@@ -8,14 +8,17 @@ on:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
+    env:
+      RECONCILE_URL: ${{ secrets.RECONCILE_URL }}
+      RECONCILE_SECRET: ${{ secrets.RECONCILE_SECRET }}
     steps:
+      - name: Skip until deployment secrets are configured
+        if: ${{ env.RECONCILE_URL == '' || env.RECONCILE_SECRET == '' }}
+        run: echo "Reconciliation is inactive until Render deployment secrets are configured."
+
       - name: Reconcile deadlines, payments, invoices, and notifications
-        env:
-          RECONCILE_URL: ${{ secrets.RECONCILE_URL }}
-          RECONCILE_SECRET: ${{ secrets.RECONCILE_SECRET }}
+        if: ${{ env.RECONCILE_URL != '' && env.RECONCILE_SECRET != '' }}
         run: |
-          test -n "$RECONCILE_URL"
-          test -n "$RECONCILE_SECRET"
           curl --fail-with-body \
             --retry 3 \
             --retry-all-errors \
