@@ -1,0 +1,79 @@
+databases:
+  - name: shilifangyuan-db
+    plan: free
+    region: singapore
+    databaseName: shilifangyuan
+    user: shilifangyuan
+
+services:
+  - type: web
+    name: shilifangyuan-api
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shilifangyuan-db
+          property: connectionString
+      - key: APP_ENV
+        value: sandbox
+      - key: APP_BASE_URL
+        sync: false
+      - key: WEB_BASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: RECONCILE_SECRET
+        generateValue: true
+      - key: DEMO_ADMIN_PASSWORD
+        sync: false
+      - key: DEMO_MEMBER_PASSWORD
+        sync: false
+      - key: DEMO_NONMEMBER_PASSWORD
+        sync: false
+      - key: DEMO_RESET_CONFIRMATION
+        sync: false
+      - key: ECPAY_PAYMENT_MERCHANT_ID
+        sync: false
+      - key: ECPAY_PAYMENT_HASH_KEY
+        sync: false
+      - key: ECPAY_PAYMENT_HASH_IV
+        sync: false
+      - key: ECPAY_PAYMENT_STAGE
+        value: "true"
+      - key: ECPAY_INVOICE_MERCHANT_ID
+        sync: false
+      - key: ECPAY_INVOICE_HASH_KEY
+        sync: false
+      - key: ECPAY_INVOICE_HASH_IV
+        sync: false
+      - key: ECPAY_INVOICE_STAGE
+        value: "true"
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: SENDGRID_FROM_EMAIL
+        sync: false
+      - key: SENDGRID_FROM_NAME
+        value: 十里方圓
+
+  - type: web
+    name: shilifangyuan-web
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm export:web
+    staticPublishPath: ./dist
+    envVars:
+      - key: EXPO_PUBLIC_API_URL
+        sync: false
+      - key: EXPO_PUBLIC_APP_ENV
+        value: sandbox
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

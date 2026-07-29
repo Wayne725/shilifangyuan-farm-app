@@ -1,0 +1,24 @@
+name: Reconcile sandbox state
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reconcile deadlines, payments, invoices, and notifications
+        env:
+          RECONCILE_URL: ${{ secrets.RECONCILE_URL }}
+          RECONCILE_SECRET: ${{ secrets.RECONCILE_SECRET }}
+        run: |
+          test -n "$RECONCILE_URL"
+          test -n "$RECONCILE_SECRET"
+          curl --fail-with-body \
+            --retry 3 \
+            --retry-all-errors \
+            --request POST \
+            --header "X-Reconcile-Secret: $RECONCILE_SECRET" \
+            "$RECONCILE_URL"

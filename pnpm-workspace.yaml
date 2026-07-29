@@ -1,0 +1,8 @@
+packages:
+  - "."
+
+overrides:
+  "@react-native/js-polyfills": "0.86.0"
+  "@react-native/metro-babel-transformer": "0.86.0"
+  "@react-native/metro-config": "0.86.0"
+  "react-native-worklets": "0.10.0"

@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "十里方圓",
+    "slug": "shilifangyuan-farm-app",
+    "description": "臺灣城鄉永續生活消費合作社農產品行動 App",
+    "version": "0.1.0",
+    "scheme": "shilifangyuan",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F5F0E6",
+    "splash": {
+      "backgroundColor": "#F5F0E6",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "tw.coop.shilifangyuan.app"
+    },
+    "android": {
+      "package": "tw.coop.shilifangyuan.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#F5F0E6"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
