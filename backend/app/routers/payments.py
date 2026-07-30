@@ -18,11 +18,18 @@ from ..integrations.ecpay import CheckoutForm
 from ..integrations.payment_service import (
     PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
+    create_membership_payment_attempt,
     create_payment_attempt,
     payment_adapter_from_settings,
     payment_attempt_read,
 )
-from ..models import Order, PaymentAttempt, PaymentStatus, User
+from ..models import (
+    MembershipCharge,
+    Order,
+    PaymentAttempt,
+    PaymentStatus,
+    User,
+)
 
 
 payments_router = APIRouter(tags=["payments"])
@@ -64,6 +71,69 @@ async def start_payment(
             status_code=503,
             detail="測試金流目前無法建立付款頁，請確認後端金流設定",
         ) from exc
+
+
+@payments_router.post(
+    "/v1/membership/charges/{charge_id}/payment-attempts",
+    response_model=PaymentAttemptResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_membership_payment(
+    charge_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Dict[str, Any]:
+    try:
+        attempt = await create_membership_payment_attempt(
+            session=session,
+            charge_id=charge_id,
+            user=user,
+            settings=settings,
+        )
+        return payment_attempt_read(attempt, settings)
+    except PaymentApplicationError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (IntegrationError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="測試金流目前無法建立付款頁，請確認後端金流設定",
+        ) from exc
+
+
+@payments_router.get("/v1/payment-attempts/{attempt_id}")
+async def get_payment_attempt_status(
+    attempt_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    attempt = await session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.id == attempt_id)
+    )
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="找不到付款資料")
+    subject_owner_id = None
+    if attempt.order_id is not None:
+        subject_owner_id = await session.scalar(
+            select(Order.user_id).where(Order.id == attempt.order_id)
+        )
+    elif attempt.membership_charge_id is not None:
+        subject_owner_id = await session.scalar(
+            select(MembershipCharge.user_id).where(
+                MembershipCharge.id == attempt.membership_charge_id
+            )
+        )
+    if subject_owner_id != user.id:
+        raise HTTPException(status_code=404, detail="找不到付款資料")
+    return {
+        "id": attempt.id,
+        "status": attempt.status.value,
+        "expires_at": attempt.expires_at,
+        "order_id": attempt.order_id,
+        "membership_charge_id": attempt.membership_charge_id,
+    }
 
 
 @payments_router.get(
@@ -150,8 +220,23 @@ async def ecpay_payment_result(
     )
     if attempt is None:
         raise HTTPException(status_code=404, detail="找不到付款資料")
-    query = urlencode({"order_id": attempt.order_id, "payment": "return"})
-    location = "{}/orders?{}".format(settings.web_base_url.rstrip("/"), query)
+    if attempt.order_id is not None:
+        query = urlencode({"order_id": attempt.order_id, "payment": "return"})
+        location = "{}/orders?{}".format(
+            settings.web_base_url.rstrip("/"),
+            query,
+        )
+    else:
+        query = urlencode(
+            {
+                "membership_charge_id": attempt.membership_charge_id,
+                "payment": "return",
+            }
+        )
+        location = "{}/membership?{}".format(
+            settings.web_base_url.rstrip("/"),
+            query,
+        )
     return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
 
 

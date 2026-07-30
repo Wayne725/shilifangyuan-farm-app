@@ -19,6 +19,7 @@ import {
 } from "../src/components/ui";
 import { getApiBaseUrl, getErrorMessage } from "../src/services/api";
 import { useAuth } from "../src/store/AuthContext";
+import { useWorkspace } from "../src/store/WorkspaceContext";
 import { colors, radii, spacing } from "../src/theme";
 
 const accounts = [
@@ -42,6 +43,7 @@ const accounts = [
 export default function LoginScreen() {
   const usingBuiltInData = !getApiBaseUrl();
   const { login } = useAuth();
+  const { workspace, lastRoute } = useWorkspace();
   const queryClient = useQueryClient();
   const [email, setEmail] = useState(accounts[0]!.email);
   const [password, setPassword] = useState(
@@ -56,7 +58,11 @@ export default function LoginScreen() {
     try {
       const user = await login(email, password);
       queryClient.clear();
-      router.replace(user.user_role === "admin" ? "/admin" : "/(tabs)/home");
+      router.replace(
+        (user.user_role === "admin"
+          ? "/admin"
+          : lastRoute[workspace]) as never,
+      );
     } catch (submitError) {
       setError(getErrorMessage(submitError));
     } finally {
@@ -99,6 +105,20 @@ export default function LoginScreen() {
 
         {error ? <InlineMessage text={error} tone="danger" /> : null}
         <Button label="登入" loading={loading} onPress={submit} />
+        <View style={styles.accountLinks}>
+          <Button
+            compact
+            label="建立帳號"
+            onPress={() => router.push("/register")}
+            variant="quiet"
+          />
+          <Button
+            compact
+            label="忘記密碼"
+            onPress={() => router.push("/forgot-password")}
+            variant="quiet"
+          />
+        </View>
       </View>
 
       {usingBuiltInData ? (
@@ -170,6 +190,7 @@ const styles = StyleSheet.create({
     minHeight: 52,
     paddingHorizontal: 15,
   },
+  accountLinks: { flexDirection: "row", gap: 8 },
   accountPanel: {
     borderTopColor: colors.line,
     borderTopWidth: 1,
@@ -178,7 +199,7 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
   },
   accountTitle: { color: colors.forest, fontSize: 14, fontWeight: "900" },
-  accountHint: { color: colors.muted, fontSize: 11, marginTop: 3 },
+  accountHint: { color: colors.muted, fontSize: 12, marginTop: 3 },
   accountRow: { flexDirection: "row", gap: 8, marginTop: 12 },
   account: {
     alignItems: "center",
@@ -194,6 +215,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sageLight,
     borderColor: colors.sage,
   },
-  accountLabel: { color: colors.forest, fontSize: 11, fontWeight: "800" },
+  accountLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
   pressed: { opacity: 0.7 },
 });

@@ -36,11 +36,21 @@ from .integrations.sendgrid import (
     sendgrid_adapter_from_settings,
 )
 from .models import (
+    Activity,
+    ActivityRegistrationStatus,
+    ActivityStatus,
+    FulfillmentState,
     FulfillmentStatus,
     GroupCampaign,
     GroupDecisionStatus,
     GroupIntakeStatus,
+    InvoiceStatus,
+    MealEvent,
+    MealEventStatus,
+    MemberProposal,
+    MemberProposalStatus,
     Order,
+    OrderFulfillment,
     OutboxEvent,
     OutboxStatus,
     PaymentAttempt,
@@ -54,6 +64,7 @@ from .models import (
     Vote,
     VoteProposal,
 )
+from .v2_domain import apply_member_proposal_clock
 
 
 @dataclass
@@ -61,6 +72,9 @@ class ReconcileReport:
     payment_attempts: int = 0
     proposals: int = 0
     campaigns: int = 0
+    member_proposals: int = 0
+    activities: int = 0
+    meal_events: int = 0
     outbox_completed: int = 0
     outbox_failed: int = 0
 
@@ -107,6 +121,21 @@ async def reconcile_once(
     report.proposals = await _reconcile_proposals(session, current, limit)
     report.campaigns = await _reconcile_campaigns(
         session, active_settings, current, limit
+    )
+    report.member_proposals = await _reconcile_member_proposals(
+        session,
+        current,
+        limit,
+    )
+    report.activities = await _reconcile_activities(
+        session,
+        current,
+        limit,
+    )
+    report.meal_events = await _reconcile_meal_events(
+        session,
+        current,
+        limit,
     )
     completed, failed = await _process_outbox(
         session, active_settings, current, limit
@@ -277,6 +306,181 @@ async def _reconcile_proposals(
                 ),
             )
         )
+    await session.commit()
+    return changed
+
+
+async def _reconcile_member_proposals(
+    session: AsyncSession,
+    now: datetime,
+    limit: int,
+) -> int:
+    proposals = list(
+        await session.scalars(
+            select(MemberProposal)
+            .where(
+                or_(
+                    (
+                        MemberProposal.status
+                        == MemberProposalStatus.DISCUSSION
+                    )
+                    & (MemberProposal.discussion_ends_at <= now),
+                    (
+                        MemberProposal.status == MemberProposalStatus.VOTING
+                    )
+                    & (MemberProposal.voting_ends_at <= now),
+                )
+            )
+            .options(selectinload(MemberProposal.votes))
+            .order_by(MemberProposal.created_at)
+            .limit(limit)
+            .with_for_update()
+        )
+    )
+    changed = 0
+    service = NotificationService(SQLAlchemyNotificationRepository(session))
+    for proposal in proposals:
+        previous = proposal.status
+        if not apply_member_proposal_clock(proposal, proposal.votes, now):
+            continue
+        changed += 1
+        if proposal.status in {
+            MemberProposalStatus.PASSED,
+            MemberProposalStatus.REJECTED,
+        }:
+            user = await session.get(User, proposal.created_by_id)
+            if user is not None:
+                await service.publish(
+                    NotificationCommand(
+                        user_id=user.id,
+                        event_type="member_proposal.result",
+                        title=(
+                            "社員提案表決通過"
+                            if proposal.status
+                            == MemberProposalStatus.PASSED
+                            else "社員提案表決未通過"
+                        ),
+                        body=f"「{proposal.title}」表決已結束。",
+                        data={
+                            "member_proposal_id": proposal.id,
+                            "status": proposal.status.value,
+                            "previous_status": previous.value,
+                        },
+                        email=user.email,
+                        dedupe_key=(
+                            f"member-proposal:{proposal.id}:"
+                            f"{proposal.status.value}"
+                        ),
+                    )
+                )
+    await session.commit()
+    return changed
+
+
+async def _reconcile_activities(
+    session: AsyncSession,
+    now: datetime,
+    limit: int,
+) -> int:
+    activities = list(
+        await session.scalars(
+            select(Activity)
+            .where(
+                Activity.status == ActivityStatus.PUBLISHED,
+                Activity.ends_at <= now,
+            )
+            .options(selectinload(Activity.registrations))
+            .order_by(Activity.ends_at)
+            .limit(limit)
+            .with_for_update()
+        )
+    )
+    for activity in activities:
+        activity.status = ActivityStatus.COMPLETED
+        for registration in activity.registrations:
+            if (
+                registration.status
+                == ActivityRegistrationStatus.REGISTERED
+            ):
+                registration.status = ActivityRegistrationStatus.NO_SHOW
+    await session.commit()
+    return len(activities)
+
+
+async def _reconcile_meal_events(
+    session: AsyncSession,
+    now: datetime,
+    limit: int,
+) -> int:
+    events = list(
+        await session.scalars(
+            select(MealEvent)
+            .where(
+                or_(
+                    (
+                        MealEvent.status == MealEventStatus.PUBLISHED
+                    )
+                    & (MealEvent.ordering_ends_at <= now),
+                    (
+                        MealEvent.status.in_(
+                            [
+                                MealEventStatus.ORDERING_CLOSED,
+                                MealEventStatus.PICKUP_OPEN,
+                            ]
+                        )
+                    )
+                    & (MealEvent.pickup_ends_at <= now),
+                )
+            )
+            .order_by(MealEvent.pickup_ends_at)
+            .limit(limit)
+            .with_for_update()
+        )
+    )
+    changed = 0
+    for event in events:
+        if (
+            event.status == MealEventStatus.PUBLISHED
+            and _aware(event.ordering_ends_at) <= now
+            and _aware(event.pickup_ends_at) > now
+        ):
+            event.status = MealEventStatus.ORDERING_CLOSED
+            changed += 1
+            continue
+        if _aware(event.pickup_ends_at) > now:
+            continue
+        orders = list(
+            await session.scalars(
+                select(Order)
+                .where(
+                    Order.meal_event_id == event.id,
+                    Order.payment_status == PaymentStatus.PAID,
+                )
+                .options(selectinload(Order.fulfillment))
+                .with_for_update()
+            )
+        )
+        for order in orders:
+            if order.fulfillment is None or order.fulfillment.status in {
+                FulfillmentState.PICKED_UP,
+                FulfillmentState.NO_SHOW,
+                FulfillmentState.CANCELLED,
+            }:
+                continue
+            order.fulfillment.status = FulfillmentState.NO_SHOW
+            order.fulfillment.fulfilled_at = now
+            if order.invoice_status != InvoiceStatus.ISSUED:
+                order.invoice_status = InvoiceStatus.PENDING
+            session.add(
+                OutboxEvent(
+                    event_type="invoice.issue_requested",
+                    aggregate_type="order",
+                    aggregate_id=order.id,
+                    payload={"order_id": order.id},
+                )
+            )
+        event.status = MealEventStatus.COMPLETED
+        changed += 1
     await session.commit()
     return changed
 
@@ -554,8 +758,17 @@ async def _dispatch_outbox_event(
         return
     if event.event_type in {"refund.requested", "sandbox_refund"}:
         await _process_refund_event(session, event)
-    elif event.event_type in {"invoice.issue", "issue_invoice"}:
+    elif event.event_type in {
+        "invoice.issue",
+        "invoice.issue_requested",
+        "issue_invoice",
+    }:
         await _process_invoice_event(session, settings, event)
+    elif event.event_type in {
+        "auth.email_verification_requested",
+        "auth.password_reset_requested",
+    }:
+        await _process_auth_email_event(settings, event)
     elif event.event_type == "send_email":
         await _process_email_event(settings, event)
     else:
@@ -668,6 +881,34 @@ async def _process_email_event(
                 if payload.get("html_content")
                 else None
             ),
+        )
+    )
+
+
+async def _process_auth_email_event(
+    settings: Settings,
+    event: OutboxEvent,
+) -> None:
+    payload = event.payload
+    if event.event_type == "auth.email_verification_requested":
+        token = str(payload["verification_token"])
+        subject = "十里方圓 Email 驗證"
+        action_url = (
+            f"{settings.web_base_url.rstrip('/')}/verify-email?token={token}"
+        )
+        text = f"請使用以下連結完成 Email 驗證：{action_url}"
+    else:
+        token = str(payload["reset_token"])
+        subject = "十里方圓密碼重設"
+        action_url = (
+            f"{settings.web_base_url.rstrip('/')}/reset-password?token={token}"
+        )
+        text = f"請使用以下連結重設密碼：{action_url}"
+    await sendgrid_adapter_from_settings(settings).send(
+        EmailMessage(
+            to_email=str(payload["recipient"]),
+            subject=subject,
+            text_content=text,
         )
     )
 

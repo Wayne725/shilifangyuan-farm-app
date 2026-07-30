@@ -1,0 +1,1155 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from ..auth import (
+    get_current_user,
+    membership_type_for_user,
+    require_active_member,
+    require_admin,
+)
+from ..config import Settings, get_settings
+from ..database import get_session
+from ..integrations.common import IntegrationError
+from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..integrations.r2_storage import r2_document_storage_from_settings
+from ..integrations.notifications import (
+    NotificationCommand,
+    NotificationService,
+    SQLAlchemyNotificationRepository,
+)
+from ..models import (
+    AdminAudit,
+    MemberDirectoryEntry,
+    MemberProfile,
+    Membership,
+    MembershipApplication,
+    MembershipApplicationStatus,
+    MembershipCharge,
+    MembershipChargeKind,
+    MembershipChargeStatus,
+    MembershipDocument,
+    MembershipDocumentStatus,
+    MembershipFeeSchedule,
+    MembershipStatus,
+    MembershipType,
+    OutboxEvent,
+    Refund,
+    RefundStatus,
+    User,
+)
+from ..schemas import (
+    MemberDirectoryRead,
+    MemberDirectoryUpdate,
+    MembershipApplicationRead,
+    MembershipApplicationReview,
+    MembershipApplicationSubmit,
+    MembershipChargeRead,
+    MembershipDocumentConfirm,
+    MembershipDocumentRead,
+    MembershipDocumentUploadRead,
+    MembershipDocumentUploadRequest,
+    MembershipFeeScheduleInput,
+    MembershipRead,
+)
+
+
+membership_router = APIRouter(tags=["membership"])
+
+
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _profile_aad(user_id: str) -> str:
+    return f"member-profile:{user_id}"
+
+
+def _cipher(settings: Settings):
+    try:
+        return pii_cipher_from_settings(settings)
+    except IntegrationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="私密資料加密設定尚未完成",
+        ) from exc
+
+
+def _storage(settings: Settings):
+    try:
+        return r2_document_storage_from_settings(settings)
+    except IntegrationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="私密證件儲存設定尚未完成",
+        ) from exc
+
+
+async def _application_for_user(
+    session: AsyncSession,
+    user_id: str,
+    *,
+    with_documents: bool = False,
+) -> Optional[MembershipApplication]:
+    query = select(MembershipApplication).where(
+        MembershipApplication.user_id == user_id
+    )
+    if with_documents:
+        query = query.options(selectinload(MembershipApplication.documents))
+    return await session.scalar(query)
+
+
+def _application_response(
+    application: MembershipApplication,
+) -> MembershipApplicationRead:
+    return MembershipApplicationRead.model_validate(application)
+
+
+async def _save_profile_and_application(
+    session: AsyncSession,
+    user: User,
+    body: MembershipApplicationSubmit,
+    settings: Settings,
+) -> MembershipApplication:
+    application = await _application_for_user(session, user.id)
+    if application is None:
+        application = MembershipApplication(user_id=user.id)
+        session.add(application)
+        await session.flush()
+    if application.status not in {
+        MembershipApplicationStatus.DRAFT,
+        MembershipApplicationStatus.NEEDS_SUPPLEMENT,
+    }:
+        raise HTTPException(status_code=409, detail="此申請目前不可修改")
+
+    cipher = _cipher(settings)
+    encrypted = {
+        "legal_name_encrypted": cipher.encrypt_text(
+            body.legal_name,
+            associated_data=_profile_aad(user.id),
+        ),
+        "phone_encrypted": cipher.encrypt_text(
+            body.phone,
+            associated_data=_profile_aad(user.id),
+        ),
+        "birth_date_encrypted": cipher.encrypt_text(
+            body.birth_date.isoformat(),
+            associated_data=_profile_aad(user.id),
+        ),
+        "address_encrypted": cipher.encrypt_text(
+            body.address,
+            associated_data=_profile_aad(user.id),
+        ),
+        "emergency_contact_encrypted": cipher.encrypt_text(
+            body.emergency_contact,
+            associated_data=_profile_aad(user.id),
+        ),
+    }
+    profile = await session.scalar(
+        select(MemberProfile).where(MemberProfile.user_id == user.id)
+    )
+    if profile is None:
+        profile = MemberProfile(
+            user_id=user.id,
+            consent_version=body.consent_version,
+            consented_at=datetime.now(timezone.utc),
+            encryption_key_version=cipher.current_version,
+            **encrypted,
+        )
+        session.add(profile)
+    else:
+        for field, value in encrypted.items():
+            setattr(profile, field, value)
+        profile.consent_version = body.consent_version
+        profile.consented_at = datetime.now(timezone.utc)
+        profile.encryption_key_version = cipher.current_version
+    await session.flush()
+    return application
+
+
+@membership_router.get(
+    "/v1/membership/application",
+    response_model=MembershipApplicationRead,
+)
+async def get_my_application(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipApplicationRead:
+    application = await _application_for_user(session, user.id)
+    if application is None:
+        raise HTTPException(status_code=404, detail="尚未建立入社申請")
+    return _application_response(application)
+
+
+@membership_router.put(
+    "/v1/membership/application",
+    response_model=MembershipApplicationRead,
+)
+async def save_my_application(
+    body: MembershipApplicationSubmit,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MembershipApplicationRead:
+    application = await _save_profile_and_application(
+        session,
+        user,
+        body,
+        settings,
+    )
+    await session.commit()
+    return _application_response(application)
+
+
+@membership_router.post(
+    "/v1/membership/application/submit",
+    response_model=MembershipApplicationRead,
+)
+async def submit_my_application(
+    body: MembershipApplicationSubmit,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MembershipApplicationRead:
+    application = await _save_profile_and_application(
+        session,
+        user,
+        body,
+        settings,
+    )
+    application = await _application_for_user(
+        session,
+        user.id,
+        with_documents=True,
+    )
+    assert application is not None
+    confirmed_types = {
+        document.document_type
+        for document in application.documents
+        if document.status == MembershipDocumentStatus.CONFIRMED
+    }
+    if len(confirmed_types) < 3:
+        raise HTTPException(
+            status_code=409,
+            detail="請先上傳並確認身分證正反面及第二證件",
+        )
+    application.status = MembershipApplicationStatus.SUBMITTED
+    application.submitted_at = datetime.now(timezone.utc)
+    application.review_reason = None
+    session.add(
+        OutboxEvent(
+            event_type="membership.application_submitted",
+            aggregate_type="membership_application",
+            aggregate_id=application.id,
+            payload={"user_id": user.id},
+        )
+    )
+    await session.commit()
+    return _application_response(application)
+
+
+@membership_router.post(
+    "/v1/membership/application/supplement",
+    response_model=MembershipApplicationRead,
+)
+async def resubmit_supplement(
+    body: MembershipApplicationSubmit,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MembershipApplicationRead:
+    application = await _application_for_user(session, user.id)
+    if (
+        application is None
+        or application.status
+        != MembershipApplicationStatus.NEEDS_SUPPLEMENT
+    ):
+        raise HTTPException(status_code=409, detail="此申請目前不需補件")
+    return await submit_my_application(body, user, session, settings)
+
+
+@membership_router.post(
+    "/v1/membership/application/withdraw",
+    response_model=MembershipApplicationRead,
+)
+async def withdraw_application(
+    body: MembershipApplicationReview,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipApplicationRead:
+    application = await _application_for_user(session, user.id)
+    if application is None or application.status in {
+        MembershipApplicationStatus.REJECTED,
+        MembershipApplicationStatus.WITHDRAWN,
+    }:
+        raise HTTPException(status_code=409, detail="此申請目前不可撤回")
+    membership = await session.scalar(
+        select(Membership)
+        .where(Membership.user_id == user.id)
+        .options(selectinload(Membership.charges))
+        .with_for_update()
+    )
+    if membership is not None and membership.status == MembershipStatus.ACTIVE:
+        raise HTTPException(status_code=409, detail="會籍啟用後不可撤回申請")
+    now = datetime.now(timezone.utc)
+    refunded_amount = 0
+    if membership is not None:
+        for charge in membership.charges:
+            if charge.status == MembershipChargeStatus.PAID:
+                refunded_amount += charge.amount
+                charge.status = MembershipChargeStatus.REFUNDED
+                charge.refunded_at = now
+                session.add(
+                    Refund(
+                        membership_charge_id=charge.id,
+                        amount=charge.amount,
+                        status=RefundStatus.COMPLETED,
+                        reason=body.reason or "入社申請啟用前撤回",
+                        requested_by_id=user.id,
+                        completed_at=now,
+                    )
+                )
+            elif charge.status == MembershipChargeStatus.PENDING:
+                charge.status = MembershipChargeStatus.WAIVED
+    application.status = MembershipApplicationStatus.WITHDRAWN
+    application.review_reason = body.reason
+    if refunded_amount:
+        service = NotificationService(
+            SQLAlchemyNotificationRepository(session)
+        )
+        await service.publish(
+            NotificationCommand(
+                user_id=user.id,
+                event_type="membership_refund_completed",
+                title="入社申請退款紀錄已建立",
+                body=(
+                    f"已建立 NT${refunded_amount} 的 Sandbox 退款紀錄；"
+                    "綠界 Stage 未執行真實退刷。"
+                ),
+                data={"membership_application_id": application.id},
+                email=user.email,
+                dedupe_key=f"membership-withdraw:{application.id}",
+            )
+        )
+    await session.commit()
+    return _application_response(application)
+
+
+@membership_router.get(
+    "/v1/membership/documents",
+    response_model=list[MembershipDocumentRead],
+)
+async def list_my_documents(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MembershipDocumentRead]:
+    application = await _application_for_user(
+        session,
+        user.id,
+        with_documents=True,
+    )
+    if application is None:
+        return []
+    return [
+        MembershipDocumentRead.model_validate(document)
+        for document in application.documents
+        if document.status != MembershipDocumentStatus.DELETED
+    ]
+
+
+@membership_router.post(
+    "/v1/membership/documents/upload-url",
+    response_model=MembershipDocumentUploadRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_document_upload_url(
+    body: MembershipDocumentUploadRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MembershipDocumentUploadRead:
+    application = await _application_for_user(session, user.id)
+    if application is None:
+        application = MembershipApplication(user_id=user.id)
+        session.add(application)
+        await session.flush()
+    if application.status not in {
+        MembershipApplicationStatus.DRAFT,
+        MembershipApplicationStatus.NEEDS_SUPPLEMENT,
+    }:
+        raise HTTPException(status_code=409, detail="此申請目前不可上傳證件")
+    storage = _storage(settings)
+    try:
+        ticket = storage.create_upload_ticket(
+            content_type=body.content_type,
+            content_length=body.size_bytes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    document = await session.scalar(
+        select(MembershipDocument).where(
+            MembershipDocument.application_id == application.id,
+            MembershipDocument.document_type == body.document_type,
+        )
+    )
+    if document is None:
+        document = MembershipDocument(
+            application_id=application.id,
+            document_type=body.document_type,
+            object_key=ticket.object_key,
+            content_type=body.content_type,
+            size_bytes=body.size_bytes,
+        )
+        session.add(document)
+    else:
+        old_object_key = document.object_key
+        if old_object_key and old_object_key != ticket.object_key:
+            await storage.delete_document(old_object_key)
+        document.object_key = ticket.object_key
+        document.content_type = body.content_type
+        document.size_bytes = body.size_bytes
+        document.status = MembershipDocumentStatus.PENDING_UPLOAD
+        document.checksum_sha256 = None
+        document.confirmed_at = None
+        document.deleted_at = None
+    await session.flush()
+    await session.commit()
+    return MembershipDocumentUploadRead(
+        document_id=document.id,
+        object_key=ticket.object_key,
+        upload_url=ticket.upload_url,
+        expires_in_seconds=ticket.expires_in_seconds,
+    )
+
+
+@membership_router.post(
+    "/v1/membership/documents/{document_id}/confirm",
+    response_model=MembershipDocumentRead,
+)
+async def confirm_document_upload(
+    document_id: str,
+    body: MembershipDocumentConfirm,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MembershipDocumentRead:
+    document = await session.scalar(
+        select(MembershipDocument)
+        .join(MembershipApplication)
+        .where(
+            MembershipDocument.id == document_id,
+            MembershipApplication.user_id == user.id,
+        )
+        .with_for_update()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="找不到證件")
+    storage = _storage(settings)
+    try:
+        head = await storage.confirm_upload(
+            object_key=document.object_key,
+            expected_content_type=document.content_type,
+            expected_content_length=document.size_bytes,
+            expected_sha256=body.checksum_sha256,
+        )
+    except IntegrationError as exc:
+        raise HTTPException(status_code=409, detail="證件上傳驗證失敗") from exc
+    document.status = MembershipDocumentStatus.CONFIRMED
+    document.checksum_sha256 = head.sha256
+    document.confirmed_at = datetime.now(timezone.utc)
+    await session.commit()
+    return MembershipDocumentRead.model_validate(document)
+
+
+@membership_router.get(
+    "/v1/membership/charges",
+    response_model=list[MembershipChargeRead],
+)
+async def list_my_membership_charges(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[MembershipChargeRead]:
+    charges = (
+        await session.scalars(
+            select(MembershipCharge)
+            .where(MembershipCharge.user_id == user.id)
+            .order_by(MembershipCharge.created_at)
+        )
+    ).all()
+    return [MembershipChargeRead.model_validate(charge) for charge in charges]
+
+
+@membership_router.get("/v1/membership/charges/{charge_id}/receipt")
+async def get_membership_receipt(
+    charge_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    charge = await session.scalar(
+        select(MembershipCharge).where(
+            MembershipCharge.id == charge_id,
+            MembershipCharge.user_id == user.id,
+        )
+    )
+    if charge is None:
+        raise HTTPException(status_code=404, detail="找不到應繳款")
+    if charge.status != MembershipChargeStatus.PAID:
+        raise HTTPException(status_code=409, detail="付款完成後才會產生收據")
+    return {
+        "receipt_number": charge.receipt_number,
+        "charge_kind": charge.charge_kind.value,
+        "amount": charge.amount,
+        "paid_at": charge.paid_at,
+        "invoice": None,
+    }
+
+
+@membership_router.get("/v1/members/me")
+async def get_my_membership(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    membership = user.__dict__.get("membership")
+    return {
+        "membership_type": membership_type_for_user(user).value,
+        "membership": (
+            MembershipRead.model_validate(membership).model_dump(mode="json")
+            if membership is not None
+            else None
+        ),
+    }
+
+
+@membership_router.get(
+    "/v1/members/directory",
+    response_model=list[MemberDirectoryRead],
+)
+async def list_member_directory(
+    _user: User = Depends(require_active_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[MemberDirectoryRead]:
+    entries = (
+        await session.scalars(
+            select(MemberDirectoryEntry)
+            .where(MemberDirectoryEntry.is_public.is_(True))
+            .order_by(MemberDirectoryEntry.nickname)
+        )
+    ).all()
+    return [MemberDirectoryRead.model_validate(entry) for entry in entries]
+
+
+@membership_router.put(
+    "/v1/members/me/directory",
+    response_model=MemberDirectoryRead,
+)
+async def update_my_directory_entry(
+    body: MemberDirectoryUpdate,
+    user: User = Depends(require_active_member),
+    session: AsyncSession = Depends(get_session),
+) -> MemberDirectoryRead:
+    entry = await session.scalar(
+        select(MemberDirectoryEntry).where(
+            MemberDirectoryEntry.user_id == user.id
+        )
+    )
+    if entry is None:
+        entry = MemberDirectoryEntry(user_id=user.id, nickname=body.nickname)
+        session.add(entry)
+    for field, value in body.model_dump().items():
+        setattr(entry, field, value)
+    await session.commit()
+    return MemberDirectoryRead.model_validate(entry)
+
+
+@membership_router.get(
+    "/v1/admin/membership-applications",
+    response_model=list[MembershipApplicationRead],
+)
+async def list_membership_applications(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[MembershipApplicationRead]:
+    applications = (
+        await session.scalars(
+            select(MembershipApplication).order_by(
+                MembershipApplication.created_at.desc()
+            )
+        )
+    ).all()
+    return [_application_response(application) for application in applications]
+
+
+@membership_router.post(
+    "/v1/admin/membership-applications/{application_id}/request-supplement",
+    response_model=MembershipApplicationRead,
+)
+async def request_application_supplement(
+    application_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipApplicationRead:
+    if not body.reason:
+        raise HTTPException(status_code=422, detail="請填寫補件原因")
+    application = await session.get(MembershipApplication, application_id)
+    if (
+        application is None
+        or application.status != MembershipApplicationStatus.SUBMITTED
+    ):
+        raise HTTPException(status_code=409, detail="此申請目前不可要求補件")
+    application.status = MembershipApplicationStatus.NEEDS_SUPPLEMENT
+    application.review_reason = body.reason
+    application.reviewed_by_id = admin.id
+    application.reviewed_at = datetime.now(timezone.utc)
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="membership.request_supplement",
+            aggregate_type="membership_application",
+            aggregate_id=application.id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+    return _application_response(application)
+
+
+async def _active_fee_schedule(
+    session: AsyncSession,
+    kind: MembershipChargeKind,
+    today: date,
+) -> MembershipFeeSchedule:
+    schedule = await session.scalar(
+        select(MembershipFeeSchedule)
+        .where(
+            MembershipFeeSchedule.charge_kind == kind,
+            MembershipFeeSchedule.is_active.is_(True),
+            MembershipFeeSchedule.effective_from <= today,
+            (
+                MembershipFeeSchedule.effective_to.is_(None)
+                | (MembershipFeeSchedule.effective_to >= today)
+            ),
+        )
+        .order_by(MembershipFeeSchedule.effective_from.desc())
+    )
+    if schedule is None:
+        raise HTTPException(status_code=409, detail="尚未設定有效入社費率")
+    return schedule
+
+
+@membership_router.post(
+    "/v1/admin/membership-applications/{application_id}/approve",
+    response_model=MembershipRead,
+)
+async def approve_membership_application(
+    application_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipRead:
+    application = await session.scalar(
+        select(MembershipApplication)
+        .where(MembershipApplication.id == application_id)
+        .options(selectinload(MembershipApplication.documents))
+        .with_for_update()
+    )
+    if (
+        application is None
+        or application.status != MembershipApplicationStatus.SUBMITTED
+    ):
+        raise HTTPException(status_code=409, detail="此申請目前不可核准")
+    if (
+        len(
+            {
+                document.document_type
+                for document in application.documents
+                if document.status == MembershipDocumentStatus.CONFIRMED
+            }
+        )
+        < 3
+    ):
+        raise HTTPException(status_code=409, detail="申請人證件尚未齊全")
+    membership = await session.scalar(
+        select(Membership).where(Membership.user_id == application.user_id)
+    )
+    if membership is None:
+        membership = Membership(
+            user_id=application.user_id,
+            application_id=application.id,
+            status=MembershipStatus.PENDING_PAYMENT,
+        )
+        session.add(membership)
+        await session.flush()
+    today = date.today()
+    for kind in (
+        MembershipChargeKind.ADMISSION_FEE,
+        MembershipChargeKind.SHARE_CAPITAL,
+    ):
+        existing = await session.scalar(
+            select(MembershipCharge.id).where(
+                MembershipCharge.application_id == application.id,
+                MembershipCharge.charge_kind == kind,
+            )
+        )
+        if existing is not None:
+            continue
+        schedule = await _active_fee_schedule(session, kind, today)
+        session.add(
+            MembershipCharge(
+                user_id=application.user_id,
+                application_id=application.id,
+                membership_id=membership.id,
+                fee_schedule_id=schedule.id,
+                charge_kind=kind,
+                amount=schedule.amount,
+            )
+        )
+    application.status = MembershipApplicationStatus.APPROVED
+    application.reviewed_by_id = admin.id
+    application.reviewed_at = datetime.now(timezone.utc)
+    application.review_reason = body.reason
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="membership.approve",
+            aggregate_type="membership_application",
+            aggregate_id=application.id,
+            reason=body.reason,
+        )
+    )
+    session.add(
+        OutboxEvent(
+            event_type="membership.application_approved",
+            aggregate_type="membership_application",
+            aggregate_id=application.id,
+            payload={"user_id": application.user_id},
+        )
+    )
+    await session.commit()
+    return MembershipRead.model_validate(membership)
+
+
+@membership_router.post(
+    "/v1/admin/membership-applications/{application_id}/reject",
+    response_model=MembershipApplicationRead,
+)
+async def reject_membership_application(
+    application_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipApplicationRead:
+    if not body.reason:
+        raise HTTPException(status_code=422, detail="請填寫駁回原因")
+    application = await session.get(MembershipApplication, application_id)
+    if (
+        application is None
+        or application.status
+        not in {
+            MembershipApplicationStatus.SUBMITTED,
+            MembershipApplicationStatus.NEEDS_SUPPLEMENT,
+        }
+    ):
+        raise HTTPException(status_code=409, detail="此申請目前不可駁回")
+    application.status = MembershipApplicationStatus.REJECTED
+    application.reviewed_by_id = admin.id
+    application.reviewed_at = datetime.now(timezone.utc)
+    application.review_reason = body.reason
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="membership.reject",
+            aggregate_type="membership_application",
+            aggregate_id=application.id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+    return _application_response(application)
+
+
+@membership_router.get("/v1/admin/membership-applications/{application_id}")
+async def get_membership_application_private(
+    application_id: str,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    application = await session.scalar(
+        select(MembershipApplication)
+        .where(MembershipApplication.id == application_id)
+        .options(
+            selectinload(MembershipApplication.documents),
+            selectinload(MembershipApplication.user).selectinload(
+                User.member_profile
+            ),
+        )
+    )
+    if application is None:
+        raise HTTPException(status_code=404, detail="找不到入社申請")
+    profile = application.user.member_profile
+    private_profile = None
+    if profile is not None:
+        cipher = _cipher(settings)
+        aad = _profile_aad(application.user_id)
+        private_profile = {
+            "legal_name": cipher.decrypt_text(
+                profile.legal_name_encrypted,
+                associated_data=aad,
+            ),
+            "phone": cipher.decrypt_text(
+                profile.phone_encrypted,
+                associated_data=aad,
+            ),
+            "birth_date": cipher.decrypt_text(
+                profile.birth_date_encrypted,
+                associated_data=aad,
+            ),
+            "address": cipher.decrypt_text(
+                profile.address_encrypted,
+                associated_data=aad,
+            ),
+            "emergency_contact": cipher.decrypt_text(
+                profile.emergency_contact_encrypted,
+                associated_data=aad,
+            ),
+            "consent_version": profile.consent_version,
+            "consented_at": profile.consented_at,
+        }
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="membership.view_private_profile",
+            aggregate_type="membership_application",
+            aggregate_id=application.id,
+        )
+    )
+    await session.commit()
+    return {
+        "application": _application_response(application).model_dump(
+            mode="json"
+        ),
+        "profile": private_profile,
+        "documents": [
+            MembershipDocumentRead.model_validate(document).model_dump(
+                mode="json"
+            )
+            for document in application.documents
+            if document.status != MembershipDocumentStatus.DELETED
+        ],
+    }
+
+
+@membership_router.get(
+    "/v1/admin/membership-applications/{application_id}/documents/"
+    "{document_id}/download-url"
+)
+async def create_document_download_url(
+    application_id: str,
+    document_id: str,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    document = await session.scalar(
+        select(MembershipDocument).where(
+            MembershipDocument.id == document_id,
+            MembershipDocument.application_id == application_id,
+            MembershipDocument.status
+            == MembershipDocumentStatus.CONFIRMED,
+        )
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="找不到證件")
+    storage = _storage(settings)
+    url = storage.create_download_url(document.object_key)
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="membership.view_document",
+            aggregate_type="membership_document",
+            aggregate_id=document.id,
+            data={"application_id": application_id},
+        )
+    )
+    await session.commit()
+    return {"download_url": url, "expires_in_seconds": 120}
+
+
+@membership_router.get(
+    "/v1/admin/members",
+    response_model=list[MembershipRead],
+)
+async def list_memberships(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[MembershipRead]:
+    memberships = (
+        await session.scalars(
+            select(Membership).order_by(Membership.created_at.desc())
+        )
+    ).all()
+    return [MembershipRead.model_validate(item) for item in memberships]
+
+
+async def _transition_membership(
+    membership_id: str,
+    next_status: MembershipStatus,
+    body: MembershipApplicationReview,
+    admin: User,
+    session: AsyncSession,
+) -> MembershipRead:
+    if not body.reason:
+        raise HTTPException(status_code=422, detail="請填寫處理原因")
+    membership = await session.get(Membership, membership_id)
+    if membership is None:
+        raise HTTPException(status_code=404, detail="找不到會籍")
+    now = datetime.now(timezone.utc)
+    membership.status = next_status
+    membership.status_reason = body.reason
+    if next_status == MembershipStatus.SUSPENDED:
+        membership.suspended_at = now
+    if next_status in {
+        MembershipStatus.RESIGNED,
+        MembershipStatus.TERMINATED,
+    }:
+        membership.ended_at = now
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action=f"membership.{next_status.value}",
+            aggregate_type="membership",
+            aggregate_id=membership.id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+    return MembershipRead.model_validate(membership)
+
+
+@membership_router.post(
+    "/v1/admin/members/{membership_id}/suspend",
+    response_model=MembershipRead,
+)
+async def suspend_membership(
+    membership_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipRead:
+    return await _transition_membership(
+        membership_id,
+        MembershipStatus.SUSPENDED,
+        body,
+        admin,
+        session,
+    )
+
+
+@membership_router.post(
+    "/v1/admin/members/{membership_id}/resign",
+    response_model=MembershipRead,
+)
+async def resign_membership(
+    membership_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipRead:
+    return await _transition_membership(
+        membership_id,
+        MembershipStatus.RESIGNED,
+        body,
+        admin,
+        session,
+    )
+
+
+@membership_router.post(
+    "/v1/admin/members/{membership_id}/terminate",
+    response_model=MembershipRead,
+)
+async def terminate_membership(
+    membership_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipRead:
+    return await _transition_membership(
+        membership_id,
+        MembershipStatus.TERMINATED,
+        body,
+        admin,
+        session,
+    )
+
+
+@membership_router.post(
+    "/v1/admin/members/{membership_id}/share-capital-return"
+)
+async def return_share_capital(
+    membership_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    if not body.reason:
+        raise HTTPException(status_code=422, detail="請填寫返還原因")
+    membership = await session.get(Membership, membership_id)
+    if (
+        membership is None
+        or membership.status != MembershipStatus.RESIGNED
+    ):
+        raise HTTPException(status_code=409, detail="只有已退社會籍可返還股金")
+    charge = await session.scalar(
+        select(MembershipCharge)
+        .where(
+            MembershipCharge.membership_id == membership.id,
+            MembershipCharge.charge_kind
+            == MembershipChargeKind.SHARE_CAPITAL,
+            MembershipCharge.status == MembershipChargeStatus.PAID,
+        )
+        .with_for_update()
+    )
+    if charge is None:
+        raise HTTPException(status_code=409, detail="沒有可返還的已繳股金")
+    now = datetime.now(timezone.utc)
+    charge.status = MembershipChargeStatus.REFUNDED
+    charge.refunded_at = now
+    refund = Refund(
+        membership_charge_id=charge.id,
+        amount=charge.amount,
+        status=RefundStatus.COMPLETED,
+        reason=body.reason,
+        requested_by_id=admin.id,
+        completed_at=now,
+    )
+    session.add_all(
+        [
+            refund,
+            AdminAudit(
+                actor_id=admin.id,
+                action="membership.share_capital_return",
+                aggregate_type="membership",
+                aggregate_id=membership.id,
+                reason=body.reason,
+                data={"amount": charge.amount},
+            ),
+        ]
+    )
+    await session.commit()
+    return {
+        "refund_id": refund.id,
+        "amount": charge.amount,
+        "status": refund.status.value,
+    }
+
+
+@membership_router.post(
+    "/v1/admin/membership-fee-schedules",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_membership_fee_schedule(
+    body: MembershipFeeScheduleInput,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    schedule = MembershipFeeSchedule(**body.model_dump())
+    session.add(schedule)
+    await session.flush()
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="membership.fee_schedule_create",
+            aggregate_type="membership_fee_schedule",
+            aggregate_id=schedule.id,
+            data={"charge_kind": body.charge_kind.value, "amount": body.amount},
+        )
+    )
+    await session.commit()
+    return {
+        "id": schedule.id,
+        **body.model_dump(mode="json"),
+        "is_active": schedule.is_active,
+    }
+
+
+async def activate_membership_if_fully_paid(
+    session: AsyncSession,
+    membership_id: str,
+    now: Optional[datetime] = None,
+) -> Optional[Membership]:
+    membership = await session.scalar(
+        select(Membership)
+        .where(Membership.id == membership_id)
+        .options(
+            selectinload(Membership.charges),
+            selectinload(Membership.application),
+        )
+        .with_for_update()
+    )
+    if (
+        membership is None
+        or membership.status != MembershipStatus.PENDING_PAYMENT
+        or membership.application is None
+        or membership.application.status
+        != MembershipApplicationStatus.APPROVED
+    ):
+        return membership
+    paid_kinds = {
+        charge.charge_kind
+        for charge in membership.charges
+        if charge.status == MembershipChargeStatus.PAID
+    }
+    if paid_kinds != {
+        MembershipChargeKind.ADMISSION_FEE,
+        MembershipChargeKind.SHARE_CAPITAL,
+    }:
+        return membership
+    current = now or datetime.now(timezone.utc)
+    connection = await session.connection()
+    if connection.dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": 1_947_000_000 + current.year},
+        )
+    sequence = int(
+        await session.scalar(
+            select(func.count(Membership.id)).where(
+                Membership.activated_at.is_not(None),
+                func.extract("year", Membership.activated_at)
+                == current.year,
+            )
+        )
+        or 0
+    ) + 1
+    membership.member_number = f"SLF-{current.year}-{sequence:04d}"
+    membership.status = MembershipStatus.ACTIVE
+    membership.activated_at = current
+    member_user = await session.get(User, membership.user_id)
+    service = NotificationService(SQLAlchemyNotificationRepository(session))
+    await service.publish(
+        NotificationCommand(
+            user_id=membership.user_id,
+            event_type="membership.activated",
+            title="十里方圓會籍已啟用",
+            body=f"社員編號 {membership.member_number} 已啟用。",
+            data={
+                "membership_id": membership.id,
+                "member_number": membership.member_number,
+            },
+            email=member_user.email if member_user else None,
+            dedupe_key=f"membership-activated:{membership.id}",
+        )
+    )
+    return membership
+
+
+router = membership_router

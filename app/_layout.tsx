@@ -6,6 +6,7 @@ import { StatusBar } from "react-native";
 import { AppViewport } from "../src/components/ui";
 import { AuthProvider } from "../src/store/AuthContext";
 import { CartProvider } from "../src/store/CartContext";
+import { WorkspaceProvider } from "../src/store/WorkspaceContext";
 import { colors } from "../src/theme";
 
 export default function RootLayout() {
@@ -27,21 +28,23 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <CartProvider>
-          <AppViewport>
-            <StatusBar
-              backgroundColor={colors.cream}
-              barStyle="dark-content"
-            />
-            <Stack
-              screenOptions={{
-                animation: "slide_from_right",
-                contentStyle: { backgroundColor: colors.cream },
-                headerShown: false,
-              }}
-            />
-          </AppViewport>
-        </CartProvider>
+        <WorkspaceProvider>
+          <CartProvider>
+            <AppViewport>
+              <StatusBar
+                backgroundColor={colors.cream}
+                barStyle="dark-content"
+              />
+              <Stack
+                screenOptions={{
+                  animation: "slide_from_right",
+                  contentStyle: { backgroundColor: colors.cream },
+                  headerShown: false,
+                }}
+              />
+            </AppViewport>
+          </CartProvider>
+        </WorkspaceProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

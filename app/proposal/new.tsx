@@ -170,7 +170,7 @@ const styles = StyleSheet.create({
   optionName: { color: colors.forest, fontSize: 14, fontWeight: "900" },
   optionDescription: {
     color: colors.muted,
-    fontSize: 10,
+    fontSize: 12,
     lineHeight: 15,
     marginTop: 3,
   },

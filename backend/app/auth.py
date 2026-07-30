@@ -13,10 +13,17 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .config import Settings, get_settings
 from .database import get_session
-from .models import User, UserRole
+from .models import (
+    Membership,
+    MembershipStatus,
+    MembershipType,
+    User,
+    UserRole,
+)
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
@@ -67,11 +74,18 @@ def create_token(
     active_settings = settings or get_settings()
     now = datetime.now(timezone.utc)
     header = {"alg": active_settings.jwt_algorithm, "typ": "JWT"}
+    membership = user.__dict__.get("membership")
+    membership_type = (
+        MembershipType.MEMBER
+        if membership is not None
+        and membership.status == MembershipStatus.ACTIVE
+        else MembershipType.NONMEMBER
+    )
     payload = {
         "sub": user.id,
         "type": token_type,
         "role": user.user_role.value,
-        "membership": user.membership_type.value,
+        "membership": membership_type.value,
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
         "jti": str(uuid4()),
@@ -155,7 +169,9 @@ async def get_current_user(
 ) -> User:
     payload = decode_token(token, "access")
     user = await session.scalar(
-        select(User).where(User.id == payload["sub"], User.is_active.is_(True))
+        select(User)
+        .where(User.id == payload["sub"], User.is_active.is_(True))
+        .options(selectinload(User.membership))
     )
     if user is None:
         raise HTTPException(
@@ -174,7 +190,9 @@ async def get_optional_user(
         return None
     payload = decode_token(token, "access")
     return await session.scalar(
-        select(User).where(User.id == payload["sub"], User.is_active.is_(True))
+        select(User)
+        .where(User.id == payload["sub"], User.is_active.is_(True))
+        .options(selectinload(User.membership))
     )
 
 
@@ -182,6 +200,27 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.user_role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="需要管理員權限"
+        )
+    return user
+
+
+def membership_type_for_user(user: User) -> MembershipType:
+    membership = user.__dict__.get("membership")
+    if (
+        isinstance(membership, Membership)
+        and membership.status == MembershipStatus.ACTIVE
+    ):
+        return MembershipType.MEMBER
+    return MembershipType.NONMEMBER
+
+
+async def require_active_member(
+    user: User = Depends(get_current_user),
+) -> User:
+    if membership_type_for_user(user) != MembershipType.MEMBER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="此功能僅限有效社員使用",
         )
     return user
 

@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from ..config import Settings
 from ..models import (
+    FulfillmentState,
     FulfillmentStatus,
     Invoice,
     InvoiceCarrierType,
@@ -115,13 +116,28 @@ async def issue_picked_up_order_invoice(
     order = await session.scalar(
         select(Order)
         .where(Order.id == order_id)
-        .options(selectinload(Order.items), selectinload(Order.invoice))
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.invoice),
+            selectinload(Order.fulfillment),
+        )
         .with_for_update()
     )
     if order is None:
         raise InvoiceApplicationError("找不到發票訂單")
-    if order.fulfillment_status != FulfillmentStatus.PICKED_UP:
-        raise InvoiceApplicationError("只有完成取貨的訂單可以開立發票")
+    nested_status = (
+        order.fulfillment.status if order.fulfillment is not None else None
+    )
+    if (
+        order.fulfillment_status != FulfillmentStatus.PICKED_UP
+        and nested_status
+        not in {
+            FulfillmentState.PICKED_UP,
+            FulfillmentState.DELIVERED,
+            FulfillmentState.NO_SHOW,
+        }
+    ):
+        raise InvoiceApplicationError("只有履約完成的訂單可以開立發票")
     if order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以開立發票")
 

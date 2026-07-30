@@ -112,7 +112,11 @@ export default function ProductDetailScreen() {
           <InfoRow
             icon="leaf-outline"
             label="稅別與供應"
-            value={`${product.tax_type === "tax_exempt" ? "免稅農產" : "應稅商品"}・現場取貨`}
+            value={`${product.tax_type === "tax_exempt" ? "免稅農產" : "應稅商品"}・${
+              product.is_shippable === false
+                ? "僅限現場取貨"
+                : "可選現場取貨或物流配送"
+            }`}
           />
         </View>
 
@@ -136,7 +140,7 @@ export default function ProductDetailScreen() {
 
 const styles = StyleSheet.create({
   image: {
-    aspectRatio: 1.28,
+    aspectRatio: 3 / 2,
     borderRadius: radii.lg,
     marginHorizontal: spacing.md,
     width: "auto",
@@ -156,7 +160,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: spacing.lg,
   },
-  priceLabel: { color: colors.muted, fontSize: 11 },
+  priceLabel: { color: colors.muted, fontSize: 12 },
   price: {
     color: colors.orange,
     fontSize: 35,
@@ -169,7 +173,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
-  savingText: { color: colors.danger, fontSize: 10, fontWeight: "800" },
+  savingText: { color: colors.danger, fontSize: 12, fontWeight: "800" },
   divider: {
     backgroundColor: colors.line,
     height: 1,
@@ -196,7 +200,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: spacing.lg,
   },
-  stock: { color: colors.muted, fontSize: 10, marginTop: 4 },
+  stock: { color: colors.muted, fontSize: 12, marginTop: 4 },
   bottom: {
     alignItems: "center",
     backgroundColor: colors.paper,
@@ -206,7 +210,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: spacing.md,
   },
-  bottomLabel: { color: colors.muted, fontSize: 10 },
+  bottomLabel: { color: colors.muted, fontSize: 12 },
   bottomTotal: {
     color: colors.forest,
     fontSize: 24,

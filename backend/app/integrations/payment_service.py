@@ -18,7 +18,14 @@ from ..models import (
     GroupIntakeStatus,
     InventoryReservation,
     InvoiceCarrierType,
+    MealEventOffering,
+    MealEventStatus,
+    MembershipCharge,
+    MembershipChargeStatus,
+    MembershipApplicationStatus,
+    MembershipStatus,
     Order,
+    OrderFulfillment,
     OrderKind,
     OutboxEvent,
     PaymentAttempt,
@@ -27,6 +34,7 @@ from ..models import (
     Refund,
     RefundStatus,
     ReservationStatus,
+    SalesChannel,
     User,
     UserRole,
 )
@@ -104,6 +112,8 @@ async def create_payment_attempt(
             selectinload(Order.items),
             selectinload(Order.payment_attempts),
             selectinload(Order.group_campaign),
+            selectinload(Order.meal_event),
+            selectinload(Order.fulfillment),
         )
         .with_for_update()
     )
@@ -156,7 +166,48 @@ async def create_payment_attempt(
     session.add(attempt)
     await session.flush()
 
-    if order.order_kind == OrderKind.GROUP:
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        if order.meal_event is None:
+            raise PaymentApplicationError("便當訂單缺少場次資料")
+        if (
+            order.meal_event.status != MealEventStatus.PUBLISHED
+            or current >= _aware(order.meal_event.ordering_ends_at)
+        ):
+            raise PaymentApplicationError("便當預購已截止")
+        for item in order.items:
+            if item.source_meal_offering_id is None:
+                raise PaymentApplicationError("便當訂單品項資料不完整")
+            offering = await session.scalar(
+                select(MealEventOffering)
+                .where(
+                    MealEventOffering.id
+                    == item.source_meal_offering_id
+                )
+                .with_for_update()
+            )
+            if (
+                offering is None
+                or not offering.is_active
+                or offering.capacity
+                - offering.reserved_quantity
+                - offering.paid_quantity
+                < item.quantity
+            ):
+                raise PaymentApplicationError(
+                    "{} 剩餘數量不足".format(item.product_name)
+                )
+            offering.reserved_quantity += item.quantity
+            session.add(
+                InventoryReservation(
+                    order=order,
+                    source_meal_offering_id=offering.id,
+                    payment_attempt=attempt,
+                    quantity=item.quantity,
+                    status=ReservationStatus.ACTIVE,
+                    expires_at=expires_at,
+                )
+            )
+    elif order.order_kind == OrderKind.GROUP:
         if order.group_campaign_id is None:
             raise PaymentApplicationError("團購訂單缺少團購資料")
         campaign = await session.scalar(
@@ -241,6 +292,103 @@ async def create_payment_attempt(
     return attempt
 
 
+async def create_membership_payment_attempt(
+    session: AsyncSession,
+    charge_id: str,
+    user: User,
+    settings: Settings,
+    now: Optional[datetime] = None,
+) -> PaymentAttempt:
+    current = now or datetime.now(timezone.utc)
+    charge = await session.scalar(
+        select(MembershipCharge)
+        .where(
+            MembershipCharge.id == charge_id,
+            MembershipCharge.user_id == user.id,
+        )
+        .options(selectinload(MembershipCharge.payment_attempts))
+        .options(
+            selectinload(MembershipCharge.application),
+            selectinload(MembershipCharge.membership),
+        )
+        .with_for_update()
+    )
+    if charge is None:
+        raise PaymentApplicationError("找不到入社應繳款")
+    if (
+        charge.application.status
+        != MembershipApplicationStatus.APPROVED
+        or charge.membership.status
+        != MembershipStatus.PENDING_PAYMENT
+    ):
+        raise PaymentApplicationError("此入社申請目前無法付款")
+    if charge.status == MembershipChargeStatus.PAID:
+        raise PaymentApplicationError("此應繳款已付款")
+    if charge.status not in {
+        MembershipChargeStatus.PENDING,
+    }:
+        raise PaymentApplicationError("此應繳款目前無法付款")
+    for existing in sorted(
+        charge.payment_attempts,
+        key=lambda item: item.created_at,
+        reverse=True,
+    ):
+        if (
+            existing.status == PaymentStatus.PENDING
+            and _aware(existing.expires_at) > current
+            and existing.checkout_payload
+        ):
+            return existing
+        if existing.status == PaymentStatus.PENDING:
+            raise PaymentApplicationError(
+                "前次付款結果仍在確認中，請稍後重新整理"
+            )
+    merchant_trade_no = create_merchant_trade_no(
+        f"membership-{charge.id}",
+        len(charge.payment_attempts) + 1,
+        current,
+    )
+    attempt = PaymentAttempt(
+        membership_charge=charge,
+        merchant_trade_no=merchant_trade_no,
+        amount=charge.amount,
+        status=PaymentStatus.PENDING,
+        expires_at=current
+        + timedelta(minutes=settings.payment_reservation_minutes),
+    )
+    session.add(attempt)
+    await session.flush()
+    item_name = (
+        "十里方圓入社費"
+        if charge.charge_kind.value == "admission_fee"
+        else "十里方圓股金"
+    )
+    adapter = payment_adapter_from_settings(settings)
+    form = adapter.create_checkout_form(
+        merchant_trade_no=merchant_trade_no,
+        amount=charge.amount,
+        item_name=item_name,
+        return_url="{}/webhooks/ecpay/payment".format(
+            settings.app_base_url.rstrip("/")
+        ),
+        order_result_url="{}/payments/result".format(
+            settings.app_base_url.rstrip("/")
+        ),
+        client_back_url="{}/membership".format(
+            settings.web_base_url.rstrip("/")
+        ),
+        custom_fields={
+            "CustomField1": charge.id,
+            "CustomField2": "membership_charge",
+        },
+        now=current,
+    )
+    attempt.checkout_payload = dict(form.fields)
+    await session.commit()
+    await session.refresh(attempt)
+    return attempt
+
+
 class SQLAlchemyPaymentCallbackRepository:
     """Applies a verified ECPay callback once inside the request transaction."""
 
@@ -291,6 +439,18 @@ class SQLAlchemyPaymentCallbackRepository:
             )
             .options(
                 selectinload(PaymentAttempt.order).selectinload(Order.items),
+                selectinload(PaymentAttempt.order).selectinload(
+                    Order.meal_event
+                ),
+                selectinload(PaymentAttempt.order).selectinload(
+                    Order.fulfillment
+                ),
+                selectinload(
+                    PaymentAttempt.membership_charge
+                ).selectinload(MembershipCharge.membership),
+                selectinload(
+                    PaymentAttempt.membership_charge
+                ).selectinload(MembershipCharge.application),
                 selectinload(PaymentAttempt.reservations),
             )
             .with_for_update()
@@ -370,7 +530,132 @@ class SQLAlchemyPaymentCallbackRepository:
         )
         attempt.provider_response = dict(payload)
 
-        if order.order_kind == OrderKind.GROUP:
+        if attempt.membership_charge is not None:
+            charge = attempt.membership_charge
+            charge_user = await self.session.get(User, charge.user_id)
+            service = NotificationService(
+                SQLAlchemyNotificationRepository(self.session)
+            )
+            if (
+                charge.application.status
+                != MembershipApplicationStatus.APPROVED
+                or charge.membership.status
+                != MembershipStatus.PENDING_PAYMENT
+            ):
+                attempt.status = PaymentStatus.LATE_PAID_REFUND_REQUIRED
+                attempt.paid_at = current
+                charge.status = MembershipChargeStatus.REFUNDED
+                charge.paid_at = current
+                charge.refunded_at = current
+                self.session.add(
+                    Refund(
+                        membership_charge_id=charge.id,
+                        amount=charge.amount,
+                        status=RefundStatus.COMPLETED,
+                        reason="入社申請已撤回或失效",
+                        requested_by_id=charge.user_id,
+                        completed_at=current,
+                    )
+                )
+                await service.publish(
+                    NotificationCommand(
+                        user_id=charge.user_id,
+                        event_type="membership_refund_completed",
+                        title="入社款項已建立 Sandbox 退款",
+                        body="申請已撤回或失效，本次付款已建立系統退款紀錄。",
+                        data={"membership_charge_id": charge.id},
+                        email=charge_user.email if charge_user else None,
+                        dedupe_key=f"membership-refund:{attempt.id}",
+                    )
+                )
+                return
+            if charge.status != MembershipChargeStatus.PENDING:
+                attempt.status = PaymentStatus.LATE_PAID_REFUND_REQUIRED
+                attempt.paid_at = current
+                self.session.add(
+                    Refund(
+                        membership_charge_id=charge.id,
+                        amount=charge.amount,
+                        status=RefundStatus.COMPLETED,
+                        reason="入社款項重複付款",
+                        requested_by_id=charge.user_id,
+                        completed_at=current,
+                    )
+                )
+                await service.publish(
+                    NotificationCommand(
+                        user_id=charge.user_id,
+                        event_type="membership_refund_completed",
+                        title="重複付款已建立 Sandbox 退款",
+                        body="系統偵測到入社款項重複付款，已建立退款紀錄。",
+                        data={"membership_charge_id": charge.id},
+                        email=charge_user.email if charge_user else None,
+                        dedupe_key=f"membership-refund:{attempt.id}",
+                    )
+                )
+                return
+            attempt.status = PaymentStatus.PAID
+            attempt.paid_at = current
+            charge.status = MembershipChargeStatus.PAID
+            charge.paid_at = current
+            charge.receipt_number = (
+                f"SLFR-{current:%Y%m%d}-{charge.id.replace('-', '')[:8].upper()}"
+            )
+            from ..routers.membership import activate_membership_if_fully_paid
+
+            membership = await activate_membership_if_fully_paid(
+                self.session,
+                charge.membership_id,
+                current,
+            )
+            await service.publish(
+                NotificationCommand(
+                    user_id=charge.user_id,
+                    event_type="membership_charge_paid",
+                    title="入社款項付款成功",
+                    body=f"{charge.charge_kind.value} 已付款成功。",
+                    data={
+                        "membership_charge_id": charge.id,
+                        "membership_id": charge.membership_id,
+                        "membership_status": (
+                            membership.status.value
+                            if membership is not None
+                            else None
+                        ),
+                    },
+                    email=charge_user.email if charge_user else None,
+                    dedupe_key=f"membership-payment:{attempt.id}",
+                )
+            )
+            return
+
+        if order is None:
+            raise PaymentApplicationError("付款嘗試缺少付款主體")
+
+        if order.sales_channel == SalesChannel.MEAL_PREORDER:
+            if (
+                order.fulfillment_status == FulfillmentStatus.CANCELLED
+                or not await self._consume_meal_reservations(
+                    attempt,
+                    payload,
+                    current,
+                )
+            ):
+                await release_attempt_reservations(self.session, attempt)
+                await self._mark_late_refund(
+                    order,
+                    attempt,
+                    "此筆付款未能重新取得便當預購數量",
+                )
+                await self._publish_payment_notification(
+                    order,
+                    attempt,
+                    "payment_refund_required",
+                    "付款已收到，正在處理退款",
+                    "便當預購數量無法保留，系統會以 Sandbox 退款處理。",
+                )
+                return
+        elif order.order_kind == OrderKind.GROUP:
             campaign = await self.session.scalar(
                 select(GroupCampaign)
                 .where(GroupCampaign.id == order.group_campaign_id)
@@ -508,6 +793,71 @@ class SQLAlchemyPaymentCallbackRepository:
             "訂單 {} 已付款成功。".format(order.order_number),
         )
 
+    async def _consume_meal_reservations(
+        self,
+        attempt: PaymentAttempt,
+        payload: Mapping[str, str],
+        current: datetime,
+    ) -> bool:
+        order = attempt.order
+        if order is None or order.meal_event is None:
+            return False
+        payment_time = _provider_payment_time(payload) or current
+        originally_in_window = payment_time <= _aware(attempt.expires_at)
+        if payment_time > _aware(attempt.expires_at):
+            await release_attempt_reservations(self.session, attempt)
+        for reservation in attempt.reservations:
+            if reservation.source_meal_offering_id is None:
+                continue
+            offering = await self.session.scalar(
+                select(MealEventOffering)
+                .where(
+                    MealEventOffering.id
+                    == reservation.source_meal_offering_id
+                )
+                .with_for_update()
+            )
+            if offering is None:
+                return False
+            if reservation.status != ReservationStatus.ACTIVE:
+                if (
+                    offering.capacity
+                    - offering.reserved_quantity
+                    - offering.paid_quantity
+                    < reservation.quantity
+                    or (
+                        not originally_in_window
+                        and payment_time
+                        >= _aware(order.meal_event.ordering_ends_at)
+                    )
+                ):
+                    return False
+                offering.reserved_quantity += reservation.quantity
+                reservation.status = ReservationStatus.ACTIVE
+                reservation.released_at = None
+        for reservation in attempt.reservations:
+            if (
+                reservation.status == ReservationStatus.ACTIVE
+                and reservation.source_meal_offering_id is not None
+            ):
+                offering = await self.session.scalar(
+                    select(MealEventOffering)
+                    .where(
+                        MealEventOffering.id
+                        == reservation.source_meal_offering_id
+                    )
+                    .with_for_update()
+                )
+                if offering is None:
+                    return False
+                offering.reserved_quantity = max(
+                    0,
+                    offering.reserved_quantity - reservation.quantity,
+                )
+                offering.paid_quantity += reservation.quantity
+                reservation.status = ReservationStatus.CONSUMED
+        return True
+
     async def _mark_late_refund(
         self,
         order: Order,
@@ -623,6 +973,20 @@ async def release_attempt_reservations(
             )
             if product is not None:
                 product.stock_quantity += reservation.quantity
+        elif reservation.source_meal_offering_id is not None:
+            offering = await session.scalar(
+                select(MealEventOffering)
+                .where(
+                    MealEventOffering.id
+                    == reservation.source_meal_offering_id
+                )
+                .with_for_update()
+            )
+            if offering is not None:
+                offering.reserved_quantity = max(
+                    0,
+                    offering.reserved_quantity - reservation.quantity,
+                )
         reservation.status = ReservationStatus.RELEASED
         reservation.released_at = current
 

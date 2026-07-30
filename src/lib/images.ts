@@ -10,6 +10,8 @@ const images: Record<string, ImageSourcePropType> = {
   "pineapple-jam": require("../../assets/products/pineapple-jam.jpg"),
   "black-bean-soy-sauce": require("../../assets/products/black-bean-soy-sauce.jpg"),
   "generic-product": require("../../assets/products/generic-product.jpg"),
+  "meal-lunchbox": require("../../assets/meals/taiwanese-lunchbox.png"),
+  "member-hike": require("../../assets/community/member-hike.png"),
 };
 
 export function imageFor(key?: string | null, remoteUrl?: string | null) {

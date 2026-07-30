@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum as SqlEnum,
     ForeignKey,
@@ -49,6 +50,48 @@ class UserRole(str, enum.Enum):
 class MembershipType(str, enum.Enum):
     MEMBER = "member"
     NONMEMBER = "nonmember"
+
+
+class MembershipApplicationStatus(str, enum.Enum):
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    NEEDS_SUPPLEMENT = "needs_supplement"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    WITHDRAWN = "withdrawn"
+
+
+class MembershipStatus(str, enum.Enum):
+    PENDING_PAYMENT = "pending_payment"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    RESIGNED = "resigned"
+    TERMINATED = "terminated"
+
+
+class MembershipDocumentType(str, enum.Enum):
+    ID_FRONT = "id_front"
+    ID_BACK = "id_back"
+    SECONDARY = "secondary"
+
+
+class MembershipDocumentStatus(str, enum.Enum):
+    PENDING_UPLOAD = "pending_upload"
+    CONFIRMED = "confirmed"
+    DELETED = "deleted"
+
+
+class MembershipChargeKind(str, enum.Enum):
+    ADMISSION_FEE = "admission_fee"
+    SHARE_CAPITAL = "share_capital"
+
+
+class MembershipChargeStatus(str, enum.Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    REFUND_PENDING = "refund_pending"
+    REFUNDED = "refunded"
+    WAIVED = "waived"
 
 
 class TaxType(str, enum.Enum):
@@ -101,6 +144,18 @@ class OrderKind(str, enum.Enum):
     GROUP = "group"
 
 
+class SalesChannel(str, enum.Enum):
+    REGULAR = "regular"
+    GROUP = "group"
+    MEAL_PREORDER = "meal_preorder"
+
+
+class FulfillmentMethod(str, enum.Enum):
+    COOPERATIVE_PICKUP = "cooperative_pickup"
+    EVENT_PICKUP = "event_pickup"
+    ECPAY_LOGISTICS = "ecpay_logistics"
+
+
 class PaymentStatus(str, enum.Enum):
     PENDING = "pending"
     PAID = "paid"
@@ -117,6 +172,85 @@ class FulfillmentStatus(str, enum.Enum):
     READY_FOR_PICKUP = "ready_for_pickup"
     PICKED_UP = "picked_up"
     CANCELLED = "cancelled"
+
+
+class FulfillmentState(str, enum.Enum):
+    PENDING_CONFIRMATION = "pending_confirmation"
+    PREPARING = "preparing"
+    READY_FOR_PICKUP = "ready_for_pickup"
+    PICKED_UP = "picked_up"
+    AWAITING_SHIPMENT = "awaiting_shipment"
+    SHIPPED = "shipped"
+    DELIVERED = "delivered"
+    NO_SHOW = "no_show"
+    CANCELLED = "cancelled"
+
+
+class ShippingTemperature(str, enum.Enum):
+    AMBIENT = "ambient"
+    CHILLED = "chilled"
+    FROZEN = "frozen"
+
+
+class ShippingChannel(str, enum.Enum):
+    HOME_DELIVERY = "home_delivery"
+    SEVEN_ELEVEN = "seven_eleven"
+    FAMILY_MART = "family_mart"
+    HILIFE = "hilife"
+
+
+class ShipmentStatus(str, enum.Enum):
+    DRAFT = "draft"
+    SELECTION_PENDING = "selection_pending"
+    READY_TO_CREATE = "ready_to_create"
+    CREATED = "created"
+    IN_TRANSIT = "in_transit"
+    DELIVERED = "delivered"
+    EXCEPTION = "exception"
+    CANCELLED = "cancelled"
+
+
+class ActivityStatus(str, enum.Enum):
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    PUBLISHED = "published"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
+
+
+class ActivityRegistrationStatus(str, enum.Enum):
+    REGISTERED = "registered"
+    WAITLISTED = "waitlisted"
+    CANCELLED = "cancelled"
+    ATTENDED = "attended"
+    NO_SHOW = "no_show"
+
+
+class MemberProposalStatus(str, enum.Enum):
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    DISCUSSION = "discussion"
+    VOTING = "voting"
+    PASSED = "passed"
+    REJECTED = "rejected"
+    WITHDRAWN = "withdrawn"
+    CLOSED = "closed"
+
+
+class MemberVoteChoice(str, enum.Enum):
+    YES = "yes"
+    NO = "no"
+    ABSTAIN = "abstain"
+
+
+class MealEventStatus(str, enum.Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    ORDERING_CLOSED = "ordering_closed"
+    PICKUP_OPEN = "pickup_open"
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
 
 
 class InvoiceStatus(str, enum.Enum):
@@ -164,8 +298,12 @@ class User(Base):
     membership_type: Mapped[MembershipType] = mapped_column(
         enum_type(MembershipType, "membership_type"),
         default=MembershipType.NONMEMBER,
+        comment="Legacy compatibility cache; authorization must use memberships.status.",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
@@ -181,6 +319,335 @@ class User(Base):
     notifications: Mapped[List["Notification"]] = relationship(
         back_populates="user"
     )
+    email_verification_tokens: Mapped[List["EmailVerificationToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    password_reset_tokens: Mapped[List["PasswordResetToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    member_profile: Mapped[Optional["MemberProfile"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+    membership_application: Mapped[Optional["MembershipApplication"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+        foreign_keys="MembershipApplication.user_id",
+    )
+    membership: Mapped[Optional["Membership"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+    directory_entry: Mapped[Optional["MemberDirectoryEntry"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="email_verification_tokens")
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="password_reset_tokens")
+
+
+class MemberProfile(Base):
+    __tablename__ = "member_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    legal_name_encrypted: Mapped[str] = mapped_column(Text)
+    phone_encrypted: Mapped[str] = mapped_column(Text)
+    birth_date_encrypted: Mapped[str] = mapped_column(Text)
+    address_encrypted: Mapped[str] = mapped_column(Text)
+    emergency_contact_encrypted: Mapped[str] = mapped_column(Text)
+    encryption_key_version: Mapped[str] = mapped_column(String(32), default="v1")
+    consent_version: Mapped[str] = mapped_column(String(40))
+    consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="member_profile")
+
+
+class MembershipApplication(Base):
+    __tablename__ = "membership_applications"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    status: Mapped[MembershipApplicationStatus] = mapped_column(
+        enum_type(
+            MembershipApplicationStatus,
+            "membership_application_status",
+        ),
+        default=MembershipApplicationStatus.DRAFT,
+        index=True,
+    )
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reviewed_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    user: Mapped[User] = relationship(
+        back_populates="membership_application", foreign_keys=[user_id]
+    )
+    reviewer: Mapped[Optional[User]] = relationship(foreign_keys=[reviewed_by_id])
+    documents: Mapped[List["MembershipDocument"]] = relationship(
+        back_populates="application", cascade="all, delete-orphan"
+    )
+    membership: Mapped[Optional["Membership"]] = relationship(
+        back_populates="application", uselist=False
+    )
+    charges: Mapped[List["MembershipCharge"]] = relationship(
+        back_populates="application"
+    )
+
+
+class MembershipDocument(Base):
+    __tablename__ = "membership_documents"
+    __table_args__ = (
+        UniqueConstraint("application_id", "document_type"),
+        CheckConstraint("size_bytes > 0", name="size_positive"),
+        CheckConstraint("size_bytes <= 8388608", name="size_at_most_8mb"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("membership_applications.id", ondelete="CASCADE"), index=True
+    )
+    document_type: Mapped[MembershipDocumentType] = mapped_column(
+        enum_type(MembershipDocumentType, "membership_document_type")
+    )
+    status: Mapped[MembershipDocumentStatus] = mapped_column(
+        enum_type(MembershipDocumentStatus, "membership_document_status"),
+        default=MembershipDocumentStatus.PENDING_UPLOAD,
+        index=True,
+    )
+    object_key: Mapped[str] = mapped_column(String(512), unique=True)
+    content_type: Mapped[str] = mapped_column(String(80))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    checksum_sha256: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    application: Mapped[MembershipApplication] = relationship(
+        back_populates="documents"
+    )
+
+
+class Membership(Base):
+    __tablename__ = "memberships"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    application_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("membership_applications.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    member_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, unique=True, index=True
+    )
+    status: Mapped[MembershipStatus] = mapped_column(
+        enum_type(MembershipStatus, "membership_status"),
+        default=MembershipStatus.PENDING_PAYMENT,
+        index=True,
+    )
+    activated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    suspended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="membership")
+    application: Mapped[Optional[MembershipApplication]] = relationship(
+        back_populates="membership"
+    )
+    charges: Mapped[List["MembershipCharge"]] = relationship(
+        back_populates="membership"
+    )
+
+
+class MembershipFeeSchedule(Base):
+    __tablename__ = "membership_fee_schedules"
+    __table_args__ = (
+        UniqueConstraint("charge_kind", "effective_from"),
+        CheckConstraint("amount >= 0", name="amount_nonnegative"),
+        CheckConstraint(
+            "effective_to IS NULL OR effective_to >= effective_from",
+            name="effective_range_valid",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    charge_kind: Mapped[MembershipChargeKind] = mapped_column(
+        enum_type(MembershipChargeKind, "membership_fee_kind"), index=True
+    )
+    amount: Mapped[int] = mapped_column(Integer)
+    effective_from: Mapped[date] = mapped_column(Date, index=True)
+    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    charges: Mapped[List["MembershipCharge"]] = relationship(
+        back_populates="fee_schedule"
+    )
+
+
+class MembershipCharge(Base):
+    __tablename__ = "membership_charges"
+    __table_args__ = (
+        UniqueConstraint("application_id", "charge_kind"),
+        CheckConstraint("amount >= 0", name="amount_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("membership_applications.id", ondelete="RESTRICT"), index=True
+    )
+    membership_id: Mapped[str] = mapped_column(
+        ForeignKey("memberships.id", ondelete="RESTRICT"), index=True
+    )
+    fee_schedule_id: Mapped[str] = mapped_column(
+        ForeignKey("membership_fee_schedules.id", ondelete="RESTRICT"), index=True
+    )
+    charge_kind: Mapped[MembershipChargeKind] = mapped_column(
+        enum_type(MembershipChargeKind, "membership_charge_kind"), index=True
+    )
+    amount: Mapped[int] = mapped_column(Integer)
+    status: Mapped[MembershipChargeStatus] = mapped_column(
+        enum_type(MembershipChargeStatus, "membership_charge_status"),
+        default=MembershipChargeStatus.PENDING,
+        index=True,
+    )
+    receipt_number: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, unique=True
+    )
+    paid_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refunded_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    user: Mapped[User] = relationship()
+    application: Mapped[MembershipApplication] = relationship(
+        back_populates="charges"
+    )
+    membership: Mapped[Membership] = relationship(back_populates="charges")
+    fee_schedule: Mapped[MembershipFeeSchedule] = relationship(
+        back_populates="charges"
+    )
+    payment_attempts: Mapped[List["PaymentAttempt"]] = relationship(
+        back_populates="membership_charge"
+    )
+    refunds: Mapped[List["Refund"]] = relationship(
+        back_populates="membership_charge"
+    )
+
+
+class MemberDirectoryEntry(Base):
+    __tablename__ = "member_directory_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    nickname: Mapped[str] = mapped_column(String(80))
+    avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    expertise: Mapped[str] = mapped_column(String(240), default="")
+    bio: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="directory_entry")
 
 
 class Product(Base):
@@ -208,6 +675,12 @@ class Product(Base):
     tax_type: Mapped[TaxType] = mapped_column(
         enum_type(TaxType, "tax_type"), default=TaxType.TAXABLE
     )
+    can_ship: Mapped[bool] = mapped_column(Boolean, default=False)
+    shipping_temperature: Mapped[Optional[ShippingTemperature]] = mapped_column(
+        enum_type(ShippingTemperature, "product_shipping_temperature"),
+        nullable=True,
+    )
+    allowed_shipping_channels: Mapped[List[str]] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
@@ -424,6 +897,12 @@ class GroupCampaign(Base):
         DateTime(timezone=True), nullable=True
     )
     rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    can_ship: Mapped[bool] = mapped_column(Boolean, default=False)
+    shipping_temperature: Mapped[Optional[ShippingTemperature]] = mapped_column(
+        enum_type(ShippingTemperature, "campaign_shipping_temperature"),
+        nullable=True,
+    )
+    allowed_shipping_channels: Mapped[List[str]] = mapped_column(JSON, default=list)
     created_by_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT")
     )
@@ -441,6 +920,323 @@ class GroupCampaign(Base):
     orders: Mapped[List["Order"]] = relationship(back_populates="group_campaign")
 
 
+class Activity(Base):
+    __tablename__ = "activities"
+    __table_args__ = (
+        CheckConstraint("capacity > 0", name="capacity_positive"),
+        CheckConstraint("ends_at > starts_at", name="time_range_valid"),
+        CheckConstraint(
+            "registration_deadline <= starts_at",
+            name="registration_before_start",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    created_by_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    location: Mapped[str] = mapped_column(String(240))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    registration_deadline: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    capacity: Mapped[int] = mapped_column(Integer)
+    waitlist_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[ActivityStatus] = mapped_column(
+        enum_type(ActivityStatus, "activity_status"),
+        default=ActivityStatus.DRAFT,
+        index=True,
+    )
+    reviewed_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    reviewed_by: Mapped[Optional[User]] = relationship(
+        foreign_keys=[reviewed_by_id]
+    )
+    registrations: Mapped[List["ActivityRegistration"]] = relationship(
+        back_populates="activity", cascade="all, delete-orphan"
+    )
+
+
+class ActivityRegistration(Base):
+    __tablename__ = "activity_registrations"
+    __table_args__ = (
+        UniqueConstraint("activity_id", "user_id"),
+        CheckConstraint("queue_position > 0", name="queue_position_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    activity_id: Mapped[str] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[ActivityRegistrationStatus] = mapped_column(
+        enum_type(
+            ActivityRegistrationStatus,
+            "activity_registration_status",
+        ),
+        default=ActivityRegistrationStatus.REGISTERED,
+        index=True,
+    )
+    queue_position: Mapped[int] = mapped_column(Integer)
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    checked_in_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    activity: Mapped[Activity] = relationship(back_populates="registrations")
+    user: Mapped[User] = relationship()
+
+
+class MemberProposal(Base):
+    __tablename__ = "member_proposals"
+    __table_args__ = (
+        CheckConstraint("minimum_voters > 0", name="minimum_voters_positive"),
+        CheckConstraint(
+            "discussion_ends_at IS NULL OR voting_ends_at IS NULL "
+            "OR voting_ends_at > discussion_ends_at",
+            name="proposal_timeline_valid",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    created_by_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[MemberProposalStatus] = mapped_column(
+        enum_type(MemberProposalStatus, "member_proposal_status"),
+        default=MemberProposalStatus.DRAFT,
+        index=True,
+    )
+    minimum_voters: Mapped[int] = mapped_column(Integer, default=10)
+    discussion_ends_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    voting_ends_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    reviewed_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    reviewed_by: Mapped[Optional[User]] = relationship(
+        foreign_keys=[reviewed_by_id]
+    )
+    comments: Mapped[List["MemberProposalComment"]] = relationship(
+        back_populates="proposal", cascade="all, delete-orphan"
+    )
+    votes: Mapped[List["MemberProposalVote"]] = relationship(
+        back_populates="proposal", cascade="all, delete-orphan"
+    )
+
+
+class MemberProposalComment(Base):
+    __tablename__ = "member_proposal_comments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    proposal_id: Mapped[str] = mapped_column(
+        ForeignKey("member_proposals.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    body: Mapped[str] = mapped_column(Text)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    proposal: Mapped[MemberProposal] = relationship(back_populates="comments")
+    user: Mapped[User] = relationship()
+
+
+class MemberProposalVote(Base):
+    __tablename__ = "member_proposal_votes"
+    __table_args__ = (UniqueConstraint("proposal_id", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    proposal_id: Mapped[str] = mapped_column(
+        ForeignKey("member_proposals.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    choice: Mapped[MemberVoteChoice] = mapped_column(
+        enum_type(MemberVoteChoice, "member_vote_choice"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    proposal: Mapped[MemberProposal] = relationship(back_populates="votes")
+    user: Mapped[User] = relationship()
+
+
+class Meal(Base):
+    __tablename__ = "meals"
+    __table_args__ = (CheckConstraint("price >= 0", name="price_nonnegative"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    price: Mapped[int] = mapped_column(Integer)
+    tax_type: Mapped[TaxType] = mapped_column(
+        enum_type(TaxType, "meal_tax_type"), default=TaxType.TAXABLE
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    offerings: Mapped[List["MealEventOffering"]] = relationship(
+        back_populates="meal"
+    )
+
+
+class MealEvent(Base):
+    __tablename__ = "meal_events"
+    __table_args__ = (
+        CheckConstraint(
+            "ordering_ends_at > ordering_starts_at",
+            name="ordering_range_valid",
+        ),
+        CheckConstraint(
+            "pickup_ends_at > pickup_starts_at",
+            name="pickup_range_valid",
+        ),
+        CheckConstraint(
+            "pickup_starts_at >= ordering_ends_at",
+            name="pickup_after_ordering",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    title: Mapped[str] = mapped_column(String(160))
+    location: Mapped[str] = mapped_column(String(240))
+    ordering_starts_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    ordering_ends_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    pickup_starts_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    pickup_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[MealEventStatus] = mapped_column(
+        enum_type(MealEventStatus, "meal_event_status"),
+        default=MealEventStatus.DRAFT,
+        index=True,
+    )
+    created_by_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancellation_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    created_by: Mapped[User] = relationship()
+    offerings: Mapped[List["MealEventOffering"]] = relationship(
+        back_populates="event", cascade="all, delete-orphan"
+    )
+    orders: Mapped[List["Order"]] = relationship(back_populates="meal_event")
+
+
+class MealEventOffering(Base):
+    __tablename__ = "meal_event_offerings"
+    __table_args__ = (
+        UniqueConstraint("meal_event_id", "meal_id"),
+        CheckConstraint("price >= 0", name="price_nonnegative"),
+        CheckConstraint("capacity > 0", name="capacity_positive"),
+        CheckConstraint("reserved_quantity >= 0", name="reserved_nonnegative"),
+        CheckConstraint("paid_quantity >= 0", name="paid_nonnegative"),
+        CheckConstraint(
+            "reserved_quantity + paid_quantity <= capacity",
+            name="allocation_within_capacity",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    meal_event_id: Mapped[str] = mapped_column(
+        ForeignKey("meal_events.id", ondelete="CASCADE"), index=True
+    )
+    meal_id: Mapped[str] = mapped_column(
+        ForeignKey("meals.id", ondelete="RESTRICT"), index=True
+    )
+    price: Mapped[int] = mapped_column(Integer)
+    capacity: Mapped[int] = mapped_column(Integer)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    paid_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    event: Mapped[MealEvent] = relationship(back_populates="offerings")
+    meal: Mapped[Meal] = relationship(back_populates="offerings")
+
+
 class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
@@ -450,13 +1246,30 @@ class Order(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     order_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     order_kind: Mapped[OrderKind] = mapped_column(
-        enum_type(OrderKind, "order_kind"), index=True
+        enum_type(OrderKind, "order_kind"),
+        index=True,
+        comment="Legacy compatibility field; new flows use sales_channel.",
+    )
+    sales_channel: Mapped[SalesChannel] = mapped_column(
+        enum_type(SalesChannel, "sales_channel"),
+        default=SalesChannel.REGULAR,
+        index=True,
+    )
+    fulfillment_method: Mapped[FulfillmentMethod] = mapped_column(
+        enum_type(FulfillmentMethod, "fulfillment_method"),
+        default=FulfillmentMethod.COOPERATIVE_PICKUP,
+        index=True,
     )
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
     group_campaign_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("group_campaigns.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    meal_event_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("meal_events.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
     )
@@ -476,6 +1289,7 @@ class Order(Base):
         enum_type(FulfillmentStatus, "fulfillment_status"),
         default=FulfillmentStatus.PENDING_CONFIRMATION,
         index=True,
+        comment="Legacy compatibility cache; OrderFulfillment.status is authoritative.",
     )
     payment_status: Mapped[PaymentStatus] = mapped_column(
         enum_type(PaymentStatus, "payment_status"),
@@ -505,6 +1319,7 @@ class Order(Base):
     group_campaign: Mapped[Optional[GroupCampaign]] = relationship(
         back_populates="orders"
     )
+    meal_event: Mapped[Optional[MealEvent]] = relationship(back_populates="orders")
     items: Mapped[List["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
@@ -518,6 +1333,9 @@ class Order(Base):
         back_populates="order", cascade="all, delete-orphan"
     )
     invoice: Mapped[Optional["Invoice"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan", uselist=False
+    )
+    fulfillment: Mapped[Optional["OrderFulfillment"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", uselist=False
     )
 
@@ -540,6 +1358,11 @@ class OrderItem(Base):
     source_bundle_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("group_bundles.id", ondelete="SET NULL"), nullable=True
     )
+    source_meal_offering_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("meal_event_offerings.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     product_name: Mapped[str] = mapped_column(String(120))
     unit_label: Mapped[str] = mapped_column(String(40))
     quantity: Mapped[int] = mapped_column(Integer)
@@ -548,6 +1371,137 @@ class OrderItem(Base):
     tax_type: Mapped[TaxType] = mapped_column(enum_type(TaxType, "order_tax_type"))
 
     order: Mapped[Order] = relationship(back_populates="items")
+
+
+class OrderFulfillment(Base):
+    __tablename__ = "order_fulfillments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    order_id: Mapped[str] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    method: Mapped[FulfillmentMethod] = mapped_column(
+        enum_type(FulfillmentMethod, "order_fulfillment_method"), index=True
+    )
+    status: Mapped[FulfillmentState] = mapped_column(
+        enum_type(FulfillmentState, "order_fulfillment_state"),
+        default=FulfillmentState.PENDING_CONFIRMATION,
+        index=True,
+    )
+    pickup_location: Mapped[Optional[str]] = mapped_column(
+        String(240), nullable=True
+    )
+    pickup_starts_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    pickup_ends_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    pickup_code: Mapped[Optional[str]] = mapped_column(
+        String(6), nullable=True, unique=True, index=True
+    )
+    pickup_qr_token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    recipient_name_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    recipient_phone_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    shipping_address_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    encryption_key_version: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )
+    fulfilled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    order: Mapped[Order] = relationship(back_populates="fulfillment")
+    shipment: Mapped[Optional["Shipment"]] = relationship(
+        back_populates="fulfillment", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class Shipment(Base):
+    __tablename__ = "shipments"
+    __table_args__ = (
+        CheckConstraint("shipping_fee >= 0", name="shipping_fee_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    order_fulfillment_id: Mapped[str] = mapped_column(
+        ForeignKey("order_fulfillments.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    channel: Mapped[ShippingChannel] = mapped_column(
+        enum_type(ShippingChannel, "shipment_channel"), index=True
+    )
+    temperature: Mapped[ShippingTemperature] = mapped_column(
+        enum_type(ShippingTemperature, "shipment_temperature"), index=True
+    )
+    status: Mapped[ShipmentStatus] = mapped_column(
+        enum_type(ShipmentStatus, "shipment_status"),
+        default=ShipmentStatus.DRAFT,
+        index=True,
+    )
+    shipping_fee: Mapped[int] = mapped_column(Integer, default=0)
+    ecpay_logistics_id: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, unique=True, index=True
+    )
+    ecpay_booking_note: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True
+    )
+    tracking_number: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, index=True
+    )
+    provider_payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    fulfillment: Mapped[OrderFulfillment] = relationship(back_populates="shipment")
+
+
+class ShippingRate(Base):
+    __tablename__ = "shipping_rates"
+    __table_args__ = (
+        UniqueConstraint("channel", "temperature", "effective_from"),
+        CheckConstraint("fee >= 0", name="fee_nonnegative"),
+        CheckConstraint("free_shipping_threshold >= 0", name="threshold_nonnegative"),
+        CheckConstraint(
+            "effective_to IS NULL OR effective_to >= effective_from",
+            name="effective_range_valid",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    channel: Mapped[ShippingChannel] = mapped_column(
+        enum_type(ShippingChannel, "shipping_rate_channel"), index=True
+    )
+    temperature: Mapped[ShippingTemperature] = mapped_column(
+        enum_type(ShippingTemperature, "shipping_rate_temperature"), index=True
+    )
+    fee: Mapped[int] = mapped_column(Integer)
+    free_shipping_threshold: Mapped[int] = mapped_column(Integer, default=1500)
+    effective_from: Mapped[date] = mapped_column(Date, index=True)
+    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
 
 
 class InventoryReservation(Base):
@@ -567,6 +1521,11 @@ class InventoryReservation(Base):
     )
     source_product_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("products.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    source_meal_offering_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("meal_event_offerings.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     payment_attempt_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("payment_attempts.id", ondelete="SET NULL"),
@@ -599,11 +1558,21 @@ class PaymentAttempt(Base):
     __tablename__ = "payment_attempts"
     __table_args__ = (
         CheckConstraint("amount >= 0", name="amount_nonnegative"),
+        CheckConstraint(
+            "(order_id IS NOT NULL AND membership_charge_id IS NULL) OR "
+            "(order_id IS NULL AND membership_charge_id IS NOT NULL)",
+            name="exactly_one_payment_subject",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    order_id: Mapped[str] = mapped_column(
-        ForeignKey("orders.id", ondelete="CASCADE"), index=True
+    order_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    membership_charge_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("membership_charges.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     merchant_trade_no: Mapped[str] = mapped_column(
         String(20), unique=True, index=True
@@ -632,7 +1601,10 @@ class PaymentAttempt(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
-    order: Mapped[Order] = relationship(back_populates="payment_attempts")
+    order: Mapped[Optional[Order]] = relationship(back_populates="payment_attempts")
+    membership_charge: Mapped[Optional[MembershipCharge]] = relationship(
+        back_populates="payment_attempts"
+    )
     reservations: Mapped[List[InventoryReservation]] = relationship(
         back_populates="payment_attempt"
     )
@@ -642,11 +1614,21 @@ class Refund(Base):
     __tablename__ = "refunds"
     __table_args__ = (
         CheckConstraint("amount >= 0", name="amount_nonnegative"),
+        CheckConstraint(
+            "(order_id IS NOT NULL AND membership_charge_id IS NULL) OR "
+            "(order_id IS NULL AND membership_charge_id IS NOT NULL)",
+            name="exactly_one_refund_subject",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    order_id: Mapped[str] = mapped_column(
-        ForeignKey("orders.id", ondelete="CASCADE"), index=True
+    order_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    membership_charge_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("membership_charges.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     amount: Mapped[int] = mapped_column(Integer)
     status: Mapped[RefundStatus] = mapped_column(
@@ -665,7 +1647,10 @@ class Refund(Base):
         DateTime(timezone=True), default=utcnow
     )
 
-    order: Mapped[Order] = relationship(back_populates="refunds")
+    order: Mapped[Optional[Order]] = relationship(back_populates="refunds")
+    membership_charge: Mapped[Optional[MembershipCharge]] = relationship(
+        back_populates="refunds"
+    )
     requested_by: Mapped[User] = relationship()
 
 

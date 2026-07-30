@@ -17,8 +17,9 @@
    - API 服務的 `APP_BASE_URL`
    - Web 服務的 `EXPO_PUBLIC_API_URL`
 4. 將 Web 公開網址填入 API 服務的 `WEB_BASE_URL`。
-5. 設定三組不同的強密碼、管理員重設確認碼及所有外部服務密鑰；部署版不可沿用 README 的範例管理員密碼。
-6. 重新部署 API 與 Web。
+5. 建立不公開且未啟用 `r2.dev` 的 Cloudflare R2 Bucket。
+6. 設定三組不同的強密碼、管理員重設確認碼及所有外部服務密鑰；部署版不可沿用 README 的範例管理員密碼。
+7. 重新部署 API 與 Web。
 
 ## 必要環境變數
 
@@ -52,6 +53,36 @@
 
 金流與電子發票是不同的測試商店，MerchantID、HashKey、HashIV 不可混用。
 
+### 綠界全方位物流 Stage
+
+- `ECPAY_LOGISTICS_MERCHANT_ID`
+- `ECPAY_LOGISTICS_HASH_KEY`
+- `ECPAY_LOGISTICS_HASH_IV`
+- `ECPAY_LOGISTICS_PLATFORM_ID`（非特店平台可留空）
+- `ECPAY_LOGISTICS_STAGE=true`
+- `ECPAY_LOGISTICS_SENDER_NAME`
+- `ECPAY_LOGISTICS_SENDER_ZIP_CODE`
+- `ECPAY_LOGISTICS_SENDER_ADDRESS`
+
+物流 Stage 密鑰與 AIO／發票密鑰分開。正式寄件資料尚未決定，Sandbox 只能填合作社同意使用的測試資料。
+
+### Cloudflare R2 與 PII
+
+- `CLOUDFLARE_R2_ACCOUNT_ID`
+- `CLOUDFLARE_R2_ACCESS_KEY_ID`
+- `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
+- `CLOUDFLARE_R2_BUCKET`
+- `PII_ENCRYPTION_KEYS_JSON`
+- `PII_ENCRYPTION_CURRENT_VERSION=v1`
+
+`PII_ENCRYPTION_KEYS_JSON` 格式：
+
+```json
+{"v1":"<Base64 編碼的 32-byte 金鑰>"}
+```
+
+輪替時新增版本並切換 `PII_ENCRYPTION_CURRENT_VERSION`，舊版本需保留到資料完成重加密。
+
 ### SendGrid
 
 - `SENDGRID_API_KEY`
@@ -77,8 +108,10 @@ Repository Settings → Secrets and variables → Actions 新增：
 4. 登入社員、非社員與管理員帳號各一次。
 5. 使用綠界測試卡完成一筆付款。
 6. 確認 GitHub Actions 最近一次 reconciliation 成功。
-7. 執行管理員「重設展示資料」，恢復 9/10 投票及接近成團的團購。
+7. 執行管理員「重設展示資料」，恢復補件申請、待付款入社、接近額滿活動、記名提案、便當待取與配送中訂單。
 8. 確認 SendGrid 寄件者仍為 verified。
+9. 使用測試檔驗證 R2 上傳、管理員短效查看 URL 及 Demo reset 刪除。
+10. 以綠界物流 Stage 完成一次通路選擇與建單。
 
 ## 手機展示相容性
 
@@ -92,6 +125,8 @@ Repository Settings → Secrets and variables → Actions 新增：
 - AIO Stage 不動真實款項。
 - AIO Stage 沒有可實際測試的信用卡退款 API；App 的退款完成代表本系統 Sandbox 狀態、庫存及通知已完成。
 - B2C 發票 Stage 不會送財政部，也不會寄綠界官方發票信。
+- 物流 Stage 不會自動模擬出貨後的貨態通知；後台手動推進只能用於 Sandbox。
+- Sandbox 證件頁禁止上傳真實證件。
 - Expo Go 不保證付款後自動 deep link；手機回到 App 後會重新查詢付款狀態。
 - 實體 iPhone 的 App Store 版 Expo Go 可能與 SDK 57 不相容，請改用 Web 或 development build。
 - `ChoosePayment=Credit` 在部分 iOS 環境仍可能顯示 Apple Pay。

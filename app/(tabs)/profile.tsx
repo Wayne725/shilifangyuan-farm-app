@@ -48,7 +48,7 @@ export default function ProfileScreen() {
   if (!isAuthenticated || !user) {
     return (
       <Screen>
-        <PageHeader eyebrow="ACCOUNT" title="我的" />
+        <PageHeader title="我的" />
         <View style={styles.guestHero}>
           <BrandLockup light />
           <Text style={styles.guestTitle}>登入，參與每一次共同選擇</Text>
@@ -63,7 +63,7 @@ export default function ProfileScreen() {
 
   return (
     <Screen>
-      <PageHeader eyebrow="ACCOUNT" title="我的" />
+      <PageHeader title="我的" />
       <View style={styles.content}>
         <View style={styles.identity}>
           <View style={styles.avatar}>
@@ -85,6 +85,13 @@ export default function ProfileScreen() {
             icon="notifications-outline"
             onPress={() => router.push("/notifications")}
             title="通知中心"
+          />
+          <View style={styles.rule} />
+          <MenuRow
+            detail="會籍、入社進度與自願公開名錄"
+            icon="id-card-outline"
+            onPress={() => router.push("/(tabs)/members")}
+            title="社員資料"
           />
           <View style={styles.rule} />
           <MenuRow
@@ -161,7 +168,7 @@ const styles = StyleSheet.create({
   avatarText: { color: colors.forest, fontSize: 20, fontWeight: "900" },
   identityCopy: { flex: 1, marginLeft: 11 },
   name: { color: colors.white, fontSize: 16, fontWeight: "900" },
-  email: { color: "#C9D6CE", fontSize: 9, marginTop: 4 },
+  email: { color: "#C9D6CE", fontSize: 12, marginTop: 4 },
   menu: {
     backgroundColor: colors.paper,
     borderRadius: radii.md,
@@ -178,6 +185,6 @@ const styles = StyleSheet.create({
   },
   menuCopy: { flex: 1, marginLeft: 10 },
   menuTitle: { color: colors.forest, fontSize: 13, fontWeight: "900" },
-  menuDetail: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  menuDetail: { color: colors.muted, fontSize: 12, marginTop: 3 },
   rule: { backgroundColor: colors.line, height: 1, marginHorizontal: 11 },
 });

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List
 
 from sqlalchemy import delete, select
@@ -10,8 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .auth import hash_password
 from .config import get_settings
 from .database import SessionLocal
+from .integrations.common import IntegrationError
+from .integrations.pii_crypto import (
+    VersionedPIICipher,
+    pii_cipher_from_settings,
+)
+from .integrations.r2_storage import r2_document_storage_from_settings
 from .models import (
+    Activity,
+    ActivityRegistration,
+    ActivityRegistrationStatus,
+    ActivityStatus,
     AdminAudit,
+    EmailVerificationToken,
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     GroupBundle,
     GroupBundleItem,
@@ -21,18 +34,49 @@ from .models import (
     InventoryReservation,
     Invoice,
     InvoiceStatus,
+    Meal,
+    MealEvent,
+    MealEventOffering,
+    MealEventStatus,
+    MemberDirectoryEntry,
+    MemberProfile,
+    MemberProposal,
+    MemberProposalComment,
+    MemberProposalStatus,
+    MemberProposalVote,
+    MemberVoteChoice,
+    Membership,
+    MembershipApplication,
+    MembershipApplicationStatus,
+    MembershipCharge,
+    MembershipChargeKind,
+    MembershipChargeStatus,
+    MembershipDocument,
+    MembershipDocumentStatus,
+    MembershipDocumentType,
+    MembershipFeeSchedule,
+    MembershipStatus,
     MembershipType,
     Notification,
     Order,
+    OrderFulfillment,
     OrderItem,
     OrderKind,
     OutboxEvent,
+    PasswordResetToken,
     PaymentAttempt,
     PaymentStatus,
     Product,
     ProposalStatus,
     ReservationStatus,
     Refund,
+    RefundStatus,
+    SalesChannel,
+    Shipment,
+    ShipmentStatus,
+    ShippingChannel,
+    ShippingRate,
+    ShippingTemperature,
     TargetType,
     TaxType,
     User,
@@ -200,6 +244,7 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
         return {"users": 0, "products": 0, "campaigns": 0}
 
     settings = get_settings()
+    now = datetime.now(timezone.utc)
     admin_password_hash = hash_password(settings.demo_admin_password)
     member_password_hash = hash_password(settings.demo_member_password)
     nonmember_password_hash = hash_password(settings.demo_nonmember_password)
@@ -211,6 +256,7 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             password_hash=admin_password_hash,
             user_role=UserRole.ADMIN,
             membership_type=MembershipType.MEMBER,
+            email_verified_at=now - timedelta(days=60),
         ),
         User(
             id="user-member",
@@ -218,6 +264,7 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             display_name="社員小方",
             password_hash=member_password_hash,
             membership_type=MembershipType.MEMBER,
+            email_verified_at=now - timedelta(days=45),
         ),
         User(
             id="user-customer",
@@ -225,6 +272,7 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             display_name="一般消費者",
             password_hash=nonmember_password_hash,
             membership_type=MembershipType.NONMEMBER,
+            email_verified_at=now - timedelta(days=30),
         ),
     ]
     users.extend(
@@ -242,16 +290,238 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
                 if number % 2
                 else MembershipType.NONMEMBER
             ),
+            email_verified_at=now - timedelta(days=20),
         )
         for number in range(1, 9)
     )
+    users.extend(
+        [
+            User(
+                id="user-applicant-supplement",
+                email="supplement@shilifangyuan.tw",
+                display_name="補件申請人",
+                password_hash=nonmember_password_hash,
+                membership_type=MembershipType.NONMEMBER,
+                email_verified_at=now - timedelta(days=5),
+            ),
+            User(
+                id="user-applicant-payment",
+                email="pending@shilifangyuan.tw",
+                display_name="待付款申請人",
+                password_hash=nonmember_password_hash,
+                membership_type=MembershipType.NONMEMBER,
+                email_verified_at=now - timedelta(days=8),
+            ),
+        ]
+    )
     session.add_all(users)
     await session.flush()
+
+    try:
+        seed_cipher = pii_cipher_from_settings(settings)
+    except IntegrationError:
+        seed_cipher = VersionedPIICipher({"v1": bytes(32)}, "v1")
+
+    fee_schedules = [
+        MembershipFeeSchedule(
+            id="fee-admission-demo",
+            charge_kind=MembershipChargeKind.ADMISSION_FEE,
+            amount=500,
+            effective_from=date(now.year, 1, 1),
+        ),
+        MembershipFeeSchedule(
+            id="fee-share-demo",
+            charge_kind=MembershipChargeKind.SHARE_CAPITAL,
+            amount=1000,
+            effective_from=date(now.year, 1, 1),
+        ),
+    ]
+    session.add_all(fee_schedules)
+
+    active_member_users = [
+        users[0],
+        users[1],
+        *users[3:11],
+    ]
+    active_memberships = [
+        Membership(
+            id=f"membership-{index:02d}",
+            user_id=user.id,
+            member_number=f"SLF-{now.year}-{index:04d}",
+            status=MembershipStatus.ACTIVE,
+            activated_at=now - timedelta(days=90 - index),
+        )
+        for index, user in enumerate(active_member_users, start=1)
+    ]
+    session.add_all(active_memberships)
+    session.add(
+        MemberDirectoryEntry(
+            user_id=users[1].id,
+            is_public=True,
+            nickname="小方",
+            avatar_url=None,
+            expertise="友善耕作、共煮",
+            bio="喜歡把產地故事帶回日常餐桌。",
+        )
+    )
+
+    supplement_user = next(
+        user for user in users if user.id == "user-applicant-supplement"
+    )
+    payment_user = next(
+        user for user in users if user.id == "user-applicant-payment"
+    )
+
+    def encrypted_profile(user: User, legal_name: str) -> MemberProfile:
+        aad = f"member-profile:{user.id}"
+        return MemberProfile(
+            user_id=user.id,
+            legal_name_encrypted=seed_cipher.encrypt_text(
+                legal_name,
+                associated_data=aad,
+            ),
+            phone_encrypted=seed_cipher.encrypt_text(
+                "0912345678",
+                associated_data=aad,
+            ),
+            birth_date_encrypted=seed_cipher.encrypt_text(
+                "1990-01-01",
+                associated_data=aad,
+            ),
+            address_encrypted=seed_cipher.encrypt_text(
+                "Sandbox 測試地址",
+                associated_data=aad,
+            ),
+            emergency_contact_encrypted=seed_cipher.encrypt_text(
+                "測試聯絡人 0900000000",
+                associated_data=aad,
+            ),
+            encryption_key_version=seed_cipher.current_version,
+            consent_version="sandbox-v1",
+            consented_at=now - timedelta(days=3),
+        )
+
+    supplement_application = MembershipApplication(
+        id="application-supplement",
+        user_id=supplement_user.id,
+        status=MembershipApplicationStatus.NEEDS_SUPPLEMENT,
+        submitted_at=now - timedelta(days=3),
+        reviewed_by_id=users[0].id,
+        reviewed_at=now - timedelta(days=2),
+        review_reason="第二證件影像需重新上傳（僅使用測試素材）",
+        documents=[
+            MembershipDocument(
+                document_type=MembershipDocumentType.ID_FRONT,
+                status=MembershipDocumentStatus.CONFIRMED,
+                object_key="membership-documents/demo/supplement-front.jpg",
+                content_type="image/jpeg",
+                size_bytes=120000,
+                checksum_sha256="a" * 64,
+                confirmed_at=now - timedelta(days=3),
+            ),
+            MembershipDocument(
+                document_type=MembershipDocumentType.ID_BACK,
+                status=MembershipDocumentStatus.CONFIRMED,
+                object_key="membership-documents/demo/supplement-back.jpg",
+                content_type="image/jpeg",
+                size_bytes=118000,
+                checksum_sha256="b" * 64,
+                confirmed_at=now - timedelta(days=3),
+            ),
+        ],
+    )
+    payment_application = MembershipApplication(
+        id="application-payment",
+        user_id=payment_user.id,
+        status=MembershipApplicationStatus.APPROVED,
+        submitted_at=now - timedelta(days=6),
+        reviewed_by_id=users[0].id,
+        reviewed_at=now - timedelta(days=5),
+        documents=[
+            MembershipDocument(
+                document_type=document_type,
+                status=MembershipDocumentStatus.CONFIRMED,
+                object_key=(
+                    "membership-documents/demo/"
+                    f"payment-{document_type.value}.jpg"
+                ),
+                content_type="image/jpeg",
+                size_bytes=125000,
+                checksum_sha256=f"{index}" * 64,
+                confirmed_at=now - timedelta(days=6),
+            )
+            for index, document_type in enumerate(
+                (
+                    MembershipDocumentType.ID_FRONT,
+                    MembershipDocumentType.ID_BACK,
+                    MembershipDocumentType.SECONDARY,
+                ),
+                start=1,
+            )
+        ],
+    )
+    session.add_all(
+        [
+            encrypted_profile(supplement_user, "測試補件者"),
+            encrypted_profile(payment_user, "測試待付款者"),
+            supplement_application,
+            payment_application,
+        ]
+    )
+    await session.flush()
+    pending_membership = Membership(
+        id="membership-pending-payment",
+        user_id=payment_user.id,
+        application_id=payment_application.id,
+        status=MembershipStatus.PENDING_PAYMENT,
+    )
+    session.add(pending_membership)
+    await session.flush()
+    session.add_all(
+        [
+            MembershipCharge(
+                id="charge-admission-paid",
+                user_id=payment_user.id,
+                application_id=payment_application.id,
+                membership_id=pending_membership.id,
+                fee_schedule_id=fee_schedules[0].id,
+                charge_kind=MembershipChargeKind.ADMISSION_FEE,
+                amount=500,
+                status=MembershipChargeStatus.PAID,
+                receipt_number=f"SLFR-{now:%Y%m%d}-DEMO0001",
+                paid_at=now - timedelta(days=4),
+            ),
+            MembershipCharge(
+                id="charge-share-pending",
+                user_id=payment_user.id,
+                application_id=payment_application.id,
+                membership_id=pending_membership.id,
+                fee_schedule_id=fee_schedules[1].id,
+                charge_kind=MembershipChargeKind.SHARE_CAPITAL,
+                amount=1000,
+                status=MembershipChargeStatus.PENDING,
+            ),
+        ]
+    )
 
     products = [Product(**data) for data in PRODUCTS]
     session.add_all(products)
     await session.flush()
     by_slug = {product.slug: product for product in products}
+    for slug in {
+        "rice",
+        "black-bean-soy-sauce",
+        "pineapple-jam",
+        "sweet-potato",
+    }:
+        by_slug[slug].can_ship = True
+        by_slug[slug].shipping_temperature = ShippingTemperature.AMBIENT
+        by_slug[slug].allowed_shipping_channels = [
+            ShippingChannel.HOME_DELIVERY.value,
+            ShippingChannel.SEVEN_ELEVEN.value,
+            ShippingChannel.FAMILY_MART.value,
+            ShippingChannel.HILIFE.value,
+        ]
 
     bundle = GroupBundle(
         name="家庭友善蔬果箱",
@@ -285,7 +555,6 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
     session.add_all([bundle, pantry_bundle])
     await session.flush()
 
-    now = datetime.now(timezone.utc)
     proposal = VoteProposal(
         proposer_id=users[1].id,
         target_type=TargetType.PRODUCT,
@@ -328,6 +597,14 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
         intake_status=GroupIntakeStatus.OPEN,
         core_locked_at=now - timedelta(hours=2),
         threshold_version=3,
+        can_ship=True,
+        shipping_temperature=ShippingTemperature.AMBIENT,
+        allowed_shipping_channels=[
+            ShippingChannel.HOME_DELIVERY.value,
+            ShippingChannel.SEVEN_ELEVEN.value,
+            ShippingChannel.FAMILY_MART.value,
+            ShippingChannel.HILIFE.value,
+        ],
         created_by_id=users[0].id,
     )
     session.add(campaign)
@@ -337,6 +614,8 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
         Order(
             order_number="DEMO-GRP-001",
             order_kind=OrderKind.GROUP,
+            sales_channel=SalesChannel.GROUP,
+            fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
             user_id=users[1].id,
             group_campaign_id=campaign.id,
             membership_type_snapshot=MembershipType.MEMBER,
@@ -356,10 +635,16 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
                     tax_type=TaxType.TAX_EXEMPT,
                 )
             ],
+            fulfillment=OrderFulfillment(
+                method=FulfillmentMethod.COOPERATIVE_PICKUP,
+                status=FulfillmentState.PENDING_CONFIRMATION,
+            ),
         ),
         Order(
             order_number="DEMO-GRP-002",
             order_kind=OrderKind.GROUP,
+            sales_channel=SalesChannel.GROUP,
+            fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
             user_id=users[2].id,
             group_campaign_id=campaign.id,
             membership_type_snapshot=MembershipType.NONMEMBER,
@@ -379,6 +664,10 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
                     tax_type=TaxType.TAX_EXEMPT,
                 )
             ],
+            fulfillment=OrderFulfillment(
+                method=FulfillmentMethod.COOPERATIVE_PICKUP,
+                status=FulfillmentState.PENDING_CONFIRMATION,
+            ),
         ),
     ]
     session.add_all(seeded_orders)
@@ -403,6 +692,259 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             ),
         ]
     )
+
+    activity = Activity(
+        id="activity-hike-demo",
+        created_by_id=users[1].id,
+        title="觀音山社員健行",
+        description="社員一起走步道、分享沿途生態與合作社近況。",
+        image_url="/assets/community/member-hike.png",
+        location="觀音山遊客中心",
+        starts_at=now + timedelta(days=6),
+        ends_at=now + timedelta(days=6, hours=4),
+        registration_deadline=now + timedelta(days=4),
+        capacity=5,
+        waitlist_enabled=True,
+        status=ActivityStatus.PUBLISHED,
+        reviewed_by_id=users[0].id,
+        reviewed_at=now - timedelta(days=1),
+        registrations=[
+            ActivityRegistration(
+                user_id=user.id,
+                status=ActivityRegistrationStatus.REGISTERED,
+                queue_position=index,
+                registered_at=now - timedelta(hours=12 - index),
+            )
+            for index, user in enumerate(active_member_users[1:5], start=1)
+        ],
+    )
+    member_proposal = MemberProposal(
+        id="member-proposal-demo",
+        created_by_id=users[1].id,
+        title="每月安排一次產地共學日",
+        body="建議每月由社員輪流提案一處合作農場，安排半日交流。",
+        status=MemberProposalStatus.VOTING,
+        minimum_voters=10,
+        discussion_ends_at=now - timedelta(days=1),
+        voting_ends_at=now + timedelta(days=5),
+        reviewed_by_id=users[0].id,
+        reviewed_at=now - timedelta(days=4),
+        votes=[
+            MemberProposalVote(
+                user_id=user.id,
+                choice=(
+                    MemberVoteChoice.YES
+                    if index < 7
+                    else (
+                        MemberVoteChoice.NO
+                        if index < 9
+                        else MemberVoteChoice.ABSTAIN
+                    )
+                ),
+            )
+            for index, user in enumerate(active_member_users)
+        ],
+    )
+    session.add_all([activity, member_proposal])
+
+    meals = [
+        Meal(
+            id="meal-seasonal-demo",
+            slug="seasonal-coop-lunchbox",
+            name="時蔬合作便當",
+            description="白飯、當季時蔬、豆腐與友善契作主菜。",
+            image_url="/assets/meals/taiwanese-lunchbox.png",
+            price=120,
+            tax_type=TaxType.TAXABLE,
+        ),
+        Meal(
+            id="meal-veggie-demo",
+            slug="vegetarian-coop-lunchbox",
+            name="田園蔬食便當",
+            description="五色蔬菜與黑豆時蔬，清爽不含肉類。",
+            image_url="/assets/meals/taiwanese-lunchbox.png",
+            price=110,
+            tax_type=TaxType.TAXABLE,
+        ),
+    ]
+    session.add_all(meals)
+    await session.flush()
+    meal_event = MealEvent(
+        id="meal-event-pickup-demo",
+        title="校園週四便當預購",
+        location="學校圖書館前合作社攤位",
+        ordering_starts_at=now - timedelta(days=2),
+        ordering_ends_at=now - timedelta(hours=1),
+        pickup_starts_at=now - timedelta(minutes=30),
+        pickup_ends_at=now + timedelta(hours=2),
+        status=MealEventStatus.PICKUP_OPEN,
+        created_by_id=users[0].id,
+        offerings=[
+            MealEventOffering(
+                id="meal-offering-seasonal-demo",
+                meal_id=meals[0].id,
+                price=120,
+                capacity=30,
+                paid_quantity=2,
+                position=1,
+            ),
+            MealEventOffering(
+                id="meal-offering-veggie-demo",
+                meal_id=meals[1].id,
+                price=110,
+                capacity=20,
+                paid_quantity=0,
+                position=2,
+            ),
+        ],
+    )
+    session.add(meal_event)
+    await session.flush()
+    meal_order = Order(
+        id="order-meal-pickup-demo",
+        order_number="DEMO-MEAL-001",
+        order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.MEAL_PREORDER,
+        fulfillment_method=FulfillmentMethod.EVENT_PICKUP,
+        user_id=users[1].id,
+        meal_event_id=meal_event.id,
+        membership_type_snapshot=MembershipType.MEMBER,
+        amount_total=240,
+        contact_email=users[1].email,
+        fulfillment_status=FulfillmentStatus.READY_FOR_PICKUP,
+        payment_status=PaymentStatus.PAID,
+        invoice_status=InvoiceStatus.NOT_ELIGIBLE,
+        paid_at=now - timedelta(hours=3),
+        items=[
+            OrderItem(
+                source_meal_offering_id="meal-offering-seasonal-demo",
+                product_name=meals[0].name,
+                unit_label="份",
+                quantity=2,
+                unit_price=120,
+                subtotal=240,
+                tax_type=TaxType.TAXABLE,
+            )
+        ],
+        fulfillment=OrderFulfillment(
+            method=FulfillmentMethod.EVENT_PICKUP,
+            status=FulfillmentState.READY_FOR_PICKUP,
+            pickup_location=meal_event.location,
+            pickup_starts_at=meal_event.pickup_starts_at,
+            pickup_ends_at=meal_event.pickup_ends_at,
+            pickup_code="381642",
+            pickup_qr_token_hash="c" * 64,
+        ),
+    )
+    session.add(meal_order)
+
+    shipping_rates = [
+        ShippingRate(
+            channel=channel,
+            temperature=ShippingTemperature.AMBIENT,
+            fee=(
+                160
+                if channel == ShippingChannel.HOME_DELIVERY
+                else 70
+            ),
+            free_shipping_threshold=1500,
+            effective_from=date(now.year, 1, 1),
+        )
+        for channel in (
+            ShippingChannel.HOME_DELIVERY,
+            ShippingChannel.SEVEN_ELEVEN,
+            ShippingChannel.FAMILY_MART,
+            ShippingChannel.HILIFE,
+        )
+    ]
+    shipping_rates.extend(
+        [
+            ShippingRate(
+                channel=ShippingChannel.HOME_DELIVERY,
+                temperature=ShippingTemperature.CHILLED,
+                fee=220,
+                free_shipping_threshold=1500,
+                effective_from=date(now.year, 1, 1),
+            ),
+            ShippingRate(
+                channel=ShippingChannel.HOME_DELIVERY,
+                temperature=ShippingTemperature.FROZEN,
+                fee=260,
+                free_shipping_threshold=1500,
+                effective_from=date(now.year, 1, 1),
+            ),
+        ]
+    )
+    session.add_all(shipping_rates)
+
+    fulfillment_id = "fulfillment-shipping-demo"
+    shipping_aad_prefix = f"order-fulfillment:{fulfillment_id}"
+    shipping_order = Order(
+        id="order-shipping-demo",
+        order_number="DEMO-SHIP-001",
+        order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.REGULAR,
+        fulfillment_method=FulfillmentMethod.ECPAY_LOGISTICS,
+        user_id=users[2].id,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=620,
+        contact_email=users[2].email,
+        fulfillment_status=FulfillmentStatus.PREPARING,
+        payment_status=PaymentStatus.PAID,
+        invoice_status=InvoiceStatus.NOT_ELIGIBLE,
+        paid_at=now - timedelta(days=1),
+        items=[
+            OrderItem(
+                source_product_id=by_slug["rice"].id,
+                product_name=by_slug["rice"].name,
+                unit_label=by_slug["rice"].unit,
+                quantity=1,
+                unit_price=250,
+                subtotal=250,
+                tax_type=TaxType.TAX_EXEMPT,
+            ),
+            OrderItem(
+                source_product_id=by_slug["black-bean-soy-sauce"].id,
+                product_name=by_slug["black-bean-soy-sauce"].name,
+                unit_label=by_slug["black-bean-soy-sauce"].unit,
+                quantity=1,
+                unit_price=210,
+                subtotal=210,
+                tax_type=TaxType.TAXABLE,
+            ),
+        ],
+        fulfillment=OrderFulfillment(
+            id=fulfillment_id,
+            method=FulfillmentMethod.ECPAY_LOGISTICS,
+            status=FulfillmentState.SHIPPED,
+            recipient_name_encrypted=seed_cipher.encrypt_text(
+                "測試收件人",
+                associated_data=f"{shipping_aad_prefix}:recipient_name",
+            ),
+            recipient_phone_encrypted=seed_cipher.encrypt_text(
+                "0912345678",
+                associated_data=f"{shipping_aad_prefix}:recipient_phone",
+            ),
+            shipping_address_encrypted=seed_cipher.encrypt_text(
+                "Sandbox 測試配送地址",
+                associated_data=f"{shipping_aad_prefix}:shipping_address",
+            ),
+            encryption_key_version=seed_cipher.current_version,
+            shipment=Shipment(
+                channel=ShippingChannel.HOME_DELIVERY,
+                temperature=ShippingTemperature.AMBIENT,
+                status=ShipmentStatus.IN_TRANSIT,
+                shipping_fee=160,
+                ecpay_logistics_id="DEMO-STAGE-LOGISTICS-001",
+                tracking_number="STAGE-DEMO-0001",
+                provider_payload={
+                    "LogisticsStatusName": "配送中（Sandbox 展示）"
+                },
+            ),
+        ),
+    )
+    session.add(shipping_order)
+
     session.add(
         Notification(
             user_id=users[1].id,
@@ -421,6 +963,25 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
 
 
 async def reset_demo_data(session: AsyncSession) -> Dict[str, int]:
+    document_keys = list(
+        await session.scalars(
+            select(MembershipDocument.object_key).where(
+                MembershipDocument.object_key.like(
+                    "membership-documents/%"
+                )
+            )
+        )
+    )
+    if document_keys:
+        try:
+            storage = r2_document_storage_from_settings(get_settings())
+            await storage.delete_documents(document_keys)
+        except IntegrationError:
+            if get_settings().environment.strip().lower() in {
+                "sandbox",
+                "production",
+            }:
+                raise
     merchant_trade_numbers = list(
         await session.scalars(select(PaymentAttempt.merchant_trade_no))
     )
@@ -454,14 +1015,34 @@ async def reset_demo_data(session: AsyncSession) -> Dict[str, int]:
         Refund,
         InventoryReservation,
         PaymentAttempt,
+        Shipment,
+        OrderFulfillment,
         OrderItem,
         Order,
+        MealEventOffering,
+        MealEvent,
+        Meal,
+        ShippingRate,
+        ActivityRegistration,
+        Activity,
+        MemberProposalVote,
+        MemberProposalComment,
+        MemberProposal,
         GroupCampaign,
         Vote,
         VoteProposal,
         GroupBundleItem,
         GroupBundle,
         Product,
+        MemberDirectoryEntry,
+        MembershipCharge,
+        MembershipFeeSchedule,
+        MembershipDocument,
+        Membership,
+        MembershipApplication,
+        MemberProfile,
+        EmailVerificationToken,
+        PasswordResetToken,
         User,
     ]
     for model in tables:

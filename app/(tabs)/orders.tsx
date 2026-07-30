@@ -13,7 +13,7 @@ import {
 } from "../../src/components/ui";
 import {
   dateTime,
-  fulfillmentLabels,
+  fulfillmentStatusLabel,
   money,
   paymentLabels,
 } from "../../src/lib/format";
@@ -25,16 +25,24 @@ import type { Order, OrderKind } from "../../src/types";
 const orderTabs: { value: OrderKind; label: string }[] = [
   { value: "regular", label: "一般訂單" },
   { value: "group", label: "團購訂單" },
+  { value: "meal_preorder", label: "便當預購" },
 ];
 
 function OrderCard({ order }: { order: Order }) {
+  const fulfillmentStatus =
+    order.fulfillment?.status ?? order.fulfillment_status;
   return (
     <Pressable
       onPress={() =>
-        router.push({
-          pathname: "/order/[id]",
-          params: { id: order.id },
-        })
+        order.order_kind === "meal_preorder"
+          ? router.push({
+              pathname: "/meal-order/[id]",
+              params: { id: order.id },
+            })
+          : router.push({
+              pathname: "/order/[id]",
+              params: { id: order.id },
+            })
       }
       style={({ pressed }) => [
         styles.card,
@@ -47,9 +55,11 @@ function OrderCard({ order }: { order: Order }) {
           <Text style={styles.orderDate}>{dateTime(order.created_at)}</Text>
         </View>
         <StatusPill
-          label={fulfillmentLabels[order.fulfillment_status]}
+          label={fulfillmentStatusLabel(fulfillmentStatus)}
           tone={
-            order.fulfillment_status === "ready_for_pickup"
+            ["ready_for_pickup", "ready", "delivered"].includes(
+              fulfillmentStatus,
+            )
               ? "positive"
               : order.fulfillment_status === "cancelled"
                 ? "danger"
@@ -98,7 +108,6 @@ export default function OrdersScreen() {
   return (
     <Screen>
       <PageHeader
-        eyebrow="MY ORDERS"
         subtitle="付款、備貨、取貨與發票各自顯示進度。"
         title="我的訂單"
       />
@@ -122,16 +131,34 @@ export default function OrdersScreen() {
         </View>
       ) : (
         <EmptyState
-          action={kind === "group" ? "看看共同購買" : "前往選購"}
+          action={
+            kind === "group"
+              ? "看看共同購買"
+              : kind === "meal_preorder"
+                ? "看看便當"
+                : "前往選購"
+          }
           description={
             kind === "group"
               ? "加入正式團購後，訂單會集中顯示在這裡。"
+              : kind === "meal_preorder"
+                ? "完成便當預購後，取餐碼會顯示在這裡。"
               : "完成選購與付款後，訂單會顯示在這裡。"
           }
-          icon={kind === "group" ? "people-outline" : "basket-outline"}
+          icon={
+            kind === "group"
+              ? "people-outline"
+              : kind === "meal_preorder"
+                ? "restaurant-outline"
+                : "basket-outline"
+          }
           onAction={() =>
             router.push(
-              kind === "group" ? "/(tabs)/group-buy" : "/(tabs)/home",
+              kind === "group"
+                ? "/(tabs)/group-buy"
+                : kind === "meal_preorder"
+                  ? "/(tabs)/meals"
+                  : "/(tabs)/home",
             )
           }
           title="目前沒有訂單"
@@ -154,7 +181,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   orderNumber: { color: colors.forest, fontSize: 15, fontWeight: "900" },
-  orderDate: { color: colors.muted, fontSize: 9, marginTop: 4 },
+  orderDate: { color: colors.muted, fontSize: 12, marginTop: 4 },
   rule: {
     backgroundColor: colors.line,
     height: 1,
@@ -162,8 +189,8 @@ const styles = StyleSheet.create({
   },
   itemRow: { flexDirection: "row", marginBottom: 7 },
   itemName: { color: colors.charcoal, flex: 1, fontSize: 12 },
-  itemQuantity: { color: colors.muted, fontSize: 11 },
-  more: { color: colors.muted, fontSize: 10 },
+  itemQuantity: { color: colors.muted, fontSize: 12 },
+  more: { color: colors.muted, fontSize: 12 },
   cardBottom: {
     alignItems: "flex-end",
     flexDirection: "row",

@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { useState } from "react";
 import {
-  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -12,6 +11,7 @@ import {
 
 import {
   Button,
+  CatalogCard,
   EmptyState,
   LoadingState,
   PageHeader,
@@ -41,62 +41,33 @@ const tabs: { value: HubTab; label: string }[] = [
 ];
 
 function CampaignCard({ campaign }: { campaign: GroupCampaign }) {
+  const { user } = useAuth();
   const progress = Math.min(
     100,
     (campaign.paid_quantity / campaign.min_paid_quantity) * 100,
   );
   return (
-    <Pressable
+    <CatalogCard
+      badge={campaignLabels[campaign.decision_status]}
+      imageKey={campaign.image_key}
+      imageUrl={campaign.image_url}
+      meta={`${dateTime(campaign.deadline)} 截止`}
       onPress={() =>
         router.push({
           pathname: "/campaign/[id]",
           params: { id: campaign.id },
         })
       }
-      style={({ pressed }) => [
-        styles.campaignCard,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Image
-        source={imageFor(campaign.image_key, campaign.image_url)}
-        style={styles.campaignImage}
-      />
-      <View style={styles.campaignCopy}>
-        <View style={styles.cardTop}>
-          <StatusPill
-            label={campaignLabels[campaign.decision_status]}
-            tone={
-              campaign.decision_status === "confirmed"
-                ? "positive"
-                : campaign.decision_status === "pending_confirmation"
-                  ? "warning"
-                  : "neutral"
-            }
-          />
-          <Text style={styles.deadline}>{dateTime(campaign.deadline)} 截止</Text>
-        </View>
-        <Text style={styles.campaignTitle}>{campaign.title}</Text>
-        <Text numberOfLines={2} style={styles.cardDescription}>
-          {campaign.description}
-        </Text>
-        <View style={styles.priceLine}>
-          <Text style={styles.price}>{money(campaign.member_price)}</Text>
-          <Text style={styles.priceMeta}>
-            社員價・非社員 {money(campaign.nonmember_price)}
-          </Text>
-        </View>
-        <View style={styles.progressMeta}>
-          <Text style={styles.progressStrong}>
-            已付款 {campaign.paid_quantity} 組
-          </Text>
-          <Text style={styles.progressText}>
-            門檻 {campaign.min_paid_quantity} 組
-          </Text>
-        </View>
-        <ProgressBar value={progress} />
-      </View>
-    </Pressable>
+      price={money(
+        user?.membership_type === "member"
+          ? campaign.member_price
+          : campaign.nonmember_price,
+      )}
+      priceLabel={user?.membership_type === "member" ? "社員價" : "一般價"}
+      progress={progress}
+      progressLabel={`${campaign.paid_quantity}/${campaign.min_paid_quantity} 組`}
+      title={campaign.title}
+    />
   );
 }
 
@@ -189,7 +160,6 @@ export default function GroupBuyScreen() {
   return (
     <Screen>
       <PageHeader
-        eyebrow="CO-BUYING"
         right={
           <Button
             compact
@@ -211,7 +181,7 @@ export default function GroupBuyScreen() {
       {loading ? <LoadingState label="整理共同購買進度" /> : null}
 
       {!loading && tab === "campaigns" ? (
-        <View style={styles.list}>
+        <View style={styles.campaignGrid}>
           {(campaignsQuery.data ?? []).map((campaign) => (
             <CampaignCard campaign={campaign} key={campaign.id} />
           ))}
@@ -232,9 +202,11 @@ export default function GroupBuyScreen() {
             {myCampaigns.length ? (
               <>
                 <Text style={styles.groupLabel}>我加入的團購</Text>
-                {myCampaigns.map((campaign) => (
-                  <CampaignCard campaign={campaign} key={campaign.id} />
-                ))}
+                <View style={styles.campaignGridNested}>
+                  {myCampaigns.map((campaign) => (
+                    <CampaignCard campaign={campaign} key={campaign.id} />
+                  ))}
+                </View>
               </>
             ) : null}
             {myProposals.length ? (
@@ -271,20 +243,23 @@ export default function GroupBuyScreen() {
 
 const styles = StyleSheet.create({
   list: { gap: 14, padding: spacing.md },
-  campaignCard: {
-    backgroundColor: colors.paper,
-    borderRadius: radii.lg,
-    overflow: "hidden",
-    ...shadows.card,
+  campaignGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    padding: spacing.md,
   },
-  campaignImage: { aspectRatio: 2.05, width: "100%" },
-  campaignCopy: { padding: spacing.md },
+  campaignGridNested: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+  },
   cardTop: {
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  deadline: { color: colors.muted, fontSize: 9 },
+  deadline: { color: colors.muted, fontSize: 12 },
   campaignTitle: {
     color: colors.forest,
     fontSize: 21,
@@ -293,7 +268,7 @@ const styles = StyleSheet.create({
   },
   cardDescription: {
     color: colors.muted,
-    fontSize: 12,
+    fontSize: 13,
     lineHeight: 19,
     marginTop: 5,
   },
@@ -304,15 +279,15 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   price: { color: colors.orange, fontSize: 24, fontWeight: "900" },
-  priceMeta: { color: colors.muted, fontSize: 10 },
+  priceMeta: { color: colors.muted, fontSize: 12 },
   progressMeta: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 7,
     marginTop: 14,
   },
-  progressStrong: { color: colors.forest, fontSize: 11, fontWeight: "900" },
-  progressText: { color: colors.muted, fontSize: 10 },
+  progressStrong: { color: colors.forest, fontSize: 12, fontWeight: "900" },
+  progressText: { color: colors.muted, fontSize: 12 },
   proposalCard: {
     backgroundColor: colors.paper,
     borderRadius: radii.lg,
@@ -335,7 +310,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 9,
   },
-  estimate: { color: colors.muted, fontSize: 10, marginTop: 9 },
+  estimate: { color: colors.muted, fontSize: 12, lineHeight: 18, marginTop: 9 },
   groupLabel: {
     color: colors.forest,
     fontSize: 17,

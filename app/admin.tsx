@@ -23,7 +23,7 @@ import {
 } from "../src/components/ui";
 import {
   campaignLabels,
-  fulfillmentLabels,
+  fulfillmentStatusLabel,
   money,
   paymentLabels,
   proposalLabels,
@@ -31,15 +31,25 @@ import {
 import { api, getApiBaseUrl, getErrorMessage } from "../src/services/api";
 import { useAuth } from "../src/store/AuthContext";
 import { colors, radii, spacing } from "../src/theme";
-import type { Category, Order, TaxType } from "../src/types";
+import type {
+  Category,
+  Order,
+  TaxType,
+  TemperatureZone,
+} from "../src/types";
 
-type AdminTab = "overview" | "orders" | "products" | "groups" | "settings";
+type AdminTab =
+  | "overview"
+  | "sales"
+  | "fulfillment"
+  | "social"
+  | "settings";
 
 const tabs: { value: AdminTab; label: string }[] = [
   { value: "overview", label: "總覽" },
-  { value: "orders", label: "訂單" },
-  { value: "products", label: "商品" },
-  { value: "groups", label: "團購" },
+  { value: "sales", label: "販售" },
+  { value: "fulfillment", label: "訂單與物流" },
+  { value: "social", label: "社務" },
   { value: "settings", label: "設定" },
 ];
 
@@ -59,6 +69,8 @@ type ProductDraft = {
   nonmemberPrice: string;
   stock: string;
   taxType: TaxType;
+  isShippable: boolean;
+  temperatureZone: TemperatureZone;
 };
 
 const emptyProductDraft: ProductDraft = {
@@ -70,13 +82,22 @@ const emptyProductDraft: ProductDraft = {
   nonmemberPrice: "",
   stock: "",
   taxType: "taxable",
+  isShippable: true,
+  temperatureZone: "ambient",
 };
 
 export default function AdminScreen() {
   const [tab, setTab] = useState<AdminTab>("overview");
+  const [message, setMessage] = useState("");
+  const [productDraft, setProductDraft] =
+    useState<ProductDraft>(emptyProductDraft);
+  const [productFormError, setProductFormError] = useState("");
+  const [resetConfirmation, setResetConfirmation] = useState("");
   const { user, isAdmin, logout } = useAuth();
   const queryClient = useQueryClient();
+
   const products = useQuery({ queryKey: ["products"], queryFn: api.products });
+  const bundles = useQuery({ queryKey: ["bundles"], queryFn: api.bundles });
   const proposals = useQuery({
     queryKey: ["proposals"],
     queryFn: api.proposals,
@@ -86,28 +107,41 @@ export default function AdminScreen() {
     queryFn: api.campaigns,
   });
   const orders = useQuery({ queryKey: ["orders"], queryFn: api.orders });
-  const bundles = useQuery({ queryKey: ["bundles"], queryFn: api.bundles });
-  const [message, setMessage] = useState("");
-  const [productDraft, setProductDraft] =
-    useState<ProductDraft>(emptyProductDraft);
-  const [productFormError, setProductFormError] = useState("");
-  const [resetConfirmation, setResetConfirmation] = useState("");
+  const mealEvents = useQuery({
+    queryKey: ["meal-events"],
+    queryFn: api.mealEvents,
+  });
+  const membershipApplications = useQuery({
+    queryKey: ["admin-membership-applications"],
+    queryFn: api.adminMembershipApplications,
+  });
+  const activities = useQuery({
+    queryKey: ["activities"],
+    queryFn: api.activities,
+  });
+  const memberProposals = useQuery({
+    queryKey: ["member-proposals"],
+    queryFn: api.memberProposals,
+  });
 
   const refresh = async () => {
     await queryClient.invalidateQueries();
   };
+  const announce = async (text: string) => {
+    setMessage(text);
+    await refresh();
+  };
   const toggleProduct = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) =>
       api.toggleProduct(id, active),
-    onSuccess: refresh,
+    onSuccess: () => announce("商品狀態已更新"),
   });
   const createProduct = useMutation({
     mutationFn: api.createProduct,
     onSuccess: async () => {
       setProductDraft(emptyProductDraft);
       setProductFormError("");
-      setMessage("商品已上架");
-      await refresh();
+      await announce("商品已上架");
     },
   });
   const reviewProposal = useMutation({
@@ -121,25 +155,11 @@ export default function AdminScreen() {
       api.reviewProposal(id, action, {
         threshold: 10,
         deadline: new Date(Date.now() + 7 * 86400000).toISOString(),
-        ...(action === "reject" ? { reason: "目前供應條件不適合開放" } : {}),
+        ...(action === "reject"
+          ? { reason: "目前供應條件不適合開放" }
+          : {}),
       }),
-    onSuccess: async () => {
-      setMessage("提案狀態已更新");
-      await refresh();
-    },
-  });
-  const confirmCampaign = useMutation({
-    mutationFn: ({
-      id,
-      pickupAt,
-    }: {
-      id: string;
-      pickupAt: string;
-    }) => api.confirmCampaign(id, pickupAt),
-    onSuccess: async () => {
-      setMessage("已確認成團並發布取貨時間");
-      await refresh();
-    },
+    onSuccess: () => announce("團購投票提案已更新"),
   });
   const convertProposal = useMutation({
     mutationFn: (proposalId: string) => {
@@ -149,12 +169,8 @@ export default function AdminScreen() {
       if (!proposal) throw new Error("找不到提案");
       const target =
         proposal.target_type === "product"
-          ? (products.data ?? []).find(
-              (item) => item.id === proposal.target_id,
-            )
-          : (bundles.data ?? []).find(
-              (item) => item.id === proposal.target_id,
-            );
+          ? (products.data ?? []).find((item) => item.id === proposal.target_id)
+          : (bundles.data ?? []).find((item) => item.id === proposal.target_id);
       if (!target) throw new Error("找不到提案項目");
       const now = Date.now();
       return api.convertProposal(proposal.id, {
@@ -174,10 +190,22 @@ export default function AdminScreen() {
         estimated_pickup_end: new Date(now + 11 * 86400000).toISOString(),
       });
     },
-    onSuccess: async () => {
-      setMessage("已建立正式團購");
-      await refresh();
-    },
+    onSuccess: () => announce("已建立正式團購"),
+  });
+  const campaignDecision = useMutation({
+    mutationFn: ({
+      id,
+      confirm,
+      pickupAt,
+    }: {
+      id: string;
+      confirm: boolean;
+      pickupAt: string;
+    }) =>
+      confirm
+        ? api.confirmCampaign(id, pickupAt)
+        : api.rejectCampaign(id, "供應條件無法確認"),
+    onSuccess: () => announce("團購成團狀態已更新"),
   });
   const advanceOrder = useMutation({
     mutationFn: ({
@@ -190,63 +218,127 @@ export default function AdminScreen() {
     onSuccess: refresh,
   });
   const refundOrder = useMutation({
-    mutationFn: (id: string) =>
-      api.adminRefundOrder(id, "管理員核准全額退款"),
-    onSuccess: async () => {
-      setMessage("訂單已進入退款處理");
-      await refresh();
-    },
+    mutationFn: (id: string) => api.adminRefundOrder(id, "管理員核准全額退款"),
+    onSuccess: () => announce("訂單已進入退款處理"),
   });
-  const rejectCampaign = useMutation({
-    mutationFn: (id: string) =>
-      api.rejectCampaign(id, "供應條件無法確認，管理員拒絕成團"),
-    onSuccess: async () => {
-      setMessage("已拒絕成團並啟動退款");
-      await refresh();
-    },
+  const advanceShipment = useMutation({
+    mutationFn: (id: string) => api.adminAdvanceShipment(id, "delivered"),
+    onSuccess: () => announce("Sandbox 物流貨態已推進"),
+  });
+  const mealEventAction = useMutation({
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "publish" | "cancel" | "open_pickup" | "complete";
+    }) => api.adminMealEventAction(id, action),
+    onSuccess: () => announce("便當場次狀態已更新"),
+  });
+  const duplicateMealEvent = useMutation({
+    mutationFn: api.adminDuplicateMealEvent,
+    onSuccess: () => announce("便當場次已複製為草稿"),
+  });
+  const reviewMembership = useMutation({
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "request_revision" | "approve" | "reject";
+    }) =>
+      api.reviewMembershipApplication(
+        id,
+        action,
+        action === "request_revision"
+          ? "請補齊測試證件後再次送件"
+          : action === "reject"
+            ? "目前資料未符合入社條件"
+            : "資料與測試證件已確認",
+      ),
+    onSuccess: () => announce("入社申請狀態已更新"),
+  });
+  const reviewActivity = useMutation({
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "approve" | "cancel" | "complete";
+    }) => api.adminReviewActivity(id, action),
+    onSuccess: () => announce("社員活動狀態已更新"),
+  });
+  const reviewMemberProposal = useMutation({
+    mutationFn: ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "approve" | "reject" | "close";
+    }) => api.adminReviewMemberProposal(id, action),
+    onSuccess: () => announce("社員提案狀態已更新"),
   });
   const reset = useMutation({
     mutationFn: api.resetDemo,
     onSuccess: async () => {
       setResetConfirmation("");
-      setMessage("展示資料已恢復為初始狀態");
-      await refresh();
+      await announce("展示資料已恢復為初始狀態");
     },
   });
 
+  const loading = [
+    products,
+    bundles,
+    proposals,
+    campaigns,
+    orders,
+    mealEvents,
+    membershipApplications,
+    activities,
+    memberProposals,
+  ].some((query) => query.isLoading);
+  const mutationError = [
+    toggleProduct,
+    createProduct,
+    reviewProposal,
+    convertProposal,
+    campaignDecision,
+    advanceOrder,
+    refundOrder,
+    advanceShipment,
+    mealEventAction,
+    duplicateMealEvent,
+    reviewMembership,
+    reviewActivity,
+    reviewMemberProposal,
+    reset,
+  ].find((mutation) => mutation.error)?.error;
   const summary = useMemo(
     () => ({
       pendingOrders: (orders.data ?? []).filter(
-        (order) => order.fulfillment_status === "pending_confirmation",
+        (order) =>
+          (order.fulfillment?.status ?? order.fulfillment_status) ===
+          "pending_confirmation",
       ).length,
-      activeCampaigns: (campaigns.data ?? []).filter(
-        (campaign) => campaign.intake_status === "open",
+      sellingItems:
+        (products.data ?? []).filter((product) => product.is_active).length +
+        (campaigns.data ?? []).filter(
+          (campaign) => campaign.intake_status === "open",
+        ).length,
+      socialReviews: (membershipApplications.data ?? []).filter((item) =>
+        ["submitted", "needs_revision"].includes(item.status),
       ).length,
-      pendingProposals: (proposals.data ?? []).filter(
-        (proposal) => proposal.status === "pending_review",
-      ).length,
-      pickupOrders: (orders.data ?? []).filter(
-        (order) => order.fulfillment_status === "ready_for_pickup",
+      shipments: (orders.data ?? []).filter(
+        (order) => order.shipment && order.shipment.status !== "delivered",
       ).length,
     }),
-    [campaigns.data, orders.data, proposals.data],
+    [
+      campaigns.data,
+      membershipApplications.data,
+      orders.data,
+      products.data,
+    ],
   );
-  const loading =
-    products.isLoading ||
-    bundles.isLoading ||
-    proposals.isLoading ||
-    campaigns.isLoading ||
-    orders.isLoading;
-  const mutationError =
-    createProduct.error ??
-    toggleProduct.error ??
-    reviewProposal.error ??
-    confirmCampaign.error ??
-    convertProposal.error ??
-    advanceOrder.error ??
-    refundOrder.error ??
-    rejectCampaign.error ??
-    reset.error;
 
   const submitProduct = () => {
     const name = productDraft.name.trim();
@@ -283,6 +375,11 @@ export default function AdminScreen() {
       nonmember_price: nonmemberPrice,
       stock_quantity: stock,
       tax_type: productDraft.taxType,
+      is_shippable: productDraft.isShippable,
+      temperature_zone: productDraft.temperatureZone,
+      allowed_logistics: productDraft.isShippable
+        ? ["home_delivery", "seven_eleven", "family_mart", "hilife"]
+        : [],
     });
   };
 
@@ -304,30 +401,29 @@ export default function AdminScreen() {
     <Screen>
       <View style={styles.header}>
         <BrandLockup light />
-        <Pressable
+        <Button
+          compact
+          icon="storefront-outline"
+          label="顧客畫面"
           onPress={() => router.push("/(tabs)/home")}
-          style={styles.storeButton}
-        >
-          <Ionicons color={colors.forest} name="storefront-outline" size={17} />
-          <Text style={styles.storeButtonText}>顧客畫面</Text>
-        </Pressable>
+          variant="quiet"
+        />
       </View>
-      <View style={styles.adminTitleRow}>
+      <View style={styles.titleRow}>
         <View>
-          <Text style={styles.eyebrow}>OPERATIONS</Text>
-          <Text style={styles.adminTitle}>合作社管理</Text>
+          <Text style={styles.title}>合作社管理</Text>
+          <Text style={styles.operator}>{user.display_name}</Text>
         </View>
-        <Text style={styles.operator}>{user.display_name}</Text>
+        <Ionicons color={colors.orange} name="settings-outline" size={27} />
       </View>
       <SegmentControl onChange={setTab} options={tabs} value={tab} />
-
       {message ? (
-        <View style={styles.messageWrap}>
+        <View style={styles.message}>
           <InlineMessage text={message} tone="positive" />
         </View>
       ) : null}
       {mutationError ? (
-        <View style={styles.messageWrap}>
+        <View style={styles.message}>
           <InlineMessage
             text={getErrorMessage(mutationError)}
             tone="danger"
@@ -341,246 +437,205 @@ export default function AdminScreen() {
           <View style={styles.metrics}>
             {[
               {
+                label: "販售項目",
+                value: summary.sellingItems,
+                icon: "storefront-outline" as const,
+                target: "sales" as const,
+              },
+              {
                 label: "待確認訂單",
                 value: summary.pendingOrders,
                 icon: "receipt-outline" as const,
+                target: "fulfillment" as const,
               },
               {
-                label: "進行中團購",
-                value: summary.activeCampaigns,
+                label: "進行中物流",
+                value: summary.shipments,
+                icon: "cube-outline" as const,
+                target: "fulfillment" as const,
+              },
+              {
+                label: "待處理社務",
+                value: summary.socialReviews,
                 icon: "people-outline" as const,
-              },
-              {
-                label: "待審核提案",
-                value: summary.pendingProposals,
-                icon: "chatbubbles-outline" as const,
-              },
-              {
-                label: "待取貨",
-                value: summary.pickupOrders,
-                icon: "storefront-outline" as const,
+                target: "social" as const,
               },
             ].map((metric) => (
               <Pressable
                 key={metric.label}
-                onPress={() =>
-                  setTab(
-                    metric.label.includes("團購") ||
-                      metric.label.includes("提案")
-                      ? "groups"
-                      : "orders",
-                  )
-                }
-                style={styles.metric}
+                onPress={() => setTab(metric.target)}
+                style={({ pressed }) => [
+                  styles.metric,
+                  pressed && styles.pressed,
+                ]}
               >
-                <Ionicons color={colors.forest} name={metric.icon} size={21} />
+                <Ionicons color={colors.forest} name={metric.icon} size={22} />
                 <Text style={styles.metricValue}>{metric.value}</Text>
                 <Text style={styles.metricLabel}>{metric.label}</Text>
               </Pressable>
             ))}
           </View>
-          <View style={styles.noticePanel}>
+          <View style={styles.notice}>
             <Text style={styles.sectionTitle}>今日處理順序</Text>
             <Text style={styles.noticeText}>
-              先確認已達門檻的團購，再處理待確認訂單與可取貨通知。
+              先處理待審核入社申請與已達門檻團購，再確認訂單履約及物流貨態。
             </Text>
-            <Button
-              compact
-              label="查看團購"
-              onPress={() => setTab("groups")}
-              variant="secondary"
-            />
           </View>
         </View>
       ) : null}
 
-      {!loading && tab === "orders" ? (
+      {!loading && tab === "sales" ? (
         <View style={styles.content}>
-          {(orders.data ?? []).map((order) => (
-            <AdminOrderRow
-              key={order.id}
-              loading={advanceOrder.isPending}
-              onAdvance={(status) =>
-                advanceOrder.mutate({ id: order.id, status })
+          <Text style={styles.sectionTitle}>上架新商品</Text>
+          <View style={styles.form}>
+            <Field
+              label="商品名稱"
+              onChange={(name) =>
+                setProductDraft((current) => ({ ...current, name }))
               }
-              onRefund={() => refundOrder.mutate(order.id)}
-              refunding={refundOrder.isPending}
-              order={order}
+              placeholder="例如：友善栽培高麗菜"
+              value={productDraft.name}
             />
-          ))}
-        </View>
-      ) : null}
-
-      {!loading && tab === "products" ? (
-        <View style={styles.content}>
-          <View style={styles.productForm}>
-            <View style={styles.formHeading}>
-              <View>
-                <Text style={styles.sectionTitle}>上架新商品</Text>
-                <Text style={styles.rowMeta}>商品代碼會由系統自動建立</Text>
-              </View>
-              <Ionicons
-                color={colors.orange}
-                name="add-circle-outline"
-                size={27}
-              />
+            <Field
+              label="商品介紹"
+              multiline
+              onChange={(description) =>
+                setProductDraft((current) => ({ ...current, description }))
+              }
+              placeholder="產地、栽培方式或料理方式"
+              value={productDraft.description}
+            />
+            <Text style={styles.fieldLabel}>分類</Text>
+            <View style={styles.optionWrap}>
+              {productCategories.map((category) => (
+                <Choice
+                  key={category}
+                  label={category}
+                  onPress={() =>
+                    setProductDraft((current) => ({ ...current, category }))
+                  }
+                  selected={productDraft.category === category}
+                />
+              ))}
             </View>
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>商品名稱</Text>
-              <TextInput
-                onChangeText={(name) =>
-                  setProductDraft((draft) => ({ ...draft, name }))
-                }
-                placeholder="例如：友善栽培高麗菜"
-                placeholderTextColor={colors.sage}
-                style={styles.input}
-                value={productDraft.name}
-              />
-            </View>
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>商品介紹</Text>
-              <TextInput
-                multiline
-                numberOfLines={3}
-                onChangeText={(description) =>
-                  setProductDraft((draft) => ({ ...draft, description }))
-                }
-                placeholder="產地、栽培方式或適合的料理方式"
-                placeholderTextColor={colors.sage}
-                style={[styles.input, styles.descriptionInput]}
-                textAlignVertical="top"
-                value={productDraft.description}
-              />
-            </View>
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>分類</Text>
-              <View style={styles.categoryRow}>
-                {productCategories.map((category) => {
-                  const selected = productDraft.category === category;
-                  return (
-                    <Pressable
-                      accessibilityRole="button"
-                      key={category}
-                      onPress={() =>
-                        setProductDraft((draft) => ({
-                          ...draft,
-                          category,
-                        }))
-                      }
-                      style={[
-                        styles.categoryButton,
-                        selected && styles.categoryButtonSelected,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.categoryLabel,
-                          selected && styles.categoryLabelSelected,
-                        ]}
-                      >
-                        {category}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-            <View style={styles.field}>
-              <Text style={styles.fieldLabel}>販售單位</Text>
-              <TextInput
-                onChangeText={(unit) =>
-                  setProductDraft((draft) => ({ ...draft, unit }))
-                }
-                placeholder="盒、包、袋、台斤"
-                placeholderTextColor={colors.sage}
-                style={styles.input}
-                value={productDraft.unit}
-              />
-            </View>
+            <Field
+              label="販售單位"
+              onChange={(unit) =>
+                setProductDraft((current) => ({ ...current, unit }))
+              }
+              placeholder="盒、包、袋、台斤"
+              value={productDraft.unit}
+            />
             <View style={styles.fieldRow}>
               <View style={styles.fieldHalf}>
-                <Text style={styles.fieldLabel}>社員價</Text>
-                <TextInput
+                <Field
                   keyboardType="number-pad"
-                  onChangeText={(memberPrice) =>
-                    setProductDraft((draft) => ({
-                      ...draft,
+                  label="社員價"
+                  onChange={(memberPrice) =>
+                    setProductDraft((current) => ({
+                      ...current,
                       memberPrice,
                     }))
                   }
                   placeholder="0"
-                  placeholderTextColor={colors.sage}
-                  style={styles.input}
                   value={productDraft.memberPrice}
                 />
               </View>
               <View style={styles.fieldHalf}>
-                <Text style={styles.fieldLabel}>非社員價</Text>
-                <TextInput
+                <Field
                   keyboardType="number-pad"
-                  onChangeText={(nonmemberPrice) =>
-                    setProductDraft((draft) => ({
-                      ...draft,
+                  label="非社員價"
+                  onChange={(nonmemberPrice) =>
+                    setProductDraft((current) => ({
+                      ...current,
                       nonmemberPrice,
                     }))
                   }
                   placeholder="0"
-                  placeholderTextColor={colors.sage}
-                  style={styles.input}
                   value={productDraft.nonmemberPrice}
                 />
               </View>
             </View>
             <View style={styles.fieldRow}>
               <View style={styles.fieldHalf}>
-                <Text style={styles.fieldLabel}>庫存</Text>
-                <TextInput
+                <Field
                   keyboardType="number-pad"
-                  onChangeText={(stock) =>
-                    setProductDraft((draft) => ({ ...draft, stock }))
+                  label="庫存"
+                  onChange={(stock) =>
+                    setProductDraft((current) => ({ ...current, stock }))
                   }
                   placeholder="0"
-                  placeholderTextColor={colors.sage}
-                  style={styles.input}
                   value={productDraft.stock}
                 />
               </View>
               <View style={styles.fieldHalf}>
                 <Text style={styles.fieldLabel}>稅別</Text>
                 <View style={styles.taxRow}>
-                  {[
-                    { value: "taxable" as const, label: "應稅" },
-                    { value: "tax_exempt" as const, label: "免稅" },
-                  ].map((option) => {
-                    const selected = productDraft.taxType === option.value;
-                    return (
-                      <Pressable
-                        key={option.value}
-                        onPress={() =>
-                          setProductDraft((draft) => ({
-                            ...draft,
-                            taxType: option.value,
-                          }))
-                        }
-                        style={[
-                          styles.taxButton,
-                          selected && styles.taxButtonSelected,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.taxLabel,
-                            selected && styles.taxLabelSelected,
-                          ]}
-                        >
-                          {option.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+                  <Choice
+                    label="應稅"
+                    onPress={() =>
+                      setProductDraft((current) => ({
+                        ...current,
+                        taxType: "taxable",
+                      }))
+                    }
+                    selected={productDraft.taxType === "taxable"}
+                  />
+                  <Choice
+                    label="免稅"
+                    onPress={() =>
+                      setProductDraft((current) => ({
+                        ...current,
+                        taxType: "tax_exempt",
+                      }))
+                    }
+                    selected={productDraft.taxType === "tax_exempt"}
+                  />
                 </View>
               </View>
             </View>
+            <View style={styles.shippingSetting}>
+              <View style={styles.cardCopy}>
+                <Text style={styles.fieldLabel}>允許物流配送</Text>
+                <Text style={styles.rowMeta}>
+                  關閉後只能選合作社現場取貨
+                </Text>
+              </View>
+              <Switch
+                onValueChange={(isShippable) =>
+                  setProductDraft((current) => ({
+                    ...current,
+                    isShippable,
+                  }))
+                }
+                trackColor={{ false: colors.sage, true: colors.forestSoft }}
+                value={productDraft.isShippable}
+              />
+            </View>
+            {productDraft.isShippable ? (
+              <>
+                <Text style={styles.fieldLabel}>配送溫層</Text>
+                <View style={styles.optionWrap}>
+                  {[
+                    { value: "ambient" as const, label: "常溫" },
+                    { value: "chilled" as const, label: "冷藏" },
+                    { value: "frozen" as const, label: "冷凍" },
+                  ].map((option) => (
+                    <Choice
+                      key={option.value}
+                      label={option.label}
+                      onPress={() =>
+                        setProductDraft((current) => ({
+                          ...current,
+                          temperatureZone: option.value,
+                        }))
+                      }
+                      selected={productDraft.temperatureZone === option.value}
+                    />
+                  ))}
+                </View>
+              </>
+            ) : null}
             {productFormError ? (
               <InlineMessage text={productFormError} tone="danger" />
             ) : null}
@@ -591,74 +646,43 @@ export default function AdminScreen() {
               onPress={submitProduct}
             />
           </View>
-          <View style={styles.productListHeading}>
-            <Text style={styles.sectionTitle}>商品清單</Text>
-            <Text style={styles.productCount}>
-              共 {(products.data ?? []).length} 項
-            </Text>
-          </View>
+
+          <Text style={styles.sectionTitle}>商品清單</Text>
           {(products.data ?? []).map((product) => (
-            <View
-              key={product.id}
-              style={[
-                styles.productRow,
-                !product.is_active && styles.productRowInactive,
-              ]}
-            >
-              <View style={styles.productCopy}>
-                <View style={styles.productNameRow}>
+            <View key={product.id} style={styles.adminCard}>
+              <View style={styles.cardHeading}>
+                <View style={styles.cardCopy}>
                   <Text style={styles.rowTitle}>{product.name}</Text>
-                  <StatusPill
-                    label={product.is_active ? "上架中" : "已下架"}
-                    tone={product.is_active ? "positive" : "neutral"}
-                  />
+                  <Text style={styles.rowMeta}>
+                    {product.category}　社員 {money(product.member_price)}
+                    　非社員 {money(product.nonmember_price)}
+                  </Text>
                 </View>
-                <Text style={styles.rowMeta}>
-                  {product.category}・社員 {money(product.member_price)}・非社員{" "}
-                  {money(product.nonmember_price)}
-                </Text>
-                <Text style={styles.rowMeta}>
-                  庫存 {product.stock_quantity ?? product.stock ?? 0}{" "}
-                  {product.unit}・
-                  {product.tax_type === "taxable" ? "應稅" : "免稅"}
-                </Text>
+                <Switch
+                  disabled={toggleProduct.isPending}
+                  onValueChange={(active) =>
+                    toggleProduct.mutate({ id: product.id, active })
+                  }
+                  trackColor={{ false: colors.sage, true: colors.forestSoft }}
+                  value={product.is_active}
+                />
               </View>
-              <Switch
-                disabled={toggleProduct.isPending}
-                onValueChange={(active) =>
-                  toggleProduct.mutate({ id: product.id, active })
-                }
-                thumbColor={colors.paper}
-                trackColor={{
-                  false: colors.sage,
-                  true: colors.forestSoft,
-                }}
-                value={product.is_active}
-              />
             </View>
           ))}
-        </View>
-      ) : null}
 
-      {!loading && tab === "groups" ? (
-        <View style={styles.content}>
-          <Text style={styles.sectionTitle}>待審核提案</Text>
+          <Text style={styles.sectionTitle}>團購提案與正式團購</Text>
           {(proposals.data ?? [])
             .filter((proposal) => proposal.status === "pending_review")
             .map((proposal) => (
               <View key={proposal.id} style={styles.adminCard}>
-                <View style={styles.cardHeading}>
-                  <Text style={styles.rowTitle}>{proposal.target_name}</Text>
-                  <StatusPill label={proposalLabels[proposal.status]} tone="warning" />
-                </View>
-                <Text style={styles.rowMeta}>
-                  {proposal.target_type === "bundle" ? "固定套組" : "單一商品"}
-                </Text>
+                <CardTitle
+                  status={proposalLabels[proposal.status]}
+                  title={proposal.target_name}
+                />
                 <View style={styles.actions}>
                   <Button
                     compact
-                    label="通過並開放投票"
-                    loading={reviewProposal.isPending}
+                    label="通過投票"
                     onPress={() =>
                       reviewProposal.mutate({
                         id: proposal.id,
@@ -675,12 +699,11 @@ export default function AdminScreen() {
                         action: "reject",
                       })
                     }
-                    variant="quiet"
+                    variant="danger"
                   />
                 </View>
               </View>
             ))}
-          <Text style={styles.sectionTitle}>正式團購</Text>
           {(proposals.data ?? [])
             .filter(
               (proposal) =>
@@ -690,50 +713,32 @@ export default function AdminScreen() {
             )
             .map((proposal) => (
               <View key={`convert-${proposal.id}`} style={styles.adminCard}>
-                <View style={styles.cardHeading}>
-                  <View>
-                    <Text style={styles.rowTitle}>{proposal.target_name}</Text>
-                    <Text style={styles.rowMeta}>
-                      已達 {proposal.vote_count}／{proposal.threshold} 人
-                    </Text>
-                  </View>
-                  <StatusPill label="可正式開團" tone="positive" />
-                </View>
+                <CardTitle status="可正式開團" title={proposal.target_name} />
                 <Button
                   compact
                   label="建立正式團購"
-                  loading={convertProposal.isPending}
                   onPress={() => convertProposal.mutate(proposal.id)}
                 />
               </View>
             ))}
           {(campaigns.data ?? []).map((campaign) => (
             <View key={campaign.id} style={styles.adminCard}>
-              <View style={styles.cardHeading}>
-                <Text style={styles.rowTitle}>{campaign.title}</Text>
-                <StatusPill
-                  label={campaignLabels[campaign.decision_status]}
-                  tone={
-                    campaign.decision_status === "confirmed"
-                      ? "positive"
-                      : "neutral"
-                  }
-                />
-              </View>
+              <CardTitle
+                status={campaignLabels[campaign.decision_status]}
+                title={campaign.title}
+              />
               <Text style={styles.rowMeta}>
-                已付款 {campaign.paid_quantity}／
-                {campaign.min_paid_quantity} 組・剩餘{" "}
-                {campaign.available_quantity} 組
+                已付款 {campaign.paid_quantity}/{campaign.min_paid_quantity} 組
               </Text>
               {campaign.decision_status === "pending_confirmation" ? (
                 <View style={styles.actions}>
                   <Button
                     compact
                     label="確認成團"
-                    loading={confirmCampaign.isPending}
                     onPress={() =>
-                      confirmCampaign.mutate({
+                      campaignDecision.mutate({
                         id: campaign.id,
+                        confirm: true,
                         pickupAt: campaign.estimated_pickup_start,
                       })
                     }
@@ -741,12 +746,292 @@ export default function AdminScreen() {
                   <Button
                     compact
                     label="拒絕成團"
-                    loading={rejectCampaign.isPending}
-                    onPress={() => rejectCampaign.mutate(campaign.id)}
+                    onPress={() =>
+                      campaignDecision.mutate({
+                        id: campaign.id,
+                        confirm: false,
+                        pickupAt: campaign.estimated_pickup_start,
+                      })
+                    }
                     variant="danger"
                   />
                 </View>
               ) : null}
+            </View>
+          ))}
+
+          <Text style={styles.sectionTitle}>便當場次</Text>
+          {(mealEvents.data ?? []).map((event) => (
+            <View key={event.id} style={styles.adminCard}>
+              <CardTitle status={event.status} title={event.title} />
+              <Text style={styles.rowMeta}>{event.venue_name}</Text>
+              <View style={styles.actions}>
+                <Button
+                  compact
+                  label="複製場次"
+                  onPress={() => duplicateMealEvent.mutate(event.id)}
+                  variant="quiet"
+                />
+                {event.status === "published" ? (
+                  <Button
+                    compact
+                    label="開放取餐"
+                    onPress={() =>
+                      mealEventAction.mutate({
+                        id: event.id,
+                        action: "open_pickup",
+                      })
+                    }
+                    variant="secondary"
+                  />
+                ) : null}
+                {!["completed", "cancelled"].includes(event.status) ? (
+                  <Button
+                    compact
+                    label="取消場次"
+                    onPress={() =>
+                      mealEventAction.mutate({
+                        id: event.id,
+                        action: "cancel",
+                      })
+                    }
+                    variant="danger"
+                  />
+                ) : null}
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {!loading && tab === "fulfillment" ? (
+        <View style={styles.content}>
+          <InlineMessage text="後台貨態推進是 Sandbox 功能，正式環境只接受已驗證的物流回呼。" />
+          {(orders.data ?? []).map((order) => {
+            const nextStatus = order.available_actions.includes("start_preparing")
+              ? "preparing"
+              : order.available_actions.includes("mark_ready")
+                ? "ready_for_pickup"
+                : order.available_actions.includes("mark_picked_up")
+                  ? "picked_up"
+                  : null;
+            return (
+              <View key={order.id} style={styles.adminCard}>
+                <View style={styles.cardHeading}>
+                  <View style={styles.cardCopy}>
+                    <Text style={styles.rowTitle}>{order.order_number}</Text>
+                    <Text style={styles.rowMeta}>
+                      {order.order_kind === "group"
+                        ? "團購"
+                        : order.order_kind === "meal_preorder"
+                          ? "便當"
+                          : "一般訂單"}
+                      　{money(order.amount_total)}
+                    </Text>
+                  </View>
+                  <StatusPill label={paymentLabels[order.payment_status]} />
+                </View>
+                <View style={styles.statusLine}>
+                  <StatusPill
+                    label={fulfillmentStatusLabel(
+                      order.fulfillment?.status ?? order.fulfillment_status,
+                    )}
+                  />
+                  {order.shipment ? (
+                    <StatusPill
+                      label={`物流 ${order.shipment.status}`}
+                      tone={
+                        order.shipment.status === "delivered"
+                          ? "positive"
+                          : "warning"
+                      }
+                    />
+                  ) : null}
+                </View>
+                {order.shipment ? (
+                  <Text style={styles.rowMeta}>
+                    {order.shipment.tracking_number}　運費{" "}
+                    {money(order.shipment.shipping_fee)}
+                  </Text>
+                ) : null}
+                <View style={styles.actions}>
+                  {order.available_actions.includes("refund") ? (
+                    <Button
+                      compact
+                      label="全額退款"
+                      onPress={() => refundOrder.mutate(order.id)}
+                      variant="danger"
+                    />
+                  ) : null}
+                  {nextStatus ? (
+                    <Button
+                      compact
+                      label="推進履約"
+                      onPress={() =>
+                        advanceOrder.mutate({ id: order.id, status: nextStatus })
+                      }
+                      variant="secondary"
+                    />
+                  ) : null}
+                  {order.shipment &&
+                  order.shipment.status !== "delivered" ? (
+                    <Button
+                      compact
+                      label="Sandbox 標記送達"
+                      onPress={() => advanceShipment.mutate(order.id)}
+                      variant="quiet"
+                    />
+                  ) : null}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {!loading && tab === "social" ? (
+        <View style={styles.content}>
+          <Text style={styles.sectionTitle}>入社申請</Text>
+          {(membershipApplications.data ?? []).map((application) => (
+            <View key={application.id} style={styles.adminCard}>
+              <CardTitle
+                status={application.status}
+                title={application.legal_name}
+              />
+              <Text style={styles.rowMeta}>
+                測試證件 {application.confirmed_documents.length}/
+                {application.required_documents.length} 份
+              </Text>
+              {application.review_note ? (
+                <Text style={styles.rowMeta}>{application.review_note}</Text>
+              ) : null}
+              {!["approved", "rejected", "withdrawn"].includes(
+                application.status,
+              ) ? (
+                <View style={styles.actions}>
+                  <Button
+                    compact
+                    label="核准"
+                    onPress={() =>
+                      reviewMembership.mutate({
+                        id: application.id,
+                        action: "approve",
+                      })
+                    }
+                  />
+                  <Button
+                    compact
+                    label="要求補件"
+                    onPress={() =>
+                      reviewMembership.mutate({
+                        id: application.id,
+                        action: "request_revision",
+                      })
+                    }
+                    variant="secondary"
+                  />
+                  <Button
+                    compact
+                    label="駁回"
+                    onPress={() =>
+                      reviewMembership.mutate({
+                        id: application.id,
+                        action: "reject",
+                      })
+                    }
+                    variant="danger"
+                  />
+                </View>
+              ) : null}
+            </View>
+          ))}
+
+          <Text style={styles.sectionTitle}>社員活動</Text>
+          {(activities.data ?? []).map((activity) => (
+            <View key={activity.id} style={styles.adminCard}>
+              <CardTitle status={activity.status} title={activity.title} />
+              <Text style={styles.rowMeta}>
+                {activity.registered_count}/{activity.capacity} 人，候補{" "}
+                {activity.waitlist_count} 人
+              </Text>
+              <View style={styles.actions}>
+                {activity.status === "pending_review" ? (
+                  <Button
+                    compact
+                    label="審核發布"
+                    onPress={() =>
+                      reviewActivity.mutate({
+                        id: activity.id,
+                        action: "approve",
+                      })
+                    }
+                  />
+                ) : null}
+                {activity.status === "published" ? (
+                  <Button
+                    compact
+                    label="結束活動"
+                    onPress={() =>
+                      reviewActivity.mutate({
+                        id: activity.id,
+                        action: "complete",
+                      })
+                    }
+                    variant="secondary"
+                  />
+                ) : null}
+              </View>
+            </View>
+          ))}
+
+          <Text style={styles.sectionTitle}>社員治理提案</Text>
+          {(memberProposals.data ?? []).map((proposal) => (
+            <View key={proposal.id} style={styles.adminCard}>
+              <CardTitle status={proposal.status} title={proposal.title} />
+              <Text style={styles.rowMeta}>
+                贊成 {proposal.yes_count}　反對 {proposal.no_count}　棄權{" "}
+                {proposal.abstain_count}
+              </Text>
+              <View style={styles.actions}>
+                {proposal.status === "pending_review" ? (
+                  <>
+                    <Button
+                      compact
+                      label="進入討論"
+                      onPress={() =>
+                        reviewMemberProposal.mutate({
+                          id: proposal.id,
+                          action: "approve",
+                        })
+                      }
+                    />
+                    <Button
+                      compact
+                      label="不通過"
+                      onPress={() =>
+                        reviewMemberProposal.mutate({
+                          id: proposal.id,
+                          action: "reject",
+                        })
+                      }
+                      variant="danger"
+                    />
+                  </>
+                ) : null}
+                {["passed", "rejected"].includes(proposal.status) ? (
+                  <Button
+                    compact
+                    label="記錄結案"
+                    onPress={() =>
+                      reviewMemberProposal.mutate({
+                        id: proposal.id,
+                        action: "close",
+                      })
+                    }
+                    variant="secondary"
+                  />
+                ) : null}
+              </View>
             </View>
           ))}
         </View>
@@ -754,20 +1039,18 @@ export default function AdminScreen() {
 
       {!loading && tab === "settings" ? (
         <View style={styles.content}>
-          <View style={styles.settingsPanel}>
+          <View style={styles.notice}>
             <Text style={styles.sectionTitle}>服務設定</Text>
             <Text style={styles.settingLabel}>API 位址</Text>
             <Text style={styles.settingValue}>
               {getApiBaseUrl() || "使用內建資料來源"}
             </Text>
-            <Text style={styles.settingLabel}>取貨方式</Text>
-            <Text style={styles.settingValue}>合作社現場取貨</Text>
             <Text style={styles.settingLabel}>資料重設確認碼</Text>
             <TextInput
               autoCapitalize="none"
               onChangeText={setResetConfirmation}
               placeholder={
-                getApiBaseUrl() ? "由部署管理員保管" : "內建資料確認碼為 RESET"
+                getApiBaseUrl() ? "由部署管理員保管" : "內建確認碼為 RESET"
               }
               placeholderTextColor={colors.sage}
               secureTextEntry
@@ -797,64 +1080,64 @@ export default function AdminScreen() {
   );
 }
 
-function AdminOrderRow({
-  order,
-  onAdvance,
-  onRefund,
-  loading,
-  refunding,
+function Field({
+  label,
+  value,
+  placeholder,
+  onChange,
+  multiline,
+  keyboardType,
 }: {
-  order: Order;
-  onAdvance: (status: Order["fulfillment_status"]) => void;
-  onRefund: () => void;
-  loading: boolean;
-  refunding: boolean;
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  multiline?: boolean;
+  keyboardType?: "default" | "number-pad";
 }) {
-  const nextStatus = order.available_actions.includes("start_preparing")
-    ? "preparing"
-    : order.available_actions.includes("mark_ready")
-      ? "ready_for_pickup"
-      : order.available_actions.includes("mark_picked_up")
-        ? "picked_up"
-        : null;
-  const canAdvance = Boolean(nextStatus);
   return (
-    <View style={styles.adminCard}>
-      <View style={styles.cardHeading}>
-        <View>
-          <Text style={styles.rowTitle}>{order.order_number}</Text>
-          <Text style={styles.rowMeta}>
-            {order.order_kind === "group" ? "團購" : "一般"}・
-            {money(order.amount_total)}
-          </Text>
-        </View>
-        <StatusPill label={paymentLabels[order.payment_status]} />
-      </View>
-      <View style={styles.orderBottom}>
-        <StatusPill label={fulfillmentLabels[order.fulfillment_status]} />
-        <View style={styles.actions}>
-          {order.available_actions.includes("refund") ? (
-            <Button
-              compact
-              label="全額退款"
-              loading={refunding}
-              onPress={onRefund}
-              variant="danger"
-            />
-          ) : null}
-          {canAdvance ? (
-            <Button
-              compact
-              label="推進狀態"
-              loading={loading}
-              onPress={() => {
-                if (nextStatus) onAdvance(nextStatus);
-              }}
-              variant="secondary"
-            />
-          ) : null}
-        </View>
-      </View>
+    <View style={styles.field}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput
+        keyboardType={keyboardType}
+        multiline={multiline}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={colors.sage}
+        style={[styles.input, multiline && styles.textarea]}
+        textAlignVertical={multiline ? "top" : "center"}
+        value={value}
+      />
+    </View>
+  );
+}
+
+function Choice({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[styles.choice, selected && styles.choiceSelected]}
+    >
+      <Text style={[styles.choiceLabel, selected && styles.choiceLabelSelected]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function CardTitle({ title, status }: { title: string; status: string }) {
+  return (
+    <View style={styles.cardHeading}>
+      <Text style={styles.rowTitle}>{title}</Text>
+      <StatusPill label={status} />
     </View>
   );
 }
@@ -868,187 +1151,103 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     paddingTop: spacing.lg,
   },
-  storeButton: {
+  titleRow: {
     alignItems: "center",
-    backgroundColor: colors.paper,
-    borderRadius: radii.pill,
-    flexDirection: "row",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  storeButtonText: { color: colors.forest, fontSize: 10, fontWeight: "900" },
-  adminTitleRow: {
-    alignItems: "flex-end",
     flexDirection: "row",
     justifyContent: "space-between",
     padding: spacing.md,
   },
-  eyebrow: {
-    color: colors.orange,
-    fontSize: 9,
-    fontWeight: "900",
-    letterSpacing: 1.4,
-  },
-  adminTitle: {
-    color: colors.forest,
-    fontSize: 27,
-    fontWeight: "900",
-    marginTop: 2,
-  },
-  operator: { color: colors.muted, fontSize: 10 },
-  messageWrap: { paddingHorizontal: spacing.md, paddingTop: 11 },
+  title: { color: colors.forest, fontSize: 27, fontWeight: "900" },
+  operator: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  message: { paddingHorizontal: spacing.md, paddingTop: 10 },
   content: { gap: 12, padding: spacing.md },
-  metrics: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  metrics: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   metric: {
     backgroundColor: colors.paper,
-    borderRadius: radii.md,
-    minHeight: 128,
-    padding: 15,
-    width: "48.6%",
+    borderRadius: radii.lg,
+    minHeight: 130,
+    padding: 14,
+    width: "48.3%",
   },
   metricValue: {
-    color: colors.forest,
-    fontSize: 31,
+    color: colors.orange,
+    fontSize: 30,
     fontWeight: "900",
-    marginTop: 15,
+    marginTop: 14,
   },
-  metricLabel: { color: colors.muted, fontSize: 10, marginTop: 3 },
-  noticePanel: {
-    backgroundColor: colors.orangeSoft,
-    borderRadius: radii.md,
-    gap: 9,
+  metricLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
+  notice: {
+    backgroundColor: colors.paper,
+    borderRadius: radii.lg,
+    gap: 10,
     padding: spacing.md,
   },
-  sectionTitle: {
-    color: colors.forest,
-    fontSize: 17,
-    fontWeight: "900",
-    marginTop: 4,
-  },
-  noticeText: { color: colors.charcoal, fontSize: 11, lineHeight: 18 },
-  productRow: {
-    alignItems: "center",
+  noticeText: { color: colors.muted, fontSize: 13, lineHeight: 20 },
+  sectionTitle: { color: colors.forest, fontSize: 19, fontWeight: "900" },
+  form: {
     backgroundColor: colors.paper,
-    borderRadius: radii.md,
-    flexDirection: "row",
-    padding: 13,
-  },
-  productRowInactive: { opacity: 0.72 },
-  productCopy: { flex: 1, marginRight: 8 },
-  productNameRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 8,
-    justifyContent: "space-between",
-  },
-  productForm: {
-    backgroundColor: colors.paper,
-    borderRadius: radii.md,
-    gap: 13,
+    borderRadius: radii.lg,
+    gap: 11,
     padding: spacing.md,
-  },
-  formHeading: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
   },
   field: { gap: 6 },
-  fieldRow: { flexDirection: "row", gap: 10 },
-  fieldHalf: { flex: 1, gap: 6 },
-  fieldLabel: {
-    color: colors.forest,
-    fontSize: 10,
-    fontWeight: "800",
-  },
+  fieldLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
   input: {
     backgroundColor: colors.cream,
     borderColor: colors.line,
-    borderRadius: radii.sm,
+    borderRadius: radii.md,
     borderWidth: 1,
     color: colors.charcoal,
-    fontSize: 12,
-    minHeight: 44,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    fontSize: 14,
+    minHeight: 50,
+    paddingHorizontal: 13,
   },
-  descriptionInput: { minHeight: 76 },
-  categoryRow: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
-  categoryButton: {
-    backgroundColor: colors.cream,
-    borderColor: colors.line,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-  },
-  categoryButtonSelected: {
-    backgroundColor: colors.forest,
-    borderColor: colors.forest,
-  },
-  categoryLabel: {
-    color: colors.muted,
-    fontSize: 10,
-    fontWeight: "800",
-  },
-  categoryLabelSelected: { color: colors.white },
-  taxRow: {
-    backgroundColor: colors.cream,
-    borderRadius: radii.sm,
-    flexDirection: "row",
-    minHeight: 44,
-    padding: 3,
-  },
-  taxButton: {
+  textarea: { minHeight: 92, paddingTop: 12 },
+  fieldRow: { flexDirection: "row", gap: 10 },
+  fieldHalf: { flex: 1 },
+  optionWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  taxRow: { flexDirection: "row", gap: 7 },
+  shippingSetting: {
     alignItems: "center",
-    borderRadius: radii.xs,
-    flex: 1,
-    justifyContent: "center",
-  },
-  taxButtonSelected: { backgroundColor: colors.forest },
-  taxLabel: { color: colors.muted, fontSize: 10, fontWeight: "800" },
-  taxLabelSelected: { color: colors.white },
-  productListHeading: {
-    alignItems: "flex-end",
     flexDirection: "row",
     justifyContent: "space-between",
+    minHeight: 54,
   },
-  productCount: { color: colors.muted, fontSize: 10 },
-  rowTitle: { color: colors.forest, fontSize: 13, fontWeight: "900" },
-  rowMeta: {
-    color: colors.muted,
-    fontSize: 9,
-    lineHeight: 14,
-    marginTop: 4,
+  choice: {
+    alignItems: "center",
+    borderColor: colors.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 12,
   },
+  choiceSelected: { backgroundColor: colors.forest, borderColor: colors.forest },
+  choiceLabel: { color: colors.muted, fontSize: 12, fontWeight: "800" },
+  choiceLabelSelected: { color: colors.white },
   adminCard: {
     backgroundColor: colors.paper,
-    borderRadius: radii.md,
-    gap: 11,
-    padding: 13,
+    borderRadius: radii.lg,
+    gap: 10,
+    padding: spacing.md,
   },
   cardHeading: {
     alignItems: "flex-start",
     flexDirection: "row",
-    gap: 8,
+    gap: 10,
     justifyContent: "space-between",
   },
-  actions: { flexDirection: "row", gap: 8 },
-  orderBottom: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  settingsPanel: {
-    backgroundColor: colors.paper,
-    borderRadius: radii.md,
-    gap: 7,
-    padding: spacing.md,
-  },
+  cardCopy: { flex: 1 },
+  rowTitle: { color: colors.forest, flex: 1, fontSize: 15, fontWeight: "900" },
+  rowMeta: { color: colors.muted, fontSize: 12, lineHeight: 18 },
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  statusLine: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   settingLabel: {
-    color: colors.muted,
-    fontSize: 9,
-    marginTop: 8,
+    color: colors.forest,
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 5,
   },
-  settingValue: { color: colors.forest, fontSize: 12, fontWeight: "800" },
+  settingValue: { color: colors.muted, fontSize: 13 },
+  pressed: { opacity: 0.74, transform: [{ scale: 0.99 }] },
 });

@@ -33,7 +33,11 @@ import { imageFor } from "../../src/lib/images";
 import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
-import type { InvoiceCarrierType } from "../../src/types";
+import type {
+  FulfillmentMethod,
+  InvoiceCarrierType,
+  LogisticsProvider,
+} from "../../src/types";
 
 export default function CampaignDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -43,6 +47,11 @@ export default function CampaignDetailScreen() {
   const [email, setEmail] = useState(user?.email ?? "");
   const [carrier, setCarrier] = useState<InvoiceCarrierType>("ecpay");
   const [barcode, setBarcode] = useState("/");
+  const [fulfillmentMethod, setFulfillmentMethod] =
+    useState<FulfillmentMethod>("cooperative_pickup");
+  const [logisticsProvider, setLogisticsProvider] =
+    useState<LogisticsProvider>("home_delivery");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
   const query = useQuery({
     queryKey: ["campaign", id],
     queryFn: () => api.campaign(id),
@@ -60,6 +69,13 @@ export default function CampaignDetailScreen() {
         invoice_carrier_type: carrier,
         ...(carrier === "mobile_barcode"
           ? { invoice_carrier_value: barcode }
+          : {}),
+        fulfillment_method: fulfillmentMethod,
+        ...(fulfillmentMethod === "ecpay_logistics"
+          ? {
+              logistics_provider: logisticsProvider,
+              delivery_address: deliveryAddress.trim(),
+            }
           : {}),
       });
       const payment = await api.createPaymentAttempt(order.id);
@@ -111,6 +127,13 @@ export default function CampaignDetailScreen() {
     100,
     (campaign.paid_quantity / campaign.min_paid_quantity) * 100,
   );
+  const subtotal = unitPrice * quantity;
+  const shippingFee =
+    fulfillmentMethod === "ecpay_logistics" && subtotal < 1500
+      ? logisticsProvider === "home_delivery"
+        ? 160
+        : 70
+      : 0;
 
   return (
     <Screen>
@@ -208,6 +231,79 @@ export default function CampaignDetailScreen() {
                 />
               </View>
 
+              <Text style={styles.fieldLabel}>履約方式</Text>
+              <View style={styles.carriers}>
+                {[
+                  {
+                    value: "cooperative_pickup" as const,
+                    label: "合作社取貨",
+                  },
+                  { value: "ecpay_logistics" as const, label: "綠界物流" },
+                ].map((option) => (
+                  <Pressable
+                    key={option.value}
+                    onPress={() => setFulfillmentMethod(option.value)}
+                    style={[
+                      styles.carrier,
+                      fulfillmentMethod === option.value &&
+                        styles.carrierSelected,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.radio,
+                        fulfillmentMethod === option.value &&
+                          styles.radioSelected,
+                      ]}
+                    />
+                    <Text style={styles.carrierLabel}>{option.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {fulfillmentMethod === "ecpay_logistics" ? (
+                <>
+                  <Text style={styles.fieldLabel}>物流通路</Text>
+                  <View style={styles.providerWrap}>
+                    {[
+                      { value: "home_delivery" as const, label: "宅配" },
+                      { value: "seven_eleven" as const, label: "7-ELEVEN" },
+                      { value: "family_mart" as const, label: "全家" },
+                      { value: "hilife" as const, label: "萊爾富" },
+                    ].map((provider) => (
+                      <Pressable
+                        key={provider.value}
+                        onPress={() => setLogisticsProvider(provider.value)}
+                        style={[
+                          styles.provider,
+                          logisticsProvider === provider.value &&
+                            styles.providerSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.providerLabel,
+                            logisticsProvider === provider.value &&
+                              styles.providerLabelSelected,
+                          ]}
+                        >
+                          {provider.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <TextInput
+                    onChangeText={setDeliveryAddress}
+                    placeholder="配送地址或門市"
+                    placeholderTextColor={colors.sage}
+                    style={styles.input}
+                    value={deliveryAddress}
+                  />
+                  <Text style={styles.fieldHint}>
+                    滿 $1,500 免運；團購失敗時商品與運費一併退款。
+                  </Text>
+                </>
+              ) : null}
+
               <Text style={styles.fieldLabel}>發票通知 Email</Text>
               <TextInput
                 autoCapitalize="none"
@@ -262,10 +358,16 @@ export default function CampaignDetailScreen() {
               ) : null}
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>付款金額</Text>
-                <Text style={styles.total}>{money(unitPrice * quantity)}</Text>
+                <Text style={styles.total}>
+                  {money(subtotal + shippingFee)}
+                </Text>
               </View>
               <Button
-                disabled={!email.includes("@")}
+                disabled={
+                  !email.includes("@") ||
+                  (fulfillmentMethod === "ecpay_logistics" &&
+                    !deliveryAddress.trim())
+                }
                 icon="card-outline"
                 label="確認並前往付款"
                 loading={join.isPending}
@@ -294,7 +396,7 @@ export default function CampaignDetailScreen() {
 
 const styles = StyleSheet.create({
   image: {
-    aspectRatio: 1.65,
+    aspectRatio: 3 / 2,
     borderRadius: radii.lg,
     marginHorizontal: spacing.md,
     width: "auto",
@@ -305,7 +407,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  deadline: { color: colors.muted, fontSize: 10 },
+  deadline: { color: colors.muted, fontSize: 12 },
   title: { color: colors.forest, fontSize: 30, fontWeight: "900" },
   description: {
     color: colors.charcoal,
@@ -320,14 +422,14 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: spacing.md,
   },
-  priceLabel: { color: colors.danger, fontSize: 10, fontWeight: "800" },
+  priceLabel: { color: colors.danger, fontSize: 12, fontWeight: "800" },
   price: {
     color: colors.orange,
     fontSize: 31,
     fontWeight: "900",
     marginTop: 2,
   },
-  otherPrice: { color: colors.muted, fontSize: 10 },
+  otherPrice: { color: colors.muted, fontSize: 12 },
   progressCard: {
     backgroundColor: colors.paper,
     borderRadius: radii.md,
@@ -340,8 +442,8 @@ const styles = StyleSheet.create({
   },
   progressRight: { alignItems: "flex-end" },
   progressValue: { color: colors.forest, fontSize: 18, fontWeight: "900" },
-  progressLabel: { color: colors.muted, fontSize: 9, marginTop: 2 },
-  remaining: { color: colors.muted, fontSize: 10, marginTop: 9 },
+  progressLabel: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  remaining: { color: colors.muted, fontSize: 12, marginTop: 9 },
   infoPanel: {
     backgroundColor: colors.paper,
     borderRadius: radii.md,
@@ -362,7 +464,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   fieldLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
-  fieldHint: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  fieldHint: { color: colors.muted, fontSize: 12, marginTop: 3 },
   input: {
     borderColor: colors.line,
     borderRadius: radii.sm,
@@ -373,6 +475,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   carriers: { flexDirection: "row", gap: 8 },
+  providerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  provider: {
+    alignItems: "center",
+    borderColor: colors.line,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    width: "48.8%",
+  },
+  providerSelected: {
+    backgroundColor: colors.forest,
+    borderColor: colors.forest,
+  },
+  providerLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
+  providerLabelSelected: { color: colors.white },
   carrier: {
     alignItems: "center",
     borderColor: colors.line,
@@ -398,12 +516,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.forest,
     borderColor: colors.forest,
   },
-  carrierLabel: { color: colors.forest, fontSize: 10, fontWeight: "800" },
+  carrierLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
   totalRow: {
     alignItems: "baseline",
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  totalLabel: { color: colors.muted, fontSize: 11 },
+  totalLabel: { color: colors.muted, fontSize: 12 },
   total: { color: colors.forest, fontSize: 24, fontWeight: "900" },
 });

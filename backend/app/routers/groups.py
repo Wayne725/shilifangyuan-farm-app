@@ -9,7 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..auth import get_current_user, require_admin
+from ..auth import (
+    get_current_user,
+    membership_type_for_user,
+    require_admin,
+)
 from ..database import get_session
 from ..domain import (
     DomainError,
@@ -21,6 +25,8 @@ from ..domain import (
 )
 from ..models import (
     AdminAudit,
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     GroupBundle,
     GroupBundleItem,
@@ -28,11 +34,13 @@ from ..models import (
     GroupDecisionStatus,
     GroupIntakeStatus,
     Order,
+    OrderFulfillment,
     OrderItem,
     OrderKind,
     OutboxEvent,
     PaymentStatus,
     Product,
+    SalesChannel,
     TaxType,
     TargetType,
     User,
@@ -253,17 +261,20 @@ async def join_campaign(
     name, unit, tax_type, product_id, bundle_id = await target_order_snapshot(
         session, campaign.target_type, campaign.target_id
     )
+    membership_type = membership_type_for_user(user)
     unit_price = price_for_membership(
         campaign.member_price,
         campaign.nonmember_price,
-        user.membership_type,
+        membership_type,
     )
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.GROUP,
+        sales_channel=SalesChannel.GROUP,
+        fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
         user_id=user.id,
         group_campaign=campaign,
-        membership_type_snapshot=user.membership_type,
+        membership_type_snapshot=membership_type,
         amount_total=unit_price * body.quantity,
         contact_email=body.contact_email.lower(),
         invoice_carrier_type=body.invoice_carrier_type,
@@ -280,6 +291,10 @@ async def join_campaign(
                 tax_type=tax_type,
             )
         ],
+        fulfillment=OrderFulfillment(
+            method=FulfillmentMethod.COOPERATIVE_PICKUP,
+            status=FulfillmentState.PENDING_CONFIRMATION,
+        ),
     )
     session.add(order)
     await session.commit()
@@ -289,6 +304,9 @@ async def join_campaign(
         .options(
             selectinload(Order.items),
             selectinload(Order.group_campaign),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
         )
     )
     return order_read(order, False)

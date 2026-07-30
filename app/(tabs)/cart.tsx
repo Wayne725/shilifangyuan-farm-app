@@ -54,7 +54,6 @@ export default function CartScreen() {
       }
     >
       <PageHeader
-        eyebrow="YOUR BASKET"
         subtitle={
           user
             ? `目前套用${user.membership_type === "member" ? "社員" : "非社員"}價格`
@@ -155,7 +154,7 @@ const styles = StyleSheet.create({
   lineTop: { flexDirection: "row", justifyContent: "space-between" },
   nameWrap: { flex: 1 },
   name: { color: colors.forest, fontSize: 14, fontWeight: "900" },
-  price: { color: colors.muted, fontSize: 10, marginTop: 4 },
+  price: { color: colors.muted, fontSize: 12, marginTop: 4 },
   remove: { padding: 4 },
   lineBottom: {
     alignItems: "flex-end",
@@ -172,8 +171,8 @@ const styles = StyleSheet.create({
     padding: 13,
   },
   pickupCopy: { flex: 1, marginLeft: 10 },
-  pickupTitle: { color: colors.forest, fontSize: 11, fontWeight: "900" },
-  pickupText: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  pickupTitle: { color: colors.forest, fontSize: 12, fontWeight: "900" },
+  pickupText: { color: colors.muted, fontSize: 12, marginTop: 3 },
   bottom: {
     alignItems: "center",
     backgroundColor: colors.paper,
@@ -183,6 +182,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: spacing.md,
   },
-  bottomLabel: { color: colors.muted, fontSize: 10 },
+  bottomLabel: { color: colors.muted, fontSize: 12 },
   bottomTotal: { color: colors.forest, fontSize: 24, fontWeight: "900" },
 });

@@ -60,6 +60,19 @@ export const fulfillmentLabels: Record<FulfillmentStatus, string> = {
   cancelled: "已取消",
 };
 
+export function fulfillmentStatusLabel(value: string) {
+  return (
+    {
+      ...fulfillmentLabels,
+      pending: "待處理",
+      ready: "可取餐",
+      shipped: "配送中",
+      delivered: "已送達",
+      no_show: "逾時未取",
+    }[value] ?? value
+  );
+}
+
 export const paymentLabels: Record<PaymentStatus, string> = {
   pending: "待付款",
   paid: "已付款",

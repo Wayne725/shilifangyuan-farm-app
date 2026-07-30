@@ -129,10 +129,10 @@ const styles = StyleSheet.create({
   },
   body: {
     color: colors.charcoal,
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: 17,
     marginTop: 4,
   },
-  date: { color: colors.muted, fontSize: 9, marginTop: 6 },
+  date: { color: colors.muted, fontSize: 12, marginTop: 6 },
   pressed: { opacity: 0.7 },
 });

@@ -32,6 +32,8 @@ from app.models import (
     GroupIntakeStatus,
     InventoryReservation,
     ExternalEvent,
+    Membership,
+    MembershipStatus,
     MembershipType,
     Order,
     OrderKind,
@@ -54,7 +56,7 @@ NOW = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
 
 
 def make_user() -> User:
-    return User(
+    user = User(
         id="user-1",
         email="member@example.com",
         display_name="社員",
@@ -62,6 +64,12 @@ def make_user() -> User:
         user_role=UserRole.CUSTOMER,
         membership_type=MembershipType.MEMBER,
     )
+    user.membership = Membership(
+        id="membership-user-1",
+        user_id=user.id,
+        status=MembershipStatus.ACTIVE,
+    )
+    return user
 
 
 def make_campaign(**overrides) -> GroupCampaign:

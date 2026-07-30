@@ -9,7 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..auth import get_current_user, require_admin
+from ..auth import (
+    get_current_user,
+    membership_type_for_user,
+    require_admin,
+)
 from ..database import get_session
 from ..domain import (
     DomainError,
@@ -20,12 +24,16 @@ from ..domain import (
 )
 from ..models import (
     AdminAudit,
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     GroupDecisionStatus,
     InventoryReservation,
     InvoiceStatus,
+    MealEventOffering,
     Notification,
     Order,
+    OrderFulfillment,
     OrderItem,
     OrderKind,
     OutboxEvent,
@@ -34,6 +42,7 @@ from ..models import (
     Refund,
     RefundStatus,
     ReservationStatus,
+    SalesChannel,
     User,
     UserRole,
 )
@@ -58,11 +67,20 @@ def make_order_number() -> str:
 
 
 def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
+    fulfillment = order.__dict__.get("fulfillment")
+    shipment = (
+        fulfillment.shipment
+        if fulfillment is not None
+        else None
+    )
     return OrderRead(
         id=order.id,
         order_number=order.order_number,
         order_kind=order.order_kind,
+        sales_channel=order.sales_channel,
+        fulfillment_method=order.fulfillment_method,
         group_campaign_id=order.group_campaign_id,
+        meal_event_id=order.meal_event_id,
         membership_type_snapshot=order.membership_type_snapshot,
         amount_total=order.amount_total,
         contact_email=order.contact_email,
@@ -75,6 +93,9 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         created_at=order.created_at,
         available_actions=order_available_actions(order, viewer_is_admin),
         items=order.items,
+        fulfillment=fulfillment,
+        shipment=shipment,
+        meal_event=order.meal_event,
     )
 
 
@@ -109,10 +130,11 @@ async def quote_products(
                 status_code=409,
                 detail=f"{product.name} 庫存不足，目前剩餘 {product.stock_quantity}",
             )
+        membership_type = membership_type_for_user(user)
         unit_price = price_for_membership(
             product.member_price,
             product.nonmember_price,
-            user.membership_type,
+            membership_type,
         )
         lines.append(
             OrderQuoteLine(
@@ -126,7 +148,7 @@ async def quote_products(
             )
         )
     return OrderQuoteRead(
-        membership_type=user.membership_type,
+        membership_type=membership_type_for_user(user),
         amount_total=sum(line.subtotal for line in lines),
         items=lines,
     )
@@ -142,6 +164,10 @@ async def load_order(
             selectinload(Order.items),
             selectinload(Order.group_campaign),
             selectinload(Order.reservations),
+            selectinload(Order.meal_event),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
         )
     )
     if lock:
@@ -179,8 +205,10 @@ async def create_order(
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.REGULAR,
+        fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
         user_id=user.id,
-        membership_type_snapshot=user.membership_type,
+        membership_type_snapshot=membership_type_for_user(user),
         amount_total=quote.amount_total,
         contact_email=body.contact_email.lower(),
         invoice_carrier_type=body.invoice_carrier_type,
@@ -197,6 +225,10 @@ async def create_order(
             )
             for line in quote.items
         ],
+        fulfillment=OrderFulfillment(
+            method=FulfillmentMethod.COOPERATIVE_PICKUP,
+            status=FulfillmentState.PENDING_CONFIRMATION,
+        ),
     )
     session.add(order)
     await session.commit()
@@ -212,6 +244,10 @@ async def list_orders(
     query = select(Order).options(
         selectinload(Order.items),
         selectinload(Order.group_campaign),
+        selectinload(Order.meal_event),
+        selectinload(Order.fulfillment).selectinload(
+            OrderFulfillment.shipment
+        ),
     )
     if user.user_role != UserRole.ADMIN:
         query = query.where(Order.user_id == user.id)
@@ -256,6 +292,16 @@ async def release_active_reservations(
             product = await session.get(Product, reservation.source_product_id)
             if product is not None:
                 product.stock_quantity += reservation.quantity
+        elif reservation.source_meal_offering_id is not None:
+            offering = await session.get(
+                MealEventOffering,
+                reservation.source_meal_offering_id,
+            )
+            if offering is not None:
+                offering.reserved_quantity = max(
+                    0,
+                    offering.reserved_quantity - reservation.quantity,
+                )
 
 
 async def request_order_refund(
@@ -286,6 +332,16 @@ async def request_order_refund(
             product = await session.get(Product, reservation.source_product_id)
             if product is not None:
                 product.stock_quantity += reservation.quantity
+        elif reservation.source_meal_offering_id is not None:
+            offering = await session.get(
+                MealEventOffering,
+                reservation.source_meal_offering_id,
+            )
+            if offering is not None:
+                offering.paid_quantity = max(
+                    0,
+                    offering.paid_quantity - reservation.quantity,
+                )
         reservation.status = ReservationStatus.RELEASED
         reservation.released_at = now
     if (
@@ -297,6 +353,9 @@ async def request_order_refund(
         )
     order.payment_status = PaymentStatus.REFUND_PENDING
     order.fulfillment_status = FulfillmentStatus.CANCELLED
+    fulfillment = order.__dict__.get("fulfillment")
+    if fulfillment is not None:
+        fulfillment.status = FulfillmentState.CANCELLED
     order.cancelled_at = now
     order.cancellation_reason = reason
     refund = Refund(
@@ -338,6 +397,9 @@ async def cancel_order(
         await release_active_reservations(session, order)
         order.payment_status = PaymentStatus.EXPIRED
         order.fulfillment_status = FulfillmentStatus.CANCELLED
+        fulfillment = order.__dict__.get("fulfillment")
+        if fulfillment is not None:
+            fulfillment.status = FulfillmentState.CANCELLED
         order.cancelled_at = datetime.now(timezone.utc)
         order.cancellation_reason = body.reason
     session.add(
@@ -387,6 +449,11 @@ async def update_fulfillment(
     order = await load_order(session, order_id, lock=True)
     if order.payment_status != PaymentStatus.PAID:
         raise HTTPException(status_code=409, detail="未付款訂單無法出貨")
+    if order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS:
+        raise HTTPException(
+            status_code=409,
+            detail="物流訂單請由訂單與物流模組推進貨態",
+        )
     if (
         order.order_kind == OrderKind.GROUP
         and order.group_campaign is not None
@@ -401,11 +468,27 @@ async def update_fulfillment(
     if allowed.get(order.fulfillment_status) != body.status:
         raise HTTPException(status_code=409, detail="訂單履約狀態不可跳級")
     order.fulfillment_status = body.status
+    fulfillment = order.__dict__.get("fulfillment")
+    if fulfillment is not None:
+        state_map = {
+            FulfillmentStatus.PENDING_CONFIRMATION: (
+                FulfillmentState.PENDING_CONFIRMATION
+            ),
+            FulfillmentStatus.PREPARING: FulfillmentState.PREPARING,
+            FulfillmentStatus.READY_FOR_PICKUP: (
+                FulfillmentState.READY_FOR_PICKUP
+            ),
+            FulfillmentStatus.PICKED_UP: FulfillmentState.PICKED_UP,
+            FulfillmentStatus.CANCELLED: FulfillmentState.CANCELLED,
+        }
+        fulfillment.status = state_map[body.status]
+        if body.status == FulfillmentStatus.PICKED_UP:
+            fulfillment.fulfilled_at = datetime.now(timezone.utc)
     if body.status == FulfillmentStatus.PICKED_UP:
         order.invoice_status = InvoiceStatus.PENDING
         session.add(
             OutboxEvent(
-                event_type="invoice.issue",
+                event_type="invoice.issue_requested",
                 aggregate_type="order",
                 aggregate_id=order.id,
                 payload={"order_id": order.id},

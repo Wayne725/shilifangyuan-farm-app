@@ -40,7 +40,7 @@ export default function WelcomeScreen() {
         <View style={styles.overlay}>
           <BrandLockup light />
           <View>
-            <Text style={styles.eyebrow}>FROM LAND TO TABLE</Text>
+            <Text style={styles.eyebrow}>在地選物・共同生活</Text>
             <Text style={styles.headline}>十里產地，{"\n"}方圓日常。</Text>
             <Text style={styles.intro}>
               選購在地農產、參與共同購買，讓每一次消費都更靠近土地。
@@ -86,7 +86,7 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     color: "#E7C9AA",
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: "900",
     letterSpacing: 2.5,
   },
@@ -119,7 +119,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "900",
   },
-  featureBody: { color: colors.muted, fontSize: 10, lineHeight: 15 },
+  featureBody: { color: colors.muted, fontSize: 12, lineHeight: 15 },
   rule: { backgroundColor: colors.line, width: 1 },
   footer: {
     backgroundColor: colors.cream,
@@ -132,6 +132,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 7,
     justifyContent: "center",
+    minHeight: 44,
     padding: 11,
   },
   browseText: { color: colors.forest, fontSize: 13, fontWeight: "800" },

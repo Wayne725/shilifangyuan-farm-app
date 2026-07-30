@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +25,12 @@ from app.database import Base
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 INITIAL_MIGRATION = (
     BACKEND_ROOT / "alembic" / "versions" / "0001_initial.py"
+)
+V2_MIGRATION = (
+    BACKEND_ROOT
+    / "alembic"
+    / "versions"
+    / "0002_v2_social_commerce.py"
 )
 
 
@@ -73,6 +81,18 @@ def test_secure_environments_accept_long_nondefault_secrets() -> None:
         jwt_secret="j" * 32,
         internal_reconcile_secret="r" * 32,
         demo_reset_confirmation="reset-code-strong",
+        ecpay_logistics_merchant_id="2000132",
+        ecpay_logistics_hash_key="5294y06JbISpM5x9",
+        ecpay_logistics_hash_iv="v77hoKGq4kWxNNIS",
+        cloudflare_r2_account_id="account-id",
+        cloudflare_r2_access_key_id="access-key",
+        cloudflare_r2_secret_access_key="secret-key",
+        cloudflare_r2_bucket="private-documents",
+        pii_encryption_keys_json=json.dumps(
+            {
+                "v1": base64.b64encode(b"p" * 32).decode("ascii"),
+            }
+        ),
     ).validate_runtime_secrets()
 
 
@@ -117,12 +137,19 @@ def test_create_app_fails_fast_with_unsafe_sandbox_secrets(
 
 
 def test_initial_migration_is_fixed_and_complete() -> None:
-    source = INITIAL_MIGRATION.read_text(encoding="utf-8")
+    sources = [
+        INITIAL_MIGRATION.read_text(encoding="utf-8"),
+        V2_MIGRATION.read_text(encoding="utf-8"),
+    ]
 
-    assert "Base.metadata" not in source
-    assert "from app" not in source
-    assert source.count("op.create_table(") == len(Base.metadata.tables)
-    assert source.count("op.drop_table(") == len(Base.metadata.tables)
+    assert all("Base.metadata" not in source for source in sources)
+    assert all("from app" not in source for source in sources)
+    assert sum(source.count("op.create_table(") for source in sources) == len(
+        Base.metadata.tables
+    )
+    assert sum(source.count("op.drop_table(") for source in sources) == len(
+        Base.metadata.tables
+    )
 
 
 def test_initial_migration_upgrades_matches_metadata_and_downgrades(

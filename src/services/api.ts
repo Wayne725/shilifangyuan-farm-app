@@ -1,6 +1,14 @@
 import {
   demoBundles,
   demoCampaigns,
+  demoActivities,
+  demoMealEvents,
+  demoMealOrders,
+  demoMemberDirectory,
+  demoMemberProposals,
+  demoMembershipApplications,
+  demoMembershipCharges,
+  demoMemberships,
   demoNotifications,
   demoOrders,
   demoProducts,
@@ -11,12 +19,26 @@ import type {
   AppNotification,
   AuthSession,
   CartItem,
+  FulfillmentMethod,
+  FulfillmentStatus,
   GroupBundle,
   GroupCampaign,
   InvoiceCarrierType,
+  LogisticsProvider,
+  MealEvent,
+  MealOrder,
+  MemberActivity,
+  MemberDirectoryEntry,
+  Membership,
+  MembershipApplication,
+  MembershipCharge,
+  MembershipDocumentUpload,
+  MemberProposal,
+  MemberVoteChoice,
   Order,
   PaymentAttempt,
   Product,
+  TemperatureZone,
   User,
   VoteProposal,
 } from "../types";
@@ -84,15 +106,43 @@ async function fallback<T>(network: () => Promise<T>, demo: () => Promise<T>) {
 }
 
 const demoState = {
-  products: structuredCloneSafe(demoProducts),
+  products: demoProductsWithLogistics(),
   proposals: structuredCloneSafe(demoProposals),
   campaigns: structuredCloneSafe(demoCampaigns),
   orders: structuredCloneSafe(demoOrders),
   notifications: structuredCloneSafe(demoNotifications),
+  mealEvents: structuredCloneSafe(demoMealEvents),
+  mealOrders: structuredCloneSafe(demoMealOrders),
+  membershipApplications: structuredCloneSafe(demoMembershipApplications),
+  memberships: structuredCloneSafe(demoMemberships),
+  membershipCharges: structuredCloneSafe(demoMembershipCharges),
+  activities: structuredCloneSafe(demoActivities),
+  memberProposals: structuredCloneSafe(demoMemberProposals),
 };
 
 function structuredCloneSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function demoProductsWithLogistics(): Product[] {
+  return structuredCloneSafe(demoProducts).map((product) => {
+    const chilled = ["tomatoes", "bok-choy", "fruit-corn", "eggs", "soy-eggs"].includes(
+      product.id,
+    );
+    return {
+      ...product,
+      is_shippable: true,
+      temperature_zone: chilled ? ("chilled" as const) : ("ambient" as const),
+      allowed_logistics: chilled
+        ? (["home_delivery"] as LogisticsProvider[])
+        : ([
+            "home_delivery",
+            "seven_eleven",
+            "family_mart",
+            "hilife",
+          ] as LogisticsProvider[]),
+    };
+  });
 }
 
 function getDemoUser(): User {
@@ -159,6 +209,29 @@ function normalizeNotification(notice: ApiNotification): AppNotification {
     created_at: notice.created_at,
     read_at: notice.read_at,
     route,
+  };
+}
+
+function normalizeOrder(order: Order) {
+  const nestedStatus = order.fulfillment?.status;
+  const legacyStatus: FulfillmentStatus =
+    order.fulfillment_status ??
+    (nestedStatus === "ready"
+      ? "ready_for_pickup"
+      : nestedStatus === "delivered"
+        ? "picked_up"
+        : nestedStatus === "shipped"
+          ? "preparing"
+          : nestedStatus === "no_show"
+            ? "cancelled"
+            : nestedStatus === "pending"
+              ? "pending_confirmation"
+              : (nestedStatus as FulfillmentStatus | undefined)) ??
+    "pending_confirmation";
+  return {
+    ...order,
+    order_kind: order.order_kind ?? order.sales_channel ?? "regular",
+    fulfillment_status: legacyStatus,
   };
 }
 
@@ -346,6 +419,9 @@ export const api = {
       contact_email: string;
       invoice_carrier_type: InvoiceCarrierType;
       invoice_carrier_value?: string;
+      fulfillment_method?: FulfillmentMethod;
+      logistics_provider?: LogisticsProvider;
+      delivery_address?: string;
     },
   ) {
     return fallback(
@@ -365,6 +441,14 @@ export const api = {
           user.membership_type === "member"
             ? campaign.member_price
             : campaign.nonmember_price;
+        const subtotal = unitPrice * input.quantity;
+        const usesLogistics = input.fulfillment_method === "ecpay_logistics";
+        const shippingFee =
+          usesLogistics && subtotal < 1500
+            ? input.logistics_provider === "home_delivery"
+              ? 160
+              : 70
+            : 0;
         const order: Order = {
           id: `order-${Date.now()}`,
           order_number: orderNumber("GB"),
@@ -374,7 +458,7 @@ export const api = {
           payment_status: "pending",
           invoice_status: "not_eligible",
           membership_type_snapshot: user.membership_type,
-          amount_total: unitPrice * input.quantity,
+          amount_total: subtotal + shippingFee,
           created_at: new Date().toISOString(),
           available_actions: ["pay", "cancel", "view"],
           items: [
@@ -386,6 +470,27 @@ export const api = {
               tax_type: "tax_exempt",
             },
           ],
+          sales_channel: "group",
+          fulfillment: {
+            method: usesLogistics
+              ? "ecpay_logistics"
+              : "cooperative_pickup",
+            status: "pending_confirmation",
+            ...(usesLogistics
+              ? { address_summary: input.delivery_address ?? "配送地址" }
+              : { venue_name: "十里方圓合作社" }),
+          },
+          shipment: usesLogistics
+            ? {
+                id: `shipment-${Date.now()}`,
+                logistics_provider:
+                  input.logistics_provider ?? "home_delivery",
+                temperature_zone: "ambient",
+                status: "pending",
+                tracking_number: null,
+                shipping_fee: shippingFee,
+              }
+            : null,
         };
         campaign.reserved_quantity += input.quantity;
         campaign.available_quantity -= input.quantity;
@@ -397,7 +502,10 @@ export const api = {
 
   orders() {
     return fallback(
-      () => request<Order[]>("/v1/orders"),
+      () =>
+        request<Order[]>("/v1/orders").then((orders) =>
+          orders.map(normalizeOrder),
+        ),
       async () => {
         const orders = structuredCloneSafe(demoState.orders);
         if (getDemoUser().user_role !== "admin") return orders;
@@ -436,7 +544,7 @@ export const api = {
 
   async order(id: string) {
     return fallback(
-      () => request<Order>(`/v1/orders/${id}`),
+      () => request<Order>(`/v1/orders/${id}`).then(normalizeOrder),
       async () => {
         const order = demoState.orders.find((item) => item.id === id);
         if (!order) throw new ApiError("找不到這筆訂單", 404);
@@ -489,6 +597,9 @@ export const api = {
     contact_email: string;
     invoice_carrier_type: InvoiceCarrierType;
     invoice_carrier_value?: string;
+    fulfillment_method?: FulfillmentMethod;
+    logistics_provider?: LogisticsProvider;
+    delivery_address?: string;
   }) {
     return fallback(
       () =>
@@ -499,6 +610,13 @@ export const api = {
       async () => {
         const quote = await api.quote(input.items);
         const user = getDemoUser();
+        const usesLogistics = input.fulfillment_method === "ecpay_logistics";
+        const shippingFee =
+          usesLogistics && quote.amount_total < 1500
+            ? input.logistics_provider === "home_delivery"
+              ? 160
+              : 70
+            : 0;
         const order: Order = {
           id: `order-${Date.now()}`,
           order_number: orderNumber("SLF"),
@@ -508,10 +626,31 @@ export const api = {
           payment_status: "pending",
           invoice_status: "not_eligible",
           membership_type_snapshot: user.membership_type,
-          amount_total: quote.amount_total,
+          amount_total: quote.amount_total + shippingFee,
           created_at: new Date().toISOString(),
           available_actions: ["pay", "cancel", "view"],
           items: quote.items,
+          sales_channel: "regular",
+          fulfillment: {
+            method: usesLogistics
+              ? "ecpay_logistics"
+              : "cooperative_pickup",
+            status: "pending_confirmation",
+            ...(usesLogistics
+              ? { address_summary: input.delivery_address ?? "配送地址" }
+              : { venue_name: "十里方圓合作社" }),
+          },
+          shipment: usesLogistics
+            ? {
+                id: `shipment-${Date.now()}`,
+                logistics_provider:
+                  input.logistics_provider ?? "home_delivery",
+                temperature_zone: "ambient",
+                status: "pending",
+                tracking_number: null,
+                shipping_fee: shippingFee,
+              }
+            : null,
         };
         demoState.orders.unshift(order);
         return structuredCloneSafe(order);
@@ -815,6 +954,9 @@ export const api = {
     nonmember_price: number;
     stock_quantity: number;
     tax_type: Product["tax_type"];
+    is_shippable?: boolean;
+    temperature_zone?: TemperatureZone;
+    allowed_logistics?: LogisticsProvider[];
   }) {
     return fallback(
       () =>
@@ -844,6 +986,14 @@ export const api = {
           stock: input.stock_quantity,
           stock_quantity: input.stock_quantity,
           tax_type: input.tax_type,
+          is_shippable: input.is_shippable ?? true,
+          temperature_zone: input.temperature_zone ?? "ambient",
+          allowed_logistics: input.allowed_logistics ?? [
+            "home_delivery",
+            "seven_eleven",
+            "family_mart",
+            "hilife",
+          ],
           is_active: true,
         };
         demoState.products.unshift(product);
@@ -871,6 +1021,693 @@ export const api = {
     );
   },
 
+  register(input: {
+    email: string;
+    password: string;
+    display_name: string;
+  }) {
+    return fallback(
+      () =>
+        request<{ message: string }>("/v1/auth/register", {
+          method: "POST",
+          body: input,
+        }),
+      async () => ({ message: "驗證信已寄出，請完成 Email 驗證。" }),
+    );
+  },
+
+  verifyEmail(token: string) {
+    return fallback(
+      () =>
+        request<{ message: string }>("/v1/auth/verify-email", {
+          method: "POST",
+          body: { token },
+        }),
+      async () => ({ message: "Email 已完成驗證。" }),
+    );
+  },
+
+  resendVerification(email: string) {
+    return fallback(
+      () =>
+        request<{ message: string }>("/v1/auth/resend-verification", {
+          method: "POST",
+          body: { email },
+        }),
+      async () => ({ message: "驗證信已重新寄出。" }),
+    );
+  },
+
+  forgotPassword(email: string) {
+    return fallback(
+      () =>
+        request<{ message: string }>("/v1/auth/forgot-password", {
+          method: "POST",
+          body: { email },
+        }),
+      async () => ({ message: "若帳號存在，重設密碼信將寄到信箱。" }),
+    );
+  },
+
+  resetPassword(token: string, password: string) {
+    return fallback(
+      () =>
+        request<{ message: string }>("/v1/auth/reset-password", {
+          method: "POST",
+          body: { token, password },
+        }),
+      async () => ({ message: "密碼已更新，請重新登入。" }),
+    );
+  },
+
+  membershipApplication() {
+    return fallback(
+      () => request<MembershipApplication | null>("/v1/membership/application"),
+      async () => {
+        const user = getDemoUser();
+        const application = demoState.membershipApplications.find(
+          (item) => item.legal_name === user.display_name,
+        );
+        return application ? structuredCloneSafe(application) : null;
+      },
+    );
+  },
+
+  saveMembershipApplication(
+    input: Omit<
+      MembershipApplication,
+      | "id"
+      | "status"
+      | "submitted_at"
+      | "required_documents"
+      | "confirmed_documents"
+      | "review_note"
+    >,
+  ) {
+    return fallback(
+      () =>
+        request<MembershipApplication>("/v1/membership/application", {
+          method: "PUT",
+          body: input,
+        }),
+      async () => {
+        const user = getDemoUser();
+        let application = demoState.membershipApplications.find(
+          (item) => item.legal_name === user.display_name,
+        );
+        if (!application) {
+          application = {
+            id: `application-${Date.now()}`,
+            status: "draft",
+            ...input,
+            submitted_at: null,
+            review_note: null,
+            required_documents: ["id_front", "id_back", "secondary"],
+            confirmed_documents: [],
+          };
+          demoState.membershipApplications.unshift(application);
+        } else {
+          Object.assign(application, input);
+        }
+        return structuredCloneSafe(application);
+      },
+    );
+  },
+
+  submitMembershipApplication() {
+    return fallback(
+      () =>
+        request<MembershipApplication>("/v1/membership/application/submit", {
+          method: "POST",
+        }),
+      async () => {
+        const application = demoState.membershipApplications.find(
+          (item) => item.legal_name === getDemoUser().display_name,
+        );
+        if (!application) throw new ApiError("請先填寫入社資料", 400);
+        if (
+          application.confirmed_documents.length <
+          application.required_documents.length
+        ) {
+          throw new ApiError("請先補齊三份測試證件", 400);
+        }
+        application.status = "submitted";
+        application.submitted_at = new Date().toISOString();
+        application.review_note = null;
+        return structuredCloneSafe(application);
+      },
+    );
+  },
+
+  withdrawMembershipApplication() {
+    return fallback(
+      () =>
+        request<MembershipApplication>("/v1/membership/application/withdraw", {
+          method: "POST",
+        }),
+      async () => {
+        const application = demoState.membershipApplications.find(
+          (item) => item.legal_name === getDemoUser().display_name,
+        );
+        if (!application) throw new ApiError("找不到入社申請", 404);
+        application.status = "withdrawn";
+        return structuredCloneSafe(application);
+      },
+    );
+  },
+
+  membershipDocumentUploadUrl(input: {
+    document_type: "id_front" | "id_back" | "secondary";
+    content_type: "image/jpeg" | "image/png" | "application/pdf";
+    file_size: number;
+    checksum: string;
+  }) {
+    return fallback(
+      () =>
+        request<MembershipDocumentUpload>(
+          "/v1/membership/documents/upload-url",
+          { method: "POST", body: input },
+        ),
+      async () => ({
+        upload_url: "https://example.invalid/sandbox-upload",
+        object_key: `sandbox/${Date.now()}-${input.document_type}`,
+        expires_in_seconds: 300,
+      }),
+    );
+  },
+
+  confirmMembershipDocument(input: {
+    document_type: "id_front" | "id_back" | "secondary";
+    object_key: string;
+    checksum: string;
+  }) {
+    return fallback(
+      () =>
+        request<MembershipApplication>(
+          "/v1/membership/documents/confirm",
+          { method: "POST", body: input },
+        ),
+      async () => {
+        const application = demoState.membershipApplications.find(
+          (item) => item.legal_name === getDemoUser().display_name,
+        );
+        if (!application) throw new ApiError("請先建立入社申請", 400);
+        if (!application.confirmed_documents.includes(input.document_type)) {
+          application.confirmed_documents.push(input.document_type);
+        }
+        return structuredCloneSafe(application);
+      },
+    );
+  },
+
+  membership() {
+    return fallback(
+      () => request<Membership | null>("/v1/members/me"),
+      async () =>
+        structuredCloneSafe(demoState.memberships[getDemoUser().id] ?? null),
+    );
+  },
+
+  membershipCharges() {
+    return fallback(
+      () => request<MembershipCharge[]>("/v1/membership/charges"),
+      async () => structuredCloneSafe(demoState.membershipCharges),
+    );
+  },
+
+  payMembershipCharge(id: string) {
+    return fallback(
+      () =>
+        request<MembershipCharge>(`/v1/membership/charges/${id}/payment`, {
+          method: "POST",
+        }),
+      async () => {
+        const charge = demoState.membershipCharges.find((item) => item.id === id);
+        if (!charge) throw new ApiError("找不到應繳款", 404);
+        charge.payment_status = "paid";
+        charge.paid_at = new Date().toISOString();
+        charge.receipt_number = `RCPT-${String(Date.now()).slice(-9)}`;
+        return structuredCloneSafe(charge);
+      },
+    );
+  },
+
+  memberDirectory() {
+    return fallback(
+      () => request<MemberDirectoryEntry[]>("/v1/members/directory"),
+      async () => structuredCloneSafe(demoMemberDirectory),
+    );
+  },
+
+  activities() {
+    return fallback(
+      () => request<MemberActivity[]>("/v1/activities"),
+      async () => structuredCloneSafe(demoState.activities),
+    );
+  },
+
+  createActivity(input: {
+    title: string;
+    description: string;
+    venue_name: string;
+    starts_at: string;
+    registration_deadline: string;
+    capacity: number;
+  }) {
+    return fallback(
+      () =>
+        request<MemberActivity>("/v1/activities", {
+          method: "POST",
+          body: input,
+        }),
+      async () => {
+        const activity: MemberActivity = {
+          id: `activity-${Date.now()}`,
+          ...input,
+          image_key: "member-hike",
+          status: "pending_review",
+          registered_count: 0,
+          waitlist_count: 0,
+          my_registration_status: null,
+          created_by_name: getDemoUser().display_name,
+        };
+        demoState.activities.unshift(activity);
+        return structuredCloneSafe(activity);
+      },
+    );
+  },
+
+  registerActivity(id: string) {
+    return fallback(
+      () =>
+        request<MemberActivity>(`/v1/activities/${id}/register`, {
+          method: "POST",
+        }),
+      async () => {
+        const activity = demoState.activities.find((item) => item.id === id);
+        if (!activity) throw new ApiError("找不到活動", 404);
+        if (activity.registered_count >= activity.capacity) {
+          activity.waitlist_count += 1;
+          activity.my_registration_status = "waitlisted";
+        } else {
+          activity.registered_count += 1;
+          activity.my_registration_status = "registered";
+        }
+        return structuredCloneSafe(activity);
+      },
+    );
+  },
+
+  cancelActivityRegistration(id: string) {
+    return fallback(
+      () =>
+        request<MemberActivity>(`/v1/activities/${id}/registration`, {
+          method: "DELETE",
+        }),
+      async () => {
+        const activity = demoState.activities.find((item) => item.id === id);
+        if (!activity) throw new ApiError("找不到活動", 404);
+        if (activity.my_registration_status === "registered") {
+          if (activity.waitlist_count > 0) {
+            activity.waitlist_count -= 1;
+          } else {
+            activity.registered_count = Math.max(
+              0,
+              activity.registered_count - 1,
+            );
+          }
+        }
+        if (activity.my_registration_status === "waitlisted") {
+          activity.waitlist_count = Math.max(0, activity.waitlist_count - 1);
+        }
+        activity.my_registration_status = "cancelled";
+        return structuredCloneSafe(activity);
+      },
+    );
+  },
+
+  memberProposals() {
+    return fallback(
+      () => request<MemberProposal[]>("/v1/member-proposals"),
+      async () => structuredCloneSafe(demoState.memberProposals),
+    );
+  },
+
+  voteMemberProposal(id: string, choice: MemberVoteChoice) {
+    return fallback(
+      () =>
+        request<MemberProposal>(`/v1/member-proposals/${id}/vote`, {
+          method: "PUT",
+          body: { choice },
+        }),
+      async () => {
+        const proposal = demoState.memberProposals.find((item) => item.id === id);
+        if (!proposal) throw new ApiError("找不到社員提案", 404);
+        const countKey = (value: MemberVoteChoice) =>
+          `${value}_count` as "yes_count" | "no_count" | "abstain_count";
+        if (proposal.my_vote) {
+          const previousKey = countKey(proposal.my_vote);
+          proposal[previousKey] = Math.max(0, proposal[previousKey] - 1);
+        }
+        proposal[countKey(choice)] += 1;
+        proposal.my_vote = choice;
+        return structuredCloneSafe(proposal);
+      },
+    );
+  },
+
+  createMemberProposal(input: { title: string; summary: string }) {
+    return fallback(
+      () =>
+        request<MemberProposal>("/v1/member-proposals", {
+          method: "POST",
+          body: input,
+        }),
+      async () => {
+        const proposal: MemberProposal = {
+          id: `member-proposal-${Date.now()}`,
+          ...input,
+          status: "pending_review",
+          created_by_name: getDemoUser().display_name,
+          discussion_ends_at: null,
+          voting_ends_at: null,
+          minimum_voters: 10,
+          yes_count: 0,
+          no_count: 0,
+          abstain_count: 0,
+          my_vote: null,
+        };
+        demoState.memberProposals.unshift(proposal);
+        return structuredCloneSafe(proposal);
+      },
+    );
+  },
+
+  addMemberProposalComment(id: string, body: string) {
+    return fallback(
+      () =>
+        request<MemberProposal>(`/v1/member-proposals/${id}/comments`, {
+          method: "POST",
+          body: { body },
+        }),
+      async () => {
+        const proposal = demoState.memberProposals.find((item) => item.id === id);
+        if (!proposal) throw new ApiError("找不到社員提案", 404);
+        proposal.comments ??= [];
+        proposal.comments.push({
+          id: `member-comment-${Date.now()}`,
+          author_name: getDemoUser().display_name,
+          body,
+          created_at: new Date().toISOString(),
+        });
+        return structuredCloneSafe(proposal);
+      },
+    );
+  },
+
+  mealEvents() {
+    return fallback(
+      () => request<MealEvent[]>("/v1/meal-events"),
+      async () => structuredCloneSafe(demoState.mealEvents),
+    );
+  },
+
+  mealEvent(id: string) {
+    return fallback(
+      () => request<MealEvent>(`/v1/meal-events/${id}`),
+      async () => {
+        const event = demoState.mealEvents.find((item) => item.id === id);
+        if (!event) throw new ApiError("找不到便當場次", 404);
+        return structuredCloneSafe(event);
+      },
+    );
+  },
+
+  mealOrders() {
+    return fallback(
+      () => request<MealOrder[]>("/v1/meal-orders"),
+      async () => structuredCloneSafe(demoState.mealOrders),
+    );
+  },
+
+  mealOrder(id: string) {
+    return fallback(
+      () => request<MealOrder>(`/v1/meal-orders/${id}`),
+      async () => {
+        const order = demoState.mealOrders.find((item) => item.id === id);
+        if (!order) throw new ApiError("找不到便當訂單", 404);
+        return structuredCloneSafe(order);
+      },
+    );
+  },
+
+  createMealOrder(
+    eventId: string,
+    input: { items: { meal_id: string; quantity: number }[] },
+  ) {
+    return fallback(
+      () =>
+        request<MealOrder>(`/v1/meal-events/${eventId}/orders`, {
+          method: "POST",
+          body: input,
+        }),
+      async () => {
+        const event = demoState.mealEvents.find((item) => item.id === eventId);
+        if (!event) throw new ApiError("找不到便當場次", 404);
+        const items = input.items.flatMap((item) => {
+          const meal = event.items.find(
+            (candidate) => candidate.meal_id === item.meal_id,
+          );
+          if (!meal || item.quantity < 1) return [];
+          if (item.quantity > meal.available_quantity) {
+            throw new ApiError(`${meal.meal_name} 剩餘數量不足`, 409);
+          }
+          meal.reserved_quantity += item.quantity;
+          meal.available_quantity -= item.quantity;
+          return [{
+            meal_id: meal.meal_id,
+            meal_name: meal.meal_name,
+            quantity: item.quantity,
+            unit_price: meal.price,
+            subtotal: meal.price * item.quantity,
+          }];
+        });
+        if (!items.length) throw new ApiError("請至少選擇一份便當", 400);
+        const order: MealOrder = {
+          id: `meal-order-${Date.now()}`,
+          order_number: `MEAL-${String(Date.now()).slice(-9)}`,
+          meal_event_id: event.id,
+          meal_event_title: event.title,
+          venue_name: event.venue_name,
+          pickup_start: event.pickup_start,
+          pickup_end: event.pickup_end,
+          pickup_code: String(Math.floor(100000 + Math.random() * 900000)),
+          payment_status: "paid",
+          fulfillment_status: "ready",
+          amount_total: items.reduce((total, item) => total + item.subtotal, 0),
+          created_at: new Date().toISOString(),
+          items,
+        };
+        demoState.mealOrders.unshift(order);
+        demoState.orders.unshift({
+          id: order.id,
+          order_number: order.order_number,
+          order_kind: "meal_preorder",
+          fulfillment_status: "ready_for_pickup",
+          payment_status: order.payment_status,
+          invoice_status: "not_eligible",
+          membership_type_snapshot: getDemoUser().membership_type,
+          amount_total: order.amount_total,
+          paid_at: new Date().toISOString(),
+          created_at: order.created_at,
+          available_actions: ["view"],
+          sales_channel: "meal_preorder",
+          fulfillment: {
+            method: "event_pickup",
+            status: "ready",
+            venue_name: order.venue_name,
+            pickup_start: order.pickup_start,
+            pickup_end: order.pickup_end,
+          },
+          meal_event: {
+            id: event.id,
+            title: event.title,
+            venue_name: event.venue_name,
+            pickup_start: event.pickup_start,
+            pickup_end: event.pickup_end,
+          },
+          pickup_code: order.pickup_code,
+          items: order.items.map((item) => ({
+            product_id: item.meal_id,
+            product_name: item.meal_name,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            subtotal: item.subtotal,
+            tax_type: "taxable",
+          })),
+        });
+        return structuredCloneSafe(order);
+      },
+    );
+  },
+
+  adminMembershipApplications() {
+    return fallback(
+      () =>
+        request<MembershipApplication[]>(
+          "/v1/admin/membership-applications",
+        ),
+      async () => structuredCloneSafe(demoState.membershipApplications),
+    );
+  },
+
+  reviewMembershipApplication(
+    id: string,
+    action: "request_revision" | "approve" | "reject",
+    note: string,
+  ) {
+    return fallback(
+      () =>
+        request<MembershipApplication>(
+          `/v1/admin/membership-applications/${id}/${action}`,
+          { method: "POST", body: { note } },
+        ),
+      async () => {
+        const application = demoState.membershipApplications.find(
+          (item) => item.id === id,
+        );
+        if (!application) throw new ApiError("找不到入社申請", 404);
+        application.status =
+          action === "approve"
+            ? "approved"
+            : action === "reject"
+              ? "rejected"
+              : "needs_revision";
+        application.review_note = note || null;
+        return structuredCloneSafe(application);
+      },
+    );
+  },
+
+  adminReviewActivity(
+    id: string,
+    action: "approve" | "cancel" | "complete",
+  ) {
+    return fallback(
+      () =>
+        request<MemberActivity>(`/v1/admin/activities/${id}/${action}`, {
+          method: "POST",
+        }),
+      async () => {
+        const activity = demoState.activities.find((item) => item.id === id);
+        if (!activity) throw new ApiError("找不到活動", 404);
+        activity.status =
+          action === "approve"
+            ? "published"
+            : action === "complete"
+              ? "completed"
+              : "cancelled";
+        return structuredCloneSafe(activity);
+      },
+    );
+  },
+
+  adminReviewMemberProposal(
+    id: string,
+    action: "approve" | "reject" | "close",
+  ) {
+    return fallback(
+      () =>
+        request<MemberProposal>(
+          `/v1/admin/member-proposals/${id}/${action}`,
+          { method: "POST" },
+        ),
+      async () => {
+        const proposal = demoState.memberProposals.find((item) => item.id === id);
+        if (!proposal) throw new ApiError("找不到社員提案", 404);
+        proposal.status =
+          action === "approve"
+            ? "discussion"
+            : action === "reject"
+              ? "rejected"
+              : "closed";
+        return structuredCloneSafe(proposal);
+      },
+    );
+  },
+
+  adminMealEventAction(
+    id: string,
+    action: "publish" | "cancel" | "open_pickup" | "complete",
+  ) {
+    return fallback(
+      () =>
+        request<MealEvent>(`/v1/admin/meal-events/${id}/${action}`, {
+          method: "POST",
+        }),
+      async () => {
+        const event = demoState.mealEvents.find((item) => item.id === id);
+        if (!event) throw new ApiError("找不到便當場次", 404);
+        event.status =
+          action === "publish"
+            ? "published"
+            : action === "open_pickup"
+              ? "pickup_open"
+              : action === "complete"
+                ? "completed"
+                : "cancelled";
+        return structuredCloneSafe(event);
+      },
+    );
+  },
+
+  adminDuplicateMealEvent(id: string) {
+    return fallback(
+      () =>
+        request<MealEvent>(`/v1/admin/meal-events/${id}/duplicate`, {
+          method: "POST",
+        }),
+      async () => {
+        const source = demoState.mealEvents.find((item) => item.id === id);
+        if (!source) throw new ApiError("找不到便當場次", 404);
+        const copy: MealEvent = {
+          ...structuredCloneSafe(source),
+          id: `meal-event-${Date.now()}`,
+          title: `${source.title}（複製）`,
+          status: "draft",
+          items: source.items.map((item) => ({
+            ...item,
+            reserved_quantity: 0,
+            paid_quantity: 0,
+            available_quantity: item.capacity,
+          })),
+        };
+        demoState.mealEvents.unshift(copy);
+        return structuredCloneSafe(copy);
+      },
+    );
+  },
+
+  adminAdvanceShipment(orderId: string, status: string) {
+    return fallback(
+      () =>
+        request<Order>(`/v1/admin/orders/${orderId}/shipment`, {
+          method: "POST",
+          body: { status },
+        }),
+      async () => {
+        const order = demoState.orders.find((item) => item.id === orderId);
+        if (!order) throw new ApiError("找不到物流訂單", 404);
+        if (order.shipment) {
+          order.shipment.status = status as NonNullable<
+            Order["shipment"]
+          >["status"];
+        }
+        return structuredCloneSafe(order);
+      },
+    );
+  },
+
   resetDemo(confirmation: string) {
     return fallback(
       () =>
@@ -882,11 +1719,22 @@ export const api = {
         if (confirmation !== "RESET") {
           throw new ApiError("重設確認碼不正確", 403);
         }
-        demoState.products = structuredCloneSafe(demoProducts);
+        demoState.products = demoProductsWithLogistics();
         demoState.proposals = structuredCloneSafe(demoProposals);
         demoState.campaigns = structuredCloneSafe(demoCampaigns);
         demoState.orders = structuredCloneSafe(demoOrders);
         demoState.notifications = structuredCloneSafe(demoNotifications);
+        demoState.mealEvents = structuredCloneSafe(demoMealEvents);
+        demoState.mealOrders = structuredCloneSafe(demoMealOrders);
+        demoState.membershipApplications = structuredCloneSafe(
+          demoMembershipApplications,
+        );
+        demoState.memberships = structuredCloneSafe(demoMemberships);
+        demoState.membershipCharges = structuredCloneSafe(
+          demoMembershipCharges,
+        );
+        demoState.activities = structuredCloneSafe(demoActivities);
+        demoState.memberProposals = structuredCloneSafe(demoMemberProposals);
         return { message: "展示資料已恢復為初始狀態" };
       },
     );

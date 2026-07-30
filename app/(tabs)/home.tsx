@@ -3,9 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { useMemo, useState } from "react";
 import {
-  ImageBackground,
-  Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,18 +10,17 @@ import {
 } from "react-native";
 
 import {
-  BrandLockup,
-  IconButton,
+  CatalogCard,
+  EmptyState,
+  InlineMessage,
   LoadingState,
+  PageHeader,
   ProductCard,
-  ProgressBar,
   Screen,
   SectionHeader,
   SegmentControl,
-  StatusPill,
 } from "../../src/components/ui";
 import { campaignLabels, money, shortDate } from "../../src/lib/format";
-import { imageFor } from "../../src/lib/images";
 import { api } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { useCart } from "../../src/store/CartContext";
@@ -54,11 +50,6 @@ export default function HomeScreen() {
     queryKey: ["campaigns"],
     queryFn: api.campaigns,
   });
-  const notificationsQuery = useQuery({
-    queryKey: ["notifications"],
-    queryFn: api.notifications,
-    enabled: isAuthenticated,
-  });
 
   const products = useMemo(
     () =>
@@ -71,36 +62,17 @@ export default function HomeScreen() {
       ),
     [category, keyword, productsQuery.data],
   );
-  const featuredCampaign = (campaignsQuery.data ?? []).find(
-    (campaign) => campaign.intake_status === "open",
-  );
-  const unread = (notificationsQuery.data ?? []).filter(
-    (notice) => !notice.read_at,
-  ).length;
+  const featuredCampaigns = (campaignsQuery.data ?? [])
+    .filter((campaign) => campaign.intake_status === "open")
+    .slice(0, 2);
   const membership = user?.membership_type ?? "nonmember";
 
   return (
     <Screen>
-      <View style={styles.topbar}>
-        <BrandLockup />
-        <View style={styles.topActions}>
-          {isAuthenticated ? (
-            <IconButton
-              badge={unread}
-              icon="notifications-outline"
-              label="通知"
-              onPress={() => router.push("/notifications")}
-            />
-          ) : (
-            <Pressable
-              onPress={() => router.push("/login")}
-              style={styles.loginButton}
-            >
-              <Text style={styles.loginText}>登入</Text>
-            </Pressable>
-          )}
-        </View>
-      </View>
+      <PageHeader
+        subtitle="選購在地農產，也能一起累積共同購買的需要。"
+        title="本週選物"
+      />
 
       <View style={styles.search}>
         <Ionicons color={colors.muted} name="search" size={18} />
@@ -113,62 +85,48 @@ export default function HomeScreen() {
         />
       </View>
 
-      {featuredCampaign ? (
-        <Pressable
-          onPress={() =>
-            router.push({
-              pathname: "/campaign/[id]",
-              params: { id: featuredCampaign.id },
-            })
-          }
-          style={({ pressed }) => [
-            styles.hero,
-            pressed && styles.pressed,
-          ]}
-        >
-          <ImageBackground
-            imageStyle={styles.heroImage}
-            source={imageFor(
-              featuredCampaign.image_key,
-              featuredCampaign.image_url,
-            )}
-            style={styles.heroImage}
-          >
-            <View style={styles.heroOverlay}>
-              <StatusPill
-                label={campaignLabels[featuredCampaign.decision_status]}
-                tone="warning"
-              />
-              <View>
-                <Text style={styles.heroEyebrow}>本週共同購買</Text>
-                <Text style={styles.heroTitle}>
-                  {featuredCampaign.title.replace("共同購買", "")}
-                </Text>
-                <Text style={styles.heroMeta}>
-                  {featuredCampaign.paid_quantity}／
-                  {featuredCampaign.min_paid_quantity} 組・
-                  {shortDate(featuredCampaign.deadline)} 截止
-                </Text>
-                <ProgressBar
-                  color="#E9A06D"
-                  value={
-                    (featuredCampaign.paid_quantity /
-                      featuredCampaign.min_paid_quantity) *
-                    100
-                  }
-                />
-              </View>
-            </View>
-          </ImageBackground>
-        </Pressable>
-      ) : null}
-
       <View style={styles.section}>
         <SectionHeader
-          action="看團購"
+          action="查看全部"
           onAction={() => router.push("/(tabs)/group-buy")}
-          title="產地選物"
+          title="進行中的團購"
         />
+        {campaignsQuery.isError ? (
+          <InlineMessage text="目前無法載入團購，請稍後再試。" tone="danger" />
+        ) : (
+          <View style={styles.gridWithoutPadding}>
+            {featuredCampaigns.map((campaign) => (
+              <CatalogCard
+                badge={campaignLabels[campaign.decision_status]}
+                imageKey={campaign.image_key}
+                imageUrl={campaign.image_url}
+                key={campaign.id}
+                meta={`${shortDate(campaign.deadline)} 截止`}
+                onPress={() =>
+                  router.push({
+                    pathname: "/campaign/[id]",
+                    params: { id: campaign.id },
+                  })
+                }
+                price={money(
+                  membership === "member"
+                    ? campaign.member_price
+                    : campaign.nonmember_price,
+                )}
+                priceLabel={membership === "member" ? "社員價" : "一般價"}
+                progress={
+                  (campaign.paid_quantity / campaign.min_paid_quantity) * 100
+                }
+                progressLabel={`${campaign.paid_quantity}/${campaign.min_paid_quantity} 組`}
+                title={campaign.title.replace("共同購買", "")}
+              />
+            ))}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.sectionTitleOnly}>
+        <SectionHeader title="產地選物" />
       </View>
       <SegmentControl
         onChange={setCategory}
@@ -178,6 +136,14 @@ export default function HomeScreen() {
 
       {productsQuery.isLoading ? (
         <LoadingState label="正在整理本週農產" />
+      ) : productsQuery.isError ? (
+        <EmptyState
+          action="重新載入"
+          description="目前無法取得商品資料，請稍後再試。"
+          icon="cloud-offline-outline"
+          onAction={() => productsQuery.refetch()}
+          title="商品載入失敗"
+        />
       ) : (
         <View style={styles.grid}>
           {products.map((product) => (
@@ -228,21 +194,6 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  topbar: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    padding: spacing.md,
-    paddingTop: spacing.lg,
-  },
-  topActions: { flexDirection: "row" },
-  loginButton: {
-    backgroundColor: colors.forest,
-    borderRadius: radii.pill,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-  },
-  loginText: { color: colors.white, fontSize: 12, fontWeight: "900" },
   search: {
     alignItems: "center",
     backgroundColor: colors.paper,
@@ -260,39 +211,18 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingLeft: 9,
   },
-  hero: {
-    borderRadius: radii.lg,
-    margin: spacing.md,
-    overflow: "hidden",
-  },
-  heroImage: { height: 235, width: "100%" },
-  heroOverlay: {
-    backgroundColor: "rgba(20,53,44,0.60)",
-    flex: 1,
-    justifyContent: "space-between",
-    padding: spacing.md,
-  },
-  heroEyebrow: {
-    color: "#EBD2B9",
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 1.5,
-  },
-  heroTitle: {
-    color: colors.white,
-    fontSize: 29,
-    fontWeight: "900",
-    marginTop: 5,
-  },
-  heroMeta: {
-    color: "#F4EEE6",
-    fontSize: 11,
-    marginBottom: 9,
-    marginTop: 7,
-  },
   section: {
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.lg,
+  },
+  sectionTitleOnly: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.lg,
+  },
+  gridWithoutPadding: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
   },
   grid: {
     flexDirection: "row",
@@ -323,10 +253,9 @@ const styles = StyleSheet.create({
   pickupTitle: { color: colors.forest, fontSize: 13, fontWeight: "900" },
   pickupBody: {
     color: colors.muted,
-    fontSize: 10,
+    fontSize: 12,
     lineHeight: 15,
     marginTop: 2,
   },
-  priceHint: { color: colors.forest, fontSize: 10, fontWeight: "900" },
-  pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
+  priceHint: { color: colors.forest, fontSize: 12, fontWeight: "900" },
 });

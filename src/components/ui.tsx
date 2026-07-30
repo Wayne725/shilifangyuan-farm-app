@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import type { ComponentProps, PropsWithChildren, ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -18,6 +19,9 @@ import { imageFor } from "../lib/images";
 import { money } from "../lib/format";
 import { colors, radii, shadows, spacing } from "../theme";
 import type { MembershipType, Product } from "../types";
+import { useAuth } from "../store/AuthContext";
+import { useCart } from "../store/CartContext";
+import { useWorkspace } from "../store/WorkspaceContext";
 
 type IconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -77,6 +81,76 @@ export function BrandLockup({ light = false }: { light?: boolean }) {
       <Text style={[styles.orgName, light && styles.orgNameLight]}>
         臺灣城鄉永續生活消費合作社
       </Text>
+    </View>
+  );
+}
+
+export function WorkspaceTopBar() {
+  const { workspace, setWorkspace, lastRoute } = useWorkspace();
+  const { itemCount } = useCart();
+  const { isAuthenticated } = useAuth();
+
+  const changeWorkspace = (next: "life" | "social") => {
+    if (next === workspace) return;
+    setWorkspace(next);
+    router.replace(lastRoute[next] as never);
+  };
+
+  return (
+    <View style={styles.workspaceHeader}>
+      <View style={styles.workspaceHeaderTop}>
+        <BrandLockup />
+        <View style={styles.workspaceActions}>
+          {isAuthenticated ? (
+            <IconButton
+              icon="notifications-outline"
+              label="通知中心"
+              onPress={() => router.push("/notifications")}
+            />
+          ) : null}
+          <IconButton
+            badge={itemCount}
+            icon="basket-outline"
+            label="購物車"
+            onPress={() => router.push("/(tabs)/cart")}
+          />
+        </View>
+      </View>
+      <View accessibilityRole="tablist" style={styles.workspaceSwitch}>
+        {[
+          { value: "life" as const, label: "生活消費", icon: "storefront-outline" as const },
+          { value: "social" as const, label: "社務系統", icon: "people-outline" as const },
+        ].map((option) => {
+          const selected = option.value === workspace;
+          return (
+            <Pressable
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+              key={option.value}
+              onPress={() => changeWorkspace(option.value)}
+              style={({ pressed }) => [
+                styles.workspaceOption,
+                selected && styles.workspaceOptionSelected,
+                pressed && styles.buttonPressed,
+              ]}
+            >
+              <Ionicons
+                color={selected ? colors.white : colors.forest}
+                name={option.icon}
+                size={18}
+              />
+              <Text
+                style={[
+                  styles.workspaceOptionLabel,
+                  selected && styles.workspaceOptionLabelSelected,
+                ]}
+              >
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -287,7 +361,55 @@ export function ProductCard({
   const price =
     membership === "member" ? product.member_price : product.nonmember_price;
   return (
+    <CatalogCard
+      badge={product.badge}
+      compact={compact}
+      imageKey={product.image_key ?? product.id}
+      imageUrl={product.image_url}
+      meta={`${product.origin ?? product.category}・每${product.unit}`}
+      onAction={onAdd}
+      onPress={onPress}
+      price={money(price)}
+      priceLabel={membership === "member" ? "社員價" : "一般價"}
+      title={product.name}
+    />
+  );
+}
+
+export function CatalogCard({
+  title,
+  meta,
+  imageKey,
+  imageUrl,
+  badge,
+  price,
+  priceLabel,
+  secondary,
+  progress,
+  progressLabel,
+  onPress,
+  onAction,
+  actionIcon = "add",
+  compact = true,
+}: {
+  title: string;
+  meta: string;
+  imageKey?: string | null;
+  imageUrl?: string | null;
+  badge?: string;
+  price?: string;
+  priceLabel?: string;
+  secondary?: ReactNode;
+  progress?: number;
+  progressLabel?: string;
+  onPress: () => void;
+  onAction?: () => void;
+  actionIcon?: IconName;
+  compact?: boolean;
+}) {
+  return (
     <Pressable
+      accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [
         styles.productCard,
@@ -297,45 +419,61 @@ export function ProductCard({
     >
       <View style={styles.productImageWrap}>
         <Image
-          source={imageFor(product.image_key ?? product.id, product.image_url)}
+          resizeMode="cover"
+          source={imageFor(imageKey, imageUrl)}
           style={styles.productImage}
         />
-        {product.badge ? (
+        {badge ? (
           <View style={styles.productBadge}>
-            <Text style={styles.productBadgeText}>{product.badge}</Text>
+            <Text numberOfLines={1} style={styles.productBadgeText}>
+              {badge}
+            </Text>
           </View>
         ) : null}
       </View>
       <View style={styles.productCopy}>
-        <Text numberOfLines={1} style={styles.productName}>
-          {product.name}
+        <Text numberOfLines={2} style={styles.productName}>
+          {title}
         </Text>
-        <Text numberOfLines={1} style={styles.productMeta}>
-          {product.origin ?? product.category}・每{product.unit}
+        <Text numberOfLines={2} style={styles.productMeta}>
+          {meta}
         </Text>
-        <View style={styles.productFooter}>
-          <View>
-            <Text style={styles.priceLabel}>
-              {membership === "member" ? "社員價" : "一般價"}
-            </Text>
-            <Text style={styles.productPrice}>{money(price)}</Text>
+        {secondary}
+        {typeof progress === "number" ? (
+          <View style={styles.catalogProgress}>
+            <ProgressBar value={progress} />
+            {progressLabel ? (
+              <Text numberOfLines={1} style={styles.catalogProgressLabel}>
+                {progressLabel}
+              </Text>
+            ) : null}
           </View>
-          {onAdd ? (
-            <Pressable
-              accessibilityLabel={`加入${product.name}`}
-              onPress={(event) => {
-                event.stopPropagation();
-                onAdd();
-              }}
-              style={({ pressed }) => [
-                styles.addButton,
-                pressed && styles.buttonPressed,
-              ]}
-            >
-              <Ionicons color={colors.white} name="add" size={22} />
-            </Pressable>
-          ) : null}
-        </View>
+        ) : null}
+        {price || onAction ? (
+          <View style={styles.productFooter}>
+            <View style={styles.catalogPriceCopy}>
+              {priceLabel ? (
+                <Text style={styles.priceLabel}>{priceLabel}</Text>
+              ) : null}
+              {price ? <Text style={styles.productPrice}>{price}</Text> : null}
+            </View>
+            {onAction ? (
+              <Pressable
+                accessibilityLabel={`${actionIcon === "add" ? "加入" : "操作"}${title}`}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onAction();
+                }}
+                style={({ pressed }) => [
+                  styles.addButton,
+                  pressed && styles.buttonPressed,
+                ]}
+              >
+                <Ionicons color={colors.white} name={actionIcon} size={22} />
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -543,7 +681,7 @@ const styles = StyleSheet.create({
   textLight: { color: colors.white },
   orgName: {
     color: colors.muted,
-    fontSize: 9,
+    fontSize: 12,
     fontWeight: "700",
     letterSpacing: 0.5,
     marginTop: 3,
@@ -562,7 +700,7 @@ const styles = StyleSheet.create({
   pageTitleCopy: { flex: 1 },
   eyebrow: {
     color: colors.orange,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: "800",
     letterSpacing: 1.3,
     marginBottom: 3,
@@ -596,6 +734,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 4,
+    minHeight: 44,
     paddingVertical: 5,
   },
   textActionLabel: {
@@ -629,7 +768,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   buttonCompact: {
-    minHeight: 39,
+    minHeight: 44,
     paddingHorizontal: 14,
   },
   buttonDisabled: { opacity: 0.45 },
@@ -645,10 +784,10 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     borderRadius: 14,
     borderWidth: 1,
-    height: 42,
+    height: 44,
     justifyContent: "center",
     marginRight: 10,
-    width: 42,
+    width: 44,
   },
   iconBadge: {
     alignItems: "center",
@@ -664,7 +803,7 @@ const styles = StyleSheet.create({
   },
   iconBadgeText: {
     color: colors.white,
-    fontSize: 9,
+    fontSize: 12,
     fontWeight: "900",
   },
   pill: {
@@ -691,7 +830,7 @@ const styles = StyleSheet.create({
   pillDot_warning: { backgroundColor: colors.amber },
   pillDot_danger: { backgroundColor: colors.danger },
   pillDot_neutral: { backgroundColor: colors.moss },
-  pillText: { color: colors.forest, fontSize: 11, fontWeight: "800" },
+  pillText: { color: colors.forest, fontSize: 12, fontWeight: "800" },
   pillText_positive: { color: colors.success },
   pillText_warning: { color: "#8A5C26" },
   pillText_danger: { color: colors.danger },
@@ -712,7 +851,7 @@ const styles = StyleSheet.create({
   },
   productCardCompact: { width: "48.3%" },
   cardPressed: { opacity: 0.82, transform: [{ translateY: 1 }] },
-  productImageWrap: { aspectRatio: 1.22, backgroundColor: colors.sageLight },
+  productImageWrap: { aspectRatio: 4 / 3, backgroundColor: colors.sageLight },
   productImage: { height: "100%", width: "100%" },
   productBadge: {
     backgroundColor: "rgba(255,253,247,0.90)",
@@ -725,15 +864,23 @@ const styles = StyleSheet.create({
   },
   productBadgeText: {
     color: colors.forest,
-    fontSize: 9,
+    fontSize: 12,
     fontWeight: "800",
   },
   productCopy: { padding: 13 },
-  productName: { color: colors.forest, fontSize: 16, fontWeight: "900" },
+  productName: {
+    color: colors.forest,
+    fontSize: 16,
+    fontWeight: "900",
+    lineHeight: 21,
+    minHeight: 42,
+  },
   productMeta: {
     color: colors.muted,
-    fontSize: 10,
+    fontSize: 12,
+    lineHeight: 17,
     marginTop: 4,
+    minHeight: 34,
   },
   productFooter: {
     alignItems: "flex-end",
@@ -741,7 +888,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: 13,
   },
-  priceLabel: { color: colors.muted, fontSize: 9 },
+  priceLabel: { color: colors.muted, fontSize: 12 },
   productPrice: {
     color: colors.orange,
     fontSize: 20,
@@ -752,9 +899,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: colors.forest,
     borderRadius: 12,
-    height: 36,
+    height: 44,
     justifyContent: "center",
-    width: 36,
+    width: 44,
   },
   quantity: {
     alignItems: "center",
@@ -763,11 +910,11 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     borderWidth: 1,
     flexDirection: "row",
-    height: 42,
+    height: 46,
   },
   quantityButton: {
     alignItems: "center",
-    height: 40,
+    height: 44,
     justifyContent: "center",
     width: 40,
   },
@@ -780,9 +927,12 @@ const styles = StyleSheet.create({
   },
   segmentRow: { gap: 8, paddingHorizontal: spacing.md },
   segment: {
+    alignItems: "center",
     borderColor: colors.line,
     borderRadius: radii.pill,
     borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
     paddingHorizontal: 16,
     paddingVertical: 9,
   },
@@ -802,7 +952,7 @@ const styles = StyleSheet.create({
     width: 40,
   },
   infoCopy: { flex: 1 },
-  infoLabel: { color: colors.muted, fontSize: 10 },
+  infoLabel: { color: colors.muted, fontSize: 12 },
   infoValue: {
     color: colors.forest,
     fontSize: 13,
@@ -849,5 +999,60 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     lineHeight: 18,
+  },
+  workspaceHeader: {
+    backgroundColor: colors.cream,
+    borderBottomColor: colors.line,
+    borderBottomWidth: 1,
+    paddingBottom: 10,
+    paddingHorizontal: spacing.md,
+    paddingTop: 10,
+  },
+  workspaceHeaderTop: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  workspaceActions: {
+    flexDirection: "row",
+  },
+  workspaceSwitch: {
+    backgroundColor: colors.creamDeep,
+    borderRadius: radii.md,
+    flexDirection: "row",
+    marginTop: 10,
+    padding: 3,
+  },
+  workspaceOption: {
+    alignItems: "center",
+    borderRadius: 13,
+    flex: 1,
+    flexDirection: "row",
+    gap: 7,
+    justifyContent: "center",
+    minHeight: 44,
+  },
+  workspaceOptionSelected: {
+    backgroundColor: colors.forest,
+  },
+  workspaceOptionLabel: {
+    color: colors.forest,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  workspaceOptionLabelSelected: {
+    color: colors.white,
+  },
+  catalogProgress: {
+    gap: 6,
+    marginTop: 10,
+  },
+  catalogProgressLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  catalogPriceCopy: {
+    flex: 1,
   },
 });

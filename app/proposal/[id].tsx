@@ -191,7 +191,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
   count: { color: "#E9C29D", fontSize: 31, fontWeight: "900" },
-  countLabel: { color: "#C8D5CC", fontSize: 9, marginTop: 2 },
+  countLabel: { color: "#C8D5CC", fontSize: 12, marginTop: 2 },
   countRule: { backgroundColor: "#4D6D62", width: 1 },
   content: { gap: 14, padding: spacing.md },
   infoPanel: {
@@ -210,6 +210,6 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   voteTitle: { color: colors.forest, fontSize: 15, fontWeight: "900" },
-  voteHint: { color: colors.muted, fontSize: 10, marginTop: 4 },
+  voteHint: { color: colors.muted, fontSize: 12, marginTop: 4 },
   actions: { gap: 9 },
 });

@@ -23,7 +23,11 @@ import { api, getErrorMessage } from "../src/services/api";
 import { useAuth } from "../src/store/AuthContext";
 import { useCart } from "../src/store/CartContext";
 import { colors, radii, spacing } from "../src/theme";
-import type { InvoiceCarrierType } from "../src/types";
+import type {
+  FulfillmentMethod,
+  InvoiceCarrierType,
+  LogisticsProvider,
+} from "../src/types";
 
 export default function CheckoutScreen() {
   const { user } = useAuth();
@@ -31,10 +35,19 @@ export default function CheckoutScreen() {
   const [email, setEmail] = useState(user?.email ?? "");
   const [carrier, setCarrier] = useState<InvoiceCarrierType>("ecpay");
   const [barcode, setBarcode] = useState("/");
+  const [fulfillmentMethod, setFulfillmentMethod] =
+    useState<FulfillmentMethod>("cooperative_pickup");
+  const [logisticsProvider, setLogisticsProvider] =
+    useState<LogisticsProvider>("home_delivery");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
   const quote = useQuery({
     queryKey: ["quote", items],
     queryFn: () => api.quote(items),
     enabled: items.length > 0,
+  });
+  const products = useQuery({
+    queryKey: ["products"],
+    queryFn: api.products,
   });
   const submit = useMutation({
     mutationFn: async () => {
@@ -49,6 +62,13 @@ export default function CheckoutScreen() {
         invoice_carrier_type: carrier,
         ...(carrier === "mobile_barcode"
           ? { invoice_carrier_value: barcode }
+          : {}),
+        fulfillment_method: fulfillmentMethod,
+        ...(fulfillmentMethod === "ecpay_logistics"
+          ? {
+              logistics_provider: logisticsProvider,
+              delivery_address: deliveryAddress.trim(),
+            }
           : {}),
       });
       const payment = await api.createPaymentAttempt(order.id);
@@ -74,12 +94,40 @@ export default function CheckoutScreen() {
     router.replace("/(tabs)/cart");
     return null;
   }
+  const productAmount = quote.data?.amount_total ?? 0;
+  const cartProducts = (products.data ?? []).filter((product) =>
+    items.some((item) => item.product_id === product.id),
+  );
+  const temperatureZones = new Set(
+    cartProducts.map((product) => product.temperature_zone ?? "ambient"),
+  );
+  const incompatibleTemperature = temperatureZones.size > 1;
+  const providers: LogisticsProvider[] = [
+    "home_delivery",
+    "seven_eleven",
+    "family_mart",
+    "hilife",
+  ];
+  const availableProviders = providers.filter((provider) =>
+    cartProducts.every(
+      (product) =>
+        product.is_shippable !== false &&
+        (product.allowed_logistics ?? providers).includes(provider),
+    ),
+  );
+  const shippingFee =
+    fulfillmentMethod === "ecpay_logistics" && productAmount < 1500
+      ? logisticsProvider === "home_delivery"
+        ? 160
+        : 70
+      : 0;
+  const payableAmount = productAmount + shippingFee;
 
   return (
     <Screen>
       <PageHeader
         onBack={() => router.back()}
-        subtitle="確認現場取貨與電子發票資料後，前往線上付款。"
+        subtitle="選擇現場取貨或配送，再確認電子發票與付款資料。"
         title="確認結帳"
       />
       {quote.isLoading ? (
@@ -107,23 +155,108 @@ export default function CheckoutScreen() {
               </View>
             ))}
             <View style={styles.rule} />
+            {fulfillmentMethod === "ecpay_logistics" ? (
+              <View style={styles.feeRow}>
+                <Text style={styles.totalLabel}>運費</Text>
+                <Text style={styles.subtotal}>
+                  {shippingFee ? money(shippingFee) : "免運"}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>付款金額</Text>
-              <Text style={styles.total}>
-                {money(quote.data?.amount_total ?? 0)}
-              </Text>
+              <Text style={styles.total}>{money(payableAmount)}</Text>
             </View>
           </View>
 
           <View style={styles.panel}>
             <Text style={styles.sectionTitle}>取貨方式</Text>
-            <View style={styles.selectedLine}>
-              <View style={styles.check} />
-              <View>
-                <Text style={styles.lineTitle}>合作社現場取貨</Text>
-                <Text style={styles.lineHint}>可取貨時會透過 App 與 Email 通知</Text>
-              </View>
-            </View>
+            {[
+              {
+                value: "cooperative_pickup" as const,
+                title: "合作社現場取貨",
+                hint: "可取貨時透過 App 與 Email 通知",
+              },
+              {
+                value: "ecpay_logistics" as const,
+                title: "綠界物流配送",
+                hint: "預先付款，不使用取貨付款",
+              },
+            ].map((option) => (
+              <Pressable
+                key={option.value}
+                onPress={() => setFulfillmentMethod(option.value)}
+                style={[
+                  styles.fulfillmentChoice,
+                  fulfillmentMethod === option.value &&
+                    styles.fulfillmentChoiceSelected,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.radio,
+                    fulfillmentMethod === option.value && styles.radioSelected,
+                  ]}
+                />
+                <View style={styles.choiceCopy}>
+                  <Text style={styles.lineTitle}>{option.title}</Text>
+                  <Text style={styles.lineHint}>{option.hint}</Text>
+                </View>
+              </Pressable>
+            ))}
+            {fulfillmentMethod === "ecpay_logistics" ? (
+              <>
+                <Text style={styles.fieldLabel}>配送通路</Text>
+                <View style={styles.logisticsGrid}>
+                  {[
+                    { value: "home_delivery" as const, label: "宅配 $160" },
+                    { value: "seven_eleven" as const, label: "7-ELEVEN $70" },
+                    { value: "family_mart" as const, label: "全家 $70" },
+                    { value: "hilife" as const, label: "萊爾富 $70" },
+                  ].map((provider) => (
+                    <Pressable
+                      disabled={!availableProviders.includes(provider.value)}
+                      key={provider.value}
+                      onPress={() => setLogisticsProvider(provider.value)}
+                      style={[
+                        styles.logisticsChoice,
+                        logisticsProvider === provider.value &&
+                          styles.logisticsChoiceSelected,
+                        !availableProviders.includes(provider.value) &&
+                          styles.logisticsChoiceDisabled,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.logisticsLabel,
+                          logisticsProvider === provider.value &&
+                            styles.logisticsLabelSelected,
+                        ]}
+                      >
+                        {provider.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {incompatibleTemperature ? (
+                  <InlineMessage
+                    text="購物車含不同溫層商品，物流訂單需分開結帳；仍可改選現場取貨。"
+                    tone="danger"
+                  />
+                ) : null}
+                <Text style={styles.shippingHint}>
+                  商品滿 $1,500 免運；同筆訂單只使用單一地址與溫層。
+                </Text>
+                <Text style={styles.fieldLabel}>配送地址或門市</Text>
+                <TextInput
+                  onChangeText={setDeliveryAddress}
+                  placeholder="輸入宅配地址，或完成綠界門市選擇"
+                  placeholderTextColor={colors.sage}
+                  style={styles.input}
+                  value={deliveryAddress}
+                />
+              </>
+            ) : null}
           </View>
 
           <View style={styles.panel}>
@@ -184,9 +317,15 @@ export default function CheckoutScreen() {
             />
           ) : null}
           <Button
-            disabled={!email.includes("@")}
+            disabled={
+              !email.includes("@") ||
+              (fulfillmentMethod === "ecpay_logistics" &&
+                (!deliveryAddress.trim() ||
+                  incompatibleTemperature ||
+                  !availableProviders.includes(logisticsProvider)))
+            }
             icon="card-outline"
-            label={`前往付款 ${money(quote.data?.amount_total ?? 0)}`}
+            label={`前往付款 ${money(payableAmount)}`}
             loading={submit.isPending}
             onPress={() => submit.mutate()}
           />
@@ -210,7 +349,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { color: colors.forest, fontSize: 17, fontWeight: "900" },
   orderTitle: { color: colors.white },
-  identity: { color: "#D7E2DA", fontSize: 10 },
+  identity: { color: "#D7E2DA", fontSize: 12 },
   item: {
     alignItems: "center",
     flexDirection: "row",
@@ -218,7 +357,7 @@ const styles = StyleSheet.create({
   },
   itemCopy: { flex: 1 },
   itemName: { color: colors.white, fontSize: 12, fontWeight: "800" },
-  itemMeta: { color: "#C8D5CC", fontSize: 9, marginTop: 3 },
+  itemMeta: { color: "#C8D5CC", fontSize: 12, marginTop: 3 },
   subtotal: { color: colors.white, fontSize: 12, fontWeight: "900" },
   rule: { backgroundColor: "#49695E", height: 1, marginVertical: 14 },
   totalRow: {
@@ -226,7 +365,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  totalLabel: { color: "#C8D5CC", fontSize: 10 },
+  feeRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  totalLabel: { color: "#C8D5CC", fontSize: 12 },
   total: { color: "#EEC8A4", fontSize: 27, fontWeight: "900" },
   panel: {
     backgroundColor: colors.paper,
@@ -234,20 +379,44 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: spacing.md,
   },
-  selectedLine: { alignItems: "center", flexDirection: "row", gap: 10 },
-  check: {
-    backgroundColor: colors.forest,
-    borderColor: colors.sage,
-    borderRadius: 8,
-    borderWidth: 4,
-    height: 16,
-    width: 16,
+  fulfillmentChoice: {
+    alignItems: "center",
+    borderColor: colors.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 10,
+    minHeight: 56,
+    padding: 11,
   },
+  fulfillmentChoiceSelected: {
+    backgroundColor: colors.sageLight,
+    borderColor: colors.sage,
+  },
+  choiceCopy: { flex: 1 },
   lineTitle: { color: colors.forest, fontSize: 12, fontWeight: "900" },
-  lineHint: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  lineHint: { color: colors.muted, fontSize: 12, marginTop: 3 },
+  logisticsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  logisticsChoice: {
+    alignItems: "center",
+    borderColor: colors.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    width: "48.8%",
+  },
+  logisticsChoiceSelected: {
+    backgroundColor: colors.forest,
+    borderColor: colors.forest,
+  },
+  logisticsChoiceDisabled: { opacity: 0.38 },
+  logisticsLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
+  logisticsLabelSelected: { color: colors.white },
+  shippingHint: { color: colors.muted, fontSize: 12, lineHeight: 18 },
   fieldLabel: {
     color: colors.forest,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "800",
     marginTop: 3,
   },
@@ -286,6 +455,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.forest,
     borderColor: colors.forest,
   },
-  carrierText: { color: colors.forest, fontSize: 10, fontWeight: "800" },
-  invoiceHint: { color: colors.muted, fontSize: 9, lineHeight: 14 },
+  carrierText: { color: colors.forest, fontSize: 12, fontWeight: "800" },
+  invoiceHint: { color: colors.muted, fontSize: 12, lineHeight: 14 },
 });

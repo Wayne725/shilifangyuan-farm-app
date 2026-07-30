@@ -1,8 +1,11 @@
-# 十里方圓｜農產品與共同購買 App
+# 十里方圓｜生活消費與社務 App
 
-「十里方圓」是為臺灣城鄉永續生活消費合作社設計的跨平台 App，涵蓋一般農產品購物、社員／非社員雙價格、共同購買投票、正式團購、訂單管理、綠界測試金流、電子發票與通知。
+「十里方圓」是為臺灣城鄉永續生活消費合作社設計的跨平台 Sandbox。App 以固定工作區切換器分成：
 
-同一套 Expo 程式可在 iOS、Android 與 Web 執行；FastAPI 與 PostgreSQL 負責身分、價格、投票、團購、訂單、付款與發票狀態。
+- `生活消費`：一般農產、共同購買、便當預購、訂單、現場取貨與物流。
+- `社務系統`：入社申請、社員資料、自願公開名錄、社員活動與治理提案。
+
+同一套 Expo 程式可在 iOS、Android 與 Web 執行；FastAPI 與 PostgreSQL 負責身分、有效會籍、價格、容量、訂單、付款、履約與稽核。
 
 ## 技術
 
@@ -11,6 +14,9 @@
 - 資料庫：PostgreSQL；本機可使用 SQLite
 - 金流：綠界 AIO Stage，信用卡一次付清
 - 發票：綠界 B2C 電子發票 Stage
+- 物流：綠界全方位物流 Stage；宅配、7-ELEVEN、全家、萊爾富
+- 私密證件：Cloudflare R2 私有 Bucket、短效簽名 URL
+- 私密欄位：版本化 AES-256-GCM
 - 通知：App 通知中心、SendGrid Email
 - 部署：Render Static Site、Web Service、PostgreSQL
 
@@ -56,12 +62,24 @@ API 文件：
 | 社員 | `member@shilifangyuan.tw` | `member123` |
 | 非社員 | `customer@shilifangyuan.tw` | `customer123` |
 | 管理員 | `admin@shilifangyuan.tw` | `admin123` |
+| 補件申請人 | `supplement@shilifangyuan.tw` | `customer123` |
+| 待付款申請人 | `pending@shilifangyuan.tw` | `customer123` |
 
 內建資料模式可使用上表快速登入。部署連接後端時，請務必用 `DEMO_ADMIN_PASSWORD`、`DEMO_MEMBER_PASSWORD`、`DEMO_NONMEMBER_PASSWORD` 覆寫成不同的強密碼；公開 Web 不應沿用範例管理員密碼。
 
 本機內建資料的重設確認碼為 `RESET`。Render Sandbox 必須另設至少 8 字元的 `DEMO_RESET_CONFIRMATION`；管理員在後台輸入正確確認碼後才能重設資料。
 
 ## 核心流程
+
+### 入社與社員資格
+
+1. 自行註冊、驗證 Email。
+2. 填寫入社資料並上傳三份測試證件；Sandbox 禁止上傳真實證件。
+3. 管理員要求補件、核准或駁回。
+4. 核准後分別繳交示範入社費 500 元與股金 1,000 元。
+5. 兩筆綠界 Stage 付款皆成功後，產生 `SLF-YYYY-####` 社員編號。
+
+API 的社員資格只由 `memberships.status=active` 推導；`users.membership_type` 僅保留舊資料相容，不參與授權。
 
 ### 一般購物
 
@@ -82,6 +100,26 @@ API 文件：
 6. 確認成團後可募集到截止或滿額，最後公布取貨時間。
 7. 未成團、拒絕或取消時，後端完成 Sandbox 退款狀態與庫存釋放。
 
+### 社員活動與治理提案
+
+- 有效社員可建立免費活動，管理員審核後發布；滿額後採 FIFO 候補與自動遞補。
+- 社員治理提案與商品團購提案分離。表決採公開記名 `yes / no / abstain`，棄權計入最低投票數，贊成必須多於反對。
+- 合作教育本版不實作，也不阻擋入社；待決事項集中於 `docs/UNRESOLVED.md`。
+
+### 便當預購
+
+- 可重用餐點搭配單次校園／攤位場次，每款便當有獨立容量。
+- 建立付款頁才保留 15 分鐘容量；付款後可於 30 分鐘內、且不超過訂購截止自行取消。
+- 產生六位取餐碼與 QR token，工作人員可重複安全地核銷；逾取餐時間標記未取且不退款。
+- 便當固定活動取餐，不與農產或團購混單，也不使用物流。
+
+### 物流
+
+- 一般農產與確認成團的團購可選宅配或超商，全程預先付款、不代收。
+- 同一訂單只接受單一溫層、單一地址與單一包裹。
+- 展示費率為超商 70 元、常溫宅配 160 元，商品小計滿 1,500 元免運。
+- 綠界物流 Stage 不會自動模擬後續貨態，因此管理後台提供有稽核紀錄的 Sandbox 貨態推進。
+
 ## 專案結構
 
 ```text
@@ -91,6 +129,7 @@ backend/app/         FastAPI、領域模型、外部服務與背景工作
 backend/alembic/     PostgreSQL migration
 backend/tests/       後端測試
 docs/                架構、部署與展示文件
+CONTEXT.md           領域詞彙與邊界
 render.yaml          Render Blueprint
 .github/workflows/   CI 與每 10 分鐘 reconciliation
 ```
@@ -100,8 +139,11 @@ render.yaml          Render Blueprint
 - 綠界 AIO Stage 不動真實款項。
 - AIO Stage 沒有實際信用卡退款 API；退款完成只代表本系統狀態、庫存與通知已完成。
 - 綠界發票 Stage 不會送財政部，也不會寄官方發票信；App 另外以 SendGrid 寄開立通知。
+- 綠界物流 Stage 可選通路、建單及查詢，但不會自動推送後續配送狀態。
+- 入社頁只接受測試素材；正式證件隱私告知、保存期限與刪除政策尚待合作社決定。
+- 入社費、股金及股金返還只產生系統收據／Sandbox 紀錄，不開電子發票。
 - Expo Go 的付款流程由使用者手動切回 App，再向後端查詢結果；正式安裝版已預留 `shilifangyuan://`。
 - Expo SDK 57 目前無法直接由實體 iPhone 的 App Store 版 Expo Go 開啟；現場以 Web 為主，或事先準備 development build。
-- 商品正式稅別、社員資料來源、配送與出貨規則仍需合作社確認。
+- 商品正式稅別、正式入社費／股金、物流合約與校園供餐資料仍需合作社確認。
 
-部署及展示前檢查請見 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，系統設計請見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+部署及展示前檢查請見 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，系統設計請見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，待決策項目請見 [docs/UNRESOLVED.md](docs/UNRESOLVED.md)。

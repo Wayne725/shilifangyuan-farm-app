@@ -15,7 +15,7 @@ import {
 } from "../../src/components/ui";
 import {
   dateTime,
-  fulfillmentLabels,
+  fulfillmentStatusLabel,
   invoiceLabels,
   membershipLabel,
   money,
@@ -74,14 +74,20 @@ export default function OrderDetailScreen() {
   const order = query.data;
   const canPay = order.available_actions.includes("pay");
   const canCancel = order.available_actions.includes("cancel");
+  const fulfillmentStatus =
+    order.fulfillment?.status ?? order.fulfillment_status;
 
   return (
     <Screen>
       <PageHeader
         onBack={() => router.back()}
-        subtitle={`${order.order_kind === "group" ? "團購訂單" : "一般訂單"}・${dateTime(
-          order.created_at,
-        )}`}
+        subtitle={`${
+          order.order_kind === "group"
+            ? "團購訂單"
+            : order.order_kind === "meal_preorder"
+              ? "便當預購"
+              : "一般訂單"
+        }・${dateTime(order.created_at)}`}
         title={order.order_number}
       />
       <View style={styles.content}>
@@ -91,15 +97,56 @@ export default function OrderDetailScreen() {
             <Text style={styles.summaryTotal}>{money(order.amount_total)}</Text>
           </View>
           <StatusPill
-            label={fulfillmentLabels[order.fulfillment_status]}
+            label={fulfillmentStatusLabel(fulfillmentStatus)}
             tone={
-              order.fulfillment_status === "ready_for_pickup"
+              ["ready_for_pickup", "ready", "delivered"].includes(
+                fulfillmentStatus,
+              )
                 ? "positive"
-                : order.fulfillment_status === "cancelled"
+                : fulfillmentStatus === "cancelled"
                   ? "danger"
                   : "neutral"
             }
           />
+        </View>
+
+        <View style={styles.itemsPanel}>
+          <Text style={styles.sectionTitle}>履約方式</Text>
+          <View style={styles.fulfillmentRow}>
+            <Ionicons
+              color={colors.forest}
+              name={
+                order.fulfillment?.method === "ecpay_logistics"
+                  ? "cube-outline"
+                  : "storefront-outline"
+              }
+              size={21}
+            />
+            <View style={styles.fulfillmentCopy}>
+              <Text style={styles.itemName}>
+                {order.fulfillment?.method === "ecpay_logistics"
+                  ? "綠界物流配送"
+                  : order.fulfillment?.method === "event_pickup"
+                    ? "活動場次取餐"
+                    : "合作社現場取貨"}
+              </Text>
+              <Text style={styles.itemMeta}>
+                {order.shipment
+                  ? `貨態 ${order.shipment.status}，追蹤碼 ${
+                      order.shipment.tracking_number ?? "建立中"
+                    }`
+                  : order.fulfillment?.venue_name ?? "依通知時間前往取貨"}
+              </Text>
+            </View>
+          </View>
+          {order.shipment ? (
+            <View style={styles.shippingFeeRow}>
+              <Text style={styles.totalLabel}>運費</Text>
+              <Text style={styles.itemSubtotal}>
+                {money(order.shipment.shipping_fee)}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.statusPanel}>
@@ -112,7 +159,7 @@ export default function OrderDetailScreen() {
             {
               icon: "cube-outline" as const,
               label: "履約狀態",
-              value: fulfillmentLabels[order.fulfillment_status],
+              value: fulfillmentStatusLabel(fulfillmentStatus),
             },
             {
               icon: "document-text-outline" as const,
@@ -158,7 +205,9 @@ export default function OrderDetailScreen() {
         <InlineMessage
           text={
             order.order_kind === "group"
-              ? "只有付款完成的數量會計入成團門檻。確認成團後，合作社會發布最終取貨時間。"
+              ? order.fulfillment?.method === "ecpay_logistics"
+                ? "只有付款完成的數量會計入門檻。確認成團並備貨後才會建立正式物流單。"
+                : "只有付款完成的數量會計入成團門檻。確認成團後，合作社會發布最終取貨時間。"
               : "付款完成後由合作社確認訂單；完成取貨後才開立電子發票。"
           }
         />
@@ -204,7 +253,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: spacing.lg,
   },
-  summaryLabel: { color: "#C9D6CE", fontSize: 10 },
+  summaryLabel: { color: "#C9D6CE", fontSize: 12 },
   summaryTotal: {
     color: colors.white,
     fontSize: 31,
@@ -225,7 +274,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 38,
   },
-  statusLabel: { color: colors.muted, flex: 1, fontSize: 11, marginLeft: 10 },
+  statusLabel: { color: colors.muted, flex: 1, fontSize: 12, marginLeft: 10 },
   statusValue: { color: colors.forest, fontSize: 12, fontWeight: "900" },
   rule: { backgroundColor: colors.line, height: 1, marginVertical: 11 },
   itemsPanel: {
@@ -245,14 +294,30 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   itemCopy: { flex: 1 },
+  fulfillmentRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 11,
+    minHeight: 48,
+  },
+  fulfillmentCopy: { flex: 1 },
+  shippingFeeRow: {
+    alignItems: "center",
+    borderTopColor: colors.line,
+    borderTopWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 10,
+    paddingTop: 10,
+  },
   itemName: { color: colors.charcoal, fontSize: 13, fontWeight: "800" },
-  itemMeta: { color: colors.muted, fontSize: 10, marginTop: 3 },
+  itemMeta: { color: colors.muted, fontSize: 12, marginTop: 3 },
   itemSubtotal: { color: colors.forest, fontSize: 13, fontWeight: "900" },
   totalRow: {
     alignItems: "baseline",
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  totalLabel: { color: colors.muted, fontSize: 11 },
+  totalLabel: { color: colors.muted, fontSize: 12 },
   total: { color: colors.forest, fontSize: 22, fontWeight: "900" },
 });

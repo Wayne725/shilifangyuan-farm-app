@@ -56,6 +56,42 @@ services:
         sync: false
       - key: ECPAY_INVOICE_STAGE
         value: "true"
+      - key: ECPAY_LOGISTICS_MERCHANT_ID
+        sync: false
+      - key: ECPAY_LOGISTICS_HASH_KEY
+        sync: false
+      - key: ECPAY_LOGISTICS_HASH_IV
+        sync: false
+      - key: ECPAY_LOGISTICS_PLATFORM_ID
+        sync: false
+      - key: ECPAY_LOGISTICS_STAGE
+        value: "true"
+      - key: ECPAY_LOGISTICS_SENDER_NAME
+        value: 十里方圓
+      - key: ECPAY_LOGISTICS_SENDER_ZIP_CODE
+        sync: false
+      - key: ECPAY_LOGISTICS_SENDER_ADDRESS
+        sync: false
+      - key: CLOUDFLARE_R2_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_R2_ACCESS_KEY_ID
+        sync: false
+      - key: CLOUDFLARE_R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: CLOUDFLARE_R2_BUCKET
+        sync: false
+      - key: CLOUDFLARE_R2_ENDPOINT_URL
+        sync: false
+      - key: R2_PRESIGNED_PUT_SECONDS
+        value: "300"
+      - key: R2_PRESIGNED_GET_SECONDS
+        value: "120"
+      - key: MEMBERSHIP_DOCUMENT_MAX_BYTES
+        value: "8388608"
+      - key: PII_ENCRYPTION_KEYS_JSON
+        sync: false
+      - key: PII_ENCRYPTION_CURRENT_VERSION
+        value: v1
       - key: SENDGRID_API_KEY
         sync: false
       - key: SENDGRID_FROM_EMAIL

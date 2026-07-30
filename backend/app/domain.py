@@ -15,6 +15,7 @@ from .models import (
     PaymentStatus,
     Product,
     ProposalStatus,
+    SalesChannel,
     VoteProposal,
 )
 
@@ -227,7 +228,21 @@ def order_available_actions(
     if order.payment_status == PaymentStatus.PENDING:
         actions.extend(["pay", "cancel"])
     elif order.payment_status == PaymentStatus.PAID:
-        if order.order_kind == OrderKind.REGULAR:
+        if order.sales_channel == SalesChannel.MEAL_PREORDER:
+            if (
+                order.meal_event is not None
+                and order.paid_at is not None
+                and current
+                <= min(
+                    aware(order.paid_at)
+                    + timedelta(
+                        minutes=get_settings().post_confirmation_cancel_minutes
+                    ),
+                    aware(order.meal_event.ordering_ends_at),
+                )
+            ):
+                actions.append("cancel")
+        elif order.order_kind == OrderKind.REGULAR:
             if order.fulfillment_status == FulfillmentStatus.PENDING_CONFIRMATION:
                 actions.append("cancel")
         elif order.group_campaign is not None:
