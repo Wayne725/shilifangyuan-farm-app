@@ -1,7 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useLocalSearchParams } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import { Platform, StyleSheet, Text, View } from "react-native";
 
 import {
@@ -13,6 +12,7 @@ import {
   Screen,
   StatusPill,
 } from "../../src/components/ui";
+import { confirmAction } from "../../src/lib/confirm";
 import {
   dateTime,
   fulfillmentStatusLabel,
@@ -20,7 +20,9 @@ import {
   membershipLabel,
   money,
   paymentLabels,
+  shipmentStatusLabel,
 } from "../../src/lib/format";
+import { openPaymentPage } from "../../src/lib/payment";
 import { api, getErrorMessage } from "../../src/services/api";
 import { colors, radii, spacing } from "../../src/theme";
 
@@ -41,18 +43,37 @@ export default function OrderDetailScreen() {
         queryClient.invalidateQueries({ queryKey: ["orders"] }),
       ]);
       if (payment.payment_url) {
-        if (Platform.OS === "web") {
-          window.location.assign(payment.payment_url);
-        } else {
-          await WebBrowser.openBrowserAsync(payment.payment_url);
-          await query.refetch();
-        }
+        await openPaymentPage(payment.payment_url);
+        if (Platform.OS !== "web") await query.refetch();
       }
     },
   });
+  const reselect = useMutation({
+    mutationFn: () => api.reissueLogisticsSelectionLink(id),
+    onSuccess: async (selection) => {
+      if (selection.selection_url) {
+        await openPaymentPage(selection.selection_url);
+        return;
+      }
+      await query.refetch();
+    },
+  });
   const cancel = useMutation({
-    mutationFn: () => api.cancelOrder(id),
-    onSuccess: async () => {
+    mutationFn: async () => {
+      const paid = query.data?.payment_status === "paid";
+      const confirmed = await confirmAction({
+        title: paid ? "取消訂單並申請退款" : "取消訂單",
+        message: paid
+          ? "取消後將建立全額退款紀錄，且無法復原。確定要繼續嗎？"
+          : "取消後這筆訂單無法復原，需要重新下單。確定要繼續嗎？",
+        confirmLabel: paid ? "取消並退款" : "取消訂單",
+        cancelLabel: "先不要",
+      });
+      if (!confirmed) return null;
+      return api.cancelOrder(id);
+    },
+    onSuccess: async (result) => {
+      if (!result) return;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["order", id] }),
         queryClient.invalidateQueries({ queryKey: ["orders"] }),
@@ -72,7 +93,15 @@ export default function OrderDetailScreen() {
   }
 
   const order = query.data;
-  const canPay = order.available_actions.includes("pay");
+  // Shipping orders cannot be paid until ECPay has fixed the store/address,
+  // so surface the missing step instead of a payment button that 409s.
+  const awaitingSelection =
+    order.fulfillment?.method === "ecpay_logistics" &&
+    !!order.shipment &&
+    !["ready_to_create", "created", "in_transit", "delivered"].includes(
+      order.shipment.status,
+    );
+  const canPay = order.available_actions.includes("pay") && !awaitingSelection;
   const canCancel = order.available_actions.includes("cancel");
   const fulfillmentStatus =
     order.fulfillment?.status ?? order.fulfillment_status;
@@ -132,8 +161,8 @@ export default function OrderDetailScreen() {
               </Text>
               <Text style={styles.itemMeta}>
                 {order.shipment
-                  ? `貨態 ${order.shipment.status}，追蹤碼 ${
-                      order.shipment.tracking_number ?? "建立中"
+                  ? `貨態 ${shipmentStatusLabel(order.shipment.status)}・追蹤碼 ${
+                      order.shipment.tracking_number ?? "尚未取得"
                     }`
                   : order.fulfillment?.venue_name ?? "依通知時間前往取貨"}
               </Text>
@@ -211,13 +240,28 @@ export default function OrderDetailScreen() {
               : "付款完成後由合作社確認訂單；完成取貨後才開立電子發票。"
           }
         />
-        {pay.error || cancel.error ? (
+        {pay.error || cancel.error || reselect.error ? (
           <InlineMessage
-            text={getErrorMessage(pay.error ?? cancel.error)}
+            text={getErrorMessage(pay.error ?? cancel.error ?? reselect.error)}
             tone="danger"
           />
         ) : null}
 
+        {awaitingSelection ? (
+          <>
+            <InlineMessage
+              text="尚未完成綠界物流門市或地址選擇，完成後才能付款。"
+              tone="danger"
+            />
+            <Button
+              icon="cube-outline"
+              label="繼續選擇物流"
+              loading={reselect.isPending}
+              onPress={() => reselect.mutate()}
+              variant="secondary"
+            />
+          </>
+        ) : null}
         {canPay ? (
           <Button
             icon="card-outline"
@@ -253,7 +297,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: spacing.lg,
   },
-  summaryLabel: { color: "#C9D6CE", fontSize: 12 },
+  summaryLabel: { color: "#C9D6CE", fontSize: 13 },
   summaryTotal: {
     color: colors.white,
     fontSize: 31,
@@ -274,8 +318,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 38,
   },
-  statusLabel: { color: colors.muted, flex: 1, fontSize: 12, marginLeft: 10 },
-  statusValue: { color: colors.forest, fontSize: 12, fontWeight: "900" },
+  statusLabel: { color: colors.muted, flex: 1, fontSize: 13, marginLeft: 10 },
+  statusValue: { color: colors.forest, fontSize: 13, fontWeight: "900" },
   rule: { backgroundColor: colors.line, height: 1, marginVertical: 11 },
   itemsPanel: {
     backgroundColor: colors.paper,
@@ -311,13 +355,13 @@ const styles = StyleSheet.create({
     paddingTop: 10,
   },
   itemName: { color: colors.charcoal, fontSize: 13, fontWeight: "800" },
-  itemMeta: { color: colors.muted, fontSize: 12, marginTop: 3 },
+  itemMeta: { color: colors.muted, fontSize: 13, marginTop: 3 },
   itemSubtotal: { color: colors.forest, fontSize: 13, fontWeight: "900" },
   totalRow: {
     alignItems: "baseline",
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  totalLabel: { color: colors.muted, fontSize: 12 },
+  totalLabel: { color: colors.muted, fontSize: 13 },
   total: { color: colors.forest, fontSize: 22, fontWeight: "900" },
 });

@@ -19,7 +19,12 @@ import {
   Screen,
   StatusPill,
 } from "../../src/components/ui";
+import {
+  pickMembershipDocument,
+  putDocumentToStorage,
+} from "../../src/lib/documentUpload";
 import { money } from "../../src/lib/format";
+import { openPaymentPage } from "../../src/lib/payment";
 import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
@@ -122,21 +127,30 @@ export default function MembersScreen() {
       if (!application.data) {
         await save.mutateAsync();
       }
+      const picked = await pickMembershipDocument();
+      if (!picked) return null;
       const upload = await api.membershipDocumentUploadUrl({
         document_type,
-        content_type: "image/png",
-        file_size: 1024,
-        checksum: `sandbox-${document_type}`,
+        content_type: picked.content_type,
+        size_bytes: picked.size_bytes,
+        checksum_sha256: picked.checksum_sha256,
       });
+      if (upload.upload_url.startsWith("https://")) {
+        await putDocumentToStorage(
+          upload.upload_url,
+          picked,
+          upload.required_headers ?? {},
+        );
+      }
       return api.confirmMembershipDocument({
+        document_id: upload.document_id,
         document_type,
-        object_key: upload.object_key,
-        checksum: `sandbox-${document_type}`,
+        checksum_sha256: picked.checksum_sha256,
       });
     },
-    onSuccess: async () => {
-      setMessage("測試證件已加入");
-      await refresh();
+    onSuccess: async (result) => {
+      setMessage(result ? "證件已上傳" : "已取消選擇");
+      if (result) await refresh();
     },
   });
   const submit = useMutation({
@@ -148,8 +162,13 @@ export default function MembersScreen() {
   });
   const pay = useMutation({
     mutationFn: api.payMembershipCharge,
-    onSuccess: async () => {
-      setMessage("款項已完成，系統收據已建立");
+    onSuccess: async (payment) => {
+      if (payment.payment_url) {
+        setMessage("正在前往綠界測試付款頁");
+        await openPaymentPage(payment.payment_url);
+      } else {
+        setMessage("款項已完成，系統收據已建立");
+      }
       await refresh();
     },
   });

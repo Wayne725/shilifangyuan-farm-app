@@ -1,6 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import { useState } from "react";
 import {
   Platform,
@@ -19,6 +18,7 @@ import {
   Screen,
 } from "../src/components/ui";
 import { membershipLabel, money } from "../src/lib/format";
+import { openPaymentPage } from "../src/lib/payment";
 import { api, getErrorMessage } from "../src/services/api";
 import { useAuth } from "../src/store/AuthContext";
 import { useCart } from "../src/store/CartContext";
@@ -27,6 +27,7 @@ import type {
   FulfillmentMethod,
   InvoiceCarrierType,
   LogisticsProvider,
+  TemperatureZone,
 } from "../src/types";
 
 export default function CheckoutScreen() {
@@ -39,6 +40,8 @@ export default function CheckoutScreen() {
     useState<FulfillmentMethod>("cooperative_pickup");
   const [logisticsProvider, setLogisticsProvider] =
     useState<LogisticsProvider>("home_delivery");
+  const [recipientName, setRecipientName] = useState(user?.display_name ?? "");
+  const [recipientPhone, setRecipientPhone] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const quote = useQuery({
     queryKey: ["quote", items],
@@ -49,6 +52,11 @@ export default function CheckoutScreen() {
     queryKey: ["products"],
     queryFn: api.products,
   });
+  const rates = useQuery({
+    queryKey: ["shipping-rates"],
+    queryFn: api.shippingRates,
+  });
+
   const submit = useMutation({
     mutationFn: async () => {
       if (!user) throw new Error("請先登入");
@@ -63,25 +71,32 @@ export default function CheckoutScreen() {
         ...(carrier === "mobile_barcode"
           ? { invoice_carrier_value: barcode }
           : {}),
-        fulfillment_method: fulfillmentMethod,
-        ...(fulfillmentMethod === "ecpay_logistics"
-          ? {
-              logistics_provider: logisticsProvider,
-              delivery_address: deliveryAddress.trim(),
-            }
-          : {}),
       });
-      const payment = await api.createPaymentAttempt(order.id);
-      return { order, payment };
+
+      // Pickup can go straight to payment. Shipping has to visit ECPay's
+      // picker first, because that is what fixes the address and the fee.
+      if (fulfillmentMethod !== "ecpay_logistics") {
+        const payment = await api.createPaymentAttempt(order.id);
+        return { order, payment, selection: null };
+      }
+      const selection = await api.createLogisticsSelection(order.id, {
+        channel: logisticsProvider,
+        temperature: cartTemperature,
+        recipient_name: recipientName.trim(),
+        recipient_phone: recipientPhone.trim(),
+        shipping_address: deliveryAddress.trim(),
+      });
+      return { order, payment: null, selection };
     },
-    onSuccess: async ({ order, payment }) => {
+    onSuccess: async ({ order, payment, selection }) => {
       clear();
-      if (payment.payment_url) {
-        if (Platform.OS === "web") {
-          window.location.assign(payment.payment_url);
-          return;
-        }
-        await WebBrowser.openBrowserAsync(payment.payment_url);
+      if (selection?.selection_url) {
+        await openPaymentPage(selection.selection_url);
+        return;
+      }
+      if (payment?.payment_url) {
+        await openPaymentPage(payment.payment_url);
+        if (Platform.OS === "web") return;
       }
       router.replace({
         pathname: "/order/[id]",
@@ -102,6 +117,8 @@ export default function CheckoutScreen() {
     cartProducts.map((product) => product.temperature_zone ?? "ambient"),
   );
   const incompatibleTemperature = temperatureZones.size > 1;
+  const cartTemperature: TemperatureZone =
+    (Array.from(temperatureZones)[0] as TemperatureZone) ?? "ambient";
   const providers: LogisticsProvider[] = [
     "home_delivery",
     "seven_eleven",
@@ -115,12 +132,22 @@ export default function CheckoutScreen() {
         (product.allowed_logistics ?? providers).includes(provider),
     ),
   );
+  // Fees come from the API's rate table, not from constants in the App.
+  const rateFor = (provider: LogisticsProvider) =>
+    (rates.data ?? []).find(
+      (rate) =>
+        rate.channel === provider && rate.temperature === cartTemperature,
+    );
+  const feeFor = (provider: LogisticsProvider) => {
+    const rate = rateFor(provider);
+    if (!rate) return null;
+    return productAmount >= rate.free_shipping_threshold ? 0 : rate.fee;
+  };
+  const selectedFee = feeFor(logisticsProvider);
   const shippingFee =
-    fulfillmentMethod === "ecpay_logistics" && productAmount < 1500
-      ? logisticsProvider === "home_delivery"
-        ? 160
-        : 70
-      : 0;
+    fulfillmentMethod === "ecpay_logistics" ? (selectedFee ?? 0) : 0;
+  const missingRate =
+    fulfillmentMethod === "ecpay_logistics" && selectedFee === null;
   const payableAmount = productAmount + shippingFee;
 
   return (
@@ -209,34 +236,49 @@ export default function CheckoutScreen() {
                 <Text style={styles.fieldLabel}>配送通路</Text>
                 <View style={styles.logisticsGrid}>
                   {[
-                    { value: "home_delivery" as const, label: "宅配 $160" },
-                    { value: "seven_eleven" as const, label: "7-ELEVEN $70" },
-                    { value: "family_mart" as const, label: "全家 $70" },
-                    { value: "hilife" as const, label: "萊爾富 $70" },
-                  ].map((provider) => (
-                    <Pressable
-                      disabled={!availableProviders.includes(provider.value)}
-                      key={provider.value}
-                      onPress={() => setLogisticsProvider(provider.value)}
-                      style={[
-                        styles.logisticsChoice,
-                        logisticsProvider === provider.value &&
-                          styles.logisticsChoiceSelected,
-                        !availableProviders.includes(provider.value) &&
-                          styles.logisticsChoiceDisabled,
-                      ]}
-                    >
-                      <Text
+                    { value: "home_delivery" as const, label: "宅配" },
+                    { value: "seven_eleven" as const, label: "7-ELEVEN" },
+                    { value: "family_mart" as const, label: "全家" },
+                    { value: "hilife" as const, label: "萊爾富" },
+                  ].map((provider) => {
+                    const fee = feeFor(provider.value);
+                    const disabled =
+                      !availableProviders.includes(provider.value) ||
+                      fee === null;
+                    const selected = logisticsProvider === provider.value;
+                    return (
+                      <Pressable
+                        accessibilityLabel={`選擇${provider.label}配送`}
+                        accessibilityRole="radio"
+                        accessibilityState={{
+                          disabled,
+                          selected,
+                        }}
+                        disabled={disabled}
+                        key={provider.value}
+                        onPress={() => setLogisticsProvider(provider.value)}
                         style={[
-                          styles.logisticsLabel,
-                          logisticsProvider === provider.value &&
-                            styles.logisticsLabelSelected,
+                          styles.logisticsChoice,
+                          selected && styles.logisticsChoiceSelected,
+                          disabled && styles.logisticsChoiceDisabled,
                         ]}
                       >
-                        {provider.label}
-                      </Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={[
+                            styles.logisticsLabel,
+                            selected && styles.logisticsLabelSelected,
+                          ]}
+                        >
+                          {provider.label}
+                          {fee === null
+                            ? "（不適用）"
+                            : fee === 0
+                              ? " 免運"
+                              : ` ${money(fee)}`}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
                 {incompatibleTemperature ? (
                   <InlineMessage
@@ -244,17 +286,59 @@ export default function CheckoutScreen() {
                     tone="danger"
                   />
                 ) : null}
+                {missingRate ? (
+                  <InlineMessage
+                    text="此通路目前沒有適用的運費費率，請改選其他通路或現場取貨。"
+                    tone="danger"
+                  />
+                ) : null}
                 <Text style={styles.shippingHint}>
-                  商品滿 $1,500 免運；同筆訂單只使用單一地址與溫層。
+                  {rateFor(logisticsProvider)
+                    ? `商品滿 ${money(
+                        rateFor(logisticsProvider)!.free_shipping_threshold,
+                      )} 免運；同筆訂單只使用單一地址與溫層。`
+                    : "同筆訂單只使用單一地址與溫層。"}
                 </Text>
-                <Text style={styles.fieldLabel}>配送地址或門市</Text>
+                <Text style={styles.fieldLabel}>收件人姓名</Text>
+                <TextInput
+                  onChangeText={setRecipientName}
+                  placeholder="與證件相同的姓名"
+                  placeholderTextColor={colors.sage}
+                  style={styles.input}
+                  value={recipientName}
+                />
+                <Text style={styles.fieldLabel}>收件人電話</Text>
+                <TextInput
+                  keyboardType="phone-pad"
+                  onChangeText={setRecipientPhone}
+                  placeholder="09xxxxxxxx 或市話"
+                  placeholderTextColor={colors.sage}
+                  style={styles.input}
+                  value={recipientPhone}
+                />
+                <Text style={styles.fieldLabel}>
+                  {logisticsProvider === "home_delivery"
+                    ? "配送地址"
+                    : "取貨地區（下一步在綠界選門市）"}
+                </Text>
                 <TextInput
                   onChangeText={setDeliveryAddress}
-                  placeholder="輸入宅配地址，或完成綠界門市選擇"
+                  placeholder={
+                    logisticsProvider === "home_delivery"
+                      ? "輸入完整宅配地址"
+                      : "輸入希望取貨的地區，例如：高雄市三民區"
+                  }
                   placeholderTextColor={colors.sage}
                   style={styles.input}
                   value={deliveryAddress}
                 />
+                <Text style={styles.shippingHint}>
+                  下一步會前往綠界物流頁面
+                  {logisticsProvider === "home_delivery"
+                    ? "確認配送資料"
+                    : "選擇取貨門市"}
+                  ，完成後回到訂單再付款。
+                </Text>
               </>
             ) : null}
           </View>
@@ -321,14 +405,31 @@ export default function CheckoutScreen() {
               !email.includes("@") ||
               (fulfillmentMethod === "ecpay_logistics" &&
                 (!deliveryAddress.trim() ||
+                  !recipientName.trim() ||
+                  recipientPhone.trim().length < 8 ||
                   incompatibleTemperature ||
+                  missingRate ||
                   !availableProviders.includes(logisticsProvider)))
             }
-            icon="card-outline"
-            label={`前往付款 ${money(payableAmount)}`}
+            icon={
+              fulfillmentMethod === "ecpay_logistics"
+                ? "cube-outline"
+                : "card-outline"
+            }
+            label={
+              fulfillmentMethod === "ecpay_logistics"
+                ? "下一步：選擇物流"
+                : `前往付款 ${money(payableAmount)}`
+            }
             loading={submit.isPending}
             onPress={() => submit.mutate()}
           />
+          {fulfillmentMethod === "ecpay_logistics" ? (
+            <Text style={styles.shippingHint}>
+              預估應付 {money(payableAmount)}（含運費 {money(shippingFee)}）；
+              實際金額以綠界物流選擇完成後的訂單為準。
+            </Text>
+          ) : null}
         </View>
       )}
     </Screen>
@@ -349,16 +450,16 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { color: colors.forest, fontSize: 17, fontWeight: "900" },
   orderTitle: { color: colors.white },
-  identity: { color: "#D7E2DA", fontSize: 12 },
+  identity: { color: "#D7E2DA", fontSize: 13 },
   item: {
     alignItems: "center",
     flexDirection: "row",
     paddingTop: 13,
   },
   itemCopy: { flex: 1 },
-  itemName: { color: colors.white, fontSize: 12, fontWeight: "800" },
-  itemMeta: { color: "#C8D5CC", fontSize: 12, marginTop: 3 },
-  subtotal: { color: colors.white, fontSize: 12, fontWeight: "900" },
+  itemName: { color: colors.white, fontSize: 14, fontWeight: "800" },
+  itemMeta: { color: "#C8D5CC", fontSize: 13, marginTop: 3 },
+  subtotal: { color: colors.white, fontSize: 14, fontWeight: "900" },
   rule: { backgroundColor: "#49695E", height: 1, marginVertical: 14 },
   totalRow: {
     alignItems: "baseline",
@@ -371,7 +472,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 8,
   },
-  totalLabel: { color: "#C8D5CC", fontSize: 12 },
+  totalLabel: { color: "#C8D5CC", fontSize: 13 },
   total: { color: "#EEC8A4", fontSize: 27, fontWeight: "900" },
   panel: {
     backgroundColor: colors.paper,
@@ -394,8 +495,8 @@ const styles = StyleSheet.create({
     borderColor: colors.sage,
   },
   choiceCopy: { flex: 1 },
-  lineTitle: { color: colors.forest, fontSize: 12, fontWeight: "900" },
-  lineHint: { color: colors.muted, fontSize: 12, marginTop: 3 },
+  lineTitle: { color: colors.forest, fontSize: 14, fontWeight: "900" },
+  lineHint: { color: colors.muted, fontSize: 13, marginTop: 3 },
   logisticsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   logisticsChoice: {
     alignItems: "center",
@@ -411,12 +512,12 @@ const styles = StyleSheet.create({
     borderColor: colors.forest,
   },
   logisticsChoiceDisabled: { opacity: 0.38 },
-  logisticsLabel: { color: colors.forest, fontSize: 12, fontWeight: "800" },
+  logisticsLabel: { color: colors.forest, fontSize: 14, fontWeight: "800" },
   logisticsLabelSelected: { color: colors.white },
-  shippingHint: { color: colors.muted, fontSize: 12, lineHeight: 18 },
+  shippingHint: { color: colors.muted, fontSize: 13, lineHeight: 18 },
   fieldLabel: {
     color: colors.forest,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "800",
     marginTop: 3,
   },
@@ -455,6 +556,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.forest,
     borderColor: colors.forest,
   },
-  carrierText: { color: colors.forest, fontSize: 12, fontWeight: "800" },
-  invoiceHint: { color: colors.muted, fontSize: 12, lineHeight: 14 },
+  carrierText: { color: colors.forest, fontSize: 14, fontWeight: "800" },
+  invoiceHint: { color: colors.muted, fontSize: 13, lineHeight: 14 },
 });

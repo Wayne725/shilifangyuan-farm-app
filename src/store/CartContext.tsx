@@ -2,12 +2,28 @@ import {
   createContext,
   type PropsWithChildren,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
+import { Platform } from "react-native";
 
 import type { CartItem, Product } from "../types";
 import { useAuth } from "./AuthContext";
+
+const CART_KEY = "shilifangyuan.cart";
+
+/** Web-only: the cart must survive the full page reload the ECPay flow causes. */
+function readStoredCart(): CartItem[] {
+  if (Platform.OS !== "web") return [];
+  try {
+    const raw = globalThis.localStorage?.getItem(CART_KEY);
+    const parsed = raw ? (JSON.parse(raw) as CartItem[]) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 type CartContextValue = {
   items: CartItem[];
@@ -22,8 +38,17 @@ type CartContextValue = {
 const CartContext = createContext<CartContextValue | null>(null);
 
 export function CartProvider({ children }: PropsWithChildren) {
-  const [items, setItems] = useState<CartItem[]>([]);
+  const [items, setItems] = useState<CartItem[]>(readStoredCart);
   const { user } = useAuth();
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    try {
+      globalThis.localStorage?.setItem(CART_KEY, JSON.stringify(items));
+    } catch {
+      // Private browsing rejects writes; the cart stays in memory only.
+    }
+  }, [items]);
 
   const addItem = (productId: string, quantity = 1) => {
     setItems((current) => {

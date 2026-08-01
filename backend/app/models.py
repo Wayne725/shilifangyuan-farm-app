@@ -1464,6 +1464,14 @@ class Shipment(Base):
     tracking_number: Mapped[Optional[str]] = mapped_column(
         String(80), nullable=True, index=True
     )
+    # Lets the unauthenticated store-selection page resolve one shipment; the
+    # browser navigation to ECPay cannot carry an Authorization header.
+    selection_token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    selection_token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     provider_payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow

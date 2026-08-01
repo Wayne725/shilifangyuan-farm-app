@@ -213,8 +213,9 @@ export type Shipment = {
   logistics_provider: LogisticsProvider;
   temperature_zone: TemperatureZone;
   status:
-    | "pending"
-    | "preparing"
+    | "draft"
+    | "selection_pending"
+    | "ready_to_create"
     | "created"
     | "in_transit"
     | "delivered"
@@ -330,10 +331,40 @@ export type MemberDirectoryEntry = {
   bio?: string | null;
 };
 
+export type ShippingRate = {
+  id: string;
+  channel: LogisticsProvider;
+  temperature: TemperatureZone;
+  fee: number;
+  free_shipping_threshold: number;
+  effective_from: string;
+  effective_to?: string | null;
+  is_active: boolean;
+};
+
+export type LogisticsSelection = {
+  shipment: Shipment;
+  /** Empty in demo mode; otherwise the ECPay store-picker page. */
+  selection_url: string;
+  shipping_fee: number;
+  product_subtotal: number;
+  amount_total: number;
+  expires_in_seconds: number;
+};
+
 export type MembershipDocumentUpload = {
+  document_id: string;
   upload_url: string;
   object_key: string;
   expires_in_seconds: number;
+  required_headers?: Record<string, string>;
+};
+
+export type MembershipDocumentRead = {
+  id: string;
+  document_type: "id_front" | "id_back" | "secondary";
+  status: "pending_upload" | "confirmed" | "rejected" | "deleted";
+  checksum_sha256?: string | null;
 };
 
 export type ActivityStatus =

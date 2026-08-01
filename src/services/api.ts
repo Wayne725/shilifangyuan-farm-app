@@ -32,12 +32,16 @@ import type {
   Membership,
   MembershipApplication,
   MembershipCharge,
+  MembershipDocumentRead,
   MembershipDocumentUpload,
   MemberProposal,
   MemberVoteChoice,
   Order,
   PaymentAttempt,
+  LogisticsSelection,
   Product,
+  Shipment,
+  ShippingRate,
   TemperatureZone,
   User,
   VoteProposal,
@@ -49,6 +53,11 @@ declare const process: {
 
 const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, "") ?? "";
 let accessToken: string | null = null;
+let refreshToken: string | null = null;
+let onTokensRefreshed: ((session: AuthSession) => void) | null = null;
+let onSessionExpired: (() => void) | null = null;
+/** In-flight refresh, so concurrent 401s wait on one call instead of racing. */
+let refreshInFlight: Promise<string | null> | null = null;
 
 class ApiError extends Error {
   constructor(
@@ -65,24 +74,69 @@ type RequestOptions = {
   token?: string | null;
 };
 
-async function request<T>(path: string, options: RequestOptions = {}) {
-  if (!apiBaseUrl) {
-    throw new ApiError("API 尚未設定", 0);
-  }
+async function performRefresh(): Promise<string | null> {
+  if (!refreshToken) return null;
+  const response = await fetch(`${apiBaseUrl}/v1/auth/refresh`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  }).catch(() => null);
+  if (!response?.ok) return null;
+  const session = (await response.json().catch(() => null)) as
+    | AuthSession
+    | null;
+  if (!session?.access_token) return null;
+  accessToken = session.access_token;
+  refreshToken = session.refresh_token ?? refreshToken;
+  onTokensRefreshed?.(session);
+  return session.access_token;
+}
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+/** Refreshes at most once per burst of 401s. */
+function refreshAccessToken(): Promise<string | null> {
+  refreshInFlight ??= performRefresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function send(path: string, options: RequestOptions, token: string | null) {
+  return fetch(`${apiBaseUrl}${path}`, {
     method: options.method ?? "GET",
     headers: {
       Accept: "application/json",
       ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.token ?? accessToken
-        ? { Authorization: `Bearer ${options.token ?? accessToken}` }
-        : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   }).catch(() => {
     throw new ApiError("無法連線到服務", 0);
   });
+}
+
+async function request<T>(path: string, options: RequestOptions = {}) {
+  if (!apiBaseUrl) {
+    throw new ApiError("API 尚未設定", 0);
+  }
+
+  const explicitToken = options.token !== undefined;
+  let response = await send(path, options, options.token ?? accessToken);
+
+  // The access token lives 30 minutes; renew it silently rather than dumping
+  // the buyer back to the login screen mid-checkout.
+  if (
+    response.status === 401 &&
+    !explicitToken &&
+    refreshToken &&
+    !path.startsWith("/v1/auth/refresh")
+  ) {
+    const renewed = await refreshAccessToken();
+    if (renewed) {
+      response = await send(path, options, renewed);
+    } else {
+      onSessionExpired?.();
+    }
+  }
 
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as {
@@ -123,6 +177,41 @@ const demoState = {
 function structuredCloneSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
+
+function demoRegistration(
+  status: ApiActivityRegistration["status"] | null,
+): ApiActivityRegistration {
+  return {
+    id: `registration-${Date.now()}`,
+    user_id: getDemoUser().id,
+    status: status ?? "cancelled",
+    queue_position: 1,
+    registered_at: new Date().toISOString(),
+    cancelled_at: status === "cancelled" ? new Date().toISOString() : null,
+    checked_in_at: null,
+  };
+}
+
+/** Mirrors the rates seeded by `backend/app/seed.py`. */
+const demoShippingRates: ShippingRate[] = (
+  [
+    ["home_delivery", "ambient", 160],
+    ["home_delivery", "chilled", 220],
+    ["home_delivery", "frozen", 260],
+    ["seven_eleven", "ambient", 70],
+    ["family_mart", "ambient", 70],
+    ["hilife", "ambient", 70],
+  ] as const
+).map(([channel, temperature, fee], index) => ({
+  id: `rate-${index + 1}`,
+  channel,
+  temperature,
+  fee,
+  free_shipping_threshold: 1500,
+  effective_from: "2026-01-01",
+  effective_to: null,
+  is_active: true,
+}));
 
 function demoProductsWithLogistics(): Product[] {
   return structuredCloneSafe(demoProducts).map((product) => {
@@ -177,6 +266,16 @@ type ApiNotification = {
   data?: Record<string, unknown> | null;
   read_at?: string | null;
   created_at: string;
+};
+
+type ApiActivityRegistration = {
+  id: string;
+  user_id: string;
+  status: "registered" | "waitlisted" | "cancelled" | "attended" | "no_show";
+  queue_position: number;
+  registered_at: string;
+  cancelled_at?: string | null;
+  checked_in_at?: string | null;
 };
 
 function normalizeNotification(notice: ApiNotification): AppNotification {
@@ -237,6 +336,20 @@ function normalizeOrder(order: Order) {
 
 export function setApiAccessToken(token: string | null) {
   accessToken = token;
+}
+
+export function setApiSession(session: AuthSession | null) {
+  accessToken = session?.access_token ?? null;
+  refreshToken = session?.refresh_token ?? null;
+}
+
+/** Lets AuthContext persist rotated tokens and react to an expired session. */
+export function setSessionHandlers(handlers: {
+  onRefreshed: (session: AuthSession) => void;
+  onExpired: () => void;
+}) {
+  onTokensRefreshed = handlers.onRefreshed;
+  onSessionExpired = handlers.onExpired;
 }
 
 export function getApiBaseUrl() {
@@ -486,7 +599,7 @@ export const api = {
                 logistics_provider:
                   input.logistics_provider ?? "home_delivery",
                 temperature_zone: "ambient",
-                status: "pending",
+                status: "draft",
                 tracking_number: null,
                 shipping_fee: shippingFee,
               }
@@ -592,6 +705,11 @@ export const api = {
     );
   },
 
+  /**
+   * Creates the order only. Shipping is chosen afterwards through
+   * `createLogisticsSelection`, which is what sets the fulfilment method,
+   * the shipping fee and the final `amount_total`.
+   */
   createOrder(input: {
     items: CartItem[];
     contact_email: string;
@@ -605,7 +723,14 @@ export const api = {
       () =>
         request<Order>("/v1/orders", {
           method: "POST",
-          body: input,
+          body: {
+            items: input.items,
+            contact_email: input.contact_email,
+            invoice_carrier_type: input.invoice_carrier_type,
+            ...(input.invoice_carrier_value
+              ? { invoice_carrier_value: input.invoice_carrier_value }
+              : {}),
+          },
         }),
       async () => {
         const quote = await api.quote(input.items);
@@ -646,7 +771,7 @@ export const api = {
                 logistics_provider:
                   input.logistics_provider ?? "home_delivery",
                 temperature_zone: "ambient",
-                status: "pending",
+                status: "draft",
                 tracking_number: null,
                 shipping_fee: shippingFee,
               }
@@ -654,6 +779,99 @@ export const api = {
         };
         demoState.orders.unshift(order);
         return structuredCloneSafe(order);
+      },
+    );
+  },
+
+  shippingRates() {
+    return fallback<ShippingRate[]>(
+      () => request<ShippingRate[]>("/v1/shipping-rates"),
+      async () => structuredCloneSafe(demoShippingRates),
+    );
+  },
+
+  /**
+   * Locks in channel, temperature and recipient, then returns the URL of the
+   * ECPay store picker. The picker page is deliberately token-authenticated:
+   * a top-level browser navigation cannot send an Authorization header.
+   */
+  createLogisticsSelection(
+    orderId: string,
+    input: {
+      channel: LogisticsProvider;
+      temperature: TemperatureZone;
+      recipient_name: string;
+      recipient_phone: string;
+      shipping_address: string;
+    },
+  ) {
+    return fallback<LogisticsSelection>(
+      () =>
+        request<LogisticsSelection>(
+          `/v1/orders/${orderId}/logistics/selection`,
+          { method: "POST", body: input },
+        ),
+      async () => {
+        const order = demoState.orders.find((item) => item.id === orderId);
+        if (!order) throw new ApiError("找不到這筆訂單", 404);
+        const rate = demoShippingRates.find(
+          (item) =>
+            item.channel === input.channel &&
+            item.temperature === input.temperature,
+        );
+        const subtotal = order.items.reduce(
+          (sum, item) => sum + item.subtotal,
+          0,
+        );
+        const shippingFee =
+          !rate || subtotal >= rate.free_shipping_threshold ? 0 : rate.fee;
+        order.amount_total = subtotal + shippingFee;
+        order.fulfillment = {
+          method: "ecpay_logistics",
+          status: "pending_confirmation",
+          address_summary: input.shipping_address,
+        };
+        order.shipment = {
+          id: `shipment-${Date.now()}`,
+          logistics_provider: input.channel,
+          temperature_zone: input.temperature,
+          status: "ready_to_create",
+          tracking_number: null,
+          shipping_fee: shippingFee,
+        };
+        return {
+          shipment: structuredCloneSafe(order.shipment),
+          selection_url: "",
+          shipping_fee: shippingFee,
+          product_subtotal: subtotal,
+          amount_total: order.amount_total,
+          expires_in_seconds: 1800,
+        };
+      },
+    );
+  },
+
+  /** Re-opens the ECPay picker for an order whose selection was abandoned. */
+  reissueLogisticsSelectionLink(orderId: string) {
+    return fallback<LogisticsSelection>(
+      () =>
+        request<LogisticsSelection>(
+          `/v1/orders/${orderId}/logistics/selection-link`,
+          { method: "POST" },
+        ),
+      async () => {
+        const order = demoState.orders.find((item) => item.id === orderId);
+        if (!order?.shipment) throw new ApiError("訂單尚未選擇物流", 404);
+        order.shipment.status = "ready_to_create";
+        return {
+          shipment: structuredCloneSafe(order.shipment),
+          selection_url: "",
+          shipping_fee: order.shipment.shipping_fee,
+          product_subtotal:
+            order.amount_total - order.shipment.shipping_fee,
+          amount_total: order.amount_total,
+          expires_in_seconds: 1800,
+        };
       },
     );
   },
@@ -1179,33 +1397,39 @@ export const api = {
   membershipDocumentUploadUrl(input: {
     document_type: "id_front" | "id_back" | "secondary";
     content_type: "image/jpeg" | "image/png" | "application/pdf";
-    file_size: number;
-    checksum: string;
+    size_bytes: number;
+    checksum_sha256: string;
   }) {
-    return fallback(
+    return fallback<MembershipDocumentUpload>(
       () =>
         request<MembershipDocumentUpload>(
           "/v1/membership/documents/upload-url",
           { method: "POST", body: input },
         ),
       async () => ({
-        upload_url: "https://example.invalid/sandbox-upload",
+        document_id: `document-${Date.now()}-${input.document_type}`,
+        // Non-https on purpose: demo mode must not attempt a real R2 PUT.
+        upload_url: "sandbox://no-upload",
         object_key: `sandbox/${Date.now()}-${input.document_type}`,
         expires_in_seconds: 300,
+        required_headers: {},
       }),
     );
   },
 
   confirmMembershipDocument(input: {
+    document_id: string;
     document_type: "id_front" | "id_back" | "secondary";
-    object_key: string;
-    checksum: string;
+    checksum_sha256: string;
   }) {
     return fallback(
       () =>
-        request<MembershipApplication>(
-          "/v1/membership/documents/confirm",
-          { method: "POST", body: input },
+        request<MembershipDocumentRead>(
+          `/v1/membership/documents/${input.document_id}/confirm`,
+          {
+            method: "POST",
+            body: { checksum_sha256: input.checksum_sha256 },
+          },
         ),
       async () => {
         const application = demoState.membershipApplications.find(
@@ -1215,7 +1439,12 @@ export const api = {
         if (!application.confirmed_documents.includes(input.document_type)) {
           application.confirmed_documents.push(input.document_type);
         }
-        return structuredCloneSafe(application);
+        return {
+          id: input.document_id,
+          document_type: input.document_type,
+          status: "confirmed" as const,
+          checksum_sha256: input.checksum_sha256,
+        };
       },
     );
   },
@@ -1236,18 +1465,33 @@ export const api = {
   },
 
   payMembershipCharge(id: string) {
-    return fallback(
+    return fallback<PaymentAttempt>(
       () =>
-        request<MembershipCharge>(`/v1/membership/charges/${id}/payment`, {
+        request<{
+          attempt_id: string;
+          payment_url: string;
+          status: PaymentAttempt["status"];
+          expires_at: string;
+        }>(`/v1/membership/charges/${id}/payment-attempts`, {
           method: "POST",
-        }),
+        }).then((result) => ({
+          id: result.attempt_id,
+          order_id: id,
+          payment_url: result.payment_url,
+          status: result.status,
+        })),
       async () => {
         const charge = demoState.membershipCharges.find((item) => item.id === id);
         if (!charge) throw new ApiError("找不到應繳款", 404);
         charge.payment_status = "paid";
         charge.paid_at = new Date().toISOString();
         charge.receipt_number = `RCPT-${String(Date.now()).slice(-9)}`;
-        return structuredCloneSafe(charge);
+        return {
+          id: `payment-${Date.now()}`,
+          order_id: id,
+          payment_url: null,
+          status: "paid" as const,
+        };
       },
     );
   },
@@ -1298,9 +1542,9 @@ export const api = {
   },
 
   registerActivity(id: string) {
-    return fallback(
+    return fallback<ApiActivityRegistration>(
       () =>
-        request<MemberActivity>(`/v1/activities/${id}/register`, {
+        request<ApiActivityRegistration>(`/v1/activities/${id}/register`, {
           method: "POST",
         }),
       async () => {
@@ -1313,17 +1557,18 @@ export const api = {
           activity.registered_count += 1;
           activity.my_registration_status = "registered";
         }
-        return structuredCloneSafe(activity);
+        return demoRegistration(activity.my_registration_status);
       },
     );
   },
 
   cancelActivityRegistration(id: string) {
-    return fallback(
+    return fallback<ApiActivityRegistration>(
       () =>
-        request<MemberActivity>(`/v1/activities/${id}/registration`, {
-          method: "DELETE",
-        }),
+        request<ApiActivityRegistration>(
+          `/v1/activities/${id}/cancel-registration`,
+          { method: "POST" },
+        ),
       async () => {
         const activity = demoState.activities.find((item) => item.id === id);
         if (!activity) throw new ApiError("找不到活動", 404);
@@ -1341,7 +1586,7 @@ export const api = {
           activity.waitlist_count = Math.max(0, activity.waitlist_count - 1);
         }
         activity.my_registration_status = "cancelled";
-        return structuredCloneSafe(activity);
+        return demoRegistration("cancelled");
       },
     );
   },
@@ -1688,22 +1933,25 @@ export const api = {
     );
   },
 
-  adminAdvanceShipment(orderId: string, status: string) {
-    return fallback(
+  adminAdvanceShipment(orderId: string, status: Shipment["status"]) {
+    return fallback<Shipment>(
       () =>
-        request<Order>(`/v1/admin/orders/${orderId}/shipment`, {
-          method: "POST",
-          body: { status },
-        }),
+        request<Shipment>(
+          `/v1/admin/orders/${orderId}/logistics/sandbox-status`,
+          {
+            method: "POST",
+            body: { status, reason: "管理員於後台推進 Sandbox 貨態" },
+          },
+        ),
       async () => {
         const order = demoState.orders.find((item) => item.id === orderId);
-        if (!order) throw new ApiError("找不到物流訂單", 404);
-        if (order.shipment) {
-          order.shipment.status = status as NonNullable<
-            Order["shipment"]
-          >["status"];
+        if (!order?.shipment) throw new ApiError("找不到物流訂單", 404);
+        order.shipment.status = status;
+        if (status === "delivered") {
+          order.fulfillment_status = "picked_up";
+          if (order.fulfillment) order.fulfillment.status = "delivered";
         }
-        return structuredCloneSafe(order);
+        return structuredCloneSafe(order.shipment);
       },
     );
   },

@@ -478,6 +478,7 @@ class MembershipDocumentUploadRequest(BaseModel):
     document_type: MembershipDocumentType
     content_type: str = Field(pattern=r"^(image/jpeg|image/png|application/pdf)$")
     size_bytes: int = Field(gt=0, le=8 * 1024 * 1024)
+    checksum_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
 
 
 class MembershipDocumentUploadRead(ApiModel):
@@ -485,6 +486,7 @@ class MembershipDocumentUploadRead(ApiModel):
     object_key: str
     upload_url: str
     expires_in_seconds: int = 300
+    required_headers: dict[str, str] = Field(default_factory=dict)
 
 
 class MembershipDocumentConfirm(BaseModel):

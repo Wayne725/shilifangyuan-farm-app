@@ -1,10 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
-import { router } from "expo-router";
-import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { router, useLocalSearchParams } from "expo-router";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
   EmptyState,
+  InlineMessage,
   LoadingState,
   PageHeader,
   Screen,
@@ -96,11 +97,37 @@ function OrderCard({ order }: { order: Order }) {
 export default function OrdersScreen() {
   const [kind, setKind] = useState<OrderKind>("regular");
   const { isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
+  const params = useLocalSearchParams<{
+    order_id?: string;
+    payment?: string;
+    logistics?: string;
+  }>();
+  const handledReturn = useRef(false);
   const query = useQuery({
     queryKey: ["orders"],
     queryFn: api.orders,
     enabled: isAuthenticated,
   });
+
+  // ECPay sends the browser back here after checkout and after store
+  // selection; jump straight to the order the buyer was working on.
+  useEffect(() => {
+    if (handledReturn.current) return;
+    if (!params.payment && !params.logistics) return;
+    handledReturn.current = true;
+    void queryClient.invalidateQueries({ queryKey: ["orders"] });
+    if (params.order_id) {
+      void queryClient.invalidateQueries({
+        queryKey: ["order", params.order_id],
+      });
+      router.replace({
+        pathname: "/order/[id]",
+        params: { id: params.order_id },
+      });
+    }
+  }, [params.payment, params.logistics, params.order_id, queryClient]);
+
   const orders = (query.data ?? []).filter(
     (order) => order.order_kind === kind,
   );
@@ -111,6 +138,11 @@ export default function OrdersScreen() {
         subtitle="付款、備貨、取貨與發票各自顯示進度。"
         title="我的訂單"
       />
+      {params.payment === "return" && !params.order_id ? (
+        <View style={styles.notice}>
+          <InlineMessage text="已從綠界返回，正在確認最新付款結果。" />
+        </View>
+      ) : null}
       <SegmentControl onChange={setKind} options={orderTabs} value={kind} />
 
       {!isAuthenticated ? (
@@ -169,6 +201,7 @@ export default function OrdersScreen() {
 }
 
 const styles = StyleSheet.create({
+  notice: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
   list: { gap: 12, padding: spacing.md },
   card: {
     backgroundColor: colors.paper,
@@ -181,16 +214,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   orderNumber: { color: colors.forest, fontSize: 15, fontWeight: "900" },
-  orderDate: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  orderDate: { color: colors.muted, fontSize: 13, marginTop: 4 },
   rule: {
     backgroundColor: colors.line,
     height: 1,
     marginVertical: 12,
   },
   itemRow: { flexDirection: "row", marginBottom: 7 },
-  itemName: { color: colors.charcoal, flex: 1, fontSize: 12 },
-  itemQuantity: { color: colors.muted, fontSize: 12 },
-  more: { color: colors.muted, fontSize: 12 },
+  itemName: { color: colors.charcoal, flex: 1, fontSize: 14 },
+  itemQuantity: { color: colors.muted, fontSize: 13 },
+  more: { color: colors.muted, fontSize: 13 },
   cardBottom: {
     alignItems: "flex-end",
     flexDirection: "row",

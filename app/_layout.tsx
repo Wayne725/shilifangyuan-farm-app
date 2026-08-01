@@ -3,11 +3,27 @@ import { Stack } from "expo-router";
 import { useState } from "react";
 import { StatusBar } from "react-native";
 
-import { AppViewport } from "../src/components/ui";
-import { AuthProvider } from "../src/store/AuthContext";
+import { AppViewport, LoadingState } from "../src/components/ui";
+import { AuthProvider, useAuth } from "../src/store/AuthContext";
 import { CartProvider } from "../src/store/CartContext";
 import { WorkspaceProvider } from "../src/store/WorkspaceContext";
 import { colors } from "../src/theme";
+
+/** Holds the first frame until the stored session is read back, so a returning
+ *  buyer never sees a logged-out flash after the ECPay redirect. */
+function RestoreGate() {
+  const { isRestoring } = useAuth();
+  if (isRestoring) return <LoadingState label="載入中" />;
+  return (
+    <Stack
+      screenOptions={{
+        animation: "slide_from_right",
+        contentStyle: { backgroundColor: colors.cream },
+        headerShown: false,
+      }}
+    />
+  );
+}
 
 export default function RootLayout() {
   const [queryClient] = useState(
@@ -35,13 +51,7 @@ export default function RootLayout() {
                 backgroundColor={colors.cream}
                 barStyle="dark-content"
               />
-              <Stack
-                screenOptions={{
-                  animation: "slide_from_right",
-                  contentStyle: { backgroundColor: colors.cream },
-                  headerShown: false,
-                }}
-              />
+              <RestoreGate />
             </AppViewport>
           </CartProvider>
         </WorkspaceProvider>

@@ -21,6 +21,17 @@ export const colors = {
   successSoft: "#DDEAE3",
 };
 
+/**
+ * Minimum readable sizes. `caption` is the floor — anything a buyer must read
+ * to make a decision (item names, prices, option labels) uses `body` or above.
+ */
+export const typeScale = {
+  caption: 13,
+  body: 14,
+  emphasis: 15,
+  title: 17,
+};
+
 export const spacing = {
   xs: 4,
   sm: 8,

@@ -12,6 +12,7 @@ from ..config import Settings
 from ..domain import apply_paid_quantity
 from ..models import (
     ExternalEvent,
+    FulfillmentMethod,
     FulfillmentStatus,
     GroupCampaign,
     GroupDecisionStatus,
@@ -35,6 +36,7 @@ from ..models import (
     RefundStatus,
     ReservationStatus,
     SalesChannel,
+    ShipmentStatus,
     User,
     UserRole,
 )
@@ -113,7 +115,9 @@ async def create_payment_attempt(
             selectinload(Order.payment_attempts),
             selectinload(Order.group_campaign),
             selectinload(Order.meal_event),
-            selectinload(Order.fulfillment),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
         )
         .with_for_update()
     )
@@ -134,6 +138,17 @@ async def create_payment_attempt(
         and not is_mobile_barcode_format(order.invoice_carrier_value or "")
     ):
         raise PaymentApplicationError("手機條碼格式不正確")
+    if order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS:
+        # Paying before the store/address is locked in leaves an order that no
+        # admin can ever turn into a shipment.
+        shipment = (
+            order.fulfillment.shipment if order.fulfillment is not None else None
+        )
+        if shipment is None or shipment.status not in {
+            ShipmentStatus.READY_TO_CREATE,
+            ShipmentStatus.CREATED,
+        }:
+            raise PaymentApplicationError("請先完成物流門市或地址選擇")
 
     for existing in sorted(
         order.payment_attempts, key=lambda item: item.created_at, reverse=True
@@ -280,7 +295,7 @@ async def create_payment_attempt(
         order_result_url="{}/payments/result".format(
             settings.app_base_url.rstrip("/")
         ),
-        client_back_url="{}/orders/{}".format(
+        client_back_url="{}/order/{}".format(
             settings.web_base_url.rstrip("/"), order.id
         ),
         custom_fields={"CustomField1": order.id},
@@ -374,7 +389,7 @@ async def create_membership_payment_attempt(
         order_result_url="{}/payments/result".format(
             settings.app_base_url.rstrip("/")
         ),
-        client_back_url="{}/membership".format(
+        client_back_url="{}/members".format(
             settings.web_base_url.rstrip("/")
         ),
         custom_fields={

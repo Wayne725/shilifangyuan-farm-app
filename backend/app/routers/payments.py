@@ -233,7 +233,7 @@ async def ecpay_payment_result(
                 "payment": "return",
             }
         )
-        location = "{}/membership?{}".format(
+        location = "{}/members?{}".format(
             settings.web_base_url.rstrip("/"),
             query,
         )

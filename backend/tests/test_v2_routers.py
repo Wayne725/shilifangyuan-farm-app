@@ -655,3 +655,166 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     assert duplicate_redeem.status_code == 409
     await session.refresh(redeem_order)
     assert redeem_order.invoice_status == InvoiceStatus.PENDING
+
+
+class RecordingDocumentStorage:
+    """Captures what the router asks R2 to sign, then replays it as a HEAD."""
+
+    def __init__(self) -> None:
+        self.tickets: list[dict] = []
+        self.stored: dict[str, dict] = {}
+
+    def create_upload_ticket(
+        self,
+        *,
+        content_type: str,
+        content_length: int,
+        sha256: str | None = None,
+    ):
+        from app.integrations.r2_storage import DocumentUploadTicket
+
+        object_key = f"membership-documents/ab/{len(self.tickets)}.png"
+        required_headers = {
+            "Content-Type": content_type,
+            "Content-Length": str(content_length),
+        }
+        if sha256:
+            required_headers["x-amz-meta-sha256"] = sha256.lower()
+        self.tickets.append(
+            {
+                "content_type": content_type,
+                "content_length": content_length,
+                "sha256": sha256,
+            }
+        )
+        # Simulate a client that uploads exactly what was signed.
+        self.stored[object_key] = {
+            "content_type": content_type,
+            "content_length": content_length,
+            "sha256": (sha256 or "").lower(),
+        }
+        return DocumentUploadTicket(
+            object_key=object_key,
+            upload_url=f"https://r2.example.test/{object_key}?signed=1",
+            expires_in_seconds=300,
+            required_headers=required_headers,
+            max_bytes=8 * 1024 * 1024,
+        )
+
+    async def confirm_upload(
+        self,
+        *,
+        object_key: str,
+        expected_content_type: str,
+        expected_content_length: int,
+        expected_sha256: str | None = None,
+    ):
+        from app.integrations.common import IntegrationResponseError
+        from app.integrations.r2_storage import DocumentHead
+
+        actual = self.stored.get(object_key)
+        if actual is None:
+            raise IntegrationResponseError("missing object")
+        if actual["content_type"] != expected_content_type:
+            raise IntegrationResponseError("content type mismatch")
+        if actual["content_length"] != expected_content_length:
+            raise IntegrationResponseError("length mismatch")
+        if expected_sha256 and actual["sha256"] != expected_sha256.lower():
+            raise IntegrationResponseError("checksum mismatch")
+        return DocumentHead(
+            object_key=object_key,
+            content_type=actual["content_type"],
+            content_length=actual["content_length"],
+            sha256=actual["sha256"] or None,
+            etag="etag-1",
+        )
+
+    async def delete_document(self, object_key: str) -> None:
+        self.stored.pop(object_key, None)
+
+
+@pytest.mark.asyncio
+async def test_membership_document_upload_then_confirm_round_trip(
+    v2_context,
+) -> None:
+    """Regression: the signed URL must carry the checksum confirm() verifies."""
+    from app.routers.membership import get_document_storage
+
+    client = v2_context["client"]
+    applicant = v2_context["applicant"]
+    storage = RecordingDocumentStorage()
+    client._transport.app.dependency_overrides[get_document_storage] = (
+        lambda: storage
+    )
+    checksum = hashlib.sha256(b"sandbox-test-document").hexdigest()
+
+    upload = await client.post(
+        "/v1/membership/documents/upload-url",
+        json={
+            "document_type": "id_front",
+            "content_type": "image/png",
+            "size_bytes": 2048,
+            "checksum_sha256": checksum,
+        },
+        headers=auth_headers(applicant),
+    )
+    assert upload.status_code == 201, upload.text
+    body = upload.json()
+    assert body["required_headers"]["x-amz-meta-sha256"] == checksum
+    assert storage.tickets[0]["sha256"] == checksum
+
+    confirmed = await client.post(
+        f"/v1/membership/documents/{body['document_id']}/confirm",
+        json={"checksum_sha256": checksum},
+        headers=auth_headers(applicant),
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "confirmed"
+
+    mismatched = await client.post(
+        f"/v1/membership/documents/{body['document_id']}/confirm",
+        json={"checksum_sha256": "b" * 64},
+        headers=auth_headers(applicant),
+    )
+    assert mismatched.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_login_is_rate_limited_and_resets_on_success(v2_context) -> None:
+    """Blunts credential stuffing without locking out the real account owner."""
+    from app.rate_limit import LOGIN_RULE, reset_all
+
+    reset_all()
+    client = v2_context["client"]
+    applicant = v2_context["applicant"]
+
+    for _ in range(LOGIN_RULE.max_attempts):
+        wrong = await client.post(
+            "/v1/auth/login",
+            json={"email": applicant.email, "password": "not-the-password"},
+        )
+        assert wrong.status_code == 401
+
+    throttled = await client.post(
+        "/v1/auth/login",
+        json={"email": applicant.email, "password": "not-the-password"},
+    )
+    assert throttled.status_code == 429
+    assert throttled.headers["Retry-After"]
+
+    # A different account is unaffected by one account's failures.
+    reset_all()
+    correct = await client.post(
+        "/v1/auth/login",
+        json={"email": applicant.email, "password": "applicant-pass-123"},
+    )
+    assert correct.status_code == 200
+
+    # Signing in clears the bucket, so a fumbled password is not punished.
+    for _ in range(LOGIN_RULE.max_attempts):
+        again = await client.post(
+            "/v1/auth/login",
+            json={"email": applicant.email, "password": "applicant-pass-123"},
+        )
+        assert again.status_code == 200
+    reset_all()

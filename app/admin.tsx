@@ -21,12 +21,15 @@ import {
   SegmentControl,
   StatusPill,
 } from "../src/components/ui";
+import { confirmAction } from "../src/lib/confirm";
 import {
   campaignLabels,
   fulfillmentStatusLabel,
   money,
+  nextShipmentStatus,
   paymentLabels,
   proposalLabels,
+  shipmentStatusLabel,
 } from "../src/lib/format";
 import { api, getApiBaseUrl, getErrorMessage } from "../src/services/api";
 import { useAuth } from "../src/store/AuthContext";
@@ -218,11 +221,29 @@ export default function AdminScreen() {
     onSuccess: refresh,
   });
   const refundOrder = useMutation({
-    mutationFn: (id: string) => api.adminRefundOrder(id, "管理員核准全額退款"),
-    onSuccess: () => announce("訂單已進入退款處理"),
+    mutationFn: async (id: string) => {
+      const confirmed = await confirmAction({
+        title: "全額退款",
+        message:
+          "將取消這筆訂單、釋放庫存並建立退款紀錄，且無法復原。確定要繼續嗎？",
+        confirmLabel: "確認退款",
+        cancelLabel: "先不要",
+      });
+      if (!confirmed) return null;
+      return api.adminRefundOrder(id, "管理員核准全額退款");
+    },
+    onSuccess: (result) => {
+      if (result) announce("訂單已進入退款處理");
+    },
   });
   const advanceShipment = useMutation({
-    mutationFn: (id: string) => api.adminAdvanceShipment(id, "delivered"),
+    mutationFn: ({
+      id,
+      status,
+    }: {
+      id: string;
+      status: "in_transit" | "delivered";
+    }) => api.adminAdvanceShipment(id, status),
     onSuccess: () => announce("Sandbox 物流貨態已推進"),
   });
   const mealEventAction = useMutation({
@@ -839,11 +860,15 @@ export default function AdminScreen() {
                   />
                   {order.shipment ? (
                     <StatusPill
-                      label={`物流 ${order.shipment.status}`}
+                      label={`物流 ${shipmentStatusLabel(
+                        order.shipment.status,
+                      )}`}
                       tone={
                         order.shipment.status === "delivered"
                           ? "positive"
-                          : "warning"
+                          : order.shipment.status === "exception"
+                            ? "danger"
+                            : "warning"
                       }
                     />
                   ) : null}
@@ -873,15 +898,24 @@ export default function AdminScreen() {
                       variant="secondary"
                     />
                   ) : null}
-                  {order.shipment &&
-                  order.shipment.status !== "delivered" ? (
-                    <Button
-                      compact
-                      label="Sandbox 標記送達"
-                      onPress={() => advanceShipment.mutate(order.id)}
-                      variant="quiet"
-                    />
-                  ) : null}
+                  {(() => {
+                    const next = order.shipment
+                      ? nextShipmentStatus(order.shipment.status)
+                      : null;
+                    return next ? (
+                      <Button
+                        compact
+                        label={`Sandbox 推進為${shipmentStatusLabel(next)}`}
+                        onPress={() =>
+                          advanceShipment.mutate({
+                            id: order.id,
+                            status: next,
+                          })
+                        }
+                        variant="quiet"
+                      />
+                    ) : null;
+                  })()}
                 </View>
               </View>
             );

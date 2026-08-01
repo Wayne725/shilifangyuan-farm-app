@@ -106,6 +106,113 @@ async def _load_event(
     return await session.scalar(query)
 
 
+_MEAL_FULFILLMENT_LABELS = {
+    FulfillmentState.PENDING_CONFIRMATION: "pending",
+    FulfillmentState.PREPARING: "pending",
+    FulfillmentState.READY_FOR_PICKUP: "ready",
+    FulfillmentState.PICKED_UP: "picked_up",
+    FulfillmentState.NO_SHOW: "no_show",
+    FulfillmentState.CANCELLED: "cancelled",
+}
+
+
+async def _meal_order_read(
+    session: AsyncSession,
+    order: Order,
+) -> dict[str, Any]:
+    """Shape a meal pre-order for the App; never exposes the pickup QR token."""
+    offering_ids = {
+        item.source_meal_offering_id
+        for item in order.items
+        if item.source_meal_offering_id is not None
+    }
+    meal_ids: dict[str, str] = {}
+    if offering_ids:
+        offerings = await session.scalars(
+            select(MealEventOffering).where(
+                MealEventOffering.id.in_(offering_ids)
+            )
+        )
+        meal_ids = {
+            offering.id: offering.meal_id for offering in offerings
+        }
+    fulfillment = order.fulfillment
+    event = order.meal_event
+    return {
+        "id": order.id,
+        "order_number": order.order_number,
+        "meal_event_id": order.meal_event_id,
+        "meal_event_title": event.title if event is not None else "",
+        "venue_name": event.location if event is not None else "",
+        "pickup_start": event.pickup_starts_at if event is not None else None,
+        "pickup_end": event.pickup_ends_at if event is not None else None,
+        "pickup_code": (
+            fulfillment.pickup_code if fulfillment is not None else None
+        ),
+        "payment_status": order.payment_status.value,
+        "fulfillment_status": _MEAL_FULFILLMENT_LABELS.get(
+            fulfillment.status if fulfillment is not None else None,
+            "pending",
+        ),
+        "amount_total": order.amount_total,
+        "created_at": order.created_at,
+        "items": [
+            {
+                "meal_id": meal_ids.get(item.source_meal_offering_id or "", ""),
+                "meal_name": item.product_name,
+                "quantity": item.quantity,
+                "unit_price": item.unit_price,
+                "subtotal": item.subtotal,
+            }
+            for item in order.items
+        ],
+    }
+
+
+def _meal_order_query():
+    return (
+        select(Order)
+        .where(Order.sales_channel == SalesChannel.MEAL_PREORDER)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.meal_event),
+            selectinload(Order.fulfillment),
+        )
+    )
+
+
+@meals_router.get("/v1/meal-orders")
+async def list_meal_orders(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    orders = list(
+        await session.scalars(
+            _meal_order_query()
+            .where(Order.user_id == user.id)
+            .order_by(Order.created_at.desc())
+        )
+    )
+    return [await _meal_order_read(session, order) for order in orders]
+
+
+@meals_router.get("/v1/meal-orders/{order_id}")
+async def get_meal_order(
+    order_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    order = await session.scalar(
+        _meal_order_query().where(
+            Order.id == order_id,
+            Order.user_id == user.id,
+        )
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="找不到便當訂單")
+    return await _meal_order_read(session, order)
+
+
 async def _unique_pickup_code(session: AsyncSession) -> str:
     for _ in range(20):
         code = f"{secrets.randbelow(1_000_000):06d}"

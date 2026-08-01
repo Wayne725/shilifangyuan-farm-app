@@ -230,7 +230,9 @@ export function Button({
 }: ButtonProps) {
   return (
     <Pressable
+      accessibilityLabel={label}
       accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled || loading), busy: Boolean(loading) }}
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => [
@@ -409,6 +411,10 @@ export function CatalogCard({
 }) {
   return (
     <Pressable
+      accessibilityHint="查看詳細資料"
+      accessibilityLabel={[title, meta, priceLabel, price]
+        .filter(Boolean)
+        .join("，")}
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [
@@ -419,6 +425,7 @@ export function CatalogCard({
     >
       <View style={styles.productImageWrap}>
         <Image
+          accessibilityLabel={`${title}的商品照片`}
           resizeMode="cover"
           source={imageFor(imageKey, imageUrl)}
           style={styles.productImage}
@@ -459,7 +466,10 @@ export function CatalogCard({
             </View>
             {onAction ? (
               <Pressable
-                accessibilityLabel={`${actionIcon === "add" ? "加入" : "操作"}${title}`}
+                accessibilityLabel={`${
+                  actionIcon === "add" ? "加入購物車：" : "操作："
+                }${title}`}
+                accessibilityRole="button"
                 onPress={(event) => {
                   event.stopPropagation();
                   onAction();
@@ -491,8 +501,16 @@ export function QuantityControl({
   max?: number;
 }) {
   return (
-    <View style={styles.quantity}>
+    <View
+      accessibilityLabel={`數量 ${value}`}
+      accessibilityRole="adjustable"
+      accessibilityValue={{ min, max, now: value }}
+      style={styles.quantity}
+    >
       <Pressable
+        accessibilityLabel="減少數量"
+        accessibilityRole="button"
+        accessibilityState={{ disabled: value <= min }}
         disabled={value <= min}
         onPress={() => onChange(Math.max(min, value - 1))}
         style={styles.quantityButton}
@@ -505,6 +523,9 @@ export function QuantityControl({
       </Pressable>
       <Text style={styles.quantityValue}>{value}</Text>
       <Pressable
+        accessibilityLabel="增加數量"
+        accessibilityRole="button"
+        accessibilityState={{ disabled: value >= max }}
         disabled={value >= max}
         onPress={() => onChange(Math.min(max, value + 1))}
         style={styles.quantityButton}
@@ -530,6 +551,7 @@ export function SegmentControl<T extends string>({
 }) {
   return (
     <ScrollView
+      accessibilityRole="tablist"
       contentContainerStyle={styles.segmentRow}
       horizontal
       showsHorizontalScrollIndicator={false}
@@ -538,6 +560,9 @@ export function SegmentControl<T extends string>({
         const selected = value === option.value;
         return (
           <Pressable
+            accessibilityLabel={option.label}
+            accessibilityRole="tab"
+            accessibilityState={{ selected }}
             key={option.value}
             onPress={() => onChange(option.value)}
             style={[

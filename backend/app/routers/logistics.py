@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 from urllib.parse import urlencode
 
@@ -109,6 +109,16 @@ EXCEPTION_CODES = {"2074", "3020"}
 class ShipmentOperationRead(BaseModel):
     shipment: ShipmentRead
     provider: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LogisticsSelectionRead(BaseModel):
+    shipment: ShipmentRead
+    #: Open this in a browser to reach ECPay's store picker.
+    selection_url: str
+    shipping_fee: int
+    product_subtotal: int
+    amount_total: int
+    expires_in_seconds: int
 
 
 class SandboxShipmentStatusUpdate(BaseModel):
@@ -308,19 +318,47 @@ def _product_subtotal(order: Order) -> int:
     return max(0, order.amount_total - existing_fee)
 
 
+SELECTION_TOKEN_TTL = timedelta(minutes=30)
+
+
 def _selection_token() -> tuple[str, str]:
     token = secrets.token_urlsafe(24)
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
     return token, digest
 
 
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def _verify_selection_token(shipment: Shipment, token: str) -> None:
-    expected = str(
-        (shipment.provider_payload or {}).get("selection_token_hash", "")
-    )
-    actual = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    if not expected or not hmac.compare_digest(expected, actual):
+    expected = shipment.selection_token_hash or ""
+    if not expected or not hmac.compare_digest(expected, _token_digest(token)):
         raise HTTPException(status_code=400, detail="物流選擇結果驗證失敗")
+
+
+async def _shipment_for_token(
+    session: AsyncSession,
+    token: str,
+) -> Shipment:
+    shipment = await session.scalar(
+        select(Shipment)
+        .where(Shipment.selection_token_hash == _token_digest(token))
+        .options(
+            selectinload(Shipment.fulfillment).selectinload(
+                OrderFulfillment.order
+            )
+        )
+        .with_for_update()
+    )
+    if shipment is None:
+        raise HTTPException(status_code=404, detail="找不到物流選擇資料")
+    expires_at = shipment.selection_token_expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at is None or expires_at <= _now():
+        raise HTTPException(status_code=410, detail="物流選擇連結已失效")
+    return shipment
 
 
 async def _request_json_envelope(request: Request) -> Mapping[str, Any]:
@@ -396,16 +434,10 @@ def _update_shipment_provider_data(
     shipment: Shipment,
     payload: Mapping[str, Any],
 ) -> None:
-    preserved_token = (shipment.provider_payload or {}).get(
-        "selection_token_hash"
-    )
-    safe = {
+    shipment.provider_payload = {
         **(shipment.provider_payload or {}),
         **_safe_provider_payload(payload),
     }
-    if preserved_token:
-        safe["selection_token_hash"] = preserved_token
-    shipment.provider_payload = safe
     tracking = payload.get("ShipmentNo") or payload.get("CVSPaymentNo")
     if tracking:
         shipment.tracking_number = str(tracking)
@@ -415,16 +447,17 @@ def _update_shipment_provider_data(
 
 
 @logistics_router.post(
-    "/v1/orders/{order_id}/logistics/selection-page",
-    response_class=HTMLResponse,
+    "/v1/orders/{order_id}/logistics/selection",
+    response_model=LogisticsSelectionRead,
+    status_code=status.HTTP_201_CREATED,
 )
-async def create_logistics_selection_page(
+async def create_logistics_selection(
     order_id: str,
     body: LogisticsSelectionRequest,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
-) -> HTMLResponse:
+) -> LogisticsSelectionRead:
     order = await _load_order(session, order_id, lock=True)
     _ensure_order_viewer(order, user)
     if order.payment_status != PaymentStatus.PENDING:
@@ -493,8 +526,122 @@ async def create_logistics_selection_page(
         address=body.shipping_address,
     )
     token, token_hash = _selection_token()
-    shipment.provider_payload = {"selection_token_hash": token_hash}
+    shipment.selection_token_hash = token_hash
+    shipment.selection_token_expires_at = _now() + SELECTION_TOKEN_TTL
+    shipment.status = ShipmentStatus.SELECTION_PENDING
+    # The buyer pays subtotal + shipping; keep the order total authoritative.
     order.amount_total = subtotal + shipping_fee
+    await session.commit()
+    return LogisticsSelectionRead(
+        shipment=_shipment_read(shipment),
+        selection_url="{}/logistics/{}/select".format(
+            settings.app_base_url.rstrip("/"), token
+        ),
+        shipping_fee=shipping_fee,
+        product_subtotal=subtotal,
+        amount_total=order.amount_total,
+        expires_in_seconds=int(SELECTION_TOKEN_TTL.total_seconds()),
+    )
+
+
+@logistics_router.post(
+    "/v1/orders/{order_id}/logistics/selection-link",
+    response_model=LogisticsSelectionRead,
+)
+async def reissue_logistics_selection_link(
+    order_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> LogisticsSelectionRead:
+    """Re-opens the picker for a buyer who abandoned it.
+
+    The recipient details are already stored (encrypted), so this only mints a
+    fresh token; without it an abandoned selection would strand the order,
+    because payment is blocked until the store/address is fixed.
+    """
+    order = await _load_order(session, order_id, lock=True)
+    _ensure_order_viewer(order, user)
+    if order.payment_status != PaymentStatus.PENDING:
+        raise HTTPException(status_code=409, detail="物流必須在付款前選擇")
+    if order.fulfillment is None or order.fulfillment.shipment is None:
+        raise HTTPException(status_code=404, detail="訂單尚未選擇物流")
+    shipment = order.fulfillment.shipment
+    if shipment.status not in {
+        ShipmentStatus.DRAFT,
+        ShipmentStatus.SELECTION_PENDING,
+        ShipmentStatus.READY_TO_CREATE,
+    }:
+        raise HTTPException(status_code=409, detail="物流單已不可重新選擇")
+    token, token_hash = _selection_token()
+    shipment.selection_token_hash = token_hash
+    shipment.selection_token_expires_at = _now() + SELECTION_TOKEN_TTL
+    shipment.status = ShipmentStatus.SELECTION_PENDING
+    await session.commit()
+    return LogisticsSelectionRead(
+        shipment=_shipment_read(shipment),
+        selection_url="{}/logistics/{}/select".format(
+            settings.app_base_url.rstrip("/"), token
+        ),
+        shipping_fee=shipment.shipping_fee,
+        product_subtotal=_product_subtotal(order),
+        amount_total=order.amount_total,
+        expires_in_seconds=int(SELECTION_TOKEN_TTL.total_seconds()),
+    )
+
+
+@logistics_router.get(
+    "/logistics/{token}/select",
+    response_class=HTMLResponse,
+)
+async def open_logistics_selection_page(
+    token: str,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    """Unauthenticated by design.
+
+    ECPay's store picker has to be reached by a top-level browser navigation,
+    which cannot carry a Bearer token, so the one-time token in the path is the
+    credential — exactly like `/payments/{attempt_id}/checkout`.
+    """
+    shipment = await _shipment_for_token(session, token)
+    if shipment.status not in {
+        ShipmentStatus.SELECTION_PENDING,
+        ShipmentStatus.READY_TO_CREATE,
+    }:
+        raise HTTPException(status_code=409, detail="此物流單已不可重新選擇")
+    fulfillment = shipment.fulfillment
+    order = fulfillment.order
+    if order.payment_status != PaymentStatus.PENDING:
+        raise HTTPException(status_code=409, detail="物流必須在付款前選擇")
+
+    cipher = pii_cipher_from_settings(settings)
+    try:
+        recipient_name = cipher.decrypt_text(
+            fulfillment.recipient_name_encrypted or "",
+            associated_data=_pii_context(fulfillment.id, "recipient_name"),
+        )
+        recipient_phone = cipher.decrypt_text(
+            fulfillment.recipient_phone_encrypted or "",
+            associated_data=_pii_context(fulfillment.id, "recipient_phone"),
+        )
+        shipping_address = cipher.decrypt_text(
+            fulfillment.shipping_address_encrypted or "",
+            associated_data=_pii_context(fulfillment.id, "shipping_address"),
+        )
+    except IntegrationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="收件資料無法讀取，請重新選擇物流",
+        ) from exc
+
+    is_mobile = (
+        len(recipient_phone) == 10
+        and recipient_phone.startswith("09")
+        and recipient_phone.isdigit()
+    )
+    subtotal = _product_subtotal(order)
     query = urlencode({"order_id": order.id, "token": token})
     try:
         adapter = ecpay_logistics_adapter_from_settings(settings)
@@ -517,24 +664,12 @@ async def create_logistics_selection_page(
                     ShippingTemperature.AMBIENT: "0001",
                     ShippingTemperature.CHILLED: "0002",
                     ShippingTemperature.FROZEN: "0003",
-                }[actual_temperature],
-                receiver_address=body.shipping_address,
-                receiver_cell_phone=(
-                    body.recipient_phone
-                    if len(body.recipient_phone) == 10
-                    and body.recipient_phone.startswith("09")
-                    and body.recipient_phone.isdigit()
-                    else ""
-                ),
-                receiver_phone=(
-                    ""
-                    if len(body.recipient_phone) == 10
-                    and body.recipient_phone.startswith("09")
-                    and body.recipient_phone.isdigit()
-                    else body.recipient_phone
-                ),
-                receiver_name=body.recipient_name,
-                eshop_member_id=user.id.replace("-", "")[:24],
+                }[shipment.temperature],
+                receiver_address=shipping_address,
+                receiver_cell_phone=recipient_phone if is_mobile else "",
+                receiver_phone="" if is_mobile else recipient_phone,
+                receiver_name=recipient_name,
+                eshop_member_id=order.user_id.replace("-", "")[:24],
             )
         )
     except (IntegrationError, ValueError) as exc:
@@ -543,7 +678,6 @@ async def create_logistics_selection_page(
             status_code=503,
             detail="綠界物流選擇頁目前無法使用",
         ) from exc
-    shipment.status = ShipmentStatus.SELECTION_PENDING
     await session.commit()
     return HTMLResponse(
         page,
@@ -581,6 +715,9 @@ async def receive_logistics_selection_result(
         raise HTTPException(status_code=400, detail="物流選擇結果驗證失敗") from exc
     _update_shipment_provider_data(shipment, data)
     shipment.status = ShipmentStatus.READY_TO_CREATE
+    # One-time use: the picker has done its job for this shipment.
+    shipment.selection_token_hash = None
+    shipment.selection_token_expires_at = None
     cipher = pii_cipher_from_settings(settings)
     _encrypt_recipient(
         order.fulfillment,

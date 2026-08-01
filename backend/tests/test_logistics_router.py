@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -233,6 +233,7 @@ async def logistics_context(database_session, monkeypatch):
             "order": order,
             "rate": rate,
             "session": database_session,
+            "settings": settings,
         }
 
 
@@ -264,12 +265,18 @@ async def test_selection_page_and_temp_result_encrypt_recipient(
     adapter = context["adapter"]
     session = context["session"]
 
-    page = await client.post(
-        f"/v1/orders/{order.id}/logistics/selection-page",
+    selection = await client.post(
+        f"/v1/orders/{order.id}/logistics/selection",
         json=selection_payload(),
         headers=auth_headers(customer),
     )
 
+    assert selection.status_code == 201
+    assert selection.json()["shipping_fee"] == 160
+    assert selection.json()["amount_total"] == 1560
+    selection_path = urlparse(selection.json()["selection_url"]).path
+    # Deliberately unauthenticated: a browser navigation carries no token.
+    page = await client.get(selection_path)
     assert page.status_code == 200
     assert "物流選擇" in page.text
     assert adapter.selection_request.goods_amount == 1400
@@ -305,11 +312,13 @@ async def prepare_formal_shipment(context) -> None:
     order = context["order"]
     customer = context["customer"]
     adapter = context["adapter"]
-    page = await client.post(
-        f"/v1/orders/{order.id}/logistics/selection-page",
+    selection = await client.post(
+        f"/v1/orders/{order.id}/logistics/selection",
         json=selection_payload(),
         headers=auth_headers(customer),
     )
+    assert selection.status_code == 201
+    page = await client.get(urlparse(selection.json()["selection_url"]).path)
     assert page.status_code == 200
     callback_url = urlparse(adapter.selection_request.client_reply_url)
     callback_query = parse_qs(callback_url.query)
@@ -494,17 +503,110 @@ async def test_selection_rejects_wrong_temperature_and_paid_order(
     customer = context["customer"]
 
     wrong_temperature = await client.post(
-        f"/v1/orders/{order.id}/logistics/selection-page",
+        f"/v1/orders/{order.id}/logistics/selection",
         json=selection_payload(temperature="chilled"),
         headers=auth_headers(customer),
     )
     order.payment_status = PaymentStatus.PAID
     await context["session"].commit()
     already_paid = await client.post(
-        f"/v1/orders/{order.id}/logistics/selection-page",
+        f"/v1/orders/{order.id}/logistics/selection",
         json=selection_payload(),
         headers=auth_headers(customer),
     )
 
     assert wrong_temperature.status_code == 422
     assert already_paid.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_selection_token_is_single_use_and_expires(
+    logistics_context,
+) -> None:
+    """The token is the only credential guarding the ECPay picker page."""
+    context = logistics_context
+    client = context["client"]
+    order = context["order"]
+    customer = context["customer"]
+    session = context["session"]
+
+    selection = await client.post(
+        f"/v1/orders/{order.id}/logistics/selection",
+        json=selection_payload(),
+        headers=auth_headers(customer),
+    )
+    assert selection.status_code == 201
+    selection_path = urlparse(selection.json()["selection_url"]).path
+
+    unknown_token = await client.get("/logistics/not-a-real-token/select")
+    assert unknown_token.status_code == 404
+
+    first_open = await client.get(selection_path)
+    assert first_open.status_code == 200
+
+    # Completing the picker consumes the token.
+    adapter = context["adapter"]
+    callback_url = urlparse(adapter.selection_request.client_reply_url)
+    callback_query = parse_qs(callback_url.query)
+    callback = await client.post(
+        callback_url.path,
+        params={
+            "order_id": callback_query["order_id"][0],
+            "token": callback_query["token"][0],
+        },
+        json={"provider": "mocked"},
+    )
+    assert callback.status_code == 303
+
+    reused = await client.get(selection_path)
+    assert reused.status_code == 404
+
+    # A token past its TTL is refused even before it is used.
+    fresh = await client.post(
+        f"/v1/orders/{order.id}/logistics/selection",
+        json=selection_payload(),
+        headers=auth_headers(customer),
+    )
+    assert fresh.status_code == 201
+    shipment = await session.scalar(select(Shipment))
+    shipment.selection_token_expires_at = datetime.now(timezone.utc) - timedelta(
+        minutes=1
+    )
+    await session.commit()
+    expired = await client.get(
+        urlparse(fresh.json()["selection_url"]).path
+    )
+    assert expired.status_code == 410
+
+
+@pytest.mark.asyncio
+async def test_logistics_order_cannot_be_paid_before_store_selection(
+    logistics_context,
+) -> None:
+    """Paying first would strand an order no admin could ever ship."""
+    from app.integrations.payment_service import (
+        PaymentApplicationError,
+        create_payment_attempt,
+    )
+
+    context = logistics_context
+    client = context["client"]
+    order = context["order"]
+    customer = context["customer"]
+    session = context["session"]
+    settings = context["settings"]
+
+    selection = await client.post(
+        f"/v1/orders/{order.id}/logistics/selection",
+        json=selection_payload(),
+        headers=auth_headers(customer),
+    )
+    assert selection.status_code == 201
+
+    with pytest.raises(PaymentApplicationError, match="物流門市或地址"):
+        await create_payment_attempt(
+            session=session,
+            order_id=order.id,
+            user=customer,
+            settings=settings,
+        )

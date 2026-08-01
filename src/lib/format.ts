@@ -5,6 +5,7 @@ import type {
   MembershipType,
   PaymentStatus,
   ProposalStatus,
+  Shipment,
 } from "../types";
 
 export function money(value: number) {
@@ -71,6 +72,30 @@ export function fulfillmentStatusLabel(value: string) {
       no_show: "逾時未取",
     }[value] ?? value
   );
+}
+
+export const shipmentLabels: Record<Shipment["status"], string> = {
+  draft: "尚未選擇物流",
+  selection_pending: "選擇物流中",
+  ready_to_create: "待建立物流單",
+  created: "物流單已建立",
+  in_transit: "配送中",
+  delivered: "已送達",
+  exception: "配送異常",
+  cancelled: "已取消",
+};
+
+export function shipmentStatusLabel(value: string) {
+  return shipmentLabels[value as Shipment["status"]] ?? value;
+}
+
+/** Next Sandbox shipment status an admin may advance to, or null when stuck. */
+export function nextShipmentStatus(
+  value: Shipment["status"],
+): "in_transit" | "delivered" | null {
+  if (value === "created" || value === "exception") return "in_transit";
+  if (value === "in_transit") return "delivered";
+  return null;
 }
 
 export const paymentLabels: Record<PaymentStatus, string> = {

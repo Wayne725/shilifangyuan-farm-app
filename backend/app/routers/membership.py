@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
@@ -91,6 +92,11 @@ def _storage(settings: Settings):
             status_code=503,
             detail="私密證件儲存設定尚未完成",
         ) from exc
+
+
+def get_document_storage(settings: Settings = Depends(get_settings)):
+    """Injectable so the private-document path can be covered by tests."""
+    return _storage(settings)
 
 
 async def _application_for_user(
@@ -374,7 +380,7 @@ async def create_document_upload_url(
     body: MembershipDocumentUploadRequest,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
+    storage=Depends(get_document_storage),
 ) -> MembershipDocumentUploadRead:
     application = await _application_for_user(session, user.id)
     if application is None:
@@ -386,11 +392,12 @@ async def create_document_upload_url(
         MembershipApplicationStatus.NEEDS_SUPPLEMENT,
     }:
         raise HTTPException(status_code=409, detail="此申請目前不可上傳證件")
-    storage = _storage(settings)
+    expected_checksum = body.checksum_sha256.lower()
     try:
         ticket = storage.create_upload_ticket(
             content_type=body.content_type,
             content_length=body.size_bytes,
+            sha256=expected_checksum,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -407,6 +414,7 @@ async def create_document_upload_url(
             object_key=ticket.object_key,
             content_type=body.content_type,
             size_bytes=body.size_bytes,
+            checksum_sha256=expected_checksum,
         )
         session.add(document)
     else:
@@ -417,7 +425,7 @@ async def create_document_upload_url(
         document.content_type = body.content_type
         document.size_bytes = body.size_bytes
         document.status = MembershipDocumentStatus.PENDING_UPLOAD
-        document.checksum_sha256 = None
+        document.checksum_sha256 = expected_checksum
         document.confirmed_at = None
         document.deleted_at = None
     await session.flush()
@@ -427,6 +435,7 @@ async def create_document_upload_url(
         object_key=ticket.object_key,
         upload_url=ticket.upload_url,
         expires_in_seconds=ticket.expires_in_seconds,
+        required_headers=dict(ticket.required_headers),
     )
 
 
@@ -439,7 +448,7 @@ async def confirm_document_upload(
     body: MembershipDocumentConfirm,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
+    storage=Depends(get_document_storage),
 ) -> MembershipDocumentRead:
     document = await session.scalar(
         select(MembershipDocument)
@@ -452,13 +461,20 @@ async def confirm_document_upload(
     )
     if document is None:
         raise HTTPException(status_code=404, detail="找不到證件")
-    storage = _storage(settings)
+    if document.checksum_sha256 and not hmac.compare_digest(
+        document.checksum_sha256.lower(),
+        body.checksum_sha256.lower(),
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="證件雜湊值與取得上傳網址時不符",
+        )
     try:
         head = await storage.confirm_upload(
             object_key=document.object_key,
             expected_content_type=document.content_type,
             expected_content_length=document.size_bytes,
-            expected_sha256=body.checksum_sha256,
+            expected_sha256=document.checksum_sha256 or body.checksum_sha256,
         )
     except IntegrationError as exc:
         raise HTTPException(status_code=409, detail="證件上傳驗證失敗") from exc

@@ -30,6 +30,12 @@ export default function CartScreen() {
     return product ? [{ item, product }] : [];
   });
   const total = totalFor(products);
+  // Shipping is limited to one temperature zone per order; warn here rather
+  // than at the last step of checkout.
+  const mixedTemperature =
+    new Set(
+      lines.map(({ product }) => product.temperature_zone ?? "ambient"),
+    ).size > 1;
 
   return (
     <Screen
@@ -57,7 +63,7 @@ export default function CartScreen() {
         subtitle={
           user
             ? `目前套用${user.membership_type === "member" ? "社員" : "非社員"}價格`
-            : "登入後才能加入商品與結帳"
+            : "目前顯示非社員價格，登入後結帳"
         }
         title="購物車"
       />
@@ -119,9 +125,13 @@ export default function CartScreen() {
               size={21}
             />
             <View style={styles.pickupCopy}>
-              <Text style={styles.pickupTitle}>取貨方式：合作社現場取貨</Text>
+              <Text style={styles.pickupTitle}>
+                下一步選擇現場取貨或物流配送
+              </Text>
               <Text style={styles.pickupText}>
-                付款後可在訂單中查看備貨與取貨進度。
+                {mixedTemperature
+                  ? "購物車含不同溫層商品，物流需分開結帳；現場取貨不受限制。"
+                  : "結帳時可選合作社取貨，或宅配與超商取貨（運費另計）。"}
               </Text>
             </View>
           </View>
@@ -154,7 +164,7 @@ const styles = StyleSheet.create({
   lineTop: { flexDirection: "row", justifyContent: "space-between" },
   nameWrap: { flex: 1 },
   name: { color: colors.forest, fontSize: 14, fontWeight: "900" },
-  price: { color: colors.muted, fontSize: 12, marginTop: 4 },
+  price: { color: colors.muted, fontSize: 13, marginTop: 4 },
   remove: { padding: 4 },
   lineBottom: {
     alignItems: "flex-end",
@@ -171,8 +181,8 @@ const styles = StyleSheet.create({
     padding: 13,
   },
   pickupCopy: { flex: 1, marginLeft: 10 },
-  pickupTitle: { color: colors.forest, fontSize: 12, fontWeight: "900" },
-  pickupText: { color: colors.muted, fontSize: 12, marginTop: 3 },
+  pickupTitle: { color: colors.forest, fontSize: 14, fontWeight: "900" },
+  pickupText: { color: colors.muted, fontSize: 13, marginTop: 3 },
   bottom: {
     alignItems: "center",
     backgroundColor: colors.paper,
@@ -182,6 +192,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     padding: spacing.md,
   },
-  bottomLabel: { color: colors.muted, fontSize: 12 },
+  bottomLabel: { color: colors.muted, fontSize: 13 },
   bottomTotal: { color: colors.forest, fontSize: 24, fontWeight: "900" },
 });
