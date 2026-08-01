@@ -4,7 +4,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -19,6 +19,15 @@ from ..auth import (
 )
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..rate_limit import (
+    LOGIN_RULE,
+    PASSWORD_RESET_RULE,
+    REGISTER_RULE,
+    VERIFICATION_RULE,
+    client_key,
+    enforce,
+    reset,
+)
 from ..models import (
     EmailVerificationToken,
     OutboxEvent,
@@ -108,9 +117,11 @@ def _development_token_response(
 @auth_router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(
     body: RegisterRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    enforce(client_key(request, "register"), REGISTER_RULE)
     email = body.email.lower()
     existing = await session.scalar(select(User.id).where(User.email == email))
     if existing is not None:
@@ -160,9 +171,14 @@ async def verify_email(
 @auth_router.post("/resend-verification")
 async def resend_verification(
     body: ResendVerificationRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    enforce(
+        client_key(request, "resend-verification", body.email),
+        VERIFICATION_RULE,
+    )
     user = await session.scalar(
         select(User).where(User.email == body.email.lower())
     )
@@ -181,9 +197,14 @@ async def resend_verification(
 @auth_router.post("/forgot-password")
 async def forgot_password(
     body: ForgotPasswordRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    enforce(
+        client_key(request, "forgot-password", body.email),
+        PASSWORD_RESET_RULE,
+    )
     user = await session.scalar(
         select(User).where(User.email == body.email.lower())
     )
@@ -249,8 +270,13 @@ async def reset_password(
 @auth_router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> TokenResponse:
+    # Keyed per account as well as per client, so one IP cannot spray an inbox
+    # list and one victim account cannot be hammered from a pool of clients.
+    account_key = client_key(request, "login", body.email)
+    enforce(account_key, LOGIN_RULE)
     user = await session.scalar(
         select(User)
         .where(User.email == body.email.lower())
@@ -270,6 +296,7 @@ async def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="請先完成 Email 驗證",
         )
+    reset(account_key)
     return token_response(user)
 
 

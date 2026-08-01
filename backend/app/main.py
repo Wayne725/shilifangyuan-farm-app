@@ -11,7 +11,11 @@ from fastapi.responses import JSONResponse
 from .config import get_settings
 from .database import SessionLocal
 from .domain import DomainError
-from .jobs import jobs_router, lazy_reconcile
+from .jobs import (
+    jobs_router,
+    schedule_background_reconcile,
+    should_reconcile_now,
+)
 from .routers import ALL_ROUTERS
 from .seed import seed_demo_data
 
@@ -60,12 +64,15 @@ def create_app() -> FastAPI:
 
     @application.middleware("http")
     async def reconcile_on_api_request(request: Request, call_next):
-        if request.url.path.startswith("/v1/"):
-            async with SessionLocal() as session:
-                try:
-                    await lazy_reconcile(session, settings)
-                except Exception:
-                    await session.rollback()
+        """Wake-up safety net for the free Render tier.
+
+        The scheduled `/internal/reconcile` job is the primary driver; this only
+        covers the case where the service was asleep when the cron fired. It is
+        scheduled rather than awaited so reconciliation — which sweeps several
+        tables and can call ECPay — never sits in the user's request path.
+        """
+        if request.url.path.startswith("/v1/") and should_reconcile_now():
+            schedule_background_reconcile(settings)
         return await call_next(request)
 
     @application.exception_handler(DomainError)

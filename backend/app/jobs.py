@@ -85,6 +85,7 @@ class ReconcileReport:
 jobs_router = APIRouter(tags=["jobs"])
 _lazy_reconcile_lock = asyncio.Lock()
 _last_lazy_reconcile_at = 0.0
+_background_reconcile_tasks: set["asyncio.Task[None]"] = set()
 
 
 @jobs_router.post("/internal/reconcile")
@@ -171,6 +172,37 @@ async def lazy_reconcile(
         report = await reconcile_once(session, settings)
         _last_lazy_reconcile_at = current_monotonic
         return report.to_dict()
+
+
+def should_reconcile_now(minimum_interval_seconds: float = 60.0) -> bool:
+    """Cheap, non-blocking throttle check for the request middleware."""
+    return (
+        time.monotonic() - _last_lazy_reconcile_at >= minimum_interval_seconds
+    )
+
+
+def schedule_background_reconcile(
+    settings: Optional[Settings] = None,
+) -> "asyncio.Task[None]":
+    """Runs reconciliation off the request path.
+
+    The task reference is held until completion so the event loop cannot
+    garbage-collect a still-running reconciliation.
+    """
+
+    async def _run() -> None:
+        try:
+            async with SessionLocal() as session:
+                try:
+                    await lazy_reconcile(session, settings)
+                except Exception:
+                    await session.rollback()
+        finally:
+            _background_reconcile_tasks.discard(asyncio.current_task())
+
+    task = asyncio.create_task(_run())
+    _background_reconcile_tasks.add(task)
+    return task
 
 
 async def _reconcile_expired_payments(
