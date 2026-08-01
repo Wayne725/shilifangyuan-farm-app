@@ -13,3 +13,20 @@
 | 正式寄件人與倉儲資料 | 待確認 | 合作社 | 物流正式建單 | 由環境變數提供測試寄件資料 |
 | 正式運費與免運門檻 | 待確認 | 合作社 | 正式結帳金額 | 超商 70 元、宅配 160 元、滿 1,500 元免運 |
 | 實際校園、攤位與菜單 | 待會議確認 | 合作社／學校 | 正式便當場次 | 使用具名但不代表承諾的展示場次與菜單 |
+
+## 上線前必須完成（技術阻塞項）
+
+以下不是政策問題，是 Sandbox 為了可展示而刻意簡化的實作。
+**在收取任何真實款項或蒐集任何真實證件之前，每一項都必須完成。**
+
+| 項目 | 風險 | 現況 | 位置 |
+|---|---|---|---|
+| **退款沒有真的退錢** | **最高。系統會通知使用者「退款完成」，但沒有任何金流動作** | `LocalSandboxRefundAdapter` 只寫入資料庫狀態，`provider_refund_performed=False` | `integrations/ecpay.py:312`、`jobs.py:838` |
+| 發票作廢與折讓未實作 | 高。退款後發票仍為已開立狀態，帳務不符 | 只有開立，沒有作廢／折讓 | `integrations/invoice_service.py` |
+| 展示帳號會自動建立 | 高。空資料庫啟動時會建出 `admin@shilifangyuan.tw` 等已知帳號 | `seed_demo_data` 於 lifespan 無條件執行（僅在已有使用者時跳過） | `main.py:22`、`seed.py:241` |
+| 一鍵清空資料的端點仍存在 | 高 | `/v1/admin/demo/reset`，目前靠 `environment` 與確認碼阻擋 | `routers/catalog.py:250` |
+| Rate limiting 為單機記憶體 | 中。多實例部署即失效 | 刻意的 Sandbox 取捨，已於檔案內註明 | `rate_limit.py` |
+| PII 金鑰無輪替與備份機制 | 中。金鑰遺失等於所有社員個資永久無法解密 | 支援版本化金鑰，但沒有輪替流程與保管規範 | `integrations/pii_crypto.py` |
+| 綠界仍全部指向 Stage | 中。正式環境需簽約，且 `validate_runtime_secrets` 目前強制 stage 旗標為 true | 所有預設 URL 為 `-stage` | `config.py:51-91`、`config.py:181` |
+| Render 免費方案 | 中。免費 PostgreSQL 30 天後刪除且無自動備份；服務閒置會休眠 | 展示用設定 | `render.yaml` |
+| 無錯誤監控 | 中。線上發生例外不會有人知道 | 未接任何 APM／Sentry | — |

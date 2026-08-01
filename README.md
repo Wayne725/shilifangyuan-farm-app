@@ -73,8 +73,8 @@ API 文件：
 
 ### 入社與社員資格
 
-1. 自行註冊、驗證 Email。
-2. 填寫入社資料並上傳三份測試證件；Sandbox 禁止上傳真實證件。
+1. 自行註冊，並用驗證信中的連結（`/verify-email?token=…`）完成 Email 驗證。
+2. 填寫入社資料並上傳三份證件；App 會在本機算出 SHA-256，直接 PUT 到 R2 私有 Bucket 後才向後端確認。**Sandbox 禁止上傳真實證件**，請使用測試素材。
 3. 管理員要求補件、核准或駁回。
 4. 核准後分別繳交示範入社費 500 元與股金 1,000 元。
 5. 兩筆綠界 Stage 付款皆成功後，產生 `SLF-YYYY-####` 社員編號。
@@ -117,8 +117,11 @@ API 的社員資格只由 `memberships.status=active` 推導；`users.membership
 
 - 一般農產與確認成團的團購可選宅配或超商，全程預先付款、不代收。
 - 同一訂單只接受單一溫層、單一地址與單一包裹。
-- 展示費率為超商 70 元、常溫宅配 160 元，商品小計滿 1,500 元免運。
-- 綠界物流 Stage 不會自動模擬後續貨態，因此管理後台提供有稽核紀錄的 Sandbox 貨態推進。
+- 流程為三步：建立訂單 → 綠界物流選擇頁（選門市或確認地址）→ 付款。未完成選擇的訂單無法付款。
+- 選擇頁以一次性、30 分鐘到期的 token 開啟，不需 Bearer token；瀏覽器導頁無法帶 Authorization header，與付款頁 `/payments/{attempt_id}/checkout` 相同設計。
+- 買家中途離開可在訂單頁按「繼續選擇物流」重新取得連結。
+- 運費一律由後端 `shipping_rates` 費率表計算，App 不內建任何金額；展示費率為超商 70 元、常溫宅配 160 元、冷藏宅配 220 元，商品小計滿 1,500 元免運。
+- 綠界物流 Stage 不會自動模擬後續貨態，因此管理後台提供有稽核紀錄的 Sandbox 貨態推進（依 已建立 → 配送中 → 已送達 逐級推進，不可跳級）。
 
 ## 專案結構
 
@@ -133,6 +136,17 @@ CONTEXT.md           領域詞彙與邊界
 render.yaml          Render Blueprint
 .github/workflows/   CI 與每 10 分鐘 reconciliation
 ```
+
+### API 契約檢查
+
+`src/services/api.routes.json` 是由 FastAPI 的 OpenAPI schema 匯出的後端路由表，
+`tests/api-routes.test.mjs` 會比對 App 呼叫的每一個路徑是否存在。改動後端路由後必須重新匯出：
+
+```bash
+cd backend && python -m scripts.export_openapi_paths ../src/services/api.routes.json
+```
+
+CI 的 `api-contract` job 會重新匯出並在檔案過期時失敗。
 
 ## Sandbox 限制
 
