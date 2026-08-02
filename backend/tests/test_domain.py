@@ -47,6 +47,7 @@ from app.models import (
     Product,
     ProposalStatus,
     ShippingChannel,
+    ShippingRate,
     ShippingTemperature,
     Shipment,
     ShipmentStatus,
@@ -344,7 +345,7 @@ async def test_seed_is_idempotent_and_resettable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_seed_reuses_fee_schedules_created_by_migration() -> None:
+async def test_seed_reuses_reference_data_created_by_migration() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -364,6 +365,23 @@ async def test_seed_reuses_fee_schedules_created_by_migration() -> None:
                     amount=1000,
                     effective_from=date(2026, 1, 1),
                 ),
+                *[
+                    ShippingRate(
+                        channel=channel,
+                        temperature=temperature,
+                        fee=70,
+                        free_shipping_threshold=1500,
+                        effective_from=date(2026, 1, 1),
+                    )
+                    for channel, temperature in (
+                        (ShippingChannel.HOME_DELIVERY, ShippingTemperature.AMBIENT),
+                        (ShippingChannel.SEVEN_ELEVEN, ShippingTemperature.AMBIENT),
+                        (ShippingChannel.FAMILY_MART, ShippingTemperature.AMBIENT),
+                        (ShippingChannel.HILIFE, ShippingTemperature.AMBIENT),
+                        (ShippingChannel.HOME_DELIVERY, ShippingTemperature.CHILLED),
+                        (ShippingChannel.HOME_DELIVERY, ShippingTemperature.FROZEN),
+                    )
+                ],
             ]
         )
         await session.commit()
@@ -374,6 +392,7 @@ async def test_seed_reuses_fee_schedules_created_by_migration() -> None:
         assert await session.scalar(
             select(func.count(MembershipFeeSchedule.id))
         ) == 2
+        assert await session.scalar(select(func.count(ShippingRate.id))) == 6
     await engine.dispose()
 
 

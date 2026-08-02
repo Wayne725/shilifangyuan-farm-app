@@ -881,7 +881,18 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             ),
         ]
     )
-    session.add_all(shipping_rates)
+    new_shipping_rates = []
+    for shipping_rate in shipping_rates:
+        existing_rate = await session.scalar(
+            select(ShippingRate.id).where(
+                ShippingRate.channel == shipping_rate.channel,
+                ShippingRate.temperature == shipping_rate.temperature,
+                ShippingRate.effective_from == shipping_rate.effective_from,
+            )
+        )
+        if existing_rate is None:
+            new_shipping_rates.append(shipping_rate)
+    session.add_all(new_shipping_rates)
 
     fulfillment_id = "fulfillment-shipping-demo"
     shipping_aad_prefix = f"order-fulfillment:{fulfillment_id}"
