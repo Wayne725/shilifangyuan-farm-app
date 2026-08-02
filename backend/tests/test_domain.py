@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -35,6 +35,8 @@ from app.models import (
     FulfillmentMethod,
     FulfillmentState,
     Membership,
+    MembershipChargeKind,
+    MembershipFeeSchedule,
     MembershipStatus,
     MembershipType,
     Order,
@@ -338,6 +340,40 @@ async def test_seed_is_idempotent_and_resettable() -> None:
         reset = await reset_demo_data(session)
         assert reset["products"] == 12
         assert await session.scalar(select(func.count(Product.id))) == 12
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_seed_reuses_fee_schedules_created_by_migration() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        session.add_all(
+            [
+                MembershipFeeSchedule(
+                    id="migration-admission",
+                    charge_kind=MembershipChargeKind.ADMISSION_FEE,
+                    amount=500,
+                    effective_from=date(2026, 1, 1),
+                ),
+                MembershipFeeSchedule(
+                    id="migration-share",
+                    charge_kind=MembershipChargeKind.SHARE_CAPITAL,
+                    amount=1000,
+                    effective_from=date(2026, 1, 1),
+                ),
+            ]
+        )
+        await session.commit()
+
+        result = await seed_demo_data(session)
+
+        assert result["users"] > 0
+        assert await session.scalar(
+            select(func.count(MembershipFeeSchedule.id))
+        ) == 2
     await engine.dispose()
 
 

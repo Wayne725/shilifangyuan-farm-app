@@ -322,21 +322,27 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
     except IntegrationError:
         seed_cipher = VersionedPIICipher({"v1": bytes(32)}, "v1")
 
-    fee_schedules = [
-        MembershipFeeSchedule(
-            id="fee-admission-demo",
-            charge_kind=MembershipChargeKind.ADMISSION_FEE,
-            amount=500,
-            effective_from=date(now.year, 1, 1),
-        ),
-        MembershipFeeSchedule(
-            id="fee-share-demo",
-            charge_kind=MembershipChargeKind.SHARE_CAPITAL,
-            amount=1000,
-            effective_from=date(now.year, 1, 1),
-        ),
-    ]
-    session.add_all(fee_schedules)
+    effective_from = date(now.year, 1, 1)
+    fee_schedules = []
+    for schedule_id, charge_kind, amount in (
+        ("fee-admission-demo", MembershipChargeKind.ADMISSION_FEE, 500),
+        ("fee-share-demo", MembershipChargeKind.SHARE_CAPITAL, 1000),
+    ):
+        schedule = await session.scalar(
+            select(MembershipFeeSchedule).where(
+                MembershipFeeSchedule.charge_kind == charge_kind,
+                MembershipFeeSchedule.effective_from == effective_from,
+            )
+        )
+        if schedule is None:
+            schedule = MembershipFeeSchedule(
+                id=schedule_id,
+                charge_kind=charge_kind,
+                amount=amount,
+                effective_from=effective_from,
+            )
+            session.add(schedule)
+        fee_schedules.append(schedule)
 
     active_member_users = [
         users[0],
