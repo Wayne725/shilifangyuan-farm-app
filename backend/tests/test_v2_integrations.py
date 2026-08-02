@@ -230,6 +230,8 @@ def test_logistics_selection_result_validates_temp_order_and_age() -> None:
     envelope = json.loads(logistics_response(data).body)
 
     assert adapter.decode_selection_result(envelope, now=NOW) == data
+    envelope["MerchantID"] = int(LOGISTICS_MERCHANT_ID)
+    assert adapter.decode_selection_result(envelope, now=NOW) == data
     envelope["RqHeader"] = envelope.pop("RpHeader")
     assert adapter.decode_selection_result(envelope, now=NOW) == data
     with pytest.raises(IntegrationResponseError, match="timestamp"):

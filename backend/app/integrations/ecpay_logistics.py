@@ -464,7 +464,7 @@ class ECPayLogisticsAdapter:
             now=now,
             max_age_seconds=max_age_seconds,
         )
-        if data.get("MerchantID") != self.settings.merchant_id:
+        if str(data.get("MerchantID", "")) != self.settings.merchant_id:
             raise IntegrationResponseError(
                 "Unexpected callback Data MerchantID"
             )
@@ -527,7 +527,7 @@ class ECPayLogisticsAdapter:
         now: Optional[datetime] = None,
         max_age_seconds: Optional[int] = None,
     ) -> Dict[str, Any]:
-        if envelope.get("MerchantID") != self.settings.merchant_id:
+        if str(envelope.get("MerchantID", "")) != self.settings.merchant_id:
             raise IntegrationResponseError(
                 "Unexpected ECPay logistics MerchantID"
             )
