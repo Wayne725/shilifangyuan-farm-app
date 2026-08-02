@@ -91,18 +91,19 @@ export default function RegisterScreen() {
         <View style={styles.verifyPanel}>
           <Text style={styles.panelTitle}>完成 Email 驗證</Text>
           <Text style={styles.panelText}>
-            從驗證信連結帶入的代碼可在這裡完成驗證。
+            輸入驗證信中的 6 位數驗證碼。
           </Text>
           <TextInput
-            autoCapitalize="none"
+            keyboardType="number-pad"
+            maxLength={6}
             onChangeText={setVerificationToken}
-            placeholder="驗證代碼"
+            placeholder="6 位數驗證碼"
             placeholderTextColor={colors.sage}
             style={styles.input}
             value={verificationToken}
           />
           <Button
-            disabled={!verificationToken.trim()}
+            disabled={!/^\d{6}$/.test(verificationToken)}
             label="驗證 Email"
             loading={verify.isPending}
             onPress={() => verify.mutate()}

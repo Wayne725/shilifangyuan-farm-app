@@ -166,6 +166,8 @@ async def test_auth_register_verify_login_refresh_and_reset(
 
     assert registered.status_code == 201
     verification_token = registered.json()["development_token"]
+    assert verification_token.isdigit()
+    assert len(verification_token) == 6
     unverified_login = await client.post(
         "/v1/auth/login",
         json={

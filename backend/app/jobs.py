@@ -940,10 +940,7 @@ async def _process_auth_email_event(
     if event.event_type == "auth.email_verification_requested":
         token = str(payload["verification_token"])
         subject = "十里方圓 Email 驗證"
-        action_url = (
-            f"{settings.web_base_url.rstrip('/')}/verify-email?token={token}"
-        )
-        text = f"請使用以下連結完成 Email 驗證：{action_url}"
+        text = f"您的 Email 驗證碼是：{token}\n\n驗證碼將於 10 分鐘後失效。"
     else:
         token = str(payload["reset_token"])
         subject = "十里方圓密碼重設"

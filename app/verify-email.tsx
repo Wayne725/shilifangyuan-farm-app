@@ -12,7 +12,6 @@ import {
 import { api, getErrorMessage } from "../src/services/api";
 import { colors, radii, spacing } from "../src/theme";
 
-/** Target of the verification link sent by the API (`/verify-email?token=…`). */
 export default function VerifyEmailScreen() {
   const { token: linkToken } = useLocalSearchParams<{ token?: string }>();
   const [token, setToken] = useState(linkToken ?? "");
@@ -58,16 +57,17 @@ export default function VerifyEmailScreen() {
             <View style={styles.field}>
               <Text style={styles.label}>驗證代碼</Text>
               <TextInput
-                autoCapitalize="none"
+                keyboardType="number-pad"
+                maxLength={6}
                 onChangeText={setToken}
-                placeholder="輸入信件中的代碼"
+                placeholder="輸入 6 位數驗證碼"
                 placeholderTextColor={colors.sage}
                 style={styles.input}
                 value={token}
               />
             </View>
             <Button
-              disabled={!token.trim()}
+              disabled={!/^\d{6}$/.test(token)}
               label="完成驗證"
               loading={verify.isPending}
               onPress={() => verify.mutate(token)}

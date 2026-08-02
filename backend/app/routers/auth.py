@@ -79,12 +79,12 @@ async def _issue_email_verification(
     session: AsyncSession,
     user: User,
 ) -> str:
-    raw_token = secrets.token_urlsafe(32)
+    raw_token = f"{secrets.randbelow(1_000_000):06d}"
     session.add(
         EmailVerificationToken(
             user_id=user.id,
             token_hash=_token_hash(raw_token),
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
         )
     )
     session.add(
@@ -158,7 +158,7 @@ async def verify_email(
     if record is None or record.expires_at.replace(
         tzinfo=record.expires_at.tzinfo or timezone.utc
     ) <= now:
-        raise HTTPException(status_code=400, detail="驗證連結無效或已過期")
+        raise HTTPException(status_code=400, detail="驗證碼無效或已過期")
     user = await session.get(User, record.user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="找不到此使用者")
