@@ -308,13 +308,18 @@ async def _effective_rate(
     return rate
 
 
-def _product_subtotal(order: Order) -> int:
-    existing_fee = (
-        order.fulfillment.shipment.shipping_fee
-        if order.fulfillment is not None
-        and order.fulfillment.shipment is not None
-        else 0
-    )
+def _product_subtotal(
+    order: Order,
+    shipment: Optional[Shipment] = None,
+) -> int:
+    if shipment is None:
+        fulfillment = order.__dict__.get("fulfillment")
+        shipment = (
+            fulfillment.__dict__.get("shipment")
+            if fulfillment is not None
+            else None
+        )
+    existing_fee = shipment.shipping_fee if shipment is not None else 0
     return max(0, order.amount_total - existing_fee)
 
 
@@ -641,7 +646,7 @@ async def open_logistics_selection_page(
         and recipient_phone.startswith("09")
         and recipient_phone.isdigit()
     )
-    subtotal = _product_subtotal(order)
+    subtotal = _product_subtotal(order, shipment)
     query = urlencode({"order_id": order.id, "token": token})
     try:
         adapter = ecpay_logistics_adapter_from_settings(settings)

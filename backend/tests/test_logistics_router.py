@@ -577,6 +577,7 @@ async def test_selection_token_is_single_use_and_expires(
     unknown_token = await client.get("/logistics/not-a-real-token/select")
     assert unknown_token.status_code == 404
 
+    session.expire(order, ["fulfillment"])
     first_open = await client.get(selection_path)
     assert first_open.status_code == 200
 
