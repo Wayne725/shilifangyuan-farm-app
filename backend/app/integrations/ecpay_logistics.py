@@ -542,10 +542,10 @@ class ECPayLogisticsAdapter:
                 "ECPay logistics rejected the transport"
             )
         if max_age_seconds is not None:
-            header = envelope.get("RpHeader")
+            header = envelope.get("RpHeader") or envelope.get("RqHeader")
             if not isinstance(header, Mapping):
                 raise IntegrationResponseError(
-                    "Logistics callback is missing RpHeader"
+                    "Logistics callback is missing timestamp header"
                 )
             try:
                 timestamp = int(header.get("Timestamp", 0))
