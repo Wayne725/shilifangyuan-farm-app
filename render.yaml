@@ -8,6 +8,7 @@ databases:
 services:
   - type: web
     name: shilifangyuan-api
+    branch: codex/v2-social-commerce
     runtime: python
     plan: free
     region: singapore
@@ -101,6 +102,7 @@ services:
 
   - type: web
     name: shilifangyuan-web
+    branch: codex/v2-social-commerce
     runtime: static
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm export:web
     staticPublishPath: ./dist
