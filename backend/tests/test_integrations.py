@@ -33,10 +33,10 @@ from app.integrations.payment_service import (
     payment_adapter_from_settings,
     release_attempt_reservations,
 )
-from app.integrations.sendgrid import (
+from app.integrations.mailersend import (
     EmailMessage,
-    SendGridAdapter,
-    SendGridSettings,
+    MailerSendAdapter,
+    MailerSendSettings,
 )
 from app.models import (
     InventoryReservation,
@@ -255,7 +255,7 @@ def test_invoice_payload_supports_taxable_and_exempt_snapshots() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sendgrid_adapter_uses_mocked_network() -> None:
+async def test_mailersend_adapter_uses_mocked_network() -> None:
     captured = {}
 
     async def transport(url, payload, headers, timeout):
@@ -268,9 +268,9 @@ async def test_sendgrid_adapter_uses_mocked_network() -> None:
             headers={"X-Message-Id": "message-123"},
         )
 
-    adapter = SendGridAdapter(
-        SendGridSettings(
-            api_key="SG.test-secret",
+    adapter = MailerSendAdapter(
+        MailerSendSettings(
+            api_token="mlsn.test-secret",
             sender_email="sender@example.test",
         ),
         transport=transport,
@@ -285,7 +285,7 @@ async def test_sendgrid_adapter_uses_mocked_network() -> None:
 
     assert result.accepted is True
     assert result.provider_message_id == "message-123"
-    assert captured["headers"]["Authorization"] == "Bearer SG.test-secret"
+    assert captured["headers"]["Authorization"] == "Bearer mlsn.test-secret"
     assert captured["payload"]["from"]["name"] == "十里方圓"
 
 

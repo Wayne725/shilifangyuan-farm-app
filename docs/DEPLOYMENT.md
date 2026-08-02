@@ -106,13 +106,13 @@ Web 版會從瀏覽器直接以簽名 URL 上傳測試證件。部署 Web 前，
 - Bucket 必須維持私有，不可啟用公開網域或 `r2.dev`；檔案讀取只走後端產生的兩分鐘簽名 URL。
 - `Content-Length` 不會納入簽名 Header，避免瀏覽器無法手動設定而導致簽名失敗；後端仍會在確認上傳時比對實際大小、Content-Type 與 SHA-256 metadata。
 
-### SendGrid
+### MailerSend
 
-- `SENDGRID_API_KEY`
-- `SENDGRID_FROM_EMAIL`
-- `SENDGRID_FROM_NAME=十里方圓`
+- `MAILERSEND_API_TOKEN`
+- `MAILERSEND_FROM_EMAIL`
+- `MAILERSEND_FROM_NAME=十里方圓`
 
-寄件地址必須先完成 Single Sender Verification。綠界發票 Stage 不接受真實 Email；真實收件地址只傳給 SendGrid。
+寄件地址必須屬於 MailerSend 已驗證的寄件網域。綠界發票 Stage 不接受真實 Email；真實收件地址只傳給 MailerSend。
 Sandbox 會在啟動時檢查 API Key 與寄件地址，未設定時 Render 部署會直接失敗並列出缺少的變數。
 
 ## GitHub Actions
@@ -133,7 +133,7 @@ Repository Settings → Secrets and variables → Actions 新增：
 5. 使用綠界測試卡完成一筆付款。
 6. 確認 GitHub Actions 最近一次 reconciliation 成功。
 7. 執行管理員「重設展示資料」，恢復補件申請、待付款入社、接近額滿活動、記名提案、便當待取與配送中訂單。
-8. 確認 SendGrid 寄件者仍為 verified。
+8. 確認 MailerSend 寄件網域仍為 verified。
 9. 使用測試檔驗證 R2 上傳、管理員短效查看 URL 及 Demo reset 刪除。
 10. 以綠界物流 Stage 完成一次通路選擇與建單。
 

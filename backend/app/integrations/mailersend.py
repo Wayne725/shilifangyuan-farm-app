@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
 from ..config import Settings
-
 from .common import (
     HTTPResponse,
     IntegrationConfigurationError,
@@ -12,7 +11,7 @@ from .common import (
 )
 
 
-SENDGRID_MAIL_SEND_URL = "https://api.sendgrid.com/v3/mail/send"
+MAILERSEND_EMAIL_URL = "https://api.mailersend.com/v1/email"
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 JsonTransport = Callable[
@@ -22,23 +21,22 @@ JsonTransport = Callable[
 
 
 @dataclass(frozen=True)
-class SendGridSettings:
-    api_key: str
+class MailerSendSettings:
+    api_token: str
     sender_email: str
     sender_name: str = "十里方圓"
-    mail_send_url: str = SENDGRID_MAIL_SEND_URL
+    email_url: str = MAILERSEND_EMAIL_URL
     timeout_seconds: float = 15.0
-    sandbox_mode: bool = False
 
     def validate(self) -> None:
-        if not self.api_key:
-            raise IntegrationConfigurationError("SendGrid API key is required")
+        if not self.api_token:
+            raise IntegrationConfigurationError("MailerSend API token is required")
         if not EMAIL_PATTERN.fullmatch(self.sender_email):
-            raise IntegrationConfigurationError("Invalid SendGrid sender email")
+            raise IntegrationConfigurationError("Invalid MailerSend sender email")
         if not self.sender_name.strip():
-            raise IntegrationConfigurationError("SendGrid sender name is required")
-        if not self.mail_send_url.startswith("https://"):
-            raise IntegrationConfigurationError("SendGrid URL must use HTTPS")
+            raise IntegrationConfigurationError("MailerSend sender name is required")
+        if not self.email_url.startswith("https://"):
+            raise IntegrationConfigurationError("MailerSend URL must use HTTPS")
 
 
 @dataclass(frozen=True)
@@ -67,10 +65,10 @@ class EmailSendResult:
     status_code: int
 
 
-class SendGridAdapter:
+class MailerSendAdapter:
     def __init__(
         self,
-        settings: SendGridSettings,
+        settings: MailerSendSettings,
         transport: JsonTransport = post_json,
     ) -> None:
         settings.validate()
@@ -79,68 +77,49 @@ class SendGridAdapter:
 
     def build_payload(self, message: EmailMessage) -> Dict[str, Any]:
         message.validate()
-        content = [
-            {
-                "type": "text/plain",
-                "value": message.text_content,
-            }
-        ]
-        if message.html_content:
-            content.append(
-                {
-                    "type": "text/html",
-                    "value": message.html_content,
-                }
-            )
         payload: Dict[str, Any] = {
-            "personalizations": [
-                {
-                    "to": [{"email": message.to_email}],
-                    "subject": message.subject[:998],
-                }
-            ],
             "from": {
                 "email": self.settings.sender_email,
                 "name": self.settings.sender_name,
             },
-            "content": content,
+            "to": [{"email": message.to_email}],
+            "subject": message.subject[:998],
+            "text": message.text_content,
         }
+        if message.html_content:
+            payload["html"] = message.html_content
         if message.reply_to:
             payload["reply_to"] = {"email": message.reply_to}
-        if self.settings.sandbox_mode:
-            payload["mail_settings"] = {"sandbox_mode": {"enable": True}}
         return payload
 
     async def send(self, message: EmailMessage) -> EmailSendResult:
-        payload = self.build_payload(message)
         response = await self.transport(
-            self.settings.mail_send_url,
-            payload,
-            {"Authorization": "Bearer {}".format(self.settings.api_key)},
+            self.settings.email_url,
+            self.build_payload(message),
+            {"Authorization": f"Bearer {self.settings.api_token}"},
             self.settings.timeout_seconds,
         )
         if response.status_code != 202:
             raise IntegrationResponseError(
-                "SendGrid rejected email with HTTP {}".format(response.status_code)
+                f"MailerSend rejected email with HTTP {response.status_code}"
             )
-        message_id = None
-        for key, value in response.headers.items():
-            if key.lower() == "x-message-id":
-                message_id = value
-                break
-        return EmailSendResult(
-            accepted=True,
-            provider_message_id=message_id,
-            status_code=response.status_code,
+        message_id = next(
+            (
+                value
+                for key, value in response.headers.items()
+                if key.lower() == "x-message-id"
+            ),
+            None,
         )
+        return EmailSendResult(True, message_id, response.status_code)
 
 
-def sendgrid_adapter_from_settings(settings: Settings) -> SendGridAdapter:
-    return SendGridAdapter(
-        SendGridSettings(
-            api_key=settings.sendgrid_api_key,
-            sender_email=settings.sendgrid_from_email,
-            sender_name=settings.sendgrid_from_name,
+def mailersend_adapter_from_settings(settings: Settings) -> MailerSendAdapter:
+    return MailerSendAdapter(
+        MailerSendSettings(
+            api_token=settings.mailersend_api_token,
+            sender_email=settings.mailersend_from_email,
+            sender_name=settings.mailersend_from_name,
             timeout_seconds=settings.integration_timeout_seconds,
         )
     )

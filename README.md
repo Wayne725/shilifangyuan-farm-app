@@ -17,7 +17,7 @@
 - 物流：綠界全方位物流 Stage；宅配、7-ELEVEN、全家、萊爾富
 - 私密證件：Cloudflare R2 私有 Bucket、短效簽名 URL
 - 私密欄位：版本化 AES-256-GCM
-- 通知：App 通知中心、SendGrid Email
+- 通知：App 通知中心、MailerSend Email
 - 部署：Render Static Site、Web Service、PostgreSQL
 
 ## 前端啟動
@@ -152,7 +152,7 @@ CI 的 `api-contract` job 會重新匯出並在檔案過期時失敗。
 
 - 綠界 AIO Stage 不動真實款項。
 - AIO Stage 沒有實際信用卡退款 API；退款完成只代表本系統狀態、庫存與通知已完成。
-- 綠界發票 Stage 不會送財政部，也不會寄官方發票信；App 另外以 SendGrid 寄開立通知。
+- 綠界發票 Stage 不會送財政部，也不會寄官方發票信；App 另外以 MailerSend 寄開立通知。
 - 綠界物流 Stage 可選通路、建單及查詢，但不會自動推送後續配送狀態。
 - 入社頁只接受測試素材；正式證件隱私告知、保存期限與刪除政策尚待合作社決定。
 - 入社費、股金及股金返還只產生系統收據／Sandbox 紀錄，不開電子發票。

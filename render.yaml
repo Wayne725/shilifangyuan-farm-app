@@ -93,11 +93,11 @@ services:
         sync: false
       - key: PII_ENCRYPTION_CURRENT_VERSION
         value: v1
-      - key: SENDGRID_API_KEY
+      - key: MAILERSEND_API_TOKEN
         sync: false
-      - key: SENDGRID_FROM_EMAIL
+      - key: MAILERSEND_FROM_EMAIL
         sync: false
-      - key: SENDGRID_FROM_NAME
+      - key: MAILERSEND_FROM_NAME
         value: 十里方圓
 
   - type: web

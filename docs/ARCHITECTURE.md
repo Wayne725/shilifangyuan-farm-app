@@ -13,7 +13,7 @@ flowchart LR
     api --> r2[("Cloudflare R2<br/>私有測試證件")]
     api --> ecpay["綠界 AIO・B2C 發票・物流 Stage"]
     api --> outbox[("Outbox")]
-    outbox --> sendgrid["SendGrid"]
+    outbox --> mailersend["MailerSend"]
     cron["GitHub Actions"] --> jobs["Reconciliation"]
     jobs --> db
     jobs --> outbox

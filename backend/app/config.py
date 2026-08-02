@@ -102,9 +102,9 @@ class Settings(BaseSettings):
     membership_document_max_bytes: int = 8 * 1024 * 1024
     pii_encryption_keys_json: str = ""
     pii_encryption_current_version: str = "v1"
-    sendgrid_api_key: str = ""
-    sendgrid_from_email: str = ""
-    sendgrid_from_name: str = "十里方圓"
+    mailersend_api_token: str = ""
+    mailersend_from_email: str = ""
+    mailersend_from_name: str = "十里方圓"
     demo_admin_password: str = "admin123"
     demo_member_password: str = "member123"
     demo_nonmember_password: str = "customer123"
@@ -171,13 +171,13 @@ class Settings(BaseSettings):
             invalid_secrets.extend(
                 name for name in R2_REQUIRED_SETTINGS if not r2_values[name].strip()
             )
-            if not self.sendgrid_api_key.strip():
-                invalid_secrets.append("SENDGRID_API_KEY")
+            if not self.mailersend_api_token.strip():
+                invalid_secrets.append("MAILERSEND_API_TOKEN")
             if (
-                not self.sendgrid_from_email.strip()
-                or "@" not in self.sendgrid_from_email
+                not self.mailersend_from_email.strip()
+                or "@" not in self.mailersend_from_email
             ):
-                invalid_secrets.append("SENDGRID_FROM_EMAIL")
+                invalid_secrets.append("MAILERSEND_FROM_EMAIL")
             if not self.ecpay_payment_merchant_id.strip():
                 invalid_secrets.append("ECPAY_PAYMENT_MERCHANT_ID")
             if len(self.ecpay_payment_hash_key.encode("utf-8")) != 16:

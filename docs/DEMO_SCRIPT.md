@@ -26,7 +26,7 @@
 
 有效社員可以發起活動，額滿後採先到先得候補，取消時自動遞補。社員治理提案與商品團購分開，採公開記名的贊成、反對、棄權；棄權計入最低投票人數，但贊成仍必須多於反對才會通過。
 
-技術方面，前端使用 Expo SDK 57、React Native、TypeScript、Expo Router 與 TanStack Query，同一套程式支援 iOS、Android 和 Web。後端使用 Python FastAPI、SQLAlchemy、Alembic 與 PostgreSQL；付款、發票和物流使用綠界 Stage，重要信件使用 SendGrid。
+技術方面，前端使用 Expo SDK 57、React Native、TypeScript、Expo Router 與 TanStack Query，同一套程式支援 iOS、Android 和 Web。後端使用 Python FastAPI、SQLAlchemy、Alembic 與 PostgreSQL；付款、發票和物流使用綠界 Stage，重要信件使用 MailerSend。
 
 目前所有外部服務都在 Sandbox，不動真實款項，也禁止上傳真實證件；但完整的資料模型、權限、狀態與稽核流程都已保留，之後可以再接合作社正式規則。謝謝大家。
 

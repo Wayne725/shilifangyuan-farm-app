@@ -25,7 +25,7 @@ from .r2_storage import (
     R2StorageSettings,
     r2_document_storage_from_settings,
 )
-from .sendgrid import SendGridAdapter, SendGridSettings
+from .mailersend import MailerSendAdapter, MailerSendSettings
 
 __all__ = [
     "ECPayAIOAdapter",
@@ -40,8 +40,8 @@ __all__ = [
     "DocumentUploadTicket",
     "R2DocumentStorage",
     "R2StorageSettings",
-    "SendGridAdapter",
-    "SendGridSettings",
+    "MailerSendAdapter",
+    "MailerSendSettings",
     "UpdateTempLogisticsRequest",
     "VersionedPIICipher",
     "build_check_mac_value",

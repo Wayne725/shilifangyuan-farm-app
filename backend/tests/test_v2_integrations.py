@@ -401,8 +401,8 @@ def sandbox_settings(**overrides) -> Settings:
         "cloudflare_r2_access_key_id": "access-key",
         "cloudflare_r2_secret_access_key": "secret-key",
         "cloudflare_r2_bucket": "private-documents",
-        "sendgrid_api_key": "SG.test-secret",
-        "sendgrid_from_email": "verified@example.test",
+        "mailersend_api_token": "mlsn.test-secret",
+        "mailersend_from_email": "verified@example.test",
         "pii_encryption_keys_json": json.dumps(
             {"v1": base64.b64encode(b"p" * 32).decode("ascii")}
         ),

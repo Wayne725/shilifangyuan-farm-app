@@ -11,7 +11,6 @@ python-multipart>=0.0.20,<1
 email-validator>=2.2,<3
 httpx>=0.28,<1
 cryptography>=44,<46
-sendgrid>=6.11,<7
 boto3>=1.35,<2
 pytest>=8.3,<9
 pytest-asyncio>=0.25,<1

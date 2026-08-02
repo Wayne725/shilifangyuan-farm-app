@@ -94,8 +94,8 @@ def test_secure_environments_accept_long_nondefault_secrets() -> None:
         cloudflare_r2_access_key_id="access-key",
         cloudflare_r2_secret_access_key="secret-key",
         cloudflare_r2_bucket="private-documents",
-        sendgrid_api_key="SG.test-secret",
-        sendgrid_from_email="verified@example.test",
+        mailersend_api_token="mlsn.test-secret",
+        mailersend_from_email="verified@example.test",
         pii_encryption_keys_json=json.dumps(
             {
                 "v1": base64.b64encode(b"p" * 32).decode("ascii"),
@@ -139,7 +139,7 @@ def test_sandbox_requires_payment_and_invoice_credentials() -> None:
         assert name in message
 
 
-def test_sandbox_requires_sendgrid_credentials() -> None:
+def test_sandbox_requires_mailersend_credentials() -> None:
     runtime_settings = settings(
         environment="sandbox",
         jwt_secret="j" * 32,
@@ -151,8 +151,8 @@ def test_sandbox_requires_sendgrid_credentials() -> None:
         runtime_settings.validate_runtime_secrets()
 
     message = str(error.value)
-    assert "SENDGRID_API_KEY" in message
-    assert "SENDGRID_FROM_EMAIL" in message
+    assert "MAILERSEND_API_TOKEN" in message
+    assert "MAILERSEND_FROM_EMAIL" in message
 
 
 def test_sandbox_requires_a_reset_confirmation_secret() -> None:
