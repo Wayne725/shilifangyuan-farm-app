@@ -41,6 +41,8 @@ from app.integrations.sendgrid import (
 from app.models import (
     InventoryReservation,
     ExternalEvent,
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     GroupCampaign,
     GroupDecisionStatus,
@@ -49,6 +51,7 @@ from app.models import (
     InvoiceStatus,
     MembershipType,
     Order,
+    OrderFulfillment,
     OrderItem,
     OrderKind,
     PaymentAttempt,
@@ -56,6 +59,10 @@ from app.models import (
     Product,
     Refund,
     ReservationStatus,
+    Shipment,
+    ShipmentStatus,
+    ShippingChannel,
+    ShippingTemperature,
     TaxType,
     TargetType,
     User,
@@ -522,6 +529,62 @@ async def test_picked_up_order_invoice_is_queried_then_issued_once(
     assert adapter.issue_count == 1
     assert invoice.status == InvoiceStatus.ISSUED
     assert invoice.random_number == "1234"
+
+
+@pytest.mark.asyncio
+async def test_delivered_logistics_invoice_includes_shipping_fee(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order.amount_total = 360
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.invoice_status = InvoiceStatus.PENDING
+    order.fulfillment_method = FulfillmentMethod.ECPAY_LOGISTICS
+    order.fulfillment = OrderFulfillment(
+        method=FulfillmentMethod.ECPAY_LOGISTICS,
+        status=FulfillmentState.DELIVERED,
+        shipment=Shipment(
+            channel=ShippingChannel.HOME_DELIVERY,
+            temperature=ShippingTemperature.AMBIENT,
+            status=ShipmentStatus.DELIVERED,
+            shipping_fee=160,
+        ),
+    )
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        issued_request = None
+
+        async def query_invoice(self, relate_number):
+            return {"RtnCode": 0, "RtnMsg": "not found"}
+
+        async def issue_invoice(self, request):
+            self.issued_request = request
+            return InvoiceIssueResult(
+                relate_number=request.relate_number,
+                invoice_number="AB12345679",
+                invoice_date="2026-07-29 12:30:00",
+                random_number="5678",
+                raw={"RtnCode": 1, "InvoiceNo": "AB12345679"},
+            )
+
+    adapter = InvoiceAdapter()
+    await issue_picked_up_order_invoice(database_session, order.id, adapter)
+
+    assert adapter.issued_request is not None
+    actual_lines = [
+        (line.name, line.amount, line.tax_type)
+        for line in adapter.issued_request.items
+    ]
+    assert actual_lines == [
+        ("測試白米", 200, "1"),
+        ("運費", 160, "1"),
+    ]
+    assert (
+        sum(line.amount for line in adapter.issued_request.items)
+        == order.amount_total
+    )
 
 
 @pytest.mark.asyncio

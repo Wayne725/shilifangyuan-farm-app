@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -14,6 +15,7 @@ import app.jobs as jobs_module
 from app.auth import make_token_pair
 from app.config import Settings
 from app.database import Base, get_session
+from app.domain import order_available_actions
 from app.integrations.ecpay import CheckoutForm
 from app.integrations.invoice import InvoiceIssueResult
 from app.integrations.invoice_service import issue_picked_up_order_invoice
@@ -28,6 +30,8 @@ from app.jobs import (
     _reconcile_expired_payments,
     _reconcile_meal_events,
     _reconcile_member_proposals,
+    schedule_background_reconcile,
+    should_reconcile_now,
 )
 from app.models import (
     Activity,
@@ -99,6 +103,43 @@ class FakePaymentAdapter:
             **self.query_result,
             "MerchantTradeNo": merchant_trade_no,
         }
+
+
+@pytest.mark.asyncio
+async def test_background_reconcile_is_single_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    async def fake_lazy_reconcile(session, settings):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(jobs_module, "SessionLocal", SessionContext)
+    monkeypatch.setattr(jobs_module, "lazy_reconcile", fake_lazy_reconcile)
+
+    first = schedule_background_reconcile(payment_settings())
+    await started.wait()
+    second = schedule_background_reconcile(payment_settings())
+    await asyncio.sleep(0)
+
+    assert second is first
+    assert calls == 1
+    assert should_reconcile_now() is False
+
+    release.set()
+    await first
 
 
 def payment_settings() -> Settings:
@@ -477,6 +518,135 @@ async def test_duplicate_membership_charge_payment_records_sandbox_refund(
 
 
 @pytest.mark.asyncio
+async def test_late_final_charge_preserves_active_membership_and_refunds_once(
+    database_session,
+    fake_payment,
+) -> None:
+    user, membership, admission, capital = await make_pending_membership(
+        database_session
+    )
+    settings = payment_settings()
+    now = datetime(2026, 7, 31, 2, 0, tzinfo=timezone.utc)
+    admission.status = MembershipChargeStatus.PAID
+    admission.paid_at = now
+    admission.receipt_number = "SLFR-20260731-ADMISSION"
+    await database_session.commit()
+
+    old_attempt = await create_membership_payment_attempt(
+        database_session,
+        capital.id,
+        user,
+        settings,
+        now=now,
+    )
+    old_attempt.status = PaymentStatus.EXPIRED
+    await database_session.commit()
+    current_attempt = await create_membership_payment_attempt(
+        database_session,
+        capital.id,
+        user,
+        settings,
+        now=now + timedelta(minutes=16),
+    )
+    repository = SQLAlchemyPaymentCallbackRepository(database_session)
+    current_result = await repository.apply_ecpay_payment_callback(
+        "membership-final-current",
+        successful_callback(
+            current_attempt,
+            now + timedelta(minutes=17),
+            "MEMBER-FINAL-CURRENT",
+        ),
+    )
+    await database_session.refresh(membership)
+    await database_session.refresh(capital)
+    original_receipt = capital.receipt_number
+
+    assert current_result == "paid"
+    assert membership.status == MembershipStatus.ACTIVE
+    assert capital.status == MembershipChargeStatus.PAID
+    assert original_receipt
+
+    late_payload = successful_callback(
+        old_attempt,
+        now + timedelta(minutes=5),
+        "MEMBER-FINAL-LATE",
+    )
+    late_result = await repository.apply_ecpay_payment_callback(
+        "membership-final-old-late",
+        late_payload,
+    )
+    await database_session.refresh(membership)
+    await database_session.refresh(capital)
+
+    assert late_result == "late_paid_refund_required"
+    assert membership.status == MembershipStatus.ACTIVE
+    assert capital.status == MembershipChargeStatus.PAID
+    assert capital.receipt_number == original_receipt
+    assert await database_session.scalar(
+        select(func.count(Refund.id)).where(
+            Refund.membership_charge_id == capital.id
+        )
+    ) == 1
+
+    duplicate_result = await repository.apply_ecpay_payment_callback(
+        "membership-final-old-late-second-event",
+        late_payload,
+    )
+    assert duplicate_result == "duplicate"
+    assert await database_session.scalar(
+        select(func.count(Refund.id)).where(
+            Refund.membership_charge_id == capital.id
+        )
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_membership_payment_after_termination_is_refunded(
+    database_session,
+    fake_payment,
+) -> None:
+    user, membership, _admission, capital = await make_pending_membership(
+        database_session
+    )
+    now = datetime(2026, 7, 31, 2, 0, tzinfo=timezone.utc)
+    attempt = await create_membership_payment_attempt(
+        database_session,
+        capital.id,
+        user,
+        payment_settings(),
+        now=now,
+    )
+    membership.status = MembershipStatus.TERMINATED
+    membership.ended_at = now + timedelta(minutes=1)
+    membership.status_reason = "管理員終止待付款會籍"
+    await database_session.commit()
+
+    result = await SQLAlchemyPaymentCallbackRepository(
+        database_session
+    ).apply_ecpay_payment_callback(
+        "membership-terminated-late-payment",
+        successful_callback(
+            attempt,
+            now + timedelta(minutes=2),
+            "MEMBER-TERMINATED-LATE",
+        ),
+    )
+    await database_session.refresh(membership)
+    await database_session.refresh(capital)
+    await database_session.refresh(attempt)
+
+    assert result == "late_paid_refund_required"
+    assert membership.status == MembershipStatus.TERMINATED
+    assert capital.status == MembershipChargeStatus.REFUNDED
+    assert attempt.status == PaymentStatus.LATE_PAID_REFUND_REQUIRED
+    assert await database_session.scalar(
+        select(func.count(Refund.id)).where(
+            Refund.membership_charge_id == capital.id
+        )
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_meal_payment_reserves_expires_releases_and_success_consumes(
     database_session,
     fake_payment,
@@ -627,6 +797,74 @@ async def test_meal_valid_hold_reacquires_after_ordering_deadline(
 
 
 @pytest.mark.asyncio
+async def test_meal_payment_arriving_after_event_cancel_is_refunded(
+    database_session,
+    fake_payment,
+) -> None:
+    now = datetime(2026, 7, 31, 2, 0, tzinfo=timezone.utc)
+    user, event, offering, order = await make_meal_order(
+        database_session,
+        now=now,
+        ordering_ends_at=now + timedelta(hours=2),
+        order_number="MEAL-CANCEL-RACE-0001",
+    )
+    attempt = await create_payment_attempt(
+        database_session,
+        order.id,
+        user,
+        payment_settings(),
+        now=now,
+    )
+    attempt_id = attempt.id
+    reservation = await database_session.scalar(
+        select(InventoryReservation).where(
+            InventoryReservation.payment_attempt_id == attempt_id
+        )
+    )
+    assert reservation is not None
+    event.status = MealEventStatus.CANCELLED
+    await database_session.commit()
+
+    result = await SQLAlchemyPaymentCallbackRepository(
+        database_session
+    ).apply_ecpay_payment_callback(
+        "meal-payment-after-event-cancel",
+        successful_callback(
+            attempt,
+            now + timedelta(minutes=5),
+            "MEAL-CANCELLED-TRADE",
+        ),
+    )
+    await database_session.refresh(order)
+    await database_session.refresh(offering)
+    await database_session.refresh(reservation)
+    refund = await database_session.scalar(
+        select(Refund).where(Refund.order_id == order.id)
+    )
+    refund_event = None
+    if refund is not None:
+        refund_event = await database_session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.event_type == "refund.requested",
+                OutboxEvent.aggregate_id == refund.id,
+            )
+        )
+    attempt_status = await database_session.scalar(
+        select(PaymentAttempt.status).where(PaymentAttempt.id == attempt_id)
+    )
+
+    assert result == "late_paid_refund_required"
+    assert attempt_status == PaymentStatus.LATE_PAID_REFUND_REQUIRED
+    assert order.payment_status == PaymentStatus.LATE_PAID_REFUND_REQUIRED
+    assert reservation.status == ReservationStatus.RELEASED
+    assert offering.reserved_quantity == 0
+    assert offering.paid_quantity == 0
+    assert refund is not None
+    assert refund.status.value == "pending"
+    assert refund_event is not None
+
+
+@pytest.mark.asyncio
 async def test_meal_no_show_reconcile_issues_invoice(
     database_session,
 ) -> None:
@@ -663,7 +901,8 @@ async def test_meal_no_show_reconcile_issues_invoice(
     assert event.status == MealEventStatus.COMPLETED
     assert fulfillment.status == FulfillmentState.NO_SHOW
     assert fulfillment.fulfilled_at.replace(tzinfo=timezone.utc) == now
-    assert order.fulfillment_status == FulfillmentStatus.READY_FOR_PICKUP
+    assert order.fulfillment_status == FulfillmentStatus.PICKED_UP
+    assert "refund" not in order_available_actions(order, viewer_is_admin=True)
     assert order.invoice_status == InvoiceStatus.PENDING
     assert await database_session.scalar(
         select(func.count(Refund.id)).where(Refund.order_id == order.id)

@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, useLocalSearchParams } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Image,
   Platform,
@@ -30,6 +29,7 @@ import {
   money,
 } from "../../src/lib/format";
 import { imageFor } from "../../src/lib/images";
+import { openPaymentPage } from "../../src/lib/payment";
 import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
@@ -52,10 +52,48 @@ export default function CampaignDetailScreen() {
   const [logisticsProvider, setLogisticsProvider] =
     useState<LogisticsProvider>("home_delivery");
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [recipientName, setRecipientName] = useState(user?.display_name ?? "");
+  const [recipientPhone, setRecipientPhone] = useState("");
   const query = useQuery({
     queryKey: ["campaign", id],
     queryFn: () => api.campaign(id),
+    refetchInterval: 30000,
   });
+  const rates = useQuery({
+    queryKey: ["shipping-rates"],
+    queryFn: api.shippingRates,
+  });
+  const campaignTemperature = query.data?.temperature_zone ?? "ambient";
+  const quote = useQuery({
+    queryKey: [
+      "campaign-quote",
+      id,
+      quantity,
+      fulfillmentMethod,
+      logisticsProvider,
+    ],
+    queryFn: () =>
+      api.quoteCampaign(id, {
+        quantity,
+        fulfillment_method: fulfillmentMethod,
+        ...(fulfillmentMethod === "ecpay_logistics"
+          ? { shipping_channel: logisticsProvider }
+          : {}),
+      }),
+    enabled: isAuthenticated && Boolean(query.data),
+    retry: false,
+  });
+
+  useEffect(() => {
+    const campaign = query.data;
+    if (
+      campaign?.can_ship &&
+      campaign.allowed_logistics.length > 0 &&
+      !campaign.allowed_logistics.includes(logisticsProvider)
+    ) {
+      setLogisticsProvider(campaign.allowed_logistics[0]!);
+    }
+  }, [logisticsProvider, query.data]);
 
   const join = useMutation({
     mutationFn: async () => {
@@ -70,29 +108,53 @@ export default function CampaignDetailScreen() {
         ...(carrier === "mobile_barcode"
           ? { invoice_carrier_value: barcode }
           : {}),
-        fulfillment_method: fulfillmentMethod,
-        ...(fulfillmentMethod === "ecpay_logistics"
-          ? {
-              logistics_provider: logisticsProvider,
-              delivery_address: deliveryAddress.trim(),
-            }
-          : {}),
       });
-      const payment = await api.createPaymentAttempt(order.id);
-      return { order, payment };
+      try {
+        if (fulfillmentMethod === "ecpay_logistics") {
+          const selection = await api.createLogisticsSelection(order.id, {
+            channel: logisticsProvider,
+            temperature: campaignTemperature,
+            recipient_name: recipientName.trim(),
+            recipient_phone: recipientPhone.trim(),
+            shipping_address: deliveryAddress.trim(),
+          });
+          if (selection.selection_url) {
+            return { order, payment: null, selection, setupFailed: false };
+          }
+        }
+        const payment = await api.createPaymentAttempt(order.id);
+        return { order, payment, selection: null, setupFailed: false };
+      } catch {
+        return {
+          order,
+          payment: null,
+          selection: null,
+          setupFailed: true,
+        };
+      }
     },
-    onSuccess: async ({ order, payment }) => {
+    onSuccess: async ({ order, payment, selection, setupFailed }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["campaigns"] }),
         queryClient.invalidateQueries({ queryKey: ["campaign", id] }),
         queryClient.invalidateQueries({ queryKey: ["orders"] }),
       ]);
-      if (payment.payment_url) {
-        if (Platform.OS === "web") {
-          window.location.assign(payment.payment_url);
-          return;
-        }
-        await WebBrowser.openBrowserAsync(payment.payment_url);
+      if (setupFailed) {
+        router.replace({
+          pathname: "/order/[id]",
+          params: { id: order.id, setup: "retry" },
+        });
+        return;
+      }
+      if (selection?.selection_url) {
+        await openPaymentPage(selection.selection_url);
+        if (Platform.OS === "web") return;
+        router.replace({ pathname: "/order/[id]", params: { id: order.id } });
+        return;
+      }
+      if (payment?.payment_url) {
+        await openPaymentPage(payment.payment_url);
+        if (Platform.OS === "web") return;
       }
       router.replace({
         pathname: "/order/[id]",
@@ -102,17 +164,35 @@ export default function CampaignDetailScreen() {
   });
 
   if (query.isLoading) return <LoadingState label="載入團購資料" />;
-  if (!query.data) {
+  if (query.isError || !query.data) {
     return (
       <Screen>
         <PageHeader onBack={() => router.back()} title="團購詳情" />
-        <EmptyState description="這個共同購買可能已經結束。" title="找不到團購" />
+        <EmptyState
+          action={query.isError ? "重新載入" : undefined}
+          description={
+            query.isError
+              ? "目前無法取得團購資料，尚未建立任何訂單。"
+              : "這個共同購買可能已經結束。"
+          }
+          onAction={query.isError ? () => query.refetch() : undefined}
+          title={query.isError ? "團購載入失敗" : "找不到團購"}
+        />
       </Screen>
     );
   }
 
   const campaign = query.data;
-  const membership = user?.membership_type ?? "nonmember";
+  const availableProviders = campaign.can_ship
+    ? campaign.allowed_logistics
+    : [];
+  const selectedRate = (rates.data ?? []).find(
+    (rate) =>
+      rate.channel === logisticsProvider &&
+      rate.temperature === campaignTemperature,
+  );
+  const membership =
+    quote.data?.membership_type ?? user?.membership_type ?? "nonmember";
   const unitPrice =
     membership === "member"
       ? campaign.member_price
@@ -122,18 +202,13 @@ export default function CampaignDetailScreen() {
     Math.min(campaign.per_user_cap, campaign.available_quantity),
   );
   const isOpen =
-    campaign.intake_status === "open" && campaign.available_quantity > 0;
+    campaign.intake_status === "open" &&
+    campaign.available_quantity > 0 &&
+    Date.now() < Date.parse(campaign.deadline);
   const progress = Math.min(
     100,
     (campaign.paid_quantity / campaign.min_paid_quantity) * 100,
   );
-  const subtotal = unitPrice * quantity;
-  const shippingFee =
-    fulfillmentMethod === "ecpay_logistics" && subtotal < 1500
-      ? logisticsProvider === "home_delivery"
-        ? 160
-        : 70
-      : 0;
 
   return (
     <Screen>
@@ -197,7 +272,11 @@ export default function CampaignDetailScreen() {
           <InfoRow
             icon="storefront-outline"
             label="取貨方式"
-            value="合作社現場取貨"
+            value={
+              campaign.can_ship
+                ? "合作社現場取貨／綠界物流配送"
+                : "合作社現場取貨"
+            }
           />
           <View style={styles.rule} />
           <InfoRow
@@ -238,9 +317,15 @@ export default function CampaignDetailScreen() {
                     value: "cooperative_pickup" as const,
                     label: "合作社取貨",
                   },
-                  { value: "ecpay_logistics" as const, label: "綠界物流" },
+                  ...(campaign.can_ship
+                    ? [{ value: "ecpay_logistics" as const, label: "綠界物流" }]
+                    : []),
                 ].map((option) => (
                   <Pressable
+                    accessibilityRole="radio"
+                    accessibilityState={{
+                      selected: fulfillmentMethod === option.value,
+                    }}
                     key={option.value}
                     onPress={() => setFulfillmentMethod(option.value)}
                     style={[
@@ -269,8 +354,16 @@ export default function CampaignDetailScreen() {
                       { value: "seven_eleven" as const, label: "7-ELEVEN" },
                       { value: "family_mart" as const, label: "全家" },
                       { value: "hilife" as const, label: "萊爾富" },
-                    ].map((provider) => (
+                    ]
+                      .filter((provider) =>
+                        availableProviders.includes(provider.value),
+                      )
+                      .map((provider) => (
                       <Pressable
+                        accessibilityRole="radio"
+                        accessibilityState={{
+                          selected: logisticsProvider === provider.value,
+                        }}
                         key={provider.value}
                         onPress={() => setLogisticsProvider(provider.value)}
                         style={[
@@ -291,6 +384,23 @@ export default function CampaignDetailScreen() {
                       </Pressable>
                     ))}
                   </View>
+                  <Text style={styles.fieldLabel}>收件人姓名</Text>
+                  <TextInput
+                    onChangeText={setRecipientName}
+                    placeholder="收件人姓名"
+                    placeholderTextColor={colors.sage}
+                    style={styles.input}
+                    value={recipientName}
+                  />
+                  <Text style={styles.fieldLabel}>收件人電話</Text>
+                  <TextInput
+                    keyboardType="phone-pad"
+                    onChangeText={setRecipientPhone}
+                    placeholder="09xxxxxxxx 或市話"
+                    placeholderTextColor={colors.sage}
+                    style={styles.input}
+                    value={recipientPhone}
+                  />
                   <TextInput
                     onChangeText={setDeliveryAddress}
                     placeholder="配送地址或門市"
@@ -299,8 +409,24 @@ export default function CampaignDetailScreen() {
                     value={deliveryAddress}
                   />
                   <Text style={styles.fieldHint}>
-                    滿 $1,500 免運；團購失敗時商品與運費一併退款。
+                    {selectedRate
+                      ? `滿 ${money(selectedRate.free_shipping_threshold)} 免運；團購失敗時商品與運費一併退款。`
+                      : "目前找不到適用運費，請改選合作社取貨。"}
                   </Text>
+                  {rates.isError ? (
+                    <>
+                      <InlineMessage
+                        text="運費資料載入失敗，重新載入前無法建立物流訂單。"
+                        tone="danger"
+                      />
+                      <Button
+                        compact
+                        label="重新載入運費"
+                        onPress={() => rates.refetch()}
+                        variant="secondary"
+                      />
+                    </>
+                  ) : null}
                 </>
               ) : null}
 
@@ -322,6 +448,8 @@ export default function CampaignDetailScreen() {
                   { value: "mobile_barcode" as const, label: "手機條碼" },
                 ].map((option) => (
                   <Pressable
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: carrier === option.value }}
                     key={option.value}
                     onPress={() => setCarrier(option.value)}
                     style={[
@@ -356,20 +484,50 @@ export default function CampaignDetailScreen() {
                   tone="danger"
                 />
               ) : null}
+              {quote.isError ? (
+                <InlineMessage
+                  text="後端目前無法完成報價，重新計價前不會建立訂單。"
+                  tone="danger"
+                />
+              ) : null}
               <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>付款金額</Text>
+                <Text style={styles.totalLabel}>後端報價</Text>
                 <Text style={styles.total}>
-                  {money(subtotal + shippingFee)}
+                  {quote.data ? money(quote.data.amount_total) : "計價中"}
                 </Text>
               </View>
+              {quote.data ? (
+                <Text style={styles.fieldHint}>
+                  商品 {money(quote.data.product_subtotal)}
+                  {quote.data.shipping_fee > 0
+                    ? `＋運費 ${money(quote.data.shipping_fee)}`
+                    : fulfillmentMethod === "ecpay_logistics"
+                      ? "＋免運"
+                      : ""}
+                  ；建單時會再次驗證社員資格、名額與費率。
+                </Text>
+              ) : null}
               <Button
                 disabled={
                   !email.includes("@") ||
+                  quote.isLoading ||
+                  quote.isError ||
+                  !quote.data ||
                   (fulfillmentMethod === "ecpay_logistics" &&
-                    !deliveryAddress.trim())
+                    (!deliveryAddress.trim() ||
+                      !recipientName.trim() ||
+                      recipientPhone.trim().length < 8 ||
+                      rates.isLoading ||
+                      rates.isError ||
+                      !availableProviders.includes(logisticsProvider) ||
+                      !selectedRate))
                 }
                 icon="card-outline"
-                label="確認並前往付款"
+                label={
+                  fulfillmentMethod === "ecpay_logistics"
+                    ? "下一步：選擇物流"
+                    : "確認並前往付款"
+                }
                 loading={join.isPending}
                 onPress={() => join.mutate()}
               />
@@ -383,7 +541,9 @@ export default function CampaignDetailScreen() {
         ) : (
           <InlineMessage
             text={
-              campaign.intake_status === "full"
+              Date.now() >= Date.parse(campaign.deadline)
+                ? "本團已截止，請留意後續成團與履約通知。"
+                : campaign.intake_status === "full"
                 ? "本團已額滿，暫不接受新的加入。"
                 : "目前暫停加入，請留意後續成團與取貨通知。"
             }
@@ -499,6 +659,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     gap: 7,
+    minHeight: 48,
     padding: 10,
   },
   carrierSelected: {

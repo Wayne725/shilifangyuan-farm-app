@@ -171,6 +171,29 @@ class Settings(BaseSettings):
             invalid_secrets.extend(
                 name for name in R2_REQUIRED_SETTINGS if not r2_values[name].strip()
             )
+            if not self.sendgrid_api_key.strip():
+                invalid_secrets.append("SENDGRID_API_KEY")
+            if (
+                not self.sendgrid_from_email.strip()
+                or "@" not in self.sendgrid_from_email
+            ):
+                invalid_secrets.append("SENDGRID_FROM_EMAIL")
+            if not self.ecpay_payment_merchant_id.strip():
+                invalid_secrets.append("ECPAY_PAYMENT_MERCHANT_ID")
+            if len(self.ecpay_payment_hash_key.encode("utf-8")) != 16:
+                invalid_secrets.append("ECPAY_PAYMENT_HASH_KEY（必須為 16 bytes）")
+            if len(self.ecpay_payment_hash_iv.encode("utf-8")) != 16:
+                invalid_secrets.append("ECPAY_PAYMENT_HASH_IV（必須為 16 bytes）")
+            if not self.ecpay_invoice_merchant_id.strip():
+                invalid_secrets.append("ECPAY_INVOICE_MERCHANT_ID")
+            if len(self.ecpay_invoice_hash_key.encode("utf-8")) != 16:
+                invalid_secrets.append(
+                    "ECPAY_INVOICE_HASH_KEY（必須為 16 bytes）"
+                )
+            if len(self.ecpay_invoice_hash_iv.encode("utf-8")) != 16:
+                invalid_secrets.append(
+                    "ECPAY_INVOICE_HASH_IV（必須為 16 bytes）"
+                )
             if not self.ecpay_logistics_merchant_id.strip():
                 invalid_secrets.append("ECPAY_LOGISTICS_MERCHANT_ID")
             if len(self.ecpay_logistics_hash_key.encode("utf-8")) != 16:

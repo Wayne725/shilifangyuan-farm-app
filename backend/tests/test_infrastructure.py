@@ -81,6 +81,35 @@ def test_secure_environments_accept_long_nondefault_secrets() -> None:
         jwt_secret="j" * 32,
         internal_reconcile_secret="r" * 32,
         demo_reset_confirmation="reset-code-strong",
+        ecpay_payment_merchant_id="3002607",
+        ecpay_payment_hash_key="pwFHCqoQZGmho4w6",
+        ecpay_payment_hash_iv="EkRm7iFT261dpevs",
+        ecpay_invoice_merchant_id="2000132",
+        ecpay_invoice_hash_key="ejCk326UnaZWKisg",
+        ecpay_invoice_hash_iv="q9jcZX8Ib9LM8wYk",
+        ecpay_logistics_merchant_id="2000132",
+        ecpay_logistics_hash_key="5294y06JbISpM5x9",
+        ecpay_logistics_hash_iv="v77hoKGq4kWxNNIS",
+        cloudflare_r2_account_id="account-id",
+        cloudflare_r2_access_key_id="access-key",
+        cloudflare_r2_secret_access_key="secret-key",
+        cloudflare_r2_bucket="private-documents",
+        sendgrid_api_key="SG.test-secret",
+        sendgrid_from_email="verified@example.test",
+        pii_encryption_keys_json=json.dumps(
+            {
+                "v1": base64.b64encode(b"p" * 32).decode("ascii"),
+            }
+        ),
+    ).validate_runtime_secrets()
+
+
+def test_sandbox_requires_payment_and_invoice_credentials() -> None:
+    runtime_settings = settings(
+        environment="sandbox",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        demo_reset_confirmation="reset-code-strong",
         ecpay_logistics_merchant_id="2000132",
         ecpay_logistics_hash_key="5294y06JbISpM5x9",
         ecpay_logistics_hash_iv="v77hoKGq4kWxNNIS",
@@ -93,7 +122,37 @@ def test_secure_environments_accept_long_nondefault_secrets() -> None:
                 "v1": base64.b64encode(b"p" * 32).decode("ascii"),
             }
         ),
-    ).validate_runtime_secrets()
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        runtime_settings.validate_runtime_secrets()
+
+    message = str(error.value)
+    for name in (
+        "ECPAY_PAYMENT_MERCHANT_ID",
+        "ECPAY_PAYMENT_HASH_KEY",
+        "ECPAY_PAYMENT_HASH_IV",
+        "ECPAY_INVOICE_MERCHANT_ID",
+        "ECPAY_INVOICE_HASH_KEY",
+        "ECPAY_INVOICE_HASH_IV",
+    ):
+        assert name in message
+
+
+def test_sandbox_requires_sendgrid_credentials() -> None:
+    runtime_settings = settings(
+        environment="sandbox",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        demo_reset_confirmation="reset-code-strong",
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        runtime_settings.validate_runtime_secrets()
+
+    message = str(error.value)
+    assert "SENDGRID_API_KEY" in message
+    assert "SENDGRID_FROM_EMAIL" in message
 
 
 def test_sandbox_requires_a_reset_confirmation_secret() -> None:

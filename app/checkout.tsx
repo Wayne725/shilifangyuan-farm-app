@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Platform,
   Pressable,
@@ -12,6 +12,7 @@ import {
 
 import {
   Button,
+  EmptyState,
   InlineMessage,
   LoadingState,
   PageHeader,
@@ -43,6 +44,7 @@ export default function CheckoutScreen() {
   const [recipientName, setRecipientName] = useState(user?.display_name ?? "");
   const [recipientPhone, setRecipientPhone] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [submittedOrderId, setSubmittedOrderId] = useState<string | null>(null);
   const quote = useQuery({
     queryKey: ["quote", items],
     queryFn: () => api.quote(items),
@@ -75,23 +77,42 @@ export default function CheckoutScreen() {
 
       // Pickup can go straight to payment. Shipping has to visit ECPay's
       // picker first, because that is what fixes the address and the fee.
-      if (fulfillmentMethod !== "ecpay_logistics") {
-        const payment = await api.createPaymentAttempt(order.id);
-        return { order, payment, selection: null };
+      try {
+        if (fulfillmentMethod !== "ecpay_logistics") {
+          const payment = await api.createPaymentAttempt(order.id);
+          return { order, payment, selection: null, setupFailed: false };
+        }
+        const selection = await api.createLogisticsSelection(order.id, {
+          channel: logisticsProvider,
+          temperature: cartTemperature,
+          recipient_name: recipientName.trim(),
+          recipient_phone: recipientPhone.trim(),
+          shipping_address: deliveryAddress.trim(),
+        });
+        return { order, payment: null, selection, setupFailed: false };
+      } catch {
+        return {
+          order,
+          payment: null,
+          selection: null,
+          setupFailed: true,
+        };
       }
-      const selection = await api.createLogisticsSelection(order.id, {
-        channel: logisticsProvider,
-        temperature: cartTemperature,
-        recipient_name: recipientName.trim(),
-        recipient_phone: recipientPhone.trim(),
-        shipping_address: deliveryAddress.trim(),
-      });
-      return { order, payment: null, selection };
     },
-    onSuccess: async ({ order, payment, selection }) => {
+    onSuccess: async ({ order, payment, selection, setupFailed }) => {
+      setSubmittedOrderId(order.id);
       clear();
+      if (setupFailed) {
+        router.replace({
+          pathname: "/order/[id]",
+          params: { id: order.id, setup: "retry" },
+        });
+        return;
+      }
       if (selection?.selection_url) {
         await openPaymentPage(selection.selection_url);
+        if (Platform.OS === "web") return;
+        router.replace({ pathname: "/order/[id]", params: { id: order.id } });
         return;
       }
       if (payment?.payment_url) {
@@ -105,9 +126,27 @@ export default function CheckoutScreen() {
     },
   });
 
+  useEffect(() => {
+    if (!items.length && !submittedOrderId && !submit.isPending) {
+      router.replace("/(tabs)/cart");
+    }
+  }, [items.length, submittedOrderId, submit.isPending]);
+
   if (!items.length) {
-    router.replace("/(tabs)/cart");
     return null;
+  }
+  if (quote.isError) {
+    return (
+      <Screen>
+        <PageHeader onBack={() => router.back()} title="確認結帳" />
+        <EmptyState
+          action="重新計價"
+          description="目前無法確認庫存與實際售價，尚未建立訂單。"
+          onAction={() => quote.refetch()}
+          title="訂單金額載入失敗"
+        />
+      </Screen>
+    );
   }
   const productAmount = quote.data?.amount_total ?? 0;
   const cartProducts = (products.data ?? []).filter((product) =>
@@ -211,6 +250,10 @@ export default function CheckoutScreen() {
               },
             ].map((option) => (
               <Pressable
+                accessibilityRole="radio"
+                accessibilityState={{
+                  selected: fulfillmentMethod === option.value,
+                }}
                 key={option.value}
                 onPress={() => setFulfillmentMethod(option.value)}
                 style={[
@@ -292,6 +335,23 @@ export default function CheckoutScreen() {
                     tone="danger"
                   />
                 ) : null}
+                {products.isError || rates.isError ? (
+                  <>
+                    <InlineMessage
+                      text="配送商品或運費資料載入失敗，重新載入前無法建立物流訂單。"
+                      tone="danger"
+                    />
+                    <Button
+                      compact
+                      label="重新載入配送資料"
+                      onPress={() => {
+                        products.refetch();
+                        rates.refetch();
+                      }}
+                      variant="secondary"
+                    />
+                  </>
+                ) : null}
                 <Text style={styles.shippingHint}>
                   {rateFor(logisticsProvider)
                     ? `商品滿 ${money(
@@ -362,6 +422,8 @@ export default function CheckoutScreen() {
                 { value: "mobile_barcode" as const, label: "手機條碼" },
               ].map((option) => (
                 <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: carrier === option.value }}
                   key={option.value}
                   onPress={() => setCarrier(option.value)}
                   style={[
@@ -402,11 +464,16 @@ export default function CheckoutScreen() {
           ) : null}
           <Button
             disabled={
+              !quote.data ||
               !email.includes("@") ||
               (fulfillmentMethod === "ecpay_logistics" &&
                 (!deliveryAddress.trim() ||
                   !recipientName.trim() ||
                   recipientPhone.trim().length < 8 ||
+                  products.isLoading ||
+                  rates.isLoading ||
+                  products.isError ||
+                  rates.isError ||
                   incompatibleTemperature ||
                   missingRate ||
                   !availableProviders.includes(logisticsProvider)))
@@ -539,6 +606,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     gap: 7,
+    minHeight: 48,
     padding: 10,
   },
   carrierSelected: {

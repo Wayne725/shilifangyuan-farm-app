@@ -20,6 +20,8 @@ from app.models import (
     AdminAudit,
     ExternalEvent,
     FulfillmentMethod,
+    FulfillmentState,
+    FulfillmentStatus,
     InvoiceStatus,
     MembershipType,
     Order,
@@ -39,6 +41,7 @@ from app.models import (
     UserRole,
 )
 from app.routers.logistics import logistics_router
+from app.routers.orders import orders_router
 
 
 class FakeLogisticsAdapter:
@@ -151,6 +154,7 @@ async def logistics_context(database_session, monkeypatch):
     )
     application = FastAPI()
     application.include_router(logistics_router)
+    application.include_router(orders_router)
 
     async def override_get_session():
         yield database_session
@@ -159,13 +163,13 @@ async def logistics_context(database_session, monkeypatch):
     application.dependency_overrides[get_settings] = lambda: settings
 
     admin = User(
-        email="admin@example.test",
+        email="admin@example.com",
         display_name="管理員",
         password_hash="test",
         user_role=UserRole.ADMIN,
     )
     customer = User(
-        email="customer@example.test",
+        email="customer@example.com",
         display_name="測試社員",
         password_hash="test",
         user_role=UserRole.CUSTOMER,
@@ -333,6 +337,38 @@ async def prepare_formal_shipment(context) -> None:
     assert callback.status_code == 303
     order.payment_status = PaymentStatus.PAID
     await context["session"].commit()
+    preparing = await client.post(
+        f"/v1/orders/{order.id}/fulfillment",
+        json={"status": "preparing"},
+        headers=auth_headers(context["admin"]),
+    )
+    assert preparing.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_state", ["cancelled", "pickup_method"])
+async def test_formal_logistics_creation_rejects_non_shippable_order(
+    logistics_context,
+    invalid_state: str,
+) -> None:
+    context = logistics_context
+    await prepare_formal_shipment(context)
+    order = context["order"]
+    if invalid_state == "cancelled":
+        order.fulfillment_status = FulfillmentStatus.CANCELLED
+        order.fulfillment.status = FulfillmentState.CANCELLED
+    else:
+        order.fulfillment_method = FulfillmentMethod.COOPERATIVE_PICKUP
+        order.fulfillment.method = FulfillmentMethod.COOPERATIVE_PICKUP
+    await context["session"].commit()
+
+    response = await context["client"].post(
+        f"/v1/admin/orders/{order.id}/logistics/create",
+        headers=auth_headers(context["admin"]),
+    )
+
+    assert response.status_code == 409
+    assert context["adapter"].created_order is None
 
 
 @pytest.mark.asyncio

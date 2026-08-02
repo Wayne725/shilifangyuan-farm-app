@@ -67,6 +67,7 @@ export function fulfillmentStatusLabel(value: string) {
       ...fulfillmentLabels,
       pending: "待處理",
       ready: "可取餐",
+      awaiting_shipment: "待交寄",
       shipped: "配送中",
       delivered: "已送達",
       no_show: "逾時未取",

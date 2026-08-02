@@ -1,10 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-  Pressable,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -24,11 +24,15 @@ import {
   putDocumentToStorage,
 } from "../../src/lib/documentUpload";
 import { money } from "../../src/lib/format";
+import { confirmAction } from "../../src/lib/confirm";
 import { openPaymentPage } from "../../src/lib/payment";
 import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
-import type { MembershipApplication } from "../../src/types";
+import type {
+  MembershipApplication,
+  PaymentStatus,
+} from "../../src/types";
 
 const applicationLabels: Record<MembershipApplication["status"], string> = {
   draft: "填寫中",
@@ -44,6 +48,16 @@ const documentLabels = {
   id_back: "身分證反面測試檔",
   secondary: "第二證件測試檔",
 } as const;
+
+const paymentLabels: Record<PaymentStatus, string> = {
+  pending: "待付款",
+  paid: "已繳",
+  late_paid_refund_required: "待退款",
+  refund_pending: "退款處理中",
+  refunded: "已退款",
+  failed: "付款失敗",
+  expired: "已失效",
+};
 
 type FormState = {
   legal_name: string;
@@ -63,16 +77,32 @@ const emptyForm: FormState = {
   emergency_contact_phone: "",
 };
 
+type DirectoryFormState = {
+  is_public: boolean;
+  nickname: string;
+  expertise: string;
+  bio: string;
+};
+
+const emptyDirectoryForm: DirectoryFormState = {
+  is_public: false,
+  nickname: "",
+  expertise: "",
+  bio: "",
+};
+
 export default function MembersScreen() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, refreshUser, user } = useAuth();
   const queryClient = useQueryClient();
+  const params = useLocalSearchParams<{
+    membership_charge_id?: string;
+    payment?: string;
+  }>();
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [directoryForm, setDirectoryForm] =
+    useState<DirectoryFormState>(emptyDirectoryForm);
   const [message, setMessage] = useState("");
-  const membership = useQuery({
-    queryKey: ["membership"],
-    queryFn: api.membership,
-    enabled: isAuthenticated,
-  });
+  const [paymentSyncUntil, setPaymentSyncUntil] = useState(0);
   const application = useQuery({
     queryKey: ["membership-application"],
     queryFn: api.membershipApplication,
@@ -82,6 +112,33 @@ export default function MembersScreen() {
     queryKey: ["membership-charges"],
     queryFn: api.membershipCharges,
     enabled: isAuthenticated,
+    refetchInterval: (query) =>
+      paymentSyncUntil > Date.now() &&
+      query.state.data?.some((charge) => charge.payment_status === "pending")
+        ? 4000
+        : false,
+  });
+  const allChargesPaid = Boolean(charges.data?.length) &&
+    charges.data!.every((charge) => charge.payment_status === "paid");
+  const membership = useQuery({
+    queryKey: ["membership"],
+    queryFn: api.membership,
+    enabled: isAuthenticated,
+    refetchInterval: (query) =>
+      paymentSyncUntil > Date.now() &&
+      allChargesPaid &&
+      query.state.data?.status === "pending_payment"
+        ? 2000
+        : false,
+  });
+  const authMembershipSync = useQuery({
+    queryKey: ["auth-membership-sync", user?.id],
+    queryFn: refreshUser,
+    enabled:
+      membership.data?.status === "active" &&
+      user?.membership_type !== "member",
+    retry: 4,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   });
   const directory = useQuery({
     queryKey: ["member-directory"],
@@ -92,14 +149,40 @@ export default function MembersScreen() {
   useEffect(() => {
     if (!application.data) return;
     setForm({
-      legal_name: application.data.legal_name,
-      phone: application.data.phone,
-      birth_date: application.data.birth_date,
-      address: application.data.address,
-      emergency_contact_name: application.data.emergency_contact_name,
-      emergency_contact_phone: application.data.emergency_contact_phone,
+      legal_name: application.data.legal_name ?? "",
+      phone: application.data.phone ?? "",
+      birth_date: application.data.birth_date ?? "",
+      address: application.data.address ?? "",
+      emergency_contact_name: application.data.emergency_contact_name ?? "",
+      emergency_contact_phone: application.data.emergency_contact_phone ?? "",
     });
   }, [application.data]);
+
+  useEffect(() => {
+    if (!membership.data) return;
+    setDirectoryForm({
+      is_public: membership.data.directory_visible,
+      nickname: membership.data.nickname,
+      expertise: membership.data.expertise ?? "",
+      bio: membership.data.bio ?? "",
+    });
+  }, [membership.data]);
+
+  useEffect(() => {
+    if (params.payment !== "return") return;
+    setPaymentSyncUntil(Date.now() + 60_000);
+    setMessage("已從綠界返回，正在確認付款與會籍狀態");
+  }, [params.membership_charge_id, params.payment]);
+
+  useEffect(() => {
+    if (
+      paymentSyncUntil > Date.now() &&
+      allChargesPaid &&
+      membership.data?.status === "pending_payment"
+    ) {
+      void membership.refetch();
+    }
+  }, [allChargesPaid, membership.data?.status, paymentSyncUntil]);
 
   const refresh = async () => {
     await Promise.all([
@@ -128,7 +211,6 @@ export default function MembersScreen() {
         await save.mutateAsync();
       }
       const picked = await pickMembershipDocument();
-      if (!picked) return null;
       const upload = await api.membershipDocumentUploadUrl({
         document_type,
         content_type: picked.content_type,
@@ -154,10 +236,68 @@ export default function MembersScreen() {
     },
   });
   const submit = useMutation({
-    mutationFn: api.submitMembershipApplication,
+    mutationFn: () =>
+      api.submitMembershipApplication({
+        ...form,
+        consented_at:
+          application.data?.consented_at ?? new Date().toISOString(),
+      }),
     onSuccess: async () => {
       setMessage("入社申請已送出");
       await refresh();
+    },
+  });
+  const removeDocument = useMutation({
+    mutationFn: async (documentId: string) => {
+      const confirmed = await confirmAction({
+        title: "移除測試證件",
+        message: "移除後必須重新加入測試檔，才能再次送出申請。確定移除嗎？",
+        confirmLabel: "確認移除",
+        destructive: true,
+      });
+      if (!confirmed) return false;
+      await api.deleteMembershipDocument(documentId);
+      return true;
+    },
+    onSuccess: async (removed) => {
+      if (!removed) return;
+      setMessage("測試證件已移除");
+      await refresh();
+    },
+  });
+  const withdraw = useMutation({
+    mutationFn: async () => {
+      const confirmed = await confirmAction({
+        title: "撤回入社申請",
+        message:
+          "撤回後此申請將結束；已繳款項會建立 Sandbox 退款紀錄。確定要撤回嗎？",
+        confirmLabel: "確認撤回",
+        destructive: true,
+      });
+      if (!confirmed) return null;
+      return api.withdrawMembershipApplication();
+    },
+    onSuccess: async (result) => {
+      if (!result) return;
+      setMessage("入社申請已撤回");
+      await refresh();
+    },
+  });
+  const updateDirectory = useMutation({
+    mutationFn: () =>
+      api.updateMemberDirectory({
+        ...directoryForm,
+        nickname: directoryForm.nickname.trim(),
+        expertise: directoryForm.expertise.trim(),
+        bio: directoryForm.bio.trim(),
+        avatar_url: membership.data?.avatar_url ?? null,
+      }),
+    onSuccess: async () => {
+      setMessage("公開名錄設定已更新");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["membership"] }),
+        queryClient.invalidateQueries({ queryKey: ["member-directory"] }),
+      ]);
     },
   });
   const pay = useMutation({
@@ -166,14 +306,22 @@ export default function MembersScreen() {
       if (payment.payment_url) {
         setMessage("正在前往綠界測試付款頁");
         await openPaymentPage(payment.payment_url);
+        setMessage("已返回 App，正在確認付款與會籍狀態");
       } else {
         setMessage("款項已完成，系統收據已建立");
       }
+      setPaymentSyncUntil(Date.now() + 60_000);
       await refresh();
     },
   });
   const error =
-    save.error ?? addDocument.error ?? submit.error ?? pay.error;
+    save.error ??
+    addDocument.error ??
+    removeDocument.error ??
+    submit.error ??
+    withdraw.error ??
+    updateDirectory.error ??
+    pay.error;
 
   if (!isAuthenticated) {
     return (
@@ -192,13 +340,39 @@ export default function MembersScreen() {
   if (membership.isLoading || application.isLoading) {
     return <LoadingState label="載入社員資料" />;
   }
+  if (membership.isError || application.isError || charges.isError) {
+    return (
+      <Screen>
+        <PageHeader title="社員" />
+        <EmptyState
+          action="重新載入"
+          description="目前無法取得社員或入社申請資料，請檢查網路後重試。"
+          icon="cloud-offline-outline"
+          onAction={() => void refresh()}
+          title="社員資料載入失敗"
+        />
+      </Screen>
+    );
+  }
 
   const isMember = membership.data?.status === "active";
+  const wasMembershipActivated = Boolean(
+    membership.data?.member_number || membership.data?.started_at,
+  );
+  const canPayMembershipCharges =
+    membership.data?.status === "pending_payment";
   const confirmed = application.data?.confirmed_documents ?? [];
+  const canEditApplication =
+    !application.data ||
+    ["draft", "needs_revision"].includes(application.data.status);
+  const canWithdraw =
+    Boolean(application.data) &&
+    !wasMembershipActivated &&
+    !["rejected", "withdrawn"].includes(application.data?.status ?? "");
   const canSubmit =
+    canEditApplication &&
     Object.values(form).every((value) => value.trim()) &&
-    confirmed.length === 3 &&
-    !["submitted", "approved"].includes(application.data?.status ?? "");
+    confirmed.length === 3;
 
   return (
     <Screen>
@@ -214,6 +388,24 @@ export default function MembersScreen() {
         {message ? <InlineMessage text={message} tone="positive" /> : null}
         {error ? (
           <InlineMessage text={getErrorMessage(error)} tone="danger" />
+        ) : null}
+        {user?.membership_type !== "member" &&
+        authMembershipSync.isFetching ? (
+          <InlineMessage text="會籍已啟用，正在更新社員價格。" />
+        ) : user?.membership_type !== "member" &&
+          authMembershipSync.isError ? (
+          <View style={styles.syncError}>
+            <InlineMessage
+              text="會籍已啟用，但社員價格尚未同步。"
+              tone="danger"
+            />
+            <Button
+              compact
+              label="重新同步社員資格"
+              onPress={() => void authMembershipSync.refetch()}
+              variant="secondary"
+            />
+          </View>
         ) : null}
 
         {isMember ? (
@@ -242,6 +434,74 @@ export default function MembersScreen() {
               </Text>
             </View>
 
+            <Text style={styles.sectionTitle}>我的公開名錄</Text>
+            <View style={styles.formCard}>
+              <View style={styles.switchRow}>
+                <View style={styles.switchCopy}>
+                  <Text style={styles.fieldLabel}>公開給其他有效社員</Text>
+                  <Text style={styles.helperText}>
+                    只會顯示下方暱稱、專長與自我介紹。
+                  </Text>
+                </View>
+                <Switch
+                  accessibilityLabel="公開社員名錄資料"
+                  onValueChange={(is_public) =>
+                    setDirectoryForm((current) => ({ ...current, is_public }))
+                  }
+                  trackColor={{ false: colors.line, true: colors.sage }}
+                  value={directoryForm.is_public}
+                />
+              </View>
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>暱稱</Text>
+                <TextInput
+                  maxLength={80}
+                  onChangeText={(nickname) =>
+                    setDirectoryForm((current) => ({ ...current, nickname }))
+                  }
+                  placeholder="社員名錄顯示名稱"
+                  placeholderTextColor={colors.sage}
+                  style={styles.input}
+                  value={directoryForm.nickname}
+                />
+              </View>
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>專長</Text>
+                <TextInput
+                  maxLength={240}
+                  onChangeText={(expertise) =>
+                    setDirectoryForm((current) => ({ ...current, expertise }))
+                  }
+                  placeholder="例如：食農教育、步道植物"
+                  placeholderTextColor={colors.sage}
+                  style={styles.input}
+                  value={directoryForm.expertise}
+                />
+              </View>
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>自我介紹</Text>
+                <TextInput
+                  maxLength={2000}
+                  multiline
+                  onChangeText={(bio) =>
+                    setDirectoryForm((current) => ({ ...current, bio }))
+                  }
+                  placeholder="分享你願意公開給社員認識的內容"
+                  placeholderTextColor={colors.sage}
+                  style={[styles.input, styles.textarea]}
+                  textAlignVertical="top"
+                  value={directoryForm.bio}
+                />
+              </View>
+              <Button
+                disabled={!directoryForm.nickname.trim()}
+                label="儲存名錄設定"
+                loading={updateDirectory.isPending}
+                onPress={() => updateDirectory.mutate()}
+                variant="secondary"
+              />
+            </View>
+
             <Text style={styles.sectionTitle}>款項與系統收據</Text>
             {(charges.data ?? []).map((charge) => (
               <View key={charge.id} style={styles.chargeRow}>
@@ -258,13 +518,23 @@ export default function MembersScreen() {
                   {charge.payment_status === "pending" ? (
                     <Button
                       compact
+                      disabled={!canPayMembershipCharges}
                       label="測試付款"
                       loading={pay.isPending}
                       onPress={() => pay.mutate(charge.id)}
                       variant="secondary"
                     />
                   ) : (
-                    <StatusPill label="已繳" tone="positive" />
+                    <StatusPill
+                      label={paymentLabels[charge.payment_status]}
+                      tone={
+                        charge.payment_status === "paid"
+                          ? "positive"
+                          : charge.payment_status === "refunded"
+                            ? "neutral"
+                            : "warning"
+                      }
+                    />
                   )}
                 </View>
               </View>
@@ -273,6 +543,13 @@ export default function MembersScreen() {
             <Text style={styles.sectionTitle}>社員名錄</Text>
             {directory.isLoading ? (
               <LoadingState label="載入社員名錄" />
+            ) : directory.isError ? (
+              <EmptyState
+                action="重新載入"
+                description="目前無法取得社員名錄。"
+                onAction={() => directory.refetch()}
+                title="社員名錄載入失敗"
+              />
             ) : directory.data?.length ? (
               <View style={styles.directoryGrid}>
                 {directory.data.map((member) => (
@@ -318,6 +595,14 @@ export default function MembersScreen() {
             {application.data?.review_note ? (
               <InlineMessage text={application.data.review_note} />
             ) : null}
+            {canWithdraw ? (
+              <Button
+                label="撤回入社申請"
+                loading={withdraw.isPending}
+                onPress={() => withdraw.mutate()}
+                variant="danger"
+              />
+            ) : null}
 
             <Text style={styles.sectionTitle}>基本資料</Text>
             {([
@@ -331,6 +616,7 @@ export default function MembersScreen() {
               <View key={key} style={styles.field}>
                 <Text style={styles.fieldLabel}>{label}</Text>
                 <TextInput
+                  editable={canEditApplication}
                   onChangeText={(value) =>
                     setForm((current) => ({ ...current, [key]: value }))
                   }
@@ -342,6 +628,7 @@ export default function MembersScreen() {
               </View>
             ))}
             <Button
+              disabled={!canEditApplication}
               label="儲存入社資料"
               loading={save.isPending}
               onPress={() => save.mutate()}
@@ -355,7 +642,7 @@ export default function MembersScreen() {
                   Sandbox 禁止上傳真實證件
                 </Text>
                 <Text style={styles.warningText}>
-                  展示時只加入系統產生的測試檔，不會讀取手機檔案。
+                  按下加入後會建立標有 Sandbox 的合成 PDF，不會開啟相簿或讀取手機檔案。
                 </Text>
               </View>
             </View>
@@ -363,15 +650,17 @@ export default function MembersScreen() {
             {(Object.keys(documentLabels) as (keyof typeof documentLabels)[]).map(
               (documentType) => {
                 const done = confirmed.includes(documentType);
+                const documentId = application.data?.documents?.find(
+                  (document) =>
+                    document.document_type === documentType &&
+                    document.status === "confirmed",
+                )?.id;
                 return (
-                  <Pressable
-                    disabled={done || addDocument.isPending}
+                  <View
                     key={documentType}
-                    onPress={() => addDocument.mutate(documentType)}
-                    style={({ pressed }) => [
+                    style={[
                       styles.documentRow,
                       done && styles.documentDone,
-                      pressed && styles.pressed,
                     ]}
                   >
                     <Ionicons
@@ -382,10 +671,27 @@ export default function MembersScreen() {
                     <Text style={styles.documentLabel}>
                       {documentLabels[documentType]}
                     </Text>
-                    <Text style={styles.documentAction}>
-                      {done ? "已加入" : "加入測試檔"}
-                    </Text>
-                  </Pressable>
+                    <View style={styles.documentActions}>
+                      <Button
+                        compact
+                        disabled={!canEditApplication}
+                        label={done ? "替換" : "加入測試檔"}
+                        loading={addDocument.isPending}
+                        onPress={() => addDocument.mutate(documentType)}
+                        variant="secondary"
+                      />
+                      {done && documentId ? (
+                        <Button
+                          compact
+                          disabled={!canEditApplication}
+                          label="移除"
+                          loading={removeDocument.isPending}
+                          onPress={() => removeDocument.mutate(documentId)}
+                          variant="danger"
+                        />
+                      ) : null}
+                    </View>
+                  </View>
                 );
               },
             )}
@@ -399,6 +705,12 @@ export default function MembersScreen() {
             {application.data?.status === "approved" ? (
               <>
                 <Text style={styles.sectionTitle}>入社款項</Text>
+                {!canPayMembershipCharges ? (
+                  <InlineMessage
+                    text="目前會籍狀態不可付款，請洽合作社確認。"
+                    tone="danger"
+                  />
+                ) : null}
                 {(charges.data ?? []).map((charge) => (
                   <View key={charge.id} style={styles.chargeRow}>
                     <View>
@@ -416,11 +728,22 @@ export default function MembersScreen() {
                       {charge.payment_status === "pending" ? (
                         <Button
                           compact
+                          disabled={!canPayMembershipCharges}
                           label="測試付款"
+                          loading={pay.isPending}
                           onPress={() => pay.mutate(charge.id)}
                         />
                       ) : (
-                        <StatusPill label="已繳" tone="positive" />
+                        <StatusPill
+                          label={paymentLabels[charge.payment_status]}
+                          tone={
+                            charge.payment_status === "paid"
+                              ? "positive"
+                              : charge.payment_status === "refunded"
+                                ? "neutral"
+                                : "warning"
+                          }
+                        />
                       )}
                     </View>
                   </View>
@@ -436,6 +759,7 @@ export default function MembersScreen() {
 
 const styles = StyleSheet.create({
   content: { gap: 12, padding: spacing.md },
+  syncError: { alignItems: "flex-start", gap: 8 },
   progressCard: {
     alignItems: "center",
     backgroundColor: colors.forest,
@@ -469,6 +793,24 @@ const styles = StyleSheet.create({
     minHeight: 50,
     paddingHorizontal: 14,
   },
+  textarea: { minHeight: 100, paddingTop: 14 },
+  formCard: {
+    backgroundColor: colors.paper,
+    borderColor: colors.line,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    gap: 12,
+    padding: spacing.md,
+  },
+  switchRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 52,
+  },
+  switchCopy: { flex: 1, paddingRight: 12 },
+  helperText: { color: colors.muted, fontSize: 12, lineHeight: 18, marginTop: 3 },
+  documentActions: { flexDirection: "row", gap: 6 },
   warning: {
     alignItems: "flex-start",
     backgroundColor: colors.dangerSoft,
@@ -501,7 +843,6 @@ const styles = StyleSheet.create({
   },
   documentDone: { backgroundColor: colors.successSoft },
   documentLabel: { color: colors.forest, flex: 1, fontSize: 13, fontWeight: "800" },
-  documentAction: { color: colors.orange, fontSize: 12, fontWeight: "900" },
   memberCard: {
     backgroundColor: colors.forest,
     borderRadius: radii.lg,
@@ -566,5 +907,4 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 7,
   },
-  pressed: { opacity: 0.72, transform: [{ scale: 0.99 }] },
 });

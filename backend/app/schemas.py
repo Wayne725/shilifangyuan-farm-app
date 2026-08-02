@@ -288,6 +288,9 @@ class CampaignCreate(BaseModel):
     deadline: datetime
     estimated_pickup_start: datetime
     estimated_pickup_end: datetime
+    can_ship: bool = False
+    shipping_temperature: Optional[ShippingTemperature] = None
+    allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
 
     @field_validator(
         "deadline", "estimated_pickup_start", "estimated_pickup_end"
@@ -302,7 +305,67 @@ class CampaignCreate(BaseModel):
     def validate_price_order(self) -> "CampaignCreate":
         if self.member_price > self.nonmember_price:
             raise ValueError("社員價不可高於非社員價")
+        if not self.can_ship:
+            self.shipping_temperature = None
+            self.allowed_shipping_channels = []
+            return self
+        if (
+            self.shipping_temperature is None
+            or not self.allowed_shipping_channels
+        ):
+            raise ValueError("可配送團購必須設定溫層與至少一個物流通路")
+        if (
+            self.shipping_temperature != ShippingTemperature.AMBIENT
+            and any(
+                channel != ShippingChannel.HOME_DELIVERY
+                for channel in self.allowed_shipping_channels
+            )
+        ):
+            raise ValueError("冷藏或冷凍團購只支援宅配")
         return self
+
+
+class CampaignUpdate(BaseModel):
+    target_type: Optional[TargetType] = None
+    target_id: Optional[str] = Field(default=None, min_length=1)
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    member_price: Optional[int] = Field(default=None, ge=0)
+    nonmember_price: Optional[int] = Field(default=None, ge=0)
+    min_paid_quantity: Optional[int] = Field(default=None, ge=1)
+    supply_cap: Optional[int] = Field(default=None, ge=1)
+    per_user_cap: Optional[int] = Field(default=None, ge=1)
+    deadline: Optional[datetime] = None
+    estimated_pickup_start: Optional[datetime] = None
+    estimated_pickup_end: Optional[datetime] = None
+    can_ship: Optional[bool] = None
+    shipping_temperature: Optional[ShippingTemperature] = None
+    allowed_shipping_channels: Optional[List[ShippingChannel]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_for_required_columns(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        nullable_fields = {"image_url", "shipping_temperature"}
+        null_fields = sorted(
+            field
+            for field, value in data.items()
+            if field not in nullable_fields and value is None
+        )
+        if null_fields:
+            raise ValueError(f"{'、'.join(null_fields)} 不可為 null")
+        return data
+
+    @field_validator(
+        "deadline", "estimated_pickup_start", "estimated_pickup_end"
+    )
+    @classmethod
+    def ensure_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("時間必須包含時區")
+        return value
 
 
 class CampaignDecision(BaseModel):
@@ -344,6 +407,7 @@ class CampaignRead(ApiModel):
     intake_status: GroupIntakeStatus
     confirmation_deadline: Optional[datetime]
     confirmed_at: Optional[datetime]
+    core_locked_at: Optional[datetime]
     can_ship: bool = False
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
@@ -387,6 +451,30 @@ class GroupJoinRequest(BaseModel):
     contact_email: EmailStr
     invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
+
+
+class GroupJoinQuoteRequest(BaseModel):
+    quantity: int = Field(ge=1, le=999)
+    fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
+    shipping_channel: Optional[ShippingChannel] = None
+
+    @model_validator(mode="after")
+    def validate_shipping_channel(self) -> "GroupJoinQuoteRequest":
+        if (
+            self.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
+            and self.shipping_channel is None
+        ):
+            raise ValueError("物流配送必須選擇通路")
+        return self
+
+
+class GroupJoinQuoteRead(ApiModel):
+    membership_type: MembershipType
+    quantity: int
+    unit_price: int
+    product_subtotal: int
+    shipping_fee: int
+    amount_total: int
 
 
 class OrderItemRead(ApiModel):
@@ -463,6 +551,26 @@ class MembershipApplicationReview(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
 
 
+class MembershipProfileRead(BaseModel):
+    legal_name: str
+    phone: str
+    birth_date: date
+    address: str
+    emergency_contact: str
+    consent_version: str
+    consented_at: datetime
+
+
+class MembershipDocumentRead(ApiModel):
+    id: str
+    document_type: MembershipDocumentType
+    status: MembershipDocumentStatus
+    content_type: str
+    size_bytes: int
+    checksum_sha256: Optional[str]
+    confirmed_at: Optional[datetime]
+
+
 class MembershipApplicationRead(ApiModel):
     id: str
     user_id: str
@@ -472,6 +580,8 @@ class MembershipApplicationRead(ApiModel):
     review_reason: Optional[str]
     created_at: datetime
     updated_at: datetime
+    profile: Optional[MembershipProfileRead] = None
+    documents: List[MembershipDocumentRead] = Field(default_factory=list)
 
 
 class MembershipDocumentUploadRequest(BaseModel):
@@ -491,16 +601,6 @@ class MembershipDocumentUploadRead(ApiModel):
 
 class MembershipDocumentConfirm(BaseModel):
     checksum_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
-
-
-class MembershipDocumentRead(ApiModel):
-    id: str
-    document_type: MembershipDocumentType
-    status: MembershipDocumentStatus
-    content_type: str
-    size_bytes: int
-    checksum_sha256: Optional[str]
-    confirmed_at: Optional[datetime]
 
 
 class MembershipRead(ApiModel):
@@ -547,10 +647,17 @@ class MemberDirectoryUpdate(BaseModel):
 
 class MemberDirectoryRead(ApiModel):
     user_id: str
+    is_public: bool
     nickname: str
     avatar_url: Optional[str]
     expertise: str
     bio: str
+
+
+class MembershipMeRead(BaseModel):
+    membership_type: MembershipType
+    membership: Optional[MembershipRead]
+    directory: Optional[MemberDirectoryRead]
 
 
 class ActivityCreate(BaseModel):
@@ -587,6 +694,11 @@ class ActivityRegistrationRead(ApiModel):
     checked_in_at: Optional[datetime]
 
 
+class AdminActivityRegistrationRead(ActivityRegistrationRead):
+    display_name: str
+    email: EmailStr
+
+
 class ActivityRead(ApiModel):
     id: str
     created_by_id: str
@@ -600,6 +712,8 @@ class ActivityRead(ApiModel):
     capacity: int
     waitlist_enabled: bool
     status: ActivityStatus
+    reviewed_at: Optional[datetime]
+    review_reason: Optional[str]
     registration_count: int = 0
     waitlist_count: int = 0
     my_registration: Optional[ActivityRegistrationRead] = None
@@ -629,6 +743,7 @@ class MemberProposalCommentCreate(BaseModel):
 class MemberProposalCommentRead(ApiModel):
     id: str
     user_id: str
+    display_name: str
     body: str
     created_at: datetime
     updated_at: datetime
@@ -636,6 +751,13 @@ class MemberProposalCommentRead(ApiModel):
 
 class MemberProposalVoteUpsert(BaseModel):
     choice: MemberVoteChoice
+
+
+class MemberProposalNamedVoteRead(BaseModel):
+    user_id: str
+    display_name: str
+    choice: MemberVoteChoice
+    updated_at: datetime
 
 
 class MemberProposalTally(ApiModel):
@@ -648,12 +770,14 @@ class MemberProposalTally(ApiModel):
 class MemberProposalRead(ApiModel):
     id: str
     created_by_id: str
+    created_by_name: str
     title: str
     body: str
     status: MemberProposalStatus
     minimum_voters: int
     discussion_ends_at: Optional[datetime]
     voting_ends_at: Optional[datetime]
+    review_reason: Optional[str]
     result_summary: Optional[str]
     tally: MemberProposalTally = Field(default_factory=MemberProposalTally)
     my_vote: Optional[MemberVoteChoice] = None
@@ -712,13 +836,16 @@ class MealEventCreate(BaseModel):
 class MealOfferingRead(ApiModel):
     id: str
     meal_id: str
+    meal_name: str
+    description: str
+    image_url: Optional[str]
     price: int
     capacity: int
     reserved_quantity: int
     paid_quantity: int
+    available_quantity: int
     position: int
     is_active: bool
-    meal: Optional[MealRead] = None
 
 
 class MealEventSummary(ApiModel):
@@ -748,8 +875,93 @@ class MealOrderCreate(BaseModel):
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
 
 
+class MealOrderQuoteItemRead(ApiModel):
+    offering_id: str
+    meal_id: str
+    meal_name: str
+    quantity: int
+    unit_price: int
+    subtotal: int
+    tax_type: TaxType
+
+
+class MealPickupWindowRead(ApiModel):
+    location: str
+    starts_at: datetime
+    ends_at: datetime
+
+
+class MealOrderQuoteRead(ApiModel):
+    sales_channel: SalesChannel
+    fulfillment_method: FulfillmentMethod
+    items: List[MealOrderQuoteItemRead]
+    amount_total: int
+    pickup: MealPickupWindowRead
+
+
+class MealOrderItemRead(ApiModel):
+    offering_id: str
+    meal_id: str
+    meal_name: str
+    quantity: int
+    unit_price: int
+    subtotal: int
+
+
+class MealOrderRead(ApiModel):
+    id: str
+    order_number: str
+    sales_channel: SalesChannel
+    fulfillment_method: FulfillmentMethod
+    meal_event_id: str
+    meal_event_title: str
+    venue_name: str
+    pickup_start: datetime
+    pickup_end: datetime
+    pickup_code: Optional[str]
+    pickup_qr_payload: Optional[str]
+    payment_status: PaymentStatus
+    invoice_status: InvoiceStatus
+    fulfillment_status: str
+    paid_at: Optional[datetime]
+    cancelled_at: Optional[datetime]
+    amount_total: int
+    created_at: datetime
+    available_actions: List[str]
+    items: List[MealOrderItemRead]
+
+
+class MealPickupCredentialRead(ApiModel):
+    order_id: str
+    pickup_code: str
+    qr_token: str
+
+
 class MealPickupVerify(BaseModel):
-    pickup_code: str = Field(pattern=r"^\d{6}$")
+    pickup_code: Optional[str] = Field(default=None, pattern=r"^\d{6}$")
+    qr_token: Optional[str] = Field(default=None, min_length=16, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_credential(self) -> "MealPickupVerify":
+        if (self.pickup_code is None) == (self.qr_token is None):
+            raise ValueError("取餐碼與 QR token 必須擇一提供")
+        return self
+
+
+class MealPickupRedemptionRead(ApiModel):
+    order_id: str
+    order_number: str
+    pickup_code: str
+    status: str
+    redeemed_at: datetime
+
+
+class MealEventActionRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+
+
+class MealEventCancelRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class OrderFulfillmentRead(ApiModel):

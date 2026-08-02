@@ -85,7 +85,7 @@ class ReconcileReport:
 jobs_router = APIRouter(tags=["jobs"])
 _lazy_reconcile_lock = asyncio.Lock()
 _last_lazy_reconcile_at = 0.0
-_background_reconcile_tasks: set["asyncio.Task[None]"] = set()
+_background_reconcile_task: Optional["asyncio.Task[None]"] = None
 
 
 @jobs_router.post("/internal/reconcile")
@@ -176,6 +176,11 @@ async def lazy_reconcile(
 
 def should_reconcile_now(minimum_interval_seconds: float = 60.0) -> bool:
     """Cheap, non-blocking throttle check for the request middleware."""
+    if (
+        _background_reconcile_task is not None
+        and not _background_reconcile_task.done()
+    ):
+        return False
     return (
         time.monotonic() - _last_lazy_reconcile_at >= minimum_interval_seconds
     )
@@ -190,7 +195,15 @@ def schedule_background_reconcile(
     garbage-collect a still-running reconciliation.
     """
 
+    global _background_reconcile_task
+    if (
+        _background_reconcile_task is not None
+        and not _background_reconcile_task.done()
+    ):
+        return _background_reconcile_task
+
     async def _run() -> None:
+        global _background_reconcile_task
         try:
             async with SessionLocal() as session:
                 try:
@@ -198,10 +211,11 @@ def schedule_background_reconcile(
                 except Exception:
                     await session.rollback()
         finally:
-            _background_reconcile_tasks.discard(asyncio.current_task())
+            if _background_reconcile_task is asyncio.current_task():
+                _background_reconcile_task = None
 
     task = asyncio.create_task(_run())
-    _background_reconcile_tasks.add(task)
+    _background_reconcile_task = task
     return task
 
 
@@ -501,6 +515,7 @@ async def _reconcile_meal_events(
                 continue
             order.fulfillment.status = FulfillmentState.NO_SHOW
             order.fulfillment.fulfilled_at = now
+            order.fulfillment_status = FulfillmentStatus.PICKED_UP
             if order.invoice_status != InvoiceStatus.ISSUED:
                 order.invoice_status = InvoiceStatus.PENDING
             session.add(

@@ -28,6 +28,7 @@ export default function ActivitiesScreen() {
   const [description, setDescription] = useState("");
   const [venue, setVenue] = useState("");
   const [startsAt, setStartsAt] = useState("2026-08-20T01:00:00.000Z");
+  const [endsAt, setEndsAt] = useState("2026-08-20T05:00:00.000Z");
   const [deadline, setDeadline] = useState("2026-08-16T15:59:00.000Z");
   const [capacity, setCapacity] = useState("16");
   const membership = useQuery({
@@ -62,6 +63,7 @@ export default function ActivitiesScreen() {
         description: description.trim(),
         venue_name: venue.trim(),
         starts_at: startsAt.trim(),
+        ends_at: endsAt.trim(),
         registration_deadline: deadline.trim(),
         capacity: Number(capacity),
       }),
@@ -89,6 +91,19 @@ export default function ActivitiesScreen() {
     );
   }
   if (membership.isLoading) return <LoadingState label="確認社員資格" />;
+  if (membership.isError) {
+    return (
+      <Screen>
+        <PageHeader title="社員活動" />
+        <EmptyState
+          action="重新載入"
+          description="目前無法確認社員資格。"
+          onAction={() => membership.refetch()}
+          title="社員資料載入失敗"
+        />
+      </Screen>
+    );
+  }
   if (!isMember) {
     return (
       <Screen>
@@ -135,6 +150,7 @@ export default function ActivitiesScreen() {
             { label: "活動說明", value: description, onChange: setDescription },
             { label: "集合地點", value: venue, onChange: setVenue },
             { label: "活動時間（ISO）", value: startsAt, onChange: setStartsAt },
+            { label: "活動結束（ISO）", value: endsAt, onChange: setEndsAt },
             { label: "報名截止（ISO）", value: deadline, onChange: setDeadline },
             { label: "名額", value: capacity, onChange: setCapacity },
           ].map((field) => (

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
+  Button,
   EmptyState,
   InlineMessage,
   LoadingState,
@@ -96,6 +97,8 @@ function OrderCard({ order }: { order: Order }) {
 
 export default function OrdersScreen() {
   const [kind, setKind] = useState<OrderKind>("regular");
+  const [returnError, setReturnError] = useState("");
+  const [returnRetry, setReturnRetry] = useState(0);
   const { isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const params = useLocalSearchParams<{
@@ -103,7 +106,7 @@ export default function OrdersScreen() {
     payment?: string;
     logistics?: string;
   }>();
-  const handledReturn = useRef(false);
+  const handledReturn = useRef<string | null>(null);
   const query = useQuery({
     queryKey: ["orders"],
     queryFn: api.orders,
@@ -113,20 +116,62 @@ export default function OrdersScreen() {
   // ECPay sends the browser back here after checkout and after store
   // selection; jump straight to the order the buyer was working on.
   useEffect(() => {
-    if (handledReturn.current) return;
     if (!params.payment && !params.logistics) return;
-    handledReturn.current = true;
     void queryClient.invalidateQueries({ queryKey: ["orders"] });
-    if (params.order_id) {
-      void queryClient.invalidateQueries({
-        queryKey: ["order", params.order_id],
-      });
-      router.replace({
-        pathname: "/order/[id]",
-        params: { id: params.order_id },
-      });
-    }
-  }, [params.payment, params.logistics, params.order_id, queryClient]);
+    if (!params.order_id) return;
+
+    const orderId = params.order_id;
+    const returnKey = `${params.payment ?? ""}:${params.logistics ?? ""}:${orderId}`;
+    if (handledReturn.current === returnKey) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const resolveReturn = async (attempt = 0) => {
+      try {
+        const order = await queryClient.fetchQuery({
+          queryKey: ["order", orderId],
+          queryFn: () => api.order(orderId),
+          staleTime: 0,
+        });
+        if (cancelled) return;
+        setReturnError("");
+        router.replace({
+          pathname:
+            order.sales_channel === "meal_preorder"
+              ? "/meal-order/[id]"
+              : "/order/[id]",
+          params: { id: orderId },
+        });
+        handledReturn.current = returnKey;
+      } catch {
+        if (cancelled) return;
+        if (attempt < 7) {
+          const delay = Math.min(1000 * 2 ** attempt, 10000);
+          retryTimer = setTimeout(
+            () => void resolveReturn(attempt + 1),
+            delay,
+          );
+          return;
+        }
+        setReturnError(
+          "已返回十里方圓，但服務仍在喚醒中；可以留在訂單列表或重新查詢。",
+        );
+      }
+    };
+
+    setReturnError("");
+    void resolveReturn();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    params.payment,
+    params.logistics,
+    params.order_id,
+    queryClient,
+    returnRetry,
+  ]);
 
   const orders = (query.data ?? []).filter(
     (order) => order.order_kind === kind,
@@ -138,7 +183,26 @@ export default function OrdersScreen() {
         subtitle="付款、備貨、取貨與發票各自顯示進度。"
         title="我的訂單"
       />
-      {params.payment === "return" && !params.order_id ? (
+      {(params.payment || params.logistics) && returnError ? (
+        <View style={styles.returnError}>
+          <InlineMessage text={returnError} tone="danger" />
+          <Button
+            compact
+            label="重新查詢訂單"
+            onPress={() => {
+              handledReturn.current = null;
+              setReturnRetry((current) => current + 1);
+            }}
+            variant="secondary"
+          />
+        </View>
+      ) : (params.payment || params.logistics) && params.order_id ? (
+        <View style={styles.notice}>
+          <InlineMessage
+            text={`已從綠界返回，正在確認最新${params.payment ? "付款" : "物流"}結果。`}
+          />
+        </View>
+      ) : params.payment === "return" ? (
         <View style={styles.notice}>
           <InlineMessage text="已從綠界返回，正在確認最新付款結果。" />
         </View>
@@ -155,6 +219,14 @@ export default function OrdersScreen() {
         />
       ) : query.isLoading ? (
         <LoadingState label="載入訂單" />
+      ) : query.isError ? (
+        <EmptyState
+          action="重新載入"
+          description="目前無法取得訂單資料，請檢查網路後重試。"
+          icon="cloud-offline-outline"
+          onAction={() => query.refetch()}
+          title="訂單載入失敗"
+        />
       ) : orders.length ? (
         <View style={styles.list}>
           {orders.map((order) => (
@@ -202,6 +274,12 @@ export default function OrdersScreen() {
 
 const styles = StyleSheet.create({
   notice: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
+  returnError: {
+    alignItems: "flex-start",
+    gap: 8,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
   list: { gap: 12, padding: spacing.md },
   card: {
     backgroundColor: colors.paper,

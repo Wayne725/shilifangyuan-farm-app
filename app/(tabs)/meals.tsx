@@ -103,6 +103,14 @@ export default function MealsScreen() {
         />
       ) : orders.isLoading ? (
         <LoadingState label="載入便當訂單" />
+      ) : orders.isError ? (
+        <EmptyState
+          action="重新載入"
+          description="目前無法取得便當訂單。"
+          icon="cloud-offline-outline"
+          onAction={() => orders.refetch()}
+          title="訂單載入失敗"
+        />
       ) : orders.data?.length ? (
         <View style={styles.orderList}>
           {orders.data.map((order) => (
@@ -140,7 +148,10 @@ export default function MealsScreen() {
               <View style={styles.codeRow}>
                 <View>
                   <Text style={styles.codeLabel}>取餐碼</Text>
-                  <Text style={styles.code}>{order.pickup_code}</Text>
+                  <Text style={styles.code}>
+                    {order.pickup_code ??
+                      (order.payment_status === "pending" ? "待付款" : "待產生")}
+                  </Text>
                 </View>
                 <Text style={styles.total}>{money(order.amount_total)}</Text>
               </View>

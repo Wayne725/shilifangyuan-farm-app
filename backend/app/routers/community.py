@@ -25,6 +25,7 @@ from ..models import (
     User,
 )
 from ..schemas import (
+    AdminActivityRegistrationRead,
     ActivityCreate,
     ActivityRead,
     ActivityRegistrationRead,
@@ -32,6 +33,7 @@ from ..schemas import (
     MemberProposalCommentCreate,
     MemberProposalCommentRead,
     MemberProposalCreate,
+    MemberProposalNamedVoteRead,
     MemberProposalRead,
     MemberProposalReview,
     MemberProposalTally,
@@ -94,6 +96,8 @@ def _activity_read(
         capacity=activity.capacity,
         waitlist_enabled=activity.waitlist_enabled,
         status=activity.status,
+        reviewed_at=activity.reviewed_at,
+        review_reason=activity.review_reason,
         registration_count=len(registered),
         waitlist_count=len(waitlisted),
         my_registration=(
@@ -116,12 +120,14 @@ def _proposal_read(
     return MemberProposalRead(
         id=proposal.id,
         created_by_id=proposal.created_by_id,
+        created_by_name=proposal.created_by.display_name,
         title=proposal.title,
         body=proposal.body,
         status=proposal.status,
         minimum_voters=proposal.minimum_voters,
         discussion_ends_at=proposal.discussion_ends_at,
         voting_ends_at=proposal.voting_ends_at,
+        review_reason=proposal.review_reason,
         result_summary=proposal.result_summary,
         tally=MemberProposalTally(
             yes=tally.yes,
@@ -143,7 +149,11 @@ async def _load_activity(
     query = (
         select(Activity)
         .where(Activity.id == activity_id)
-        .options(selectinload(Activity.registrations))
+        .options(
+            selectinload(Activity.registrations).selectinload(
+                ActivityRegistration.user
+            )
+        )
     )
     if for_update:
         query = query.with_for_update()
@@ -162,6 +172,7 @@ async def _load_proposal(
         .options(
             selectinload(MemberProposal.votes),
             selectinload(MemberProposal.comments),
+            selectinload(MemberProposal.created_by),
         )
     )
     if for_update:
@@ -367,6 +378,33 @@ async def admin_list_activities(
     return [_activity_read(activity, admin.id) for activity in activities]
 
 
+@community_router.get(
+    "/v1/admin/activities/{activity_id}/registrations",
+    response_model=list[AdminActivityRegistrationRead],
+)
+async def admin_list_activity_registrations(
+    activity_id: str,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[AdminActivityRegistrationRead]:
+    activity = await _load_activity(session, activity_id)
+    if activity is None:
+        raise HTTPException(status_code=404, detail="找不到活動")
+    return [
+        AdminActivityRegistrationRead(
+            **ActivityRegistrationRead.model_validate(
+                registration
+            ).model_dump(),
+            display_name=registration.user.display_name,
+            email=registration.user.email,
+        )
+        for registration in sorted(
+            activity.registrations,
+            key=lambda item: (item.queue_position, item.registered_at),
+        )
+    ]
+
+
 async def _review_activity(
     activity_id: str,
     body: ActivityReview,
@@ -487,6 +525,39 @@ async def cancel_activity(
 
 
 @community_router.post(
+    "/v1/admin/activities/{activity_id}/complete",
+    response_model=ActivityRead,
+)
+async def complete_activity(
+    activity_id: str,
+    body: ActivityReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> ActivityRead:
+    activity = await _load_activity(session, activity_id, for_update=True)
+    now = datetime.now(timezone.utc)
+    if activity is None or activity.status != ActivityStatus.PUBLISHED:
+        raise HTTPException(status_code=409, detail="此活動目前不可結案")
+    if _aware(activity.ends_at) > now:
+        raise HTTPException(status_code=409, detail="活動結束時間後才能結案")
+    activity.status = ActivityStatus.COMPLETED
+    for registration in activity.registrations:
+        if registration.status == ActivityRegistrationStatus.REGISTERED:
+            registration.status = ActivityRegistrationStatus.NO_SHOW
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="activity.complete",
+            aggregate_type="activity",
+            aggregate_id=activity.id,
+            reason=body.reason,
+        )
+    )
+    await session.commit()
+    return _activity_read(activity, admin.id)
+
+
+@community_router.post(
     "/v1/admin/activities/{activity_id}/registrations/"
     "{registration_id}/{attendance_status}",
     response_model=ActivityRegistrationRead,
@@ -542,10 +613,17 @@ async def list_member_proposals(
         await session.scalars(
             select(MemberProposal)
             .where(
-                (MemberProposal.status != MemberProposalStatus.DRAFT)
+                MemberProposal.status.notin_(
+                    {
+                        MemberProposalStatus.DRAFT,
+                        MemberProposalStatus.PENDING_REVIEW,
+                        MemberProposalStatus.WITHDRAWN,
+                    }
+                )
                 | (MemberProposal.created_by_id == user.id)
             )
             .options(selectinload(MemberProposal.votes))
+            .options(selectinload(MemberProposal.created_by))
             .order_by(MemberProposal.created_at.desc())
         )
     ).all()
@@ -570,7 +648,12 @@ async def get_member_proposal(
 ) -> MemberProposalRead:
     proposal = await _load_proposal(session, proposal_id)
     if proposal is None or (
-        proposal.status == MemberProposalStatus.DRAFT
+        proposal.status
+        in {
+            MemberProposalStatus.DRAFT,
+            MemberProposalStatus.PENDING_REVIEW,
+            MemberProposalStatus.WITHDRAWN,
+        }
         and proposal.created_by_id != user.id
     ):
         raise HTTPException(status_code=404, detail="找不到社員提案")
@@ -591,6 +674,7 @@ async def create_member_proposal(
 ) -> MemberProposalRead:
     proposal = MemberProposal(
         created_by_id=user.id,
+        created_by=user,
         title=body.title,
         body=body.body,
         status=MemberProposalStatus.DRAFT,
@@ -669,8 +753,9 @@ async def list_member_proposal_comments(
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberProposalCommentRead]:
     comments = (
-        await session.scalars(
-            select(MemberProposalComment)
+        await session.execute(
+            select(MemberProposalComment, User)
+            .join(User, User.id == MemberProposalComment.user_id)
             .where(
                 MemberProposalComment.proposal_id == proposal_id,
                 MemberProposalComment.deleted_at.is_(None),
@@ -679,8 +764,15 @@ async def list_member_proposal_comments(
         )
     ).all()
     return [
-        MemberProposalCommentRead.model_validate(comment)
-        for comment in comments
+        MemberProposalCommentRead(
+            id=comment.id,
+            user_id=comment.user_id,
+            display_name=author.display_name,
+            body=comment.body,
+            created_at=comment.created_at,
+            updated_at=comment.updated_at,
+        )
+        for comment, author in comments
     ]
 
 
@@ -708,7 +800,14 @@ async def comment_on_member_proposal(
     )
     session.add(comment)
     await session.commit()
-    return MemberProposalCommentRead.model_validate(comment)
+    return MemberProposalCommentRead(
+        id=comment.id,
+        user_id=comment.user_id,
+        display_name=user.display_name,
+        body=comment.body,
+        created_at=comment.created_at,
+        updated_at=comment.updated_at,
+    )
 
 
 @community_router.put(
@@ -751,12 +850,24 @@ async def vote_on_member_proposal(
 
 @community_router.get(
     "/v1/member-proposals/{proposal_id}/votes",
+    response_model=list[MemberProposalNamedVoteRead],
 )
 async def list_named_member_proposal_votes(
     proposal_id: str,
-    _user: User = Depends(require_active_member),
+    user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
-) -> list[dict[str, str]]:
+) -> list[MemberProposalNamedVoteRead]:
+    proposal = await session.get(MemberProposal, proposal_id)
+    if proposal is None or (
+        proposal.status
+        in {
+            MemberProposalStatus.DRAFT,
+            MemberProposalStatus.PENDING_REVIEW,
+            MemberProposalStatus.WITHDRAWN,
+        }
+        and proposal.created_by_id != user.id
+    ):
+        raise HTTPException(status_code=404, detail="找不到社員提案")
     rows = (
         await session.execute(
             select(MemberProposalVote, User)
@@ -766,12 +877,12 @@ async def list_named_member_proposal_votes(
         )
     ).all()
     return [
-        {
-            "user_id": vote.user_id,
-            "display_name": voter.display_name,
-            "choice": vote.choice.value,
-            "updated_at": vote.updated_at.isoformat(),
-        }
+        MemberProposalNamedVoteRead(
+            user_id=vote.user_id,
+            display_name=voter.display_name,
+            choice=vote.choice,
+            updated_at=vote.updated_at,
+        )
         for vote, voter in rows
     ]
 
@@ -787,7 +898,10 @@ async def admin_list_member_proposals(
     proposals = (
         await session.scalars(
             select(MemberProposal)
-            .options(selectinload(MemberProposal.votes))
+            .options(
+                selectinload(MemberProposal.votes),
+                selectinload(MemberProposal.created_by),
+            )
             .order_by(MemberProposal.created_at.desc())
         )
     ).all()

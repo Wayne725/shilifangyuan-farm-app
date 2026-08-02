@@ -83,6 +83,29 @@
 
 輪替時新增版本並切換 `PII_ENCRYPTION_CURRENT_VERSION`，舊版本需保留到資料完成重加密。
 
+#### R2 Bucket CORS
+
+Web 版會從瀏覽器直接以簽名 URL 上傳測試證件。部署 Web 前，必須在 Cloudflare R2 Bucket 的 **Settings → CORS Policy** 加入下列設定，並把 Render 網址換成實際的 Web 網域：
+
+```json
+[
+  {
+    "AllowedOrigins": [
+      "https://<your-render-static-site>.onrender.com",
+      "http://localhost:8081"
+    ],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["Content-Type", "x-amz-meta-sha256"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+- 正式展示網址要完整符合 Origin（包含 `https`，不含路徑），正式環境不要使用 `*`。
+- Bucket 必須維持私有，不可啟用公開網域或 `r2.dev`；檔案讀取只走後端產生的兩分鐘簽名 URL。
+- `Content-Length` 不會納入簽名 Header，避免瀏覽器無法手動設定而導致簽名失敗；後端仍會在確認上傳時比對實際大小、Content-Type 與 SHA-256 metadata。
+
 ### SendGrid
 
 - `SENDGRID_API_KEY`
@@ -90,6 +113,7 @@
 - `SENDGRID_FROM_NAME=十里方圓`
 
 寄件地址必須先完成 Single Sender Verification。綠界發票 Stage 不接受真實 Email；真實收件地址只傳給 SendGrid。
+Sandbox 會在啟動時檢查 API Key 與寄件地址，未設定時 Render 部署會直接失敗並列出缺少的變數。
 
 ## GitHub Actions
 

@@ -765,12 +765,34 @@ async def create_formal_logistics_order(
         raise HTTPException(status_code=409, detail="團購確認成團後才能出貨")
     if order.fulfillment is None or order.fulfillment.shipment is None:
         raise HTTPException(status_code=409, detail="訂單尚未選擇物流")
+    if (
+        order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
+        or order.fulfillment.method != FulfillmentMethod.ECPAY_LOGISTICS
+    ):
+        raise HTTPException(status_code=409, detail="訂單履約方式不是物流配送")
     shipment = order.fulfillment.shipment
     if shipment.ecpay_logistics_id:
         return ShipmentOperationRead(
             shipment=_shipment_read(shipment),
             provider=_safe_provider_payload(shipment.provider_payload or {}),
         )
+    if (
+        order.fulfillment_status
+        in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
+        or order.fulfillment.status
+        in {
+            FulfillmentState.PICKED_UP,
+            FulfillmentState.DELIVERED,
+            FulfillmentState.NO_SHOW,
+            FulfillmentState.CANCELLED,
+        }
+    ):
+        raise HTTPException(status_code=409, detail="訂單目前不可建立物流單")
+    if (
+        order.fulfillment_status != FulfillmentStatus.PREPARING
+        or order.fulfillment.status != FulfillmentState.PREPARING
+    ):
+        raise HTTPException(status_code=409, detail="訂單進入備貨中後才能建立物流單")
     if shipment.status != ShipmentStatus.READY_TO_CREATE:
         raise HTTPException(status_code=409, detail="暫存物流單尚未完成")
     temp_id = str(

@@ -27,7 +27,10 @@ import { api, getErrorMessage } from "../../src/services/api";
 import { colors, radii, spacing } from "../../src/theme";
 
 export default function OrderDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, setup } = useLocalSearchParams<{
+    id: string;
+    setup?: string;
+  }>();
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["order", id],
@@ -120,6 +123,12 @@ export default function OrderDetailScreen() {
         title={order.order_number}
       />
       <View style={styles.content}>
+        {setup === "retry" ? (
+          <InlineMessage
+            text="訂單已安全建立，但付款或物流頁暫時未開啟。請在本頁重新操作，不要重複下單。"
+            tone="warning"
+          />
+        ) : null}
         <View style={styles.summary}>
           <View>
             <Text style={styles.summaryLabel}>訂單金額</Text>

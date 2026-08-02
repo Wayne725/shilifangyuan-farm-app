@@ -38,6 +38,26 @@ export const demoUsers: Record<string, { password: string; user: User }> = {
       membership_type: "nonmember",
     },
   },
+  "supplement@shilifangyuan.tw": {
+    password: "customer123",
+    user: {
+      id: "user-applicant-supplement",
+      email: "supplement@shilifangyuan.tw",
+      display_name: "補件申請人",
+      user_role: "customer",
+      membership_type: "nonmember",
+    },
+  },
+  "pending@shilifangyuan.tw": {
+    password: "customer123",
+    user: {
+      id: "user-applicant-payment",
+      email: "pending@shilifangyuan.tw",
+      display_name: "陳嘉禾",
+      user_role: "customer",
+      membership_type: "nonmember",
+    },
+  },
   "admin@shilifangyuan.tw": {
     password: "admin123",
     user: {
@@ -331,6 +351,14 @@ export const demoCampaigns: GroupCampaign[] = [
     estimated_pickup_start: "2026-08-06T02:00:00.000Z",
     estimated_pickup_end: "2026-08-07T10:00:00.000Z",
     final_pickup_at: null,
+    can_ship: true,
+    temperature_zone: "ambient",
+    allowed_logistics: [
+      "home_delivery",
+      "seven_eleven",
+      "family_mart",
+      "hilife",
+    ],
     created_at: "2026-07-25T02:00:00.000Z",
   },
   {
@@ -352,6 +380,9 @@ export const demoCampaigns: GroupCampaign[] = [
     estimated_pickup_start: "2026-08-08T02:00:00.000Z",
     estimated_pickup_end: "2026-08-08T09:00:00.000Z",
     final_pickup_at: "2026-08-08T06:00:00.000Z",
+    can_ship: true,
+    temperature_zone: "ambient",
+    allowed_logistics: ["home_delivery", "seven_eleven", "family_mart"],
     created_at: "2026-07-22T02:00:00.000Z",
   },
   {
@@ -373,6 +404,9 @@ export const demoCampaigns: GroupCampaign[] = [
     estimated_pickup_start: "2026-08-05T02:00:00.000Z",
     estimated_pickup_end: "2026-08-05T09:00:00.000Z",
     final_pickup_at: null,
+    can_ship: true,
+    temperature_zone: "chilled",
+    allowed_logistics: ["home_delivery"],
     created_at: "2026-07-23T02:00:00.000Z",
   },
 ];
@@ -390,7 +424,7 @@ export const demoOrders: Order[] = [
     amount_total: 160,
     paid_at: "2026-07-29T02:32:00.000Z",
     created_at: "2026-07-29T02:30:00.000Z",
-    available_actions: ["view"],
+    available_actions: ["refund", "advance_shipment", "view"],
     sales_channel: "regular",
     fulfillment: {
       method: "ecpay_logistics",
@@ -588,6 +622,7 @@ export const demoMealEvents: MealEvent[] = [
     pickup_end: "2026-08-06T05:00:00.000Z",
     status: "published",
     items: demoMeals.map((meal, index) => ({
+      offering_id: `offering-campus-${meal.id}`,
       meal_id: meal.id,
       meal_name: meal.name,
       description: meal.description,
@@ -610,6 +645,7 @@ export const demoMealEvents: MealEvent[] = [
     pickup_end: "2026-08-07T05:30:00.000Z",
     status: "published",
     items: demoMeals.slice(0, 2).map((meal) => ({
+      offering_id: `offering-market-${meal.id}`,
       meal_id: meal.id,
       meal_name: meal.name,
       description: meal.description,
@@ -637,6 +673,7 @@ export const demoMealOrders: MealOrder[] = [
     fulfillment_status: "ready",
     amount_total: 245,
     created_at: "2026-07-30T02:10:00.000Z",
+    available_actions: ["view"],
     items: [
       {
         meal_id: "meal-seasonal",
@@ -659,8 +696,9 @@ export const demoMealOrders: MealOrder[] = [
 export const demoMembershipApplications: MembershipApplication[] = [
   {
     id: "application-customer",
+    user_id: "user-applicant-supplement",
     status: "needs_revision",
-    legal_name: "張以安",
+    legal_name: "補件申請人",
     phone: "0912-345-678",
     birth_date: "1997-04-18",
     address: "臺北市大安區和平東路",
@@ -671,9 +709,22 @@ export const demoMembershipApplications: MembershipApplication[] = [
     submitted_at: "2026-07-28T02:01:00.000Z",
     required_documents: ["id_front", "id_back", "secondary"],
     confirmed_documents: ["id_front", "id_back"],
+    documents: [
+      {
+        id: "demo-document-customer-front",
+        document_type: "id_front",
+        status: "confirmed",
+      },
+      {
+        id: "demo-document-customer-back",
+        document_type: "id_back",
+        status: "confirmed",
+      },
+    ],
   },
   {
     id: "application-payment",
+    user_id: "user-applicant-payment",
     status: "approved",
     legal_name: "陳嘉禾",
     phone: "0900-000-123",
@@ -686,6 +737,23 @@ export const demoMembershipApplications: MembershipApplication[] = [
     submitted_at: "2026-07-27T02:01:00.000Z",
     required_documents: ["id_front", "id_back", "secondary"],
     confirmed_documents: ["id_front", "id_back", "secondary"],
+    documents: [
+      {
+        id: "demo-document-payment-front",
+        document_type: "id_front",
+        status: "confirmed",
+      },
+      {
+        id: "demo-document-payment-back",
+        document_type: "id_back",
+        status: "confirmed",
+      },
+      {
+        id: "demo-document-payment-secondary",
+        document_type: "secondary",
+        status: "confirmed",
+      },
+    ],
   },
 ];
 
@@ -701,6 +769,16 @@ export const demoMemberships: Record<string, Membership | null> = {
     bio: "喜歡認識產地，也協助規劃親子農事活動。",
   },
   "user-customer": null,
+  "user-applicant-supplement": null,
+  "user-applicant-payment": {
+    id: "membership-applicant",
+    member_number: null,
+    status: "pending_payment",
+    directory_visible: false,
+    nickname: "嘉禾",
+    expertise: null,
+    bio: null,
+  },
   "user-admin": {
     id: "membership-admin",
     member_number: "SLF-2026-0001",
@@ -764,6 +842,7 @@ export const demoActivities: MemberActivity[] = [
     image_key: "member-hike",
     venue_name: "捷運動物園站 2 號出口",
     starts_at: "2026-08-09T00:30:00.000Z",
+    ends_at: "2026-08-09T04:00:00.000Z",
     registration_deadline: "2026-08-06T15:59:00.000Z",
     capacity: 16,
     registered_count: 15,
@@ -779,6 +858,7 @@ export const demoActivities: MemberActivity[] = [
     image_key: "bok-choy",
     venue_name: "彰化溪州集合",
     starts_at: "2026-08-16T01:00:00.000Z",
+    ends_at: "2026-08-16T08:00:00.000Z",
     registration_deadline: "2026-08-10T15:59:00.000Z",
     capacity: 20,
     registered_count: 9,

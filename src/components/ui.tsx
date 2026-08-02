@@ -393,6 +393,7 @@ export function CatalogCard({
   onAction,
   actionIcon = "add",
   compact = true,
+  disabled = false,
 }: {
   title: string;
   meta: string;
@@ -408,6 +409,7 @@ export function CatalogCard({
   onAction?: () => void;
   actionIcon?: IconName;
   compact?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
@@ -416,10 +418,13 @@ export function CatalogCard({
         .filter(Boolean)
         .join("，")}
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.productCard,
         compact && styles.productCardCompact,
+        disabled && styles.cardDisabled,
         pressed && styles.cardPressed,
       ]}
     >
@@ -470,6 +475,8 @@ export function CatalogCard({
                   actionIcon === "add" ? "加入購物車：" : "操作："
                 }${title}`}
                 accessibilityRole="button"
+                accessibilityState={{ disabled }}
+                disabled={disabled}
                 onPress={(event) => {
                   event.stopPropagation();
                   onAction();
@@ -875,6 +882,7 @@ const styles = StyleSheet.create({
     ...shadows.card,
   },
   productCardCompact: { width: "48.3%" },
+  cardDisabled: { opacity: 0.5 },
   cardPressed: { opacity: 0.82, transform: [{ translateY: 1 }] },
   productImageWrap: { aspectRatio: 4 / 3, backgroundColor: colors.sageLight },
   productImage: { height: "100%", width: "100%" },

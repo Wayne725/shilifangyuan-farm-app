@@ -119,6 +119,9 @@ export type GroupCampaign = {
   estimated_pickup_start: string;
   estimated_pickup_end: string;
   final_pickup_at?: string | null;
+  can_ship: boolean;
+  temperature_zone?: TemperatureZone;
+  allowed_logistics: LogisticsProvider[];
   available_quantity: number;
   created_at: string;
 };
@@ -157,6 +160,8 @@ export type OrderAction =
   | "start_preparing"
   | "mark_ready"
   | "mark_picked_up"
+  | "create_shipment"
+  | "advance_shipment"
   | "advance_fulfillment"
   | "view";
 
@@ -199,6 +204,7 @@ export type OrderFulfillment = {
     | FulfillmentStatus
     | "pending"
     | "ready"
+    | "awaiting_shipment"
     | "shipped"
     | "delivered"
     | "no_show";
@@ -222,12 +228,14 @@ export type Shipment = {
     | "exception"
     | "cancelled";
   tracking_number?: string | null;
+  ecpay_logistics_id?: string | null;
   shipping_fee: number;
 };
 
 export type NotificationKind =
   | "proposal"
   | "group"
+  | "membership"
   | "payment"
   | "pickup"
   | "invoice";
@@ -287,6 +295,7 @@ export type MembershipApplicationStatus =
 
 export type MembershipApplication = {
   id: string;
+  user_id: string;
   status: MembershipApplicationStatus;
   legal_name: string;
   phone: string;
@@ -299,13 +308,18 @@ export type MembershipApplication = {
   submitted_at?: string | null;
   required_documents: ("id_front" | "id_back" | "secondary")[];
   confirmed_documents: ("id_front" | "id_back" | "secondary")[];
+  documents?: MembershipDocumentRead[];
 };
 
 export type Membership = {
   id: string;
+  user_id?: string;
   member_number?: string | null;
   status: MembershipStatus;
   started_at?: string | null;
+  suspended_at?: string | null;
+  ended_at?: string | null;
+  status_reason?: string | null;
   directory_visible: boolean;
   nickname: string;
   avatar_url?: string | null;
@@ -325,6 +339,7 @@ export type MembershipCharge = {
 export type MemberDirectoryEntry = {
   id: string;
   member_number: string;
+  is_public?: boolean;
   nickname: string;
   avatar_url?: string | null;
   expertise?: string | null;
@@ -340,6 +355,15 @@ export type ShippingRate = {
   effective_from: string;
   effective_to?: string | null;
   is_active: boolean;
+};
+
+export type GroupJoinQuote = {
+  membership_type: MembershipType;
+  quantity: number;
+  unit_price: number;
+  product_subtotal: number;
+  shipping_fee: number;
+  amount_total: number;
 };
 
 export type LogisticsSelection = {
@@ -379,6 +403,18 @@ export type ActivityRegistrationStatus =
   | "attended"
   | "no_show";
 
+export type AdminActivityRegistration = {
+  id: string;
+  user_id: string;
+  display_name: string;
+  email: string;
+  status: ActivityRegistrationStatus;
+  queue_position: number;
+  registered_at: string;
+  cancelled_at?: string | null;
+  checked_in_at?: string | null;
+};
+
 export type MemberActivity = {
   id: string;
   title: string;
@@ -387,6 +423,7 @@ export type MemberActivity = {
   image_url?: string | null;
   venue_name: string;
   starts_at: string;
+  ends_at: string;
   registration_deadline: string;
   capacity: number;
   registered_count: number;
@@ -426,9 +463,17 @@ export type MemberProposal = {
 
 export type MemberProposalComment = {
   id: string;
+  user_id?: string;
   author_name: string;
   body: string;
   created_at: string;
+};
+
+export type MemberProposalNamedVote = {
+  user_id: string;
+  display_name: string;
+  choice: MemberVoteChoice;
+  updated_at: string;
 };
 
 export type Meal = {
@@ -438,10 +483,12 @@ export type Meal = {
   price: number;
   image_key?: string;
   image_url?: string | null;
+  tax_type?: TaxType;
   is_active: boolean;
 };
 
 export type MealEventItem = {
+  offering_id: string;
   meal_id: string;
   meal_name: string;
   description: string;
@@ -463,7 +510,13 @@ export type MealEvent = {
   order_deadline: string;
   pickup_start: string;
   pickup_end: string;
-  status: "draft" | "published" | "pickup_open" | "completed" | "cancelled";
+  status:
+    | "draft"
+    | "published"
+    | "ordering_closed"
+    | "pickup_open"
+    | "completed"
+    | "cancelled";
   items: MealEventItem[];
 };
 
@@ -475,11 +528,13 @@ export type MealOrder = {
   venue_name: string;
   pickup_start: string;
   pickup_end: string;
-  pickup_code: string;
+  pickup_code: string | null;
+  pickup_qr_payload?: string | null;
   payment_status: PaymentStatus;
   fulfillment_status: "pending" | "ready" | "picked_up" | "no_show" | "cancelled";
   amount_total: number;
   created_at: string;
+  available_actions?: OrderAction[];
   items: {
     meal_id: string;
     meal_name: string;
@@ -487,4 +542,12 @@ export type MealOrder = {
     unit_price: number;
     subtotal: number;
   }[];
+};
+
+export type MealPickupRedemption = {
+  order_id: string;
+  order_number: string;
+  pickup_code: string;
+  status: "picked_up";
+  redeemed_at: string;
 };

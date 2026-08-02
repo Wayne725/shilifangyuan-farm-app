@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { useState } from "react";
 import {
@@ -34,6 +33,16 @@ const accounts = [
     password: "customer123",
   },
   {
+    label: "補件中",
+    email: "supplement@shilifangyuan.tw",
+    password: "customer123",
+  },
+  {
+    label: "待付款",
+    email: "pending@shilifangyuan.tw",
+    password: "customer123",
+  },
+  {
     label: "管理員",
     email: "admin@shilifangyuan.tw",
     password: "admin123",
@@ -44,7 +53,6 @@ export default function LoginScreen() {
   const usingBuiltInData = !getApiBaseUrl();
   const { login } = useAuth();
   const { workspace, lastRoute } = useWorkspace();
-  const queryClient = useQueryClient();
   const [email, setEmail] = useState(accounts[0]!.email);
   const [password, setPassword] = useState(
     usingBuiltInData ? accounts[0]!.password : "",
@@ -57,7 +65,6 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const user = await login(email, password);
-      queryClient.clear();
       router.replace(
         (user.user_role === "admin"
           ? "/admin"
@@ -200,14 +207,20 @@ const styles = StyleSheet.create({
   },
   accountTitle: { color: colors.forest, fontSize: 14, fontWeight: "900" },
   accountHint: { color: colors.muted, fontSize: 12, marginTop: 3 },
-  accountRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  accountRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 12,
+  },
   account: {
     alignItems: "center",
     backgroundColor: colors.paper,
     borderColor: colors.line,
     borderRadius: radii.sm,
     borderWidth: 1,
-    flex: 1,
+    flexBasis: 100,
+    flexGrow: 1,
     gap: 5,
     paddingVertical: 11,
   },

@@ -18,6 +18,7 @@ import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
 import type {
+  MemberProposal,
   MemberProposalStatus,
   MemberVoteChoice,
 } from "../../src/types";
@@ -39,15 +40,258 @@ const votes: { value: MemberVoteChoice; label: string }[] = [
   { value: "abstain", label: "棄權" },
 ];
 
+const voteLabels: Record<MemberVoteChoice, string> = {
+  yes: "贊成",
+  no: "反對",
+  abstain: "棄權",
+};
+
+function ProposalCard({ proposal }: { proposal: MemberProposal }) {
+  const queryClient = useQueryClient();
+  const [commentDraft, setCommentDraft] = useState("");
+  const commentsOpen = ["discussion", "voting"].includes(proposal.status);
+  const votesVisible = ["voting", "passed", "rejected", "closed"].includes(
+    proposal.status,
+  );
+  const commentsQuery = useQuery({
+    queryKey: ["member-proposal-comments", proposal.id],
+    queryFn: () => api.memberProposalComments(proposal.id),
+    enabled: commentsOpen,
+  });
+  const votesQuery = useQuery({
+    queryKey: ["member-proposal-votes", proposal.id],
+    queryFn: () => api.memberProposalVotes(proposal.id),
+    enabled: votesVisible,
+  });
+  const vote = useMutation({
+    mutationFn: (choice: MemberVoteChoice) =>
+      api.voteMemberProposal(proposal.id, choice),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["member-proposals"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["member-proposal-votes", proposal.id],
+        }),
+      ]);
+    },
+  });
+  const comment = useMutation({
+    mutationFn: (body: string) =>
+      api.addMemberProposalComment(proposal.id, body),
+    onSuccess: async () => {
+      setCommentDraft("");
+      await queryClient.invalidateQueries({
+        queryKey: ["member-proposal-comments", proposal.id],
+      });
+    },
+  });
+  const voters =
+    proposal.yes_count + proposal.no_count + proposal.abstain_count;
+  const actionError = vote.error ?? comment.error;
+
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardTop}>
+        <StatusPill
+          label={proposalLabels[proposal.status]}
+          tone={
+            proposal.status === "passed"
+              ? "positive"
+              : proposal.status === "rejected"
+                ? "danger"
+                : proposal.status === "voting"
+                  ? "warning"
+                  : "neutral"
+          }
+        />
+        <Text style={styles.author}>提案人 {proposal.created_by_name}</Text>
+      </View>
+      <Text style={styles.title}>{proposal.title}</Text>
+      <Text style={styles.summary}>{proposal.summary}</Text>
+      {proposal.status === "discussion" && proposal.discussion_ends_at ? (
+        <View style={styles.notice}>
+          <Ionicons
+            color={colors.forest}
+            name="chatbubble-ellipses-outline"
+            size={19}
+          />
+          <Text style={styles.noticeText}>
+            討論至 {dateTime(proposal.discussion_ends_at)}
+          </Text>
+        </View>
+      ) : null}
+      {votesVisible ? (
+        <>
+          <View style={styles.tally}>
+            <View style={styles.tallyItem}>
+              <Text style={styles.tallyValue}>{proposal.yes_count}</Text>
+              <Text style={styles.tallyLabel}>贊成</Text>
+            </View>
+            <View style={styles.tallyItem}>
+              <Text style={styles.tallyValue}>{proposal.no_count}</Text>
+              <Text style={styles.tallyLabel}>反對</Text>
+            </View>
+            <View style={styles.tallyItem}>
+              <Text style={styles.tallyValue}>{proposal.abstain_count}</Text>
+              <Text style={styles.tallyLabel}>棄權</Text>
+            </View>
+          </View>
+          <Text style={styles.voterMeta}>
+            共 {voters} 人投票，最低投票數 {proposal.minimum_voters} 人
+            {proposal.status === "voting" && proposal.voting_ends_at
+              ? `，${dateTime(proposal.voting_ends_at)} 截止`
+              : ""}
+          </Text>
+          {proposal.status === "voting" ? (
+            <View style={styles.voteRow}>
+              {votes.map((choice) => {
+                const selected = proposal.my_vote === choice.value;
+                const submitting =
+                  vote.isPending && vote.variables === choice.value;
+                return (
+                  <Button
+                    compact
+                    disabled={vote.isPending || selected}
+                    key={choice.value}
+                    label={selected ? `已選${choice.label}` : choice.label}
+                    loading={submitting}
+                    onPress={() => vote.mutate(choice.value)}
+                    variant={selected ? "primary" : "quiet"}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
+        </>
+      ) : null}
+      {votesVisible ? (
+        <View style={styles.governanceSection}>
+          <Text style={styles.commentHeading}>公開記名票</Text>
+          {votesQuery.isLoading ? (
+            <View style={styles.sectionState}>
+              <Text style={styles.sectionStateText}>載入投票名單中…</Text>
+            </View>
+          ) : votesQuery.isError ? (
+            <View style={styles.sectionState}>
+              <Text style={styles.sectionErrorText}>無法載入投票名單</Text>
+              <Button
+                compact
+                label="重試"
+                onPress={() => votesQuery.refetch()}
+                variant="quiet"
+              />
+            </View>
+          ) : votesQuery.data?.length ? (
+            <View style={styles.namedVoteList}>
+              {votesQuery.data.map((item) => (
+                <View key={item.user_id} style={styles.namedVoteRow}>
+                  <View style={styles.namedVoteIdentity}>
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>
+                        {item.display_name.trim().slice(0, 1) || "社"}
+                      </Text>
+                    </View>
+                    <View style={styles.namedVoteCopy}>
+                      <Text style={styles.namedVoteName}>
+                        {item.display_name}
+                      </Text>
+                      <Text style={styles.namedVoteTime}>
+                        {dateTime(item.updated_at)}
+                      </Text>
+                    </View>
+                  </View>
+                  <StatusPill
+                    label={voteLabels[item.choice]}
+                    tone={
+                      item.choice === "yes"
+                        ? "positive"
+                        : item.choice === "no"
+                          ? "danger"
+                          : "neutral"
+                    }
+                  />
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.sectionState}>
+              <Text style={styles.sectionStateText}>目前還沒有人投票</Text>
+            </View>
+          )}
+        </View>
+      ) : null}
+      {commentsOpen ? (
+        <View style={styles.comments}>
+          <Text style={styles.commentHeading}>社員討論</Text>
+          {commentsQuery.isLoading ? (
+            <View style={styles.sectionState}>
+              <Text style={styles.sectionStateText}>載入討論中…</Text>
+            </View>
+          ) : commentsQuery.isError ? (
+            <View style={styles.sectionState}>
+              <Text style={styles.sectionErrorText}>無法載入社員討論</Text>
+              <Button
+                compact
+                label="重試"
+                onPress={() => commentsQuery.refetch()}
+                variant="quiet"
+              />
+            </View>
+          ) : commentsQuery.data?.length ? (
+            commentsQuery.data.map((item) => (
+              <View key={item.id} style={styles.comment}>
+                <View style={styles.commentMeta}>
+                  <Text style={styles.commentAuthor}>{item.author_name}</Text>
+                  <Text style={styles.commentTime}>
+                    {dateTime(item.created_at)}
+                  </Text>
+                </View>
+                <Text style={styles.commentBody}>{item.body}</Text>
+              </View>
+            ))
+          ) : (
+            <View style={styles.sectionState}>
+              <Text style={styles.sectionStateText}>
+                尚無留言，歡迎提出第一個具體意見。
+              </Text>
+            </View>
+          )}
+          <TextInput
+            accessibilityLabel={`${proposal.title}的留言內容`}
+            editable={!comment.isPending}
+            multiline
+            onChangeText={setCommentDraft}
+            placeholder="留下具體意見"
+            placeholderTextColor={colors.sage}
+            style={styles.commentInput}
+            textAlignVertical="top"
+            value={commentDraft}
+          />
+          <Button
+            compact
+            disabled={!commentDraft.trim() || comment.isPending}
+            label="送出留言"
+            loading={comment.isPending}
+            onPress={() => comment.mutate(commentDraft.trim())}
+            variant="secondary"
+          />
+        </View>
+      ) : null}
+      {actionError ? (
+        <View style={styles.actionError}>
+          <InlineMessage text={getErrorMessage(actionError)} tone="danger" />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export default function MemberProposalsScreen() {
   const { isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
-  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>(
-    {},
-  );
   const membership = useQuery({
     queryKey: ["membership"],
     queryFn: api.membership,
@@ -61,16 +305,6 @@ export default function MemberProposalsScreen() {
   });
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ["member-proposals"] });
-  const vote = useMutation({
-    mutationFn: ({
-      id,
-      choice,
-    }: {
-      id: string;
-      choice: MemberVoteChoice;
-    }) => api.voteMemberProposal(id, choice),
-    onSuccess: refresh,
-  });
   const create = useMutation({
     mutationFn: () =>
       api.createMemberProposal({ title: title.trim(), summary: summary.trim() }),
@@ -78,14 +312,6 @@ export default function MemberProposalsScreen() {
       setTitle("");
       setSummary("");
       setShowForm(false);
-      await refresh();
-    },
-  });
-  const comment = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: string }) =>
-      api.addMemberProposalComment(id, body),
-    onSuccess: async (_, variables) => {
-      setCommentDrafts((current) => ({ ...current, [variables.id]: "" }));
       await refresh();
     },
   });
@@ -104,6 +330,19 @@ export default function MemberProposalsScreen() {
     );
   }
   if (membership.isLoading) return <LoadingState label="確認社員資格" />;
+  if (membership.isError) {
+    return (
+      <Screen>
+        <PageHeader title="社員提案" />
+        <EmptyState
+          action="重新載入"
+          description="目前無法確認社員資格。"
+          onAction={() => membership.refetch()}
+          title="社員資料載入失敗"
+        />
+      </Screen>
+    );
+  }
   if (!isMember) {
     return (
       <Screen>
@@ -118,7 +357,7 @@ export default function MemberProposalsScreen() {
     );
   }
 
-  const error = vote.error ?? create.error ?? comment.error;
+  const error = create.error;
   return (
     <Screen>
       <PageHeader
@@ -175,134 +414,18 @@ export default function MemberProposalsScreen() {
       </View>
       {query.isLoading ? (
         <LoadingState label="載入社員提案" />
+      ) : query.isError ? (
+        <EmptyState
+          action="重新載入"
+          description="目前無法取得社員提案。"
+          onAction={() => query.refetch()}
+          title="提案載入失敗"
+        />
       ) : query.data?.length ? (
         <View style={styles.list}>
-          {query.data.map((proposal) => {
-            const voters =
-              proposal.yes_count + proposal.no_count + proposal.abstain_count;
-            return (
-              <View key={proposal.id} style={styles.card}>
-                <View style={styles.cardTop}>
-                  <StatusPill
-                    label={proposalLabels[proposal.status]}
-                    tone={
-                      proposal.status === "passed"
-                        ? "positive"
-                        : proposal.status === "rejected"
-                          ? "danger"
-                          : proposal.status === "voting"
-                            ? "warning"
-                            : "neutral"
-                    }
-                  />
-                  <Text style={styles.author}>
-                    提案人 {proposal.created_by_name}
-                  </Text>
-                </View>
-                <Text style={styles.title}>{proposal.title}</Text>
-                <Text style={styles.summary}>{proposal.summary}</Text>
-                {proposal.status === "discussion" &&
-                proposal.discussion_ends_at ? (
-                  <View style={styles.notice}>
-                    <Ionicons
-                      color={colors.forest}
-                      name="chatbubble-ellipses-outline"
-                      size={19}
-                    />
-                    <Text style={styles.noticeText}>
-                      討論至 {dateTime(proposal.discussion_ends_at)}
-                    </Text>
-                  </View>
-                ) : null}
-                {proposal.status === "voting" ? (
-                  <>
-                    <View style={styles.tally}>
-                      <View style={styles.tallyItem}>
-                        <Text style={styles.tallyValue}>{proposal.yes_count}</Text>
-                        <Text style={styles.tallyLabel}>贊成</Text>
-                      </View>
-                      <View style={styles.tallyItem}>
-                        <Text style={styles.tallyValue}>{proposal.no_count}</Text>
-                        <Text style={styles.tallyLabel}>反對</Text>
-                      </View>
-                      <View style={styles.tallyItem}>
-                        <Text style={styles.tallyValue}>
-                          {proposal.abstain_count}
-                        </Text>
-                        <Text style={styles.tallyLabel}>棄權</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.voterMeta}>
-                      已有 {voters} 人投票，最低投票數 {proposal.minimum_voters} 人
-                      {proposal.voting_ends_at
-                        ? `，${dateTime(proposal.voting_ends_at)} 截止`
-                        : ""}
-                    </Text>
-                    <View style={styles.voteRow}>
-                      {votes.map((choice) => (
-                        <Button
-                          compact
-                          key={choice.value}
-                          label={
-                            proposal.my_vote === choice.value
-                              ? `已選${choice.label}`
-                              : choice.label
-                          }
-                          loading={vote.isPending}
-                          onPress={() =>
-                            vote.mutate({ id: proposal.id, choice: choice.value })
-                          }
-                          variant={
-                            proposal.my_vote === choice.value
-                              ? "primary"
-                              : "quiet"
-                          }
-                        />
-                      ))}
-                    </View>
-                  </>
-                ) : null}
-                {["discussion", "voting"].includes(proposal.status) ? (
-                  <View style={styles.comments}>
-                    <Text style={styles.commentHeading}>社員討論</Text>
-                    {(proposal.comments ?? []).slice(-2).map((item) => (
-                      <View key={item.id} style={styles.comment}>
-                        <Text style={styles.commentAuthor}>
-                          {item.author_name}
-                        </Text>
-                        <Text style={styles.commentBody}>{item.body}</Text>
-                      </View>
-                    ))}
-                    <TextInput
-                      onChangeText={(body) =>
-                        setCommentDrafts((current) => ({
-                          ...current,
-                          [proposal.id]: body,
-                        }))
-                      }
-                      placeholder="留下具體意見"
-                      placeholderTextColor={colors.sage}
-                      style={styles.commentInput}
-                      value={commentDrafts[proposal.id] ?? ""}
-                    />
-                    <Button
-                      compact
-                      disabled={!commentDrafts[proposal.id]?.trim()}
-                      label="送出留言"
-                      loading={comment.isPending}
-                      onPress={() =>
-                        comment.mutate({
-                          id: proposal.id,
-                          body: commentDrafts[proposal.id]!.trim(),
-                        })
-                      }
-                      variant="secondary"
-                    />
-                  </View>
-                ) : null}
-              </View>
-            );
-          })}
+          {query.data.map((proposal) => (
+            <ProposalCard key={proposal.id} proposal={proposal} />
+          ))}
         </View>
       ) : (
         <EmptyState
@@ -393,6 +516,53 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   voteRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  governanceSection: {
+    borderTopColor: colors.line,
+    borderTopWidth: 1,
+    gap: 8,
+    marginTop: 14,
+    paddingTop: 12,
+  },
+  namedVoteList: { gap: 7 },
+  namedVoteRow: {
+    alignItems: "center",
+    backgroundColor: colors.cream,
+    borderRadius: radii.md,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 56,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  namedVoteIdentity: {
+    alignItems: "center",
+    flex: 1,
+    flexDirection: "row",
+    gap: 9,
+  },
+  namedVoteCopy: { flex: 1 },
+  namedVoteName: { color: colors.forest, fontSize: 13, fontWeight: "800" },
+  namedVoteTime: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  avatar: {
+    alignItems: "center",
+    backgroundColor: colors.sageLight,
+    borderRadius: 18,
+    height: 36,
+    justifyContent: "center",
+    width: 36,
+  },
+  avatarText: { color: colors.forest, fontSize: 14, fontWeight: "900" },
+  sectionState: {
+    alignItems: "center",
+    backgroundColor: colors.cream,
+    borderRadius: radii.md,
+    gap: 8,
+    justifyContent: "center",
+    minHeight: 52,
+    padding: 8,
+  },
+  sectionStateText: { color: colors.muted, fontSize: 12, lineHeight: 18 },
+  sectionErrorText: { color: colors.danger, fontSize: 12 },
   comments: {
     borderTopColor: colors.line,
     borderTopWidth: 1,
@@ -406,7 +576,13 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     padding: 10,
   },
+  commentMeta: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
   commentAuthor: { color: colors.forest, fontSize: 12, fontWeight: "800" },
+  commentTime: { color: colors.muted, fontSize: 12 },
   commentBody: {
     color: colors.charcoal,
     fontSize: 12,
@@ -419,7 +595,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     color: colors.charcoal,
     fontSize: 13,
-    minHeight: 46,
+    minHeight: 52,
     paddingHorizontal: 12,
+    paddingVertical: 12,
   },
+  actionError: { marginTop: 12 },
 });

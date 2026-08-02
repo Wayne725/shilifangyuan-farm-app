@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { loadStoredSession, storeSession } from "../lib/sessionStorage";
 import { api, setApiSession, setSessionHandlers } from "../services/api";
@@ -21,22 +22,27 @@ type AuthContextValue = {
   /** False until the persisted session has been read back on startup. */
   isRestoring: boolean;
   login: (email: string, password: string) => Promise<User>;
+  refreshUser: () => Promise<User | null>;
   logout: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: PropsWithChildren) {
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<AuthSession | null>(null);
   const [isRestoring, setIsRestoring] = useState(true);
   const sessionRef = useRef<AuthSession | null>(null);
 
   const apply = useCallback((next: AuthSession | null) => {
+    const previousUserId = sessionRef.current?.user.id ?? null;
+    const nextUserId = next?.user.id ?? null;
+    if (previousUserId !== nextUserId) queryClient.clear();
     sessionRef.current = next;
     setSession(next);
     setApiSession(next);
     void storeSession(next);
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     setSessionHandlers({
@@ -75,13 +81,33 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, [apply]);
 
-  const login = async (email: string, password: string) => {
-    const nextSession = await api.login(email.trim(), password);
-    apply(nextSession);
-    return nextSession.user;
-  };
+  const login = useCallback(
+    async (email: string, password: string) => {
+      const nextSession = await api.login(email.trim(), password);
+      apply(nextSession);
+      return nextSession.user;
+    },
+    [apply],
+  );
 
-  const logout = () => apply(null);
+  const refreshUser = useCallback(async () => {
+    const current = sessionRef.current;
+    if (!current) return null;
+    const expectedUserId = current.user.id;
+    const user = await api.me();
+    const latest = sessionRef.current;
+    if (
+      !latest ||
+      latest.user.id !== expectedUserId ||
+      user.id !== expectedUserId
+    ) {
+      return null;
+    }
+    apply({ ...latest, user });
+    return user;
+  }, [apply]);
+
+  const logout = useCallback(() => apply(null), [apply]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -91,9 +117,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       isAdmin: session?.user.user_role === "admin",
       isRestoring,
       login,
+      refreshUser,
       logout,
     }),
-    [session, isRestoring],
+    [session, isRestoring, login, refreshUser, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

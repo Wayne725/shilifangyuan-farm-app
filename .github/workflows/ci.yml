@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 jobs:
-  frontend:
+  frontend-quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +18,23 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm export:web
+
+  frontend-export:
+    needs: frontend-quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [web, ios, android]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm export:${{ matrix.platform }}
 
   backend:
     runs-on: ubuntu-latest
@@ -49,7 +65,12 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
-      - run: alembic upgrade head
+      - name: Verify fresh migration upgrade
+        run: alembic upgrade head
+      - name: Verify full migration rollback
+        run: alembic downgrade base
+      - name: Verify migration re-upgrade
+        run: alembic upgrade head
       - run: pytest
 
   api-contract:

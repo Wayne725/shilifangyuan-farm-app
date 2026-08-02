@@ -340,6 +340,8 @@ async def test_r2_presigns_random_private_key_and_confirms_head() -> None:
     assert ticket.object_key.endswith(".jpg")
     assert ticket.expires_in_seconds == 300
     assert ticket.required_headers["x-amz-meta-sha256"] == checksum
+    assert "Content-Length" not in ticket.required_headers
+    assert "ContentLength" not in client.presigned_calls[0][1]
     assert "signed=1" in ticket.upload_url
     assert confirmed.etag == "etag-123"
     assert client.presigned_calls[0][2:] == (300, "PUT")
@@ -386,6 +388,12 @@ def sandbox_settings(**overrides) -> Settings:
         "jwt_secret": "j" * 32,
         "internal_reconcile_secret": "r" * 32,
         "demo_reset_confirmation": "reset-code-strong",
+        "ecpay_payment_merchant_id": "3002607",
+        "ecpay_payment_hash_key": "pwFHCqoQZGmho4w6",
+        "ecpay_payment_hash_iv": "EkRm7iFT261dpevs",
+        "ecpay_invoice_merchant_id": "2000132",
+        "ecpay_invoice_hash_key": "ejCk326UnaZWKisg",
+        "ecpay_invoice_hash_iv": "q9jcZX8Ib9LM8wYk",
         "ecpay_logistics_merchant_id": LOGISTICS_MERCHANT_ID,
         "ecpay_logistics_hash_key": LOGISTICS_HASH_KEY,
         "ecpay_logistics_hash_iv": LOGISTICS_HASH_IV,
@@ -393,6 +401,8 @@ def sandbox_settings(**overrides) -> Settings:
         "cloudflare_r2_access_key_id": "access-key",
         "cloudflare_r2_secret_access_key": "secret-key",
         "cloudflare_r2_bucket": "private-documents",
+        "sendgrid_api_key": "SG.test-secret",
+        "sendgrid_from_email": "verified@example.test",
         "pii_encryption_keys_json": json.dumps(
             {"v1": base64.b64encode(b"p" * 32).decode("ascii")}
         ),

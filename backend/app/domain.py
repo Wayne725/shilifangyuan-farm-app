@@ -5,6 +5,8 @@ from typing import List, Optional
 
 from .config import get_settings
 from .models import (
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     GroupCampaign,
     GroupDecisionStatus,
@@ -16,6 +18,7 @@ from .models import (
     Product,
     ProposalStatus,
     SalesChannel,
+    ShipmentStatus,
     VoteProposal,
 )
 
@@ -266,13 +269,66 @@ def order_available_actions(
             and order.fulfillment_status != FulfillmentStatus.PICKED_UP
         ):
             actions.append("refund")
-        if order.payment_status == PaymentStatus.PAID:
-            if order.fulfillment_status == FulfillmentStatus.PENDING_CONFIRMATION:
-                actions.append("start_preparing")
-            elif order.fulfillment_status == FulfillmentStatus.PREPARING:
+        campaign_ready = (
+            order.order_kind != OrderKind.GROUP
+            or (
+                order.group_campaign is not None
+                and order.group_campaign.decision_status
+                == GroupDecisionStatus.CONFIRMED
+            )
+        )
+        fulfillment_allowed = (
+            order.sales_channel != SalesChannel.MEAL_PREORDER
+            and campaign_ready
+        )
+        manual_fulfillment_allowed = (
+            fulfillment_allowed
+            and order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
+        )
+        if (
+            order.payment_status == PaymentStatus.PAID
+            and fulfillment_allowed
+            and order.fulfillment_status
+            == FulfillmentStatus.PENDING_CONFIRMATION
+        ):
+            actions.append("start_preparing")
+        if (
+            order.payment_status == PaymentStatus.PAID
+            and manual_fulfillment_allowed
+        ):
+            if order.fulfillment_status == FulfillmentStatus.PREPARING:
                 actions.append("mark_ready")
             elif order.fulfillment_status == FulfillmentStatus.READY_FOR_PICKUP:
                 actions.append("mark_picked_up")
+        fulfillment = order.__dict__.get("fulfillment")
+        shipment = (
+            fulfillment.__dict__.get("shipment")
+            if fulfillment is not None
+            else None
+        )
+        if (
+            order.payment_status == PaymentStatus.PAID
+            and order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
+            and campaign_ready
+            and order.fulfillment_status == FulfillmentStatus.PREPARING
+            and fulfillment is not None
+            and fulfillment.status == FulfillmentState.PREPARING
+            and shipment is not None
+            and shipment.status == ShipmentStatus.READY_TO_CREATE
+        ):
+            actions.append("create_shipment")
+        if (
+            get_settings().environment.strip().lower()
+            in {"development", "sandbox", "test"}
+            and shipment is not None
+            and shipment.status
+            in {
+                ShipmentStatus.CREATED,
+                ShipmentStatus.IN_TRANSIT,
+                ShipmentStatus.EXCEPTION,
+            }
+        ):
+            actions.append("advance_shipment")
     return list(dict.fromkeys(actions))
 
 

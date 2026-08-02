@@ -449,10 +449,18 @@ async def update_fulfillment(
     order = await load_order(session, order_id, lock=True)
     if order.payment_status != PaymentStatus.PAID:
         raise HTTPException(status_code=409, detail="未付款訂單無法出貨")
-    if order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS:
+    if (
+        order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
+        and body.status != FulfillmentStatus.PREPARING
+    ):
         raise HTTPException(
             status_code=409,
-            detail="物流訂單請由訂單與物流模組推進貨態",
+            detail="物流訂單只能先由後台標記為備貨中，後續請由物流模組推進",
+        )
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        raise HTTPException(
+            status_code=409,
+            detail="便當訂單請由便當場次取餐流程推進",
         )
     if (
         order.order_kind == OrderKind.GROUP

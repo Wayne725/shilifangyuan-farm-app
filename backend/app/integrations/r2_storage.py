@@ -130,11 +130,9 @@ class R2DocumentStorage:
             "Bucket": self.settings.bucket,
             "Key": object_key,
             "ContentType": normalized_type,
-            "ContentLength": content_length,
         }
         required_headers: Dict[str, str] = {
             "Content-Type": normalized_type,
-            "Content-Length": str(content_length),
         }
         if sha256:
             normalized_sha256 = sha256.lower()

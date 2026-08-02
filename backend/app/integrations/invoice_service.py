@@ -17,6 +17,7 @@ from ..models import (
     InvoiceCarrierType,
     InvoiceStatus,
     Order,
+    OrderFulfillment,
     PaymentStatus,
     TaxType,
 )
@@ -72,6 +73,23 @@ def invoice_request_from_order(
         )
         for item in order.items
     ]
+    shipment = (
+        order.fulfillment.shipment
+        if order.fulfillment is not None
+        else None
+    )
+    if shipment is not None and shipment.shipping_fee > 0:
+        lines.append(
+            InvoiceLine(
+                name="運費",
+                quantity=1,
+                unit_price=shipment.shipping_fee,
+                unit="筆",
+                tax_type="1",
+            )
+        )
+    if sum(line.amount for line in lines) != order.amount_total:
+        raise InvoiceApplicationError("發票明細總額與訂單總額不一致")
     return InvoiceIssueRequest(
         relate_number=relate_number,
         customer_email=order.contact_email,
@@ -119,7 +137,9 @@ async def issue_picked_up_order_invoice(
         .options(
             selectinload(Order.items),
             selectinload(Order.invoice),
-            selectinload(Order.fulfillment),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
         )
         .with_for_update()
     )

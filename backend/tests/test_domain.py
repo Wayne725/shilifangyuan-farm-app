@@ -32,17 +32,25 @@ from app.models import (
     GroupIntakeStatus,
     InventoryReservation,
     ExternalEvent,
+    FulfillmentMethod,
+    FulfillmentState,
     Membership,
     MembershipStatus,
     MembershipType,
     Order,
+    OrderFulfillment,
     OrderKind,
     PaymentStatus,
     PaymentAttempt,
     Product,
     ProposalStatus,
+    ShippingChannel,
+    ShippingTemperature,
+    Shipment,
+    ShipmentStatus,
     TargetType,
     ReservationStatus,
+    SalesChannel,
     User,
     UserRole,
     VoteProposal,
@@ -125,6 +133,59 @@ def test_bundle_and_campaign_reject_member_price_above_public_price() -> None:
         )
 
 
+def test_campaign_shipping_contract_is_normalized_and_validated() -> None:
+    base_payload = {
+        "target_type": TargetType.PRODUCT,
+        "target_id": "product-1",
+        "title": "可配送團購",
+        "member_price": 100,
+        "nonmember_price": 120,
+        "min_paid_quantity": 10,
+        "supply_cap": 20,
+        "deadline": NOW + timedelta(days=1),
+        "estimated_pickup_start": NOW + timedelta(days=2),
+        "estimated_pickup_end": NOW + timedelta(days=3),
+    }
+
+    pickup_only = CampaignCreate(
+        **base_payload,
+        can_ship=False,
+        shipping_temperature=ShippingTemperature.AMBIENT,
+        allowed_shipping_channels=[ShippingChannel.HOME_DELIVERY],
+    )
+    assert pickup_only.shipping_temperature is None
+    assert pickup_only.allowed_shipping_channels == []
+
+    with pytest.raises(
+        ValidationError,
+        match="可配送團購必須設定溫層與至少一個物流通路",
+    ):
+        CampaignCreate(**base_payload, can_ship=True)
+
+    with pytest.raises(
+        ValidationError,
+        match="冷藏或冷凍團購只支援宅配",
+    ):
+        CampaignCreate(
+            **base_payload,
+            can_ship=True,
+            shipping_temperature=ShippingTemperature.CHILLED,
+            allowed_shipping_channels=[ShippingChannel.SEVEN_ELEVEN],
+        )
+
+    chilled_delivery = CampaignCreate(
+        **base_payload,
+        can_ship=True,
+        shipping_temperature=ShippingTemperature.CHILLED,
+        allowed_shipping_channels=[ShippingChannel.HOME_DELIVERY],
+    )
+    assert chilled_delivery.can_ship is True
+    assert chilled_delivery.shipping_temperature == ShippingTemperature.CHILLED
+    assert chilled_delivery.allowed_shipping_channels == [
+        ShippingChannel.HOME_DELIVERY
+    ]
+
+
 def test_vote_status_freezes_at_deadline() -> None:
     proposal = VoteProposal(
         status=ProposalStatus.VOTING,
@@ -183,6 +244,61 @@ def test_regular_paid_order_can_cancel_only_before_preparing() -> None:
     assert "cancel" in order_available_actions(order, now=NOW)
     order.fulfillment_status = "preparing"
     assert "cancel" not in order_available_actions(order, now=NOW)
+
+
+def test_admin_fulfillment_actions_match_route_guards() -> None:
+    order = Order(
+        id="order-actions",
+        order_number="TEST-ACTIONS",
+        order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.REGULAR,
+        fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
+        user_id="user-1",
+        membership_type_snapshot=MembershipType.MEMBER,
+        amount_total=100,
+        contact_email="member@example.com",
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status="pending_confirmation",
+    )
+    assert "start_preparing" in order_available_actions(order, True, NOW)
+
+    order.fulfillment_method = FulfillmentMethod.ECPAY_LOGISTICS
+    assert "start_preparing" in order_available_actions(order, True, NOW)
+    order.fulfillment_status = "preparing"
+    order.fulfillment = OrderFulfillment(
+        id="fulfillment-actions",
+        order_id=order.id,
+        method=FulfillmentMethod.ECPAY_LOGISTICS,
+        status=FulfillmentState.PREPARING,
+    )
+    order.fulfillment.shipment = Shipment(
+        id="shipment-actions",
+        order_fulfillment_id=order.fulfillment.id,
+        channel=ShippingChannel.HOME_DELIVERY,
+        temperature=ShippingTemperature.AMBIENT,
+        status=ShipmentStatus.READY_TO_CREATE,
+        shipping_fee=160,
+    )
+    assert "create_shipment" in order_available_actions(order, True, NOW)
+    order.fulfillment.shipment.status = ShipmentStatus.CREATED
+    assert "advance_shipment" in order_available_actions(order, True, NOW)
+
+    order.fulfillment_method = FulfillmentMethod.EVENT_PICKUP
+    order.fulfillment_status = "pending_confirmation"
+    order.order_kind = OrderKind.REGULAR
+    order.sales_channel = SalesChannel.MEAL_PREORDER
+    assert "start_preparing" not in order_available_actions(order, True, NOW)
+
+    order.fulfillment_method = FulfillmentMethod.COOPERATIVE_PICKUP
+    order.order_kind = OrderKind.GROUP
+    order.sales_channel = SalesChannel.GROUP
+    order.group_campaign = make_campaign(
+        decision_status=GroupDecisionStatus.PENDING_CONFIRMATION,
+    )
+    assert "start_preparing" not in order_available_actions(order, True, NOW)
+
+    order.group_campaign.decision_status = GroupDecisionStatus.CONFIRMED
+    assert "start_preparing" in order_available_actions(order, True, NOW)
 
 
 def test_password_hash_and_jwt_round_trip() -> None:

@@ -20,6 +20,7 @@ const noticeIcons: Record<
 > = {
   proposal: "chatbubbles-outline",
   group: "people-outline",
+  membership: "id-card-outline",
   payment: "card-outline",
   pickup: "storefront-outline",
   invoice: "document-text-outline",
@@ -46,7 +47,7 @@ export default function NotificationsScreen() {
     <Screen>
       <PageHeader
         onBack={() => router.back()}
-        subtitle="團購、付款、取貨與發票的重要進度都會保留在這裡。"
+        subtitle="社務、團購、付款、取貨與發票的重要進度都會保留在這裡。"
         title="通知中心"
       />
       {query.isLoading ? (

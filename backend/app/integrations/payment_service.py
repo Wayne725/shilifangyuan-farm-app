@@ -19,8 +19,11 @@ from ..models import (
     GroupIntakeStatus,
     InventoryReservation,
     InvoiceCarrierType,
+    MealEvent,
     MealEventOffering,
     MealEventStatus,
+    Membership,
+    MembershipApplication,
     MembershipCharge,
     MembershipChargeStatus,
     MembershipApplicationStatus,
@@ -56,6 +59,14 @@ from .invoice import is_mobile_barcode_format
 
 class PaymentApplicationError(ValueError):
     pass
+
+
+SUCCESS_CALLBACK_TERMINAL_STATUSES = {
+    PaymentStatus.PAID,
+    PaymentStatus.LATE_PAID_REFUND_REQUIRED,
+    PaymentStatus.REFUND_PENDING,
+    PaymentStatus.REFUNDED,
+}
 
 
 def payment_adapter_from_settings(settings: Settings) -> ECPayAIOAdapter:
@@ -468,6 +479,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 ).selectinload(MembershipCharge.application),
                 selectinload(PaymentAttempt.reservations),
             )
+            .execution_options(populate_existing=True)
             .with_for_update()
         )
         if attempt is None:
@@ -513,7 +525,7 @@ class SQLAlchemyPaymentCallbackRepository:
             await self.session.commit()
             return "failed"
 
-        if attempt.status == PaymentStatus.PAID:
+        if attempt.status in SUCCESS_CALLBACK_TERMINAL_STATUSES:
             event.processed = True
             event.processed_at = datetime.now(timezone.utc)
             await self.session.commit()
@@ -545,23 +557,46 @@ class SQLAlchemyPaymentCallbackRepository:
         )
         attempt.provider_response = dict(payload)
 
-        if attempt.membership_charge is not None:
-            charge = attempt.membership_charge
+        if attempt.membership_charge_id is not None:
+            loaded_charge = attempt.membership_charge
+            if loaded_charge is None:
+                raise PaymentApplicationError("付款嘗試缺少入社款項")
+            application = await self.session.scalar(
+                select(MembershipApplication)
+                .where(
+                    MembershipApplication.id == loaded_charge.application_id
+                )
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            membership = await self.session.scalar(
+                select(Membership)
+                .where(Membership.id == loaded_charge.membership_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            charge = await self.session.scalar(
+                select(MembershipCharge)
+                .where(MembershipCharge.id == loaded_charge.id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if application is None or membership is None or charge is None:
+                raise PaymentApplicationError("入社付款主體不完整")
             charge_user = await self.session.get(User, charge.user_id)
             service = NotificationService(
                 SQLAlchemyNotificationRepository(self.session)
             )
             if (
-                charge.application.status
-                != MembershipApplicationStatus.APPROVED
-                or charge.membership.status
-                != MembershipStatus.PENDING_PAYMENT
+                application.status != MembershipApplicationStatus.APPROVED
+                or membership.status != MembershipStatus.PENDING_PAYMENT
             ):
                 attempt.status = PaymentStatus.LATE_PAID_REFUND_REQUIRED
                 attempt.paid_at = current
-                charge.status = MembershipChargeStatus.REFUNDED
-                charge.paid_at = current
-                charge.refunded_at = current
+                if charge.status != MembershipChargeStatus.PAID:
+                    charge.status = MembershipChargeStatus.REFUNDED
+                    charge.paid_at = charge.paid_at or current
+                    charge.refunded_at = current
                 self.session.add(
                     Refund(
                         membership_charge_id=charge.id,
@@ -648,8 +683,18 @@ class SQLAlchemyPaymentCallbackRepository:
             raise PaymentApplicationError("付款嘗試缺少付款主體")
 
         if order.sales_channel == SalesChannel.MEAL_PREORDER:
+            meal_event = None
+            if order.meal_event_id is not None:
+                meal_event = await self.session.scalar(
+                    select(MealEvent)
+                    .where(MealEvent.id == order.meal_event_id)
+                    .execution_options(populate_existing=True)
+                    .with_for_update()
+                )
             if (
                 order.fulfillment_status == FulfillmentStatus.CANCELLED
+                or meal_event is None
+                or meal_event.status == MealEventStatus.CANCELLED
                 or not await self._consume_meal_reservations(
                     attempt,
                     payload,

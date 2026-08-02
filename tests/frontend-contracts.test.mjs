@@ -42,8 +42,24 @@ const checkoutSource = await readFile(
   new URL("../app/checkout.tsx", import.meta.url),
   "utf8",
 );
+const campaignDetailSource = await readFile(
+  new URL("../app/campaign/[id].tsx", import.meta.url),
+  "utf8",
+);
+const mealDetailSource = await readFile(
+  new URL("../app/meal/[id].tsx", import.meta.url),
+  "utf8",
+);
 const groupBuySource = await readFile(
   new URL("../app/(tabs)/group-buy.tsx", import.meta.url),
+  "utf8",
+);
+const ordersSource = await readFile(
+  new URL("../app/(tabs)/orders.tsx", import.meta.url),
+  "utf8",
+);
+const authSource = await readFile(
+  new URL("../src/store/AuthContext.tsx", import.meta.url),
   "utf8",
 );
 const productSection = demoSource
@@ -142,7 +158,8 @@ test("便當預購包含場次、訂單與取餐 QR", () => {
   assert.match(apiSource, /\/v1\/meal-events/);
   assert.match(apiSource, /createMealOrder/);
   assert.match(mealsSource, /我的便當/);
-  assert.match(mealOrderSource, /name="qr-code"/);
+  assert.match(mealOrderSource, /pickup_qr_payload/);
+  assert.doesNotMatch(mealOrderSource, /name="qr-code"/);
   assert.match(mealOrderSource, /六位取餐碼/);
 });
 
@@ -156,16 +173,85 @@ test("社務前端包含入社警告、活動、社員提案與管理審核", ()
   assert.match(adminSource, /社員治理提案/);
 });
 
-test("一般訂單與團購結帳皆可選擇綠界物流", async () => {
-  const campaignSource = await readFile(
-    new URL("../app/campaign/[id].tsx", import.meta.url),
-    "utf8",
+test("管理端可建立便當場次並依名單記錄活動出席", () => {
+  assert.match(apiSource, /\/v1\/admin\/meals/);
+  assert.match(apiSource, /adminCreateMealEvent/);
+  assert.match(apiSource, /\/v1\/admin\/activities\/\$\{id\}\/registrations/);
+  assert.match(apiSource, /adminMarkActivityAttendance/);
+  assert.match(adminSource, /新增便當餐點/);
+  assert.match(adminSource, /建立草稿場次/);
+  assert.match(adminSource, /查看報名名單/);
+  assert.match(adminSource, /確認社員簽到/);
+  assert.match(adminSource, /標記未出席/);
+});
+
+test("社員可撤回申請、維護自願公開名錄，管理端操作依會籍狀態顯示", () => {
+  assert.match(membersSource, /withdrawMembershipApplication/);
+  assert.match(membersSource, /撤回入社申請/);
+  assert.match(membersSource, /updateMemberDirectory/);
+  assert.match(membersSource, /公開給其他有效社員/);
+  assert.match(apiSource, /\/v1\/members\/me\/directory/);
+  assert.match(apiSource, /\/v1\/admin\/members/);
+  assert.match(adminSource, /membershipActionsFor/);
+  assert.match(adminSource, /\["submitted", "needs_revision"\]\.includes/);
+  assert.match(adminSource, /application\.status === "submitted"/);
+  assert.match(adminSource, /share-capital-return/);
+  assert.match(adminSource, /目前登入的管理員會籍不可/);
+  assert.match(apiSource, /deleteMembershipDocument/);
+  assert.match(apiSource, /adminMembershipDocumentDownloadUrl/);
+  assert.match(adminSource, /審查私密資料/);
+  assert.match(adminSource, /每次檢視證件都會寫入稽核紀錄/);
+  assert.match(membersSource, /canPayMembershipCharges/);
+  assert.match(membersSource, /wasMembershipActivated/);
+});
+
+test("入社付款返回後會輪詢會籍並同步社員價格", () => {
+  assert.match(authSource, /refreshUser: \(\) => Promise<User \| null>/);
+  assert.match(authSource, /const refreshUser = useCallback/);
+  assert.match(authSource, /latest\.user\.id !== expectedUserId/);
+  assert.match(authSource, /previousUserId !== nextUserId/);
+  assert.match(authSource, /queryClient\.clear\(\)/);
+  assert.match(membersSource, /refetchInterval/);
+  assert.match(membersSource, /paymentSyncUntil > Date\.now\(\)/);
+  assert.match(membersSource, /status === "pending_payment"/);
+  assert.match(membersSource, /auth-membership-sync/);
+  assert.match(membersSource, /重新同步社員資格/);
+});
+
+test("綠界付款或物流返回遇冷啟動時會重試且保留手動查詢", () => {
+  assert.match(ordersSource, /const resolveReturn = async/);
+  assert.match(ordersSource, /attempt < 7/);
+  assert.match(ordersSource, /setTimeout/);
+  assert.match(ordersSource, /重新查詢訂單/);
+  assert.ok(
+    ordersSource.indexOf("await queryClient.fetchQuery") <
+      ordersSource.indexOf("handledReturn.current = returnKey"),
+    "必須成功取得訂單後才能把返回流程標成已處理",
   );
+});
+
+test("管理員可不經投票直接建立正式團購", () => {
+  assert.match(apiSource, /createCampaign\(input:/);
+  assert.match(apiSource, /request<unknown>\("\/v1\/group-campaigns"/);
+  assert.match(adminSource, /直接建立正式團購/);
+  assert.match(adminSource, /label="直接開團"/);
+});
+
+test("一般訂單與團購結帳皆可選擇綠界物流", async () => {
   assert.match(checkoutSource, /綠界物流配送/);
   assert.match(checkoutSource, /home_delivery/);
-  assert.match(campaignSource, /綠界物流/);
+  assert.match(campaignDetailSource, /綠界物流/);
   assert.match(apiSource, /fulfillment_method/);
   assert.match(apiSource, /logistics_provider/);
+});
+
+test("訂單建立後付款或物流失敗會導向既有訂單重試", () => {
+  for (const source of [checkoutSource, campaignDetailSource, mealDetailSource]) {
+    assert.match(source, /setupFailed: true/);
+    assert.match(source, /setup: "retry"/);
+  }
+  assert.match(campaignDetailSource, /quoteCampaign/);
+  assert.match(campaignDetailSource, /後端報價/);
 });
 
 test("便當與社員活動展示素材已接入圖片映射", () => {
