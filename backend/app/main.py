@@ -71,9 +71,10 @@ def create_app() -> FastAPI:
         scheduled rather than awaited so reconciliation — which sweeps several
         tables and can call ECPay — never sits in the user's request path.
         """
+        response = await call_next(request)
         if request.url.path.startswith("/v1/") and should_reconcile_now():
             schedule_background_reconcile(settings)
-        return await call_next(request)
+        return response
 
     @application.exception_handler(DomainError)
     async def handle_domain_error(
