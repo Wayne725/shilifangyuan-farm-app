@@ -244,6 +244,32 @@ class MemberVoteChoice(str, enum.Enum):
     ABSTAIN = "abstain"
 
 
+class MemberProposalType(str, enum.Enum):
+    RESOLUTION = "resolution"
+    MULTIPLE_CHOICE = "multiple_choice"
+
+
+class MeetingType(str, enum.Enum):
+    GENERAL_ASSEMBLY = "general_assembly"
+    AFFAIRS = "affairs"
+
+
+class PointSourceType(str, enum.Enum):
+    PURCHASE = "purchase"
+    WISH_LAUNCHED = "wish_launched"
+    ACTIVITY = "activity"
+    VOTE = "vote"
+    ADMIN_ADJUSTMENT = "admin_adjustment"
+
+
+class WishStatus(str, enum.Enum):
+    SUBMITTED = "submitted"
+    GATHERING = "gathering"
+    SOURCING = "sourcing"
+    LAUNCHED = "launched"
+    DECLINED = "declined"
+
+
 class MealEventStatus(str, enum.Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
@@ -1031,6 +1057,11 @@ class MemberProposal(Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     body: Mapped[str] = mapped_column(Text)
+    proposal_type: Mapped[MemberProposalType] = mapped_column(
+        enum_type(MemberProposalType, "member_proposal_type"),
+        default=MemberProposalType.RESOLUTION,
+        index=True,
+    )
     status: Mapped[MemberProposalStatus] = mapped_column(
         enum_type(MemberProposalStatus, "member_proposal_status"),
         default=MemberProposalStatus.DRAFT,
@@ -1071,6 +1102,24 @@ class MemberProposal(Base):
     votes: Mapped[List["MemberProposalVote"]] = relationship(
         back_populates="proposal", cascade="all, delete-orphan"
     )
+    options: Mapped[List["ProposalOption"]] = relationship(
+        back_populates="proposal", cascade="all, delete-orphan"
+    )
+
+
+class ProposalOption(Base):
+    __tablename__ = "proposal_options"
+    __table_args__ = (UniqueConstraint("proposal_id", "position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    proposal_id: Mapped[str] = mapped_column(
+        ForeignKey("member_proposals.id", ondelete="CASCADE"), index=True
+    )
+    label: Mapped[str] = mapped_column(String(160))
+    position: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    proposal: Mapped[MemberProposal] = relationship(back_populates="options")
 
 
 class MemberProposalComment(Base):
@@ -1109,8 +1158,11 @@ class MemberProposalVote(Base):
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
-    choice: Mapped[MemberVoteChoice] = mapped_column(
-        enum_type(MemberVoteChoice, "member_vote_choice"), index=True
+    choice: Mapped[Optional[MemberVoteChoice]] = mapped_column(
+        enum_type(MemberVoteChoice, "member_vote_choice"), nullable=True, index=True
+    )
+    option_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("proposal_options.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
@@ -1121,6 +1173,7 @@ class MemberProposalVote(Base):
 
     proposal: Mapped[MemberProposal] = relationship(back_populates="votes")
     user: Mapped[User] = relationship()
+    option: Mapped[Optional[ProposalOption]] = relationship()
 
 
 class Meal(Base):
@@ -1781,3 +1834,231 @@ class AdminAudit(Base):
     )
 
     actor: Mapped[User] = relationship()
+
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class FiscalYear(Base):
+    __tablename__ = "fiscal_years"
+    __table_args__ = (
+        CheckConstraint("ends_on >= starts_on", name="fiscal_year_dates_valid"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    label: Mapped[str] = mapped_column(String(80), unique=True)
+    starts_on: Mapped[date] = mapped_column(Date, index=True)
+    ends_on: Mapped[date] = mapped_column(Date, index=True)
+    reserve_percentage: Mapped[int] = mapped_column(Integer, default=50)
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SurplusLedger(Base):
+    __tablename__ = "surplus_ledgers"
+    __table_args__ = (
+        UniqueConstraint("fiscal_year_id"),
+        CheckConstraint("total_revenue >= 0", name="surplus_revenue_nonnegative"),
+        CheckConstraint("total_cost >= 0", name="surplus_cost_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    fiscal_year_id: Mapped[str] = mapped_column(
+        ForeignKey("fiscal_years.id", ondelete="RESTRICT"), index=True
+    )
+    total_revenue: Mapped[int] = mapped_column(Integer)
+    total_cost: Mapped[int] = mapped_column(Integer)
+    total_surplus: Mapped[int] = mapped_column(Integer)
+    reserve_amount: Mapped[int] = mapped_column(Integer)
+    distributable_surplus: Mapped[int] = mapped_column(Integer)
+    contribution_basis: Mapped[str] = mapped_column(String(20), default="paid_orders")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SurplusDistribution(Base):
+    __tablename__ = "surplus_distributions"
+    __table_args__ = (UniqueConstraint("fiscal_year_id", "member_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    fiscal_year_id: Mapped[str] = mapped_column(
+        ForeignKey("fiscal_years.id", ondelete="RESTRICT"), index=True
+    )
+    member_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    contribution_amount: Mapped[int] = mapped_column(Integer)
+    contribution_basis_points: Mapped[int] = mapped_column(Integer)
+    distribution_amount: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EducationLecture(Base):
+    __tablename__ = "education_lectures"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EducationQuestion(Base):
+    __tablename__ = "education_questions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    lecture_id: Mapped[str] = mapped_column(
+        ForeignKey("education_lectures.id", ondelete="CASCADE"), index=True
+    )
+    prompt: Mapped[str] = mapped_column(Text)
+    options: Mapped[List[str]] = mapped_column(JSON)
+    correct_option: Mapped[int] = mapped_column(Integer)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class EducationAttempt(Base):
+    __tablename__ = "education_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    question_ids: Mapped[List[str]] = mapped_column(JSON)
+    answers: Mapped[Dict[str, int]] = mapped_column(JSON, default=dict)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PointAccount(Base):
+    __tablename__ = "point_accounts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PointTransaction(Base):
+    __tablename__ = "point_transactions"
+    __table_args__ = (
+        CheckConstraint("amount != 0", name="point_amount_nonzero"),
+        UniqueConstraint("account_id", "source_type", "reference_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("point_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    amount: Mapped[int] = mapped_column(Integer)
+    source_type: Mapped[PointSourceType] = mapped_column(
+        enum_type(PointSourceType, "point_source_type"), index=True
+    )
+    reference_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    note: Mapped[str] = mapped_column(String(240), default="")
+    created_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Meeting(Base):
+    __tablename__ = "meetings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    meeting_type: Mapped[MeetingType] = mapped_column(
+        enum_type(MeetingType, "meeting_type"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    agenda: Mapped[List[Dict[str, Any]]] = mapped_column(JSON, default=list)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    location: Mapped[str] = mapped_column(String(240), default="")
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MeetingAttendance(Base):
+    __tablename__ = "meeting_attendances"
+    __table_args__ = (UniqueConstraint("meeting_id", "member_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id", ondelete="CASCADE"), index=True)
+    member_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    attended: Mapped[bool] = mapped_column(Boolean, default=True)
+    checked_in_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MeetingResolution(Base):
+    __tablename__ = "meeting_resolutions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meetings.id", ondelete="CASCADE"), index=True)
+    member_proposal_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("member_proposals.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(160))
+    resolution_text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Wish(Base):
+    __tablename__ = "wishes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    proposer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text)
+    expected_price: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reference_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    status: Mapped[WishStatus] = mapped_column(enum_type(WishStatus, "wish_status"), default=WishStatus.SUBMITTED, index=True)
+    launched_product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
+    launched_campaign_id: Mapped[Optional[str]] = mapped_column(ForeignKey("group_campaigns.id", ondelete="SET NULL"), nullable=True)
+    admin_note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class WishSupport(Base):
+    __tablename__ = "wish_supports"
+    __table_args__ = (UniqueConstraint("wish_id", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    wish_id: Mapped[str] = mapped_column(ForeignKey("wishes.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BadgeDefinition(Base):
+    __tablename__ = "badge_definitions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    key: Mapped[str] = mapped_column(String(80), unique=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text)
+    rule: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class MemberBadge(Base):
+    __tablename__ = "member_badges"
+    __table_args__ = (UniqueConstraint("user_id", "badge_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    badge_id: Mapped[str] = mapped_column(ForeignKey("badge_definitions.id", ondelete="CASCADE"), index=True)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

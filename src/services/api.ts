@@ -2196,12 +2196,19 @@ export const api = {
     );
   },
 
-  createMemberProposal(input: { title: string; summary: string }) {
+  voteMemberProposalOption(id: string, optionId: string) {
+    return request<unknown>(`/v1/member-proposals/${id}/vote`, {
+      method: "PUT",
+      body: { option_id: optionId },
+    }).then(normalizeMemberProposalRead);
+  },
+
+  createMemberProposal(input: { title: string; summary: string; proposal_type?: "resolution" | "multiple_choice"; options?: string[] }) {
     return fallback(
       async () => {
         const draft = await request<{ id: string }>("/v1/member-proposals", {
           method: "POST",
-          body: { title: input.title, body: input.summary },
+          body: { title: input.title, body: input.summary, proposal_type: input.proposal_type ?? "resolution", options: (input.options ?? []).map((label) => ({ label })) },
         });
         return request<unknown>(`/v1/member-proposals/${draft.id}/submit`, {
           method: "POST",
@@ -2219,6 +2226,8 @@ export const api = {
           yes_count: 0,
           no_count: 0,
           abstain_count: 0,
+          proposal_type: input.proposal_type ?? "resolution",
+          options: (input.options ?? []).map((label, position) => ({ id: `demo-option-${position}`, label, position, vote_count: 0 })),
           my_vote: null,
         };
         demoState.memberProposals.unshift(proposal);
@@ -3143,6 +3152,75 @@ export const api = {
         return structuredCloneSafe(order.shipment);
       },
     );
+  },
+
+  cooperativeEducation() {
+    return request<{
+      lectures: { id: string; title: string; body: string; position: number }[];
+      passed: boolean;
+      required_for_membership: boolean;
+    }>("/v1/education");
+  },
+
+  startEducationAttempt() {
+    return request<{
+      attempt_id: string;
+      questions: { id: string; prompt: string; options: string[] }[];
+    }>("/v1/education/attempts", { method: "POST" });
+  },
+
+  submitEducationAttempt(attemptId: string, answers: Record<string, number>) {
+    return request<{ score: number; passed: boolean; correct: number; total: number }>(
+      `/v1/education/attempts/${attemptId}/submit`,
+      { method: "POST", body: { answers } },
+    );
+  },
+
+  myPoints() {
+    return request<{
+      balance: number;
+      transactions: { id: string; amount: number; source_type: string; note: string; created_at: string }[];
+    }>("/v1/me/points");
+  },
+
+  myBadges() {
+    return request<{ key: string; name: string; description: string; granted_at: string }[]>("/v1/me/badges");
+  },
+
+  wishes() {
+    return request<{ id: string; name: string; description: string; expected_price?: number; status: string; support_count: number; supported_by_me: boolean }[]>("/v1/wishes");
+  },
+
+  createWish(body: { name: string; description: string; expected_price?: number }) {
+    return request("/v1/wishes", { method: "POST", body });
+  },
+
+  supportWish(id: string) {
+    return request<{ support_count: number }>(`/v1/wishes/${id}/support`, { method: "POST" });
+  },
+
+  meetings() {
+    return request<{ id: string; title: string; meeting_type: string; starts_at: string; location: string; attended_count: number; eligible_member_count: number; attendance_rate: number }[]>("/v1/meetings");
+  },
+
+  mySurplusDistributions() {
+    return request<{ fiscal_year_id: string; label: string; contribution_amount: number; distribution_amount: number; confirmed_at: string }[]>("/v1/me/surplus-distributions");
+  },
+
+  adminNonmemberSales(startsOn: string, endsOn: string) {
+    return request<{ total_revenue: number; nonmember_revenue: number; ratio: number; headroom_amount: number; level: string; transactions_blocked: boolean }>(`/v1/admin/finance/nonmember-sales?starts_on=${startsOn}&ends_on=${endsOn}`);
+  },
+
+  adminTaxLedger(startsOn: string, endsOn: string) {
+    return request<{ rows: { tax_type: string; membership_type: string; sales_channel: string; sales_amount: number; tax_amount: number; order_count: number }[] }>(`/v1/admin/finance/tax-ledger?starts_on=${startsOn}&ends_on=${endsOn}`);
+  },
+
+  adminSurplusDryRun(body: { label: string; starts_on: string; ends_on: string; total_cost: number; reserve_percentage: number }) {
+    return request<{ total_revenue: number; total_surplus: number; reserve_amount: number; distributable_surplus: number; distributions: { member_id: string; member_name: string; contribution_amount: number; distribution_amount: number }[] }>("/v1/admin/surplus/dry-run", { method: "POST", body });
+  },
+
+  adminConfirmSurplus(body: { label: string; starts_on: string; ends_on: string; total_cost: number; reserve_percentage: number }) {
+    return request("/v1/admin/surplus/confirm", { method: "POST", body });
   },
 
   resetDemo(confirmation: string) {

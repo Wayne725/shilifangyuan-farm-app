@@ -871,6 +871,8 @@ export const demoActivities: MemberActivity[] = [
 
 export const demoMemberProposals: MemberProposal[] = [
   {
+    proposal_type: "resolution",
+    options: [],
     id: "member-proposal-1",
     title: "每月新增一次產地共學",
     summary: "由社員輪流邀請合作小農，安排小型產地拜訪與紀錄分享。",
@@ -893,6 +895,8 @@ export const demoMemberProposals: MemberProposal[] = [
     ],
   },
   {
+    proposal_type: "resolution",
+    options: [],
     id: "member-proposal-2",
     title: "活動共乘資訊由發起人統一整理",
     summary: "活動頁增加共乘登記區，減少社員分散聯繫。",

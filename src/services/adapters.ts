@@ -346,6 +346,11 @@ export function normalizeMemberProposalRead(value: unknown): MemberProposal {
     id: text(proposal.id),
     title: text(proposal.title),
     summary: text(proposal.body ?? proposal.summary),
+    proposal_type: (proposal.proposal_type ?? "resolution") as MemberProposal["proposal_type"],
+    options: array(proposal.options).map((value) => {
+      const option = object(value);
+      return { id: text(option.id), label: text(option.label), position: number(option.position), vote_count: number(option.vote_count) };
+    }),
     status: proposal.status as MemberProposal["status"],
     created_by_name: text(proposal.created_by_name, "社員"),
     discussion_ends_at: (proposal.discussion_ends_at ?? null) as string | null,
@@ -355,6 +360,7 @@ export function normalizeMemberProposalRead(value: unknown): MemberProposal {
     no_count: number(tally.no, number(proposal.no_count)),
     abstain_count: number(tally.abstain, number(proposal.abstain_count)),
     my_vote: (proposal.my_vote ?? null) as MemberProposal["my_vote"],
+    my_option_id: (proposal.my_option_id ?? null) as string | null,
     admin_outcome: (proposal.result_summary ??
       proposal.admin_outcome ??
       null) as string | null,
@@ -382,7 +388,9 @@ export function normalizeMemberProposalNamedVoteRead(
   return {
     user_id: text(vote.user_id),
     display_name: text(vote.display_name, "社員"),
-    choice: vote.choice as MemberProposalNamedVote["choice"],
+    choice: (vote.choice ?? null) as MemberProposalNamedVote["choice"],
+    option_id: (vote.option_id ?? null) as string | null,
+    option_label: (vote.option_label ?? null) as string | null,
     updated_at: text(vote.updated_at),
   };
 }

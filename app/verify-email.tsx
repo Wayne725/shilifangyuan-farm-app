@@ -21,7 +21,10 @@ export default function VerifyEmailScreen() {
 
   const verify = useMutation({
     mutationFn: (value: string) => api.verifyEmail(value.trim()),
-    onSuccess: (result) => setMessage(result.message),
+    onSuccess: (result) => {
+      setMessage(result.message);
+      router.replace("/login");
+    },
   });
   const resend = useMutation({
     mutationFn: () => api.resendVerification(email.trim()),

@@ -89,6 +89,12 @@ export default function SocialHomeScreen() {
             </View>
             <StatusPill label="會籍有效" tone="positive" />
           </View>
+          <Button
+            icon="leaf-outline"
+            label="合作教育、積點、願望與會議"
+            onPress={() => router.push("/cooperative" as never)}
+            variant="secondary"
+          />
 
           <SectionHeader
             action="全部活動"

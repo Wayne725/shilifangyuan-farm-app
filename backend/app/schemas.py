@@ -24,6 +24,7 @@ from .models import (
     InvoiceStatus,
     MealEventStatus,
     MemberProposalStatus,
+    MemberProposalType,
     MemberVoteChoice,
     MembershipApplicationStatus,
     MembershipChargeKind,
@@ -719,9 +720,25 @@ class ActivityRead(ApiModel):
     my_registration: Optional[ActivityRegistrationRead] = None
 
 
+class ProposalOptionInput(BaseModel):
+    label: str = Field(min_length=1, max_length=160)
+
+
 class MemberProposalCreate(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     body: str = Field(min_length=1, max_length=20000)
+    proposal_type: MemberProposalType = MemberProposalType.RESOLUTION
+    options: List[ProposalOptionInput] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_options(self) -> "MemberProposalCreate":
+        if self.proposal_type == MemberProposalType.RESOLUTION and self.options:
+            raise ValueError("決議表決不可設定自訂選項")
+        if self.proposal_type == MemberProposalType.MULTIPLE_CHOICE and len(self.options) < 2:
+            raise ValueError("多選項投票至少需要兩個選項")
+        if len({item.label.strip() for item in self.options}) != len(self.options):
+            raise ValueError("投票選項不可重複")
+        return self
 
 
 class MemberProposalReview(BaseModel):
@@ -750,13 +767,22 @@ class MemberProposalCommentRead(ApiModel):
 
 
 class MemberProposalVoteUpsert(BaseModel):
-    choice: MemberVoteChoice
+    choice: Optional[MemberVoteChoice] = None
+    option_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_vote(self) -> "MemberProposalVoteUpsert":
+        if (self.choice is None) == (self.option_id is None):
+            raise ValueError("決議選擇與自訂選項必須且只能提供一種")
+        return self
 
 
 class MemberProposalNamedVoteRead(BaseModel):
     user_id: str
     display_name: str
-    choice: MemberVoteChoice
+    choice: Optional[MemberVoteChoice] = None
+    option_id: Optional[str] = None
+    option_label: Optional[str] = None
     updated_at: datetime
 
 
@@ -767,12 +793,21 @@ class MemberProposalTally(ApiModel):
     total: int = 0
 
 
+class ProposalOptionRead(ApiModel):
+    id: str
+    label: str
+    position: int
+    vote_count: int = 0
+
+
 class MemberProposalRead(ApiModel):
     id: str
     created_by_id: str
     created_by_name: str
     title: str
     body: str
+    proposal_type: MemberProposalType = MemberProposalType.RESOLUTION
+    options: List[ProposalOptionRead] = Field(default_factory=list)
     status: MemberProposalStatus
     minimum_voters: int
     discussion_ends_at: Optional[datetime]
@@ -781,6 +816,7 @@ class MemberProposalRead(ApiModel):
     result_summary: Optional[str]
     tally: MemberProposalTally = Field(default_factory=MemberProposalTally)
     my_vote: Optional[MemberVoteChoice] = None
+    my_option_id: Optional[str] = None
     created_at: datetime
 
 

@@ -75,6 +75,15 @@ function ProposalCard({ proposal }: { proposal: MemberProposal }) {
       ]);
     },
   });
+  const optionVote = useMutation({
+    mutationFn: (optionId: string) => api.voteMemberProposalOption(proposal.id, optionId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["member-proposals"] }),
+        queryClient.invalidateQueries({ queryKey: ["member-proposal-votes", proposal.id] }),
+      ]);
+    },
+  });
   const comment = useMutation({
     mutationFn: (body: string) =>
       api.addMemberProposalComment(proposal.id, body),
@@ -85,9 +94,10 @@ function ProposalCard({ proposal }: { proposal: MemberProposal }) {
       });
     },
   });
-  const voters =
-    proposal.yes_count + proposal.no_count + proposal.abstain_count;
-  const actionError = vote.error ?? comment.error;
+  const voters = proposal.proposal_type === "multiple_choice"
+    ? proposal.options.reduce((total, option) => total + option.vote_count, 0)
+    : proposal.yes_count + proposal.no_count + proposal.abstain_count;
+  const actionError = vote.error ?? optionVote.error ?? comment.error;
 
   return (
     <View style={styles.card}>
@@ -122,7 +132,7 @@ function ProposalCard({ proposal }: { proposal: MemberProposal }) {
       ) : null}
       {votesVisible ? (
         <>
-          <View style={styles.tally}>
+          {proposal.proposal_type === "resolution" ? <View style={styles.tally}>
             <View style={styles.tallyItem}>
               <Text style={styles.tallyValue}>{proposal.yes_count}</Text>
               <Text style={styles.tallyLabel}>贊成</Text>
@@ -135,14 +145,14 @@ function ProposalCard({ proposal }: { proposal: MemberProposal }) {
               <Text style={styles.tallyValue}>{proposal.abstain_count}</Text>
               <Text style={styles.tallyLabel}>棄權</Text>
             </View>
-          </View>
+          </View> : <View style={styles.namedVoteList}>{proposal.options.map((option) => <View key={option.id} style={styles.namedVoteRow}><Text style={styles.title}>{option.label}</Text><Text style={styles.tallyValue}>{option.vote_count}</Text></View>)}</View>}
           <Text style={styles.voterMeta}>
             共 {voters} 人投票，最低投票數 {proposal.minimum_voters} 人
             {proposal.status === "voting" && proposal.voting_ends_at
               ? `，${dateTime(proposal.voting_ends_at)} 截止`
               : ""}
           </Text>
-          {proposal.status === "voting" ? (
+          {proposal.status === "voting" && proposal.proposal_type === "resolution" ? (
             <View style={styles.voteRow}>
               {votes.map((choice) => {
                 const selected = proposal.my_vote === choice.value;
@@ -161,7 +171,7 @@ function ProposalCard({ proposal }: { proposal: MemberProposal }) {
                 );
               })}
             </View>
-          ) : null}
+          ) : proposal.status === "voting" ? <View style={styles.voteRow}>{proposal.options.map((option) => <Button compact disabled={optionVote.isPending || proposal.my_option_id === option.id} key={option.id} label={proposal.my_option_id === option.id ? `已選 ${option.label}` : option.label} loading={optionVote.isPending && optionVote.variables === option.id} onPress={() => optionVote.mutate(option.id)} variant={proposal.my_option_id === option.id ? "primary" : "quiet"} />)}</View> : null}
         </>
       ) : null}
       {votesVisible ? (
@@ -201,9 +211,11 @@ function ProposalCard({ proposal }: { proposal: MemberProposal }) {
                     </View>
                   </View>
                   <StatusPill
-                    label={voteLabels[item.choice]}
+                    label={item.option_label ?? (item.choice ? voteLabels[item.choice] : "未選擇")}
                     tone={
-                      item.choice === "yes"
+                      item.option_id
+                        ? "neutral"
+                        : item.choice === "yes"
                         ? "positive"
                         : item.choice === "no"
                           ? "danger"
@@ -292,6 +304,8 @@ export default function MemberProposalsScreen() {
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
+  const [proposalType, setProposalType] = useState<"resolution" | "multiple_choice">("resolution");
+  const [optionsText, setOptionsText] = useState("");
   const membership = useQuery({
     queryKey: ["membership"],
     queryFn: api.membership,
@@ -307,10 +321,12 @@ export default function MemberProposalsScreen() {
     queryClient.invalidateQueries({ queryKey: ["member-proposals"] });
   const create = useMutation({
     mutationFn: () =>
-      api.createMemberProposal({ title: title.trim(), summary: summary.trim() }),
+      api.createMemberProposal({ title: title.trim(), summary: summary.trim(), proposal_type: proposalType, options: proposalType === "multiple_choice" ? optionsText.split("\n").map((item) => item.trim()).filter(Boolean) : [] }),
     onSuccess: async () => {
       setTitle("");
       setSummary("");
+      setProposalType("resolution");
+      setOptionsText("");
       setShowForm(false);
       await refresh();
     },
@@ -381,6 +397,11 @@ export default function MemberProposalsScreen() {
           <View style={styles.form}>
             <Text style={styles.formTitle}>提出新提案</Text>
             <View style={styles.field}>
+              <Text style={styles.label}>表決類型</Text>
+              <View style={styles.voteRow}><Button compact label="決議（贊成／反對／棄權）" onPress={() => setProposalType("resolution")} variant={proposalType === "resolution" ? "primary" : "quiet"} /><Button compact label="多選項" onPress={() => setProposalType("multiple_choice")} variant={proposalType === "multiple_choice" ? "primary" : "quiet"} /></View>
+            </View>
+            {proposalType === "multiple_choice" ? <View style={styles.field}><Text style={styles.label}>選項（每行一個，至少兩項）</Text><TextInput multiline onChangeText={setOptionsText} placeholder={'選項 A\n選項 B\n選項 C'} placeholderTextColor={colors.sage} style={[styles.input, styles.textarea]} value={optionsText} /></View> : null}
+            <View style={styles.field}>
               <Text style={styles.label}>提案主旨</Text>
               <TextInput
                 onChangeText={setTitle}
@@ -404,7 +425,7 @@ export default function MemberProposalsScreen() {
               />
             </View>
             <Button
-              disabled={!title.trim() || !summary.trim()}
+              disabled={!title.trim() || !summary.trim() || (proposalType === "multiple_choice" && optionsText.split("\n").filter((item) => item.trim()).length < 2)}
               label="送交審核"
               loading={create.isPending}
               onPress={() => create.mutate()}

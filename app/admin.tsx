@@ -1039,6 +1039,13 @@ export default function AdminScreen() {
           onPress={() => router.push("/(tabs)/home")}
           variant="quiet"
         />
+        <Button
+          compact
+          icon="analytics-outline"
+          label="財務制度"
+          onPress={() => router.push("/admin-cooperative" as never)}
+          variant="quiet"
+        />
       </View>
       <View style={styles.titleRow}>
         <View>

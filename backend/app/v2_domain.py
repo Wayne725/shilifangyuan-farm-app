@@ -15,6 +15,7 @@ from .models import (
     MealEventStatus,
     MemberProposal,
     MemberProposalStatus,
+    MemberProposalType,
     MemberProposalVote,
     MemberVoteChoice,
     Membership,
@@ -137,12 +138,16 @@ def apply_member_proposal_clock(
         and proposal.voting_ends_at is not None
         and current >= aware(proposal.voting_ends_at)
     ):
-        tally = tally_member_votes(votes, proposal.minimum_voters)
-        proposal.status = (
-            MemberProposalStatus.PASSED
-            if tally.passed
-            else MemberProposalStatus.REJECTED
-        )
+        if proposal.proposal_type == MemberProposalType.MULTIPLE_CHOICE:
+            option_votes = [vote.option_id for vote in votes if vote.option_id]
+            proposal.status = MemberProposalStatus.PASSED if len(option_votes) >= proposal.minimum_voters else MemberProposalStatus.REJECTED
+            if option_votes:
+                winner_id = max(set(option_votes), key=lambda value: (option_votes.count(value), value))
+                winner = next((item for item in proposal.options if item.id == winner_id), None)
+                proposal.result_summary = f"最高票選項：{winner.label}" if winner else None
+        else:
+            tally = tally_member_votes(votes, proposal.minimum_voters)
+            proposal.status = MemberProposalStatus.PASSED if tally.passed else MemberProposalStatus.REJECTED
         proposal.closed_at = current
     return proposal.status != previous
 

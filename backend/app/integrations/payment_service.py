@@ -28,12 +28,16 @@ from ..models import (
     MembershipChargeStatus,
     MembershipApplicationStatus,
     MembershipStatus,
+    MembershipType,
     Order,
     OrderFulfillment,
     OrderKind,
     OutboxEvent,
     PaymentAttempt,
     PaymentStatus,
+    PointAccount,
+    PointSourceType,
+    PointTransaction,
     Product,
     Refund,
     RefundStatus,
@@ -845,6 +849,32 @@ class SQLAlchemyPaymentCallbackRepository:
         attempt.paid_at = current
         order.payment_status = PaymentStatus.PAID
         order.paid_at = current
+        if order.membership_type_snapshot == MembershipType.MEMBER:
+            account = await self.session.scalar(
+                select(PointAccount).where(PointAccount.user_id == order.user_id)
+            )
+            if account is None:
+                account = PointAccount(user_id=order.user_id)
+                self.session.add(account)
+                await self.session.flush()
+            existing_points = await self.session.scalar(
+                select(PointTransaction.id).where(
+                    PointTransaction.account_id == account.id,
+                    PointTransaction.source_type == PointSourceType.PURCHASE,
+                    PointTransaction.reference_id == order.id,
+                )
+            )
+            earned = order.amount_total // 100
+            if existing_points is None and earned > 0:
+                self.session.add(
+                    PointTransaction(
+                        account_id=account.id,
+                        amount=earned,
+                        source_type=PointSourceType.PURCHASE,
+                        reference_id=order.id,
+                        note="消費累積",
+                    )
+                )
         await self._publish_payment_notification(
             order,
             attempt,

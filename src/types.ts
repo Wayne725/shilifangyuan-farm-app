@@ -443,11 +443,14 @@ export type MemberProposalStatus =
   | "withdrawn"
   | "closed";
 export type MemberVoteChoice = "yes" | "no" | "abstain";
+export type MemberProposalType = "resolution" | "multiple_choice";
 
 export type MemberProposal = {
   id: string;
   title: string;
   summary: string;
+  proposal_type: MemberProposalType;
+  options: { id: string; label: string; position: number; vote_count: number }[];
   status: MemberProposalStatus;
   created_by_name: string;
   discussion_ends_at?: string | null;
@@ -457,6 +460,7 @@ export type MemberProposal = {
   no_count: number;
   abstain_count: number;
   my_vote?: MemberVoteChoice | null;
+  my_option_id?: string | null;
   admin_outcome?: string | null;
   comments?: MemberProposalComment[];
 };
@@ -472,7 +476,9 @@ export type MemberProposalComment = {
 export type MemberProposalNamedVote = {
   user_id: string;
   display_name: string;
-  choice: MemberVoteChoice;
+  choice?: MemberVoteChoice | null;
+  option_id?: string | null;
+  option_label?: string | null;
   updated_at: string;
 };
 

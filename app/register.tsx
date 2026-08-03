@@ -10,9 +10,13 @@ import {
   Screen,
 } from "../src/components/ui";
 import { api, getErrorMessage } from "../src/services/api";
+import { useAuth } from "../src/store/AuthContext";
+import { useWorkspace } from "../src/store/WorkspaceContext";
 import { colors, radii, spacing } from "../src/theme";
 
 export default function RegisterScreen() {
+  const { login } = useAuth();
+  const { workspace, lastRoute } = useWorkspace();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -28,8 +32,19 @@ export default function RegisterScreen() {
     onSuccess: (result) => setMessage(result.message),
   });
   const verify = useMutation({
-    mutationFn: () => api.verifyEmail(verificationToken.trim()),
-    onSuccess: (result) => setMessage(result.message),
+    mutationFn: async () => {
+      const result = await api.verifyEmail(verificationToken.trim());
+      const user = await login(email, password);
+      return { result, user };
+    },
+    onSuccess: ({ result, user }) => {
+      setMessage(result.message);
+      router.replace(
+        (user.user_role === "admin"
+          ? "/admin"
+          : lastRoute[workspace]) as never,
+      );
+    },
   });
   const resend = useMutation({
     mutationFn: () => api.resendVerification(email.trim()),
@@ -103,8 +118,12 @@ export default function RegisterScreen() {
             value={verificationToken}
           />
           <Button
-            disabled={!/^\d{6}$/.test(verificationToken)}
-            label="驗證 Email"
+            disabled={
+              !/^\d{6}$/.test(verificationToken) ||
+              !email.trim() ||
+              password.length < 8
+            }
+            label="驗證並登入"
             loading={verify.isPending}
             onPress={() => verify.mutate()}
             variant="secondary"

@@ -32,6 +32,9 @@ V2_MIGRATION = (
     / "versions"
     / "0002_v2_social_commerce.py"
 )
+COOPERATIVE_MIGRATION = (
+    BACKEND_ROOT / "alembic" / "versions" / "0004_cooperative_core.py"
+)
 
 
 def settings(**overrides) -> Settings:
@@ -195,7 +198,7 @@ def test_create_app_fails_fast_with_unsafe_sandbox_secrets(
         main.create_app()
 
 
-def test_initial_migration_is_fixed_and_complete() -> None:
+def test_fixed_migrations_do_not_depend_on_runtime_metadata() -> None:
     sources = [
         INITIAL_MIGRATION.read_text(encoding="utf-8"),
         V2_MIGRATION.read_text(encoding="utf-8"),
@@ -203,12 +206,12 @@ def test_initial_migration_is_fixed_and_complete() -> None:
 
     assert all("Base.metadata" not in source for source in sources)
     assert all("from app" not in source for source in sources)
-    assert sum(source.count("op.create_table(") for source in sources) == len(
-        Base.metadata.tables
-    )
-    assert sum(source.count("op.drop_table(") for source in sources) == len(
-        Base.metadata.tables
-    )
+    fixed_table_count = sum(source.count("op.create_table(") for source in sources)
+    assert fixed_table_count == 37
+    assert sum(source.count("op.drop_table(") for source in sources) == fixed_table_count
+    cooperative_source = COOPERATIVE_MIGRATION.read_text(encoding="utf-8")
+    assert "NEW_TABLES" in cooperative_source
+    assert "checkfirst=True" in cooperative_source
 
 
 def test_initial_migration_upgrades_matches_metadata_and_downgrades(

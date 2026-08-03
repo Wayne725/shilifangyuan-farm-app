@@ -27,6 +27,7 @@ from ..integrations.notifications import (
 )
 from ..models import (
     AdminAudit,
+    EducationAttempt,
     MemberDirectoryEntry,
     MemberProfile,
     Membership,
@@ -43,6 +44,7 @@ from ..models import (
     OutboxEvent,
     Refund,
     RefundStatus,
+    SystemSetting,
     User,
 )
 from ..schemas import (
@@ -64,6 +66,22 @@ from ..schemas import (
 
 
 membership_router = APIRouter(tags=["membership"])
+
+
+async def _require_education_if_enabled(
+    session: AsyncSession, user_id: str
+) -> None:
+    setting = await session.get(SystemSetting, "education_required_for_membership")
+    if not setting or not setting.value.get("enabled"):
+        return
+    passed = await session.scalar(
+        select(EducationAttempt.id).where(
+            EducationAttempt.user_id == user_id,
+            EducationAttempt.passed.is_(True),
+        )
+    )
+    if passed is None:
+        raise HTTPException(status_code=409, detail="請先完成合作教育並通過測驗")
 
 
 def _aware(value: datetime) -> datetime:
@@ -324,6 +342,7 @@ async def submit_my_application(
         raise HTTPException(status_code=409, detail="請先填寫入社資料")
     if application.status != MembershipApplicationStatus.DRAFT:
         raise HTTPException(status_code=409, detail="此申請目前不可送件")
+    await _require_education_if_enabled(session, user.id)
     profile = await session.scalar(
         select(MemberProfile.id).where(MemberProfile.user_id == user.id)
     )

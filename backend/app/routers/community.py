@@ -19,9 +19,14 @@ from ..models import (
     MemberProposal,
     MemberProposalComment,
     MemberProposalStatus,
+    MemberProposalType,
     MemberProposalVote,
     Notification,
     OutboxEvent,
+    PointAccount,
+    PointSourceType,
+    PointTransaction,
+    ProposalOption,
     User,
 )
 from ..schemas import (
@@ -38,6 +43,7 @@ from ..schemas import (
     MemberProposalReview,
     MemberProposalTally,
     MemberProposalVoteUpsert,
+    ProposalOptionRead,
 )
 from ..v2_domain import (
     apply_member_proposal_clock,
@@ -48,6 +54,30 @@ from ..v2_domain import (
 
 
 community_router = APIRouter(tags=["community"])
+
+
+async def _award_points_once(
+    session: AsyncSession,
+    user_id: str,
+    amount: int,
+    source_type: PointSourceType,
+    reference_id: str,
+    note: str,
+) -> None:
+    account = await session.scalar(select(PointAccount).where(PointAccount.user_id == user_id))
+    if account is None:
+        account = PointAccount(user_id=user_id)
+        session.add(account)
+        await session.flush()
+    existing = await session.scalar(
+        select(PointTransaction.id).where(
+            PointTransaction.account_id == account.id,
+            PointTransaction.source_type == source_type,
+            PointTransaction.reference_id == reference_id,
+        )
+    )
+    if existing is None:
+        session.add(PointTransaction(account_id=account.id, amount=amount, source_type=source_type, reference_id=reference_id, note=note))
 
 
 def _aware(value: datetime) -> datetime:
@@ -113,16 +143,23 @@ def _proposal_read(
     user_id: str,
 ) -> MemberProposalRead:
     tally = tally_member_votes(proposal.votes, proposal.minimum_voters)
-    mine = next(
-        (vote.choice for vote in proposal.votes if vote.user_id == user_id),
-        None,
-    )
+    my_vote_record = next((vote for vote in proposal.votes if vote.user_id == user_id), None)
     return MemberProposalRead(
         id=proposal.id,
         created_by_id=proposal.created_by_id,
         created_by_name=proposal.created_by.display_name,
         title=proposal.title,
         body=proposal.body,
+        proposal_type=proposal.proposal_type,
+        options=[
+            ProposalOptionRead(
+                id=option.id,
+                label=option.label,
+                position=option.position,
+                vote_count=sum(vote.option_id == option.id for vote in proposal.votes),
+            )
+            for option in sorted(proposal.options, key=lambda item: item.position)
+        ],
         status=proposal.status,
         minimum_voters=proposal.minimum_voters,
         discussion_ends_at=proposal.discussion_ends_at,
@@ -135,7 +172,8 @@ def _proposal_read(
             abstain=tally.abstain,
             total=tally.total,
         ),
-        my_vote=mine,
+        my_vote=my_vote_record.choice if my_vote_record else None,
+        my_option_id=my_vote_record.option_id if my_vote_record else None,
         created_at=proposal.created_at,
     )
 
@@ -172,6 +210,7 @@ async def _load_proposal(
         .options(
             selectinload(MemberProposal.votes),
             selectinload(MemberProposal.comments),
+            selectinload(MemberProposal.options),
             selectinload(MemberProposal.created_by),
         )
     )
@@ -589,6 +628,7 @@ async def mark_activity_attendance(
     registration.status = attendance_status
     if attendance_status == ActivityRegistrationStatus.ATTENDED:
         registration.checked_in_at = datetime.now(timezone.utc)
+        await _award_points_once(session, registration.user_id, 5, PointSourceType.ACTIVITY, activity_id, "參與社員活動")
     session.add(
         AdminAudit(
             actor_id=admin.id,
@@ -623,6 +663,7 @@ async def list_member_proposals(
                 | (MemberProposal.created_by_id == user.id)
             )
             .options(selectinload(MemberProposal.votes))
+            .options(selectinload(MemberProposal.options))
             .options(selectinload(MemberProposal.created_by))
             .order_by(MemberProposal.created_at.desc())
         )
@@ -679,8 +720,10 @@ async def create_member_proposal(
         body=body.body,
         status=MemberProposalStatus.DRAFT,
         minimum_voters=10,
+        proposal_type=body.proposal_type,
         votes=[],
         comments=[],
+        options=[ProposalOption(label=item.label.strip(), position=position) for position, item in enumerate(body.options)],
     )
     session.add(proposal)
     await session.commit()
@@ -830,6 +873,11 @@ async def vote_on_member_proposal(
         or datetime.now(timezone.utc) >= _aware(proposal.voting_ends_at)
     ):
         raise HTTPException(status_code=409, detail="此提案目前不開放投票")
+    if proposal.proposal_type == MemberProposalType.RESOLUTION and body.choice is None:
+        raise HTTPException(status_code=422, detail="決議表決需選擇贊成、反對或棄權")
+    if proposal.proposal_type == MemberProposalType.MULTIPLE_CHOICE:
+        if body.option_id is None or all(item.id != body.option_id for item in proposal.options):
+            raise HTTPException(status_code=422, detail="請選擇此提案的有效選項")
     vote = next(
         (item for item in proposal.votes if item.user_id == user.id),
         None,
@@ -839,11 +887,14 @@ async def vote_on_member_proposal(
             proposal_id=proposal.id,
             user_id=user.id,
             choice=body.choice,
+            option_id=body.option_id,
         )
         session.add(vote)
         proposal.votes.append(vote)
     else:
         vote.choice = body.choice
+        vote.option_id = body.option_id
+    await _award_points_once(session, user.id, 1, PointSourceType.VOTE, proposal.id, "參與社員表決")
     await session.commit()
     return _proposal_read(proposal, user.id)
 
@@ -872,6 +923,7 @@ async def list_named_member_proposal_votes(
         await session.execute(
             select(MemberProposalVote, User)
             .join(User, User.id == MemberProposalVote.user_id)
+            .options(selectinload(MemberProposalVote.option))
             .where(MemberProposalVote.proposal_id == proposal_id)
             .order_by(MemberProposalVote.created_at)
         )
@@ -881,6 +933,8 @@ async def list_named_member_proposal_votes(
             user_id=vote.user_id,
             display_name=voter.display_name,
             choice=vote.choice,
+            option_id=vote.option_id,
+            option_label=vote.option.label if vote.option else None,
             updated_at=vote.updated_at,
         )
         for vote, voter in rows
@@ -900,6 +954,7 @@ async def admin_list_member_proposals(
             select(MemberProposal)
             .options(
                 selectinload(MemberProposal.votes),
+                selectinload(MemberProposal.options),
                 selectinload(MemberProposal.created_by),
             )
             .order_by(MemberProposal.created_at.desc())
