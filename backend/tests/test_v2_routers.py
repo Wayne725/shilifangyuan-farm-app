@@ -177,14 +177,27 @@ async def test_auth_register_verify_login_refresh_and_reset(
     )
     assert unverified_login.status_code == 403
 
-    verified = await client.post(
+    resent = await client.post(
+        "/v1/auth/resend-verification",
+        json={"email": "new.user@example.com"},
+    )
+    assert resent.status_code == 200
+    resent_token = resent.json()["development_token"]
+    assert resent_token != verification_token
+    superseded = await client.post(
         "/v1/auth/verify-email",
         json={"token": verification_token},
+    )
+    assert superseded.status_code == 400
+
+    verified = await client.post(
+        "/v1/auth/verify-email",
+        json={"token": resent_token},
     )
     assert verified.status_code == 200
     reused_token = await client.post(
         "/v1/auth/verify-email",
-        json={"token": verification_token},
+        json={"token": resent_token},
     )
     assert reused_token.status_code == 400
 

@@ -198,6 +198,14 @@ def test_create_app_fails_fast_with_unsafe_sandbox_secrets(
         main.create_app()
 
 
+def test_auth_email_requests_are_marked_for_immediate_delivery() -> None:
+    assert main.AUTH_EMAIL_PATHS == {
+        "/v1/auth/register",
+        "/v1/auth/resend-verification",
+        "/v1/auth/forgot-password",
+    }
+
+
 def test_fixed_migrations_do_not_depend_on_runtime_metadata() -> None:
     sources = [
         INITIAL_MIGRATION.read_text(encoding="utf-8"),

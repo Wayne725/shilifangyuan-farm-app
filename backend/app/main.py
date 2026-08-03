@@ -20,6 +20,13 @@ from .routers import ALL_ROUTERS
 from .seed import seed_demo_data
 
 
+AUTH_EMAIL_PATHS = {
+    "/v1/auth/register",
+    "/v1/auth/resend-verification",
+    "/v1/auth/forgot-password",
+}
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     async with SessionLocal() as session:
@@ -72,7 +79,12 @@ def create_app() -> FastAPI:
         tables and can call ECPay — never sits in the user's request path.
         """
         response = await call_next(request)
-        if request.url.path.startswith("/v1/") and should_reconcile_now():
+        if request.url.path in AUTH_EMAIL_PATHS:
+            schedule_background_reconcile(
+                settings,
+                minimum_interval_seconds=0,
+            )
+        elif request.url.path.startswith("/v1/") and should_reconcile_now():
             schedule_background_reconcile(settings)
         return response
 

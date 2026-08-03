@@ -188,6 +188,7 @@ def should_reconcile_now(minimum_interval_seconds: float = 60.0) -> bool:
 
 def schedule_background_reconcile(
     settings: Optional[Settings] = None,
+    minimum_interval_seconds: float = 60.0,
 ) -> "asyncio.Task[None]":
     """Runs reconciliation off the request path.
 
@@ -200,6 +201,29 @@ def schedule_background_reconcile(
         _background_reconcile_task is not None
         and not _background_reconcile_task.done()
     ):
+        if minimum_interval_seconds <= 0:
+            previous_task = _background_reconcile_task
+
+            async def _run_after_current() -> None:
+                global _background_reconcile_task
+                try:
+                    await previous_task
+                    async with SessionLocal() as session:
+                        try:
+                            await lazy_reconcile(
+                                session,
+                                settings,
+                                minimum_interval_seconds=0,
+                            )
+                        except Exception:
+                            await session.rollback()
+                finally:
+                    if _background_reconcile_task is asyncio.current_task():
+                        _background_reconcile_task = None
+
+            follow_up = asyncio.create_task(_run_after_current())
+            _background_reconcile_task = follow_up
+            return follow_up
         return _background_reconcile_task
 
     async def _run() -> None:
@@ -207,7 +231,11 @@ def schedule_background_reconcile(
         try:
             async with SessionLocal() as session:
                 try:
-                    await lazy_reconcile(session, settings)
+                    await lazy_reconcile(
+                        session,
+                        settings,
+                        minimum_interval_seconds=minimum_interval_seconds,
+                    )
                 except Exception:
                     await session.rollback()
         finally:

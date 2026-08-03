@@ -5,7 +5,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -79,12 +79,21 @@ async def _issue_email_verification(
     session: AsyncSession,
     user: User,
 ) -> str:
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        update(EmailVerificationToken)
+        .where(
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
     raw_token = f"{secrets.randbelow(1_000_000):06d}"
     session.add(
         EmailVerificationToken(
             user_id=user.id,
             token_hash=_token_hash(raw_token),
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            expires_at=now + timedelta(minutes=10),
         )
     )
     session.add(
