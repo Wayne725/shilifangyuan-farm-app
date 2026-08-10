@@ -500,9 +500,32 @@ class ECPayLogisticsAdapter:
             )
         return data
 
-    @staticmethod
-    def callback_acknowledgement() -> Dict[str, int]:
-        return {"RtnCode": 1}
+    def callback_acknowledgement(
+        self,
+        *,
+        success: bool = True,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        current = now or datetime.now(timezone.utc)
+        envelope: Dict[str, Any] = {
+            "MerchantID": self.settings.merchant_id,
+            "RpHeader": {
+                "Timestamp": str(int(current.timestamp())),
+            },
+            "TransCode": 1,
+            "TransMsg": "",
+            "Data": encrypt_ecpay_logistics_data(
+                {
+                    "RtnCode": 1 if success else 0,
+                    "RtnMsg": "成功" if success else "失敗",
+                },
+                self.settings.hash_key,
+                self.settings.hash_iv,
+            ),
+        }
+        if self.settings.platform_id:
+            envelope["PlatformID"] = self.settings.platform_id
+        return envelope
 
     async def _post_encrypted(
         self,

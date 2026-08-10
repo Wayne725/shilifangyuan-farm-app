@@ -22,6 +22,7 @@ EMAIL_EVENT_TYPES = {
     "membership_charge_paid",
     "membership_refund_completed",
     "membership.activated",
+    "membership.trainee_started",
     "proposal.approved",
     "proposal.rejected",
     "group.opened",

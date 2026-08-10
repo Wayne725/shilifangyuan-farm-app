@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -11,6 +11,8 @@ import {
   StatusPill,
 } from "../../src/components/ui";
 import { membershipLabel } from "../../src/lib/format";
+import { membershipIdentity } from "../../src/lib/membership";
+import { api } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { useCart } from "../../src/store/CartContext";
 import { colors, radii, spacing } from "../../src/theme";
@@ -44,6 +46,11 @@ export default function ProfileScreen() {
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
   const { clear } = useCart();
   const queryClient = useQueryClient();
+  const membership = useQuery({
+    queryKey: ["membership"],
+    queryFn: api.membership,
+    enabled: isAuthenticated,
+  });
 
   if (!isAuthenticated || !user) {
     return (
@@ -61,6 +68,8 @@ export default function ProfileScreen() {
     );
   }
 
+  const identity = membershipIdentity(user, membership.data ?? null);
+
   return (
     <Screen>
       <PageHeader title="我的" />
@@ -72,10 +81,19 @@ export default function ProfileScreen() {
           <View style={styles.identityCopy}>
             <Text style={styles.name}>{user.display_name}</Text>
             <Text style={styles.email}>{user.email}</Text>
+            <Text style={styles.identityNumber}>
+              {identity.label} {identity.number}
+            </Text>
           </View>
           <StatusPill
             label={isAdmin ? "管理員" : membershipLabel(user.membership_type)}
-            tone={isAdmin ? "warning" : "positive"}
+            tone={
+              isAdmin
+                ? "warning"
+                : user.membership_type === "nonmember"
+                  ? "neutral"
+                  : "positive"
+            }
           />
         </View>
 
@@ -169,6 +187,7 @@ const styles = StyleSheet.create({
   identityCopy: { flex: 1, marginLeft: 11 },
   name: { color: colors.white, fontSize: 16, fontWeight: "900" },
   email: { color: "#C9D6CE", fontSize: 12, marginTop: 4 },
+  identityNumber: { color: "#C9D6CE", fontSize: 11, marginTop: 5 },
   menu: {
     backgroundColor: colors.paper,
     borderRadius: radii.md,

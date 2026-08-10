@@ -140,7 +140,11 @@ export default function OrdersScreen() {
             order.sales_channel === "meal_preorder"
               ? "/meal-order/[id]"
               : "/order/[id]",
-          params: { id: orderId },
+          params: {
+            id: orderId,
+            ...(params.payment ? { payment: params.payment } : {}),
+            ...(params.logistics ? { logistics: params.logistics } : {}),
+          },
         });
         handledReturn.current = returnKey;
       } catch {
@@ -199,7 +203,11 @@ export default function OrdersScreen() {
       ) : (params.payment || params.logistics) && params.order_id ? (
         <View style={styles.notice}>
           <InlineMessage
-            text={`已從綠界返回，正在確認最新${params.payment ? "付款" : "物流"}結果。`}
+            text={
+              params.payment === "paid"
+                ? "綠界付款已完成，正在開啟訂單。"
+                : `已從綠界返回，正在確認最新${params.payment ? "付款" : "物流"}結果。`
+            }
           />
         </View>
       ) : params.payment === "return" ? (

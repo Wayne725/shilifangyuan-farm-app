@@ -30,7 +30,9 @@ export function shortDate(value: string) {
 }
 
 export function membershipLabel(value: MembershipType) {
-  return value === "member" ? "社員" : "非社員";
+  if (value === "member") return "正式社員";
+  if (value === "trainee") return "實習社員";
+  return "一般買家";
 }
 
 export const proposalLabels: Record<ProposalStatus, string> = {

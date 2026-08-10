@@ -199,6 +199,11 @@ async def create_order(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> OrderRead:
+    if body.fulfillment_method not in {
+        FulfillmentMethod.COOPERATIVE_PICKUP,
+        FulfillmentMethod.ECPAY_LOGISTICS,
+    }:
+        raise HTTPException(status_code=422, detail="一般訂單不支援此履約方式")
     quote = await quote_products(
         session, consolidate_lines(body.items), user, lock=True
     )
@@ -206,7 +211,7 @@ async def create_order(
         order_number=make_order_number(),
         order_kind=OrderKind.REGULAR,
         sales_channel=SalesChannel.REGULAR,
-        fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
+        fulfillment_method=body.fulfillment_method,
         user_id=user.id,
         membership_type_snapshot=membership_type_for_user(user),
         amount_total=quote.amount_total,
@@ -226,7 +231,7 @@ async def create_order(
             for line in quote.items
         ],
         fulfillment=OrderFulfillment(
-            method=FulfillmentMethod.COOPERATIVE_PICKUP,
+            method=body.fulfillment_method,
             status=FulfillmentState.PENDING_CONFIRMATION,
         ),
     )

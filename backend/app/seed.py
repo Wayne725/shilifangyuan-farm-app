@@ -106,26 +106,6 @@ from .models import (
 DEMO_PASSWORD = "member123"
 
 
-EDUCATION_CONTENT = [
-    ("一人一票，營業而不以營利為目的", "合作社以共同需要為核心。社員不因出資較多而取得更多表決權，每位社員均為一票。", "合作社社員的表決權如何計算？", ["依持股比例", "一人一票", "依消費金額"], 1),
-    ("社員是主人，不只是顧客", "社員共同擁有、參與治理並監督合作社，也以消費支持共同事業。", "社員與一般顧客最大的不同是？", ["可參與治理並共同負責", "永遠享有最低價", "不需要遵守章程"], 0),
-    ("認購社股與學生保護", "社股是合作事業的共同資本，不等同購物金；學生社員的權益與負擔須依章程及適用規範保護。", "社股最接近下列何者？", ["購物折價券", "共同事業的出資", "訂單退款"], 1),
-    ("結餘提撥與消費回饋", "年度結餘先提撥合作資本或公積金，剩餘部分依社員消費貢獻度分配，而非依持股比例。", "可分配結餘的分配基礎是？", ["持股比例", "年齡", "消費貢獻度"], 2),
-    ("社員與免稅農產品", "一級農產品與加工食品的稅務分類不同；社員福利不會改變商品本身的稅務分類。", "商品稅別主要依據什麼？", ["社員身分", "商品性質", "付款方式"], 1),
-]
-
-
-async def seed_cooperative_data(session: AsyncSession) -> None:
-    if await session.scalar(select(EducationLecture.id).limit(1)) is not None:
-        return
-    for position, (title, body, prompt, options, correct) in enumerate(EDUCATION_CONTENT, start=1):
-        lecture = EducationLecture(title=title, body=body, position=position)
-        session.add(lecture)
-        await session.flush()
-        session.add(EducationQuestion(lecture_id=lecture.id, prompt=prompt, options=options, correct_option=correct))
-    await session.commit()
-
-
 PRODUCTS = [
     {
         "slug": "bok-choy",
@@ -275,7 +255,6 @@ PRODUCTS = [
 
 
 async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
-    await seed_cooperative_data(session)
     existing = await session.scalar(select(User.id).limit(1))
     if existing is not None:
         return {"users": 0, "products": 0, "campaigns": 0}
@@ -351,6 +330,14 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             ),
         ]
     )
+    customer_sequence = 0
+    for user in users:
+        if user.user_role == UserRole.ADMIN:
+            continue
+        customer_sequence += 1
+        user.customer_number = (
+            f"SLF-C-{now.year}-{customer_sequence:04d}"
+        )
     session.add_all(users)
     await session.flush()
 

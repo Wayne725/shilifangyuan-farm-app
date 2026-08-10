@@ -4,6 +4,7 @@ import base64
 import json
 from functools import lru_cache
 from typing import List
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -102,6 +103,9 @@ class Settings(BaseSettings):
     membership_document_max_bytes: int = 8 * 1024 * 1024
     pii_encryption_keys_json: str = ""
     pii_encryption_current_version: str = "v1"
+    resend_api_key: str = ""
+    email_from_email: str = ""
+    email_from_name: str = "十里方圓"
     mailersend_api_token: str = ""
     mailersend_from_email: str = ""
     mailersend_from_name: str = "十里方圓"
@@ -159,7 +163,25 @@ class Settings(BaseSettings):
                 "DEMO_RESET_CONFIRMATION"
                 f"（至少 {MIN_RESET_CONFIRMATION_LENGTH} 字元）"
             )
+        from .integrations.common import IntegrationConfigurationError
+        from .integrations.email_sender import email_sender_from_settings
+
+        try:
+            email_sender_from_settings(self)
+        except IntegrationConfigurationError:
+            invalid_secrets.append(
+                "RESEND_API_KEY/EMAIL_FROM_EMAIL 或 "
+                "MAILERSEND_API_TOKEN/MAILERSEND_FROM_EMAIL"
+                "（至少一組設定必須完整有效）"
+            )
         if environment == "sandbox":
+            for name, value in (
+                ("APP_BASE_URL", self.app_base_url),
+                ("WEB_BASE_URL", self.web_base_url),
+            ):
+                parsed = urlparse(value.strip())
+                if parsed.scheme != "https" or not parsed.netloc:
+                    invalid_secrets.append(f"{name}（必須為公開 HTTPS 網址）")
             r2_values = {
                 "CLOUDFLARE_R2_ACCOUNT_ID": self.cloudflare_r2_account_id,
                 "CLOUDFLARE_R2_ACCESS_KEY_ID": self.cloudflare_r2_access_key_id,
@@ -171,13 +193,6 @@ class Settings(BaseSettings):
             invalid_secrets.extend(
                 name for name in R2_REQUIRED_SETTINGS if not r2_values[name].strip()
             )
-            if not self.mailersend_api_token.strip():
-                invalid_secrets.append("MAILERSEND_API_TOKEN")
-            if (
-                not self.mailersend_from_email.strip()
-                or "@" not in self.mailersend_from_email
-            ):
-                invalid_secrets.append("MAILERSEND_FROM_EMAIL")
             if not self.ecpay_payment_merchant_id.strip():
                 invalid_secrets.append("ECPAY_PAYMENT_MERCHANT_ID")
             if len(self.ecpay_payment_hash_key.encode("utf-8")) != 16:

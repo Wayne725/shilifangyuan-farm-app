@@ -215,6 +215,75 @@ async def test_group_quote_uses_server_membership_and_shipping_rate(
 
 
 @pytest.mark.asyncio
+async def test_group_join_preserves_logistics_intent_before_picker(
+    campaign_context,
+) -> None:
+    client = campaign_context["client"]
+    admin = campaign_context["admin"]
+    proposer = campaign_context["proposer"]
+    product = campaign_context["product"]
+    created = await client.post(
+        "/v1/group-campaigns",
+        json=campaign_payload(product.id),
+        headers=auth_headers(admin),
+    )
+    campaign_id = created.json()["id"]
+
+    joined = await client.post(
+        f"/v1/group-campaigns/{campaign_id}/join",
+        json={
+            "quantity": 2,
+            "contact_email": "proposer@example.com",
+            "invoice_carrier_type": "ecpay",
+            "fulfillment_method": "ecpay_logistics",
+            "shipping_channel": "home_delivery",
+        },
+        headers=auth_headers(proposer),
+    )
+
+    assert joined.status_code == 201, joined.text
+    body = joined.json()
+    assert body["fulfillment"]["method"] == "ecpay_logistics"
+    assert body["amount_total"] == 1040
+    assert "pay" not in body["available_actions"]
+
+
+@pytest.mark.asyncio
+async def test_group_join_rejects_unrelated_fulfillment_method(
+    campaign_context,
+) -> None:
+    client = campaign_context["client"]
+    admin = campaign_context["admin"]
+    proposer = campaign_context["proposer"]
+    product = campaign_context["product"]
+    created = await client.post(
+        "/v1/group-campaigns",
+        json=campaign_payload(product.id),
+        headers=auth_headers(admin),
+    )
+    campaign_id = created.json()["id"]
+
+    quoted = await client.post(
+        f"/v1/group-campaigns/{campaign_id}/quote",
+        json={"quantity": 1, "fulfillment_method": "event_pickup"},
+        headers=auth_headers(proposer),
+    )
+    joined = await client.post(
+        f"/v1/group-campaigns/{campaign_id}/join",
+        json={
+            "quantity": 1,
+            "contact_email": "proposer@example.com",
+            "invoice_carrier_type": "ecpay",
+            "fulfillment_method": "event_pickup",
+        },
+        headers=auth_headers(proposer),
+    )
+
+    assert quoted.status_code == 422
+    assert joined.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_first_paid_order_locks_campaign_shipping_conditions(
     campaign_context,
 ) -> None:

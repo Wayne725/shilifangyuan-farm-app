@@ -42,7 +42,10 @@ def price_for_membership(
     nonmember_price: int,
     membership_type: MembershipType,
 ) -> int:
-    if membership_type == MembershipType.MEMBER:
+    if membership_type in {
+        MembershipType.MEMBER,
+        MembershipType.TRAINEE,
+    }:
         return member_price
     return nonmember_price
 
@@ -229,7 +232,23 @@ def order_available_actions(
     current = now or utcnow()
     actions: List[str] = []
     if order.payment_status == PaymentStatus.PENDING:
-        actions.extend(["pay", "cancel"])
+        fulfillment = order.__dict__.get("fulfillment")
+        shipment = (
+            fulfillment.__dict__.get("shipment")
+            if fulfillment is not None
+            else None
+        )
+        payment_ready = (
+            order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
+            or (
+                shipment is not None
+                and shipment.status
+                in {ShipmentStatus.READY_TO_CREATE, ShipmentStatus.CREATED}
+            )
+        )
+        if payment_ready:
+            actions.append("pay")
+        actions.append("cancel")
     elif order.payment_status == PaymentStatus.PAID:
         if order.sales_channel == SalesChannel.MEAL_PREORDER:
             if (

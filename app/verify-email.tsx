@@ -77,6 +77,9 @@ export default function VerifyEmailScreen() {
             />
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>沒有收到驗證信</Text>
+              <Text style={styles.panelText}>
+                重新寄送只會排入寄送佇列；10 分鐘效期內，已產生的驗證碼皆可使用，任一驗證成功後全部失效。
+              </Text>
               <View style={styles.field}>
                 <Text style={styles.label}>帳號 Email</Text>
                 <TextInput
@@ -130,4 +133,5 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   panelTitle: { color: colors.forest, fontSize: 18, fontWeight: "900" },
+  panelText: { color: colors.muted, fontSize: 12, lineHeight: 18 },
 });

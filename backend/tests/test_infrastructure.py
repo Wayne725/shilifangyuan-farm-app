@@ -81,6 +81,8 @@ def test_local_environments_allow_convenient_default_secrets(
 def test_secure_environments_accept_long_nondefault_secrets() -> None:
     settings(
         environment="sandbox",
+        app_base_url="https://api.example.test",
+        web_base_url="https://app.example.test",
         jwt_secret="j" * 32,
         internal_reconcile_secret="r" * 32,
         demo_reset_confirmation="reset-code-strong",
@@ -97,14 +99,32 @@ def test_secure_environments_accept_long_nondefault_secrets() -> None:
         cloudflare_r2_access_key_id="access-key",
         cloudflare_r2_secret_access_key="secret-key",
         cloudflare_r2_bucket="private-documents",
-        mailersend_api_token="mlsn.test-secret",
-        mailersend_from_email="verified@example.test",
+        resend_api_key="re_test-secret",
+        email_from_email="verified@example.test",
         pii_encryption_keys_json=json.dumps(
             {
                 "v1": base64.b64encode(b"p" * 32).decode("ascii"),
             }
         ),
     ).validate_runtime_secrets()
+
+
+def test_sandbox_requires_public_https_callback_urls() -> None:
+    runtime_settings = settings(
+        environment="sandbox",
+        app_base_url="http://localhost:8000",
+        web_base_url="http://localhost:8081",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        demo_reset_confirmation="reset-code-strong",
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        runtime_settings.validate_runtime_secrets()
+
+    message = str(error.value)
+    assert "APP_BASE_URL" in message
+    assert "WEB_BASE_URL" in message
 
 
 def test_sandbox_requires_payment_and_invoice_credentials() -> None:
@@ -142,9 +162,12 @@ def test_sandbox_requires_payment_and_invoice_credentials() -> None:
         assert name in message
 
 
-def test_sandbox_requires_mailersend_credentials() -> None:
+@pytest.mark.parametrize("environment", ["sandbox", "production"])
+def test_secure_environments_require_an_email_provider_and_sender(
+    environment: str,
+) -> None:
     runtime_settings = settings(
-        environment="sandbox",
+        environment=environment,
         jwt_secret="j" * 32,
         internal_reconcile_secret="r" * 32,
         demo_reset_confirmation="reset-code-strong",
@@ -154,8 +177,37 @@ def test_sandbox_requires_mailersend_credentials() -> None:
         runtime_settings.validate_runtime_secrets()
 
     message = str(error.value)
+    assert "RESEND_API_KEY" in message
     assert "MAILERSEND_API_TOKEN" in message
+    assert "EMAIL_FROM_EMAIL" in message
     assert "MAILERSEND_FROM_EMAIL" in message
+
+
+def test_production_rejects_email_tokens_when_no_provider_is_usable() -> None:
+    runtime_settings = settings(
+        environment="production",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        resend_api_key="re_test-secret",
+        email_from_email="broken@sender",
+    )
+
+    with pytest.raises(RuntimeError, match="至少一組設定必須完整有效"):
+        runtime_settings.validate_runtime_secrets()
+
+
+def test_production_accepts_one_usable_email_provider() -> None:
+    runtime_settings = settings(
+        environment="production",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        resend_api_key="re_test-secret",
+        email_from_email="broken@sender",
+        mailersend_api_token="mlsn.test-secret",
+        mailersend_from_email="noreply@example.com",
+    )
+
+    runtime_settings.validate_runtime_secrets()
 
 
 def test_sandbox_requires_a_reset_confirmation_secret() -> None:

@@ -42,6 +42,8 @@ def derived_membership_type(
 ) -> MembershipType:
     if membership is not None and membership.status == MembershipStatus.ACTIVE:
         return MembershipType.MEMBER
+    if membership is not None and membership.status == MembershipStatus.TRAINEE:
+        return MembershipType.TRAINEE
     return MembershipType.NONMEMBER
 
 

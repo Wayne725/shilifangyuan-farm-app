@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from fastapi import (
     APIRouter,
@@ -29,7 +31,6 @@ from ..database import get_session
 from ..domain import DomainError
 from ..integrations.common import IntegrationError
 from ..integrations.ecpay_logistics import (
-    ECPayLogisticsAdapter,
     LogisticsSelectionRequest as ECPaySelectionRequest,
     UpdateTempLogisticsRequest,
     ecpay_logistics_adapter_from_settings,
@@ -50,6 +51,7 @@ from ..models import (
     OrderFulfillment,
     OrderKind,
     OutboxEvent,
+    PaymentAttempt,
     PaymentStatus,
     Product,
     SalesChannel,
@@ -74,6 +76,7 @@ from ..v2_domain import (
 
 
 logistics_router = APIRouter(tags=["logistics"])
+logger = logging.getLogger(__name__)
 
 PROVIDER_SAFE_FIELDS = {
     "TempLogisticsID",
@@ -104,6 +107,16 @@ IN_TRANSIT_CODES = {
 }
 DELIVERED_CODES = {"2067", "3022"}
 EXCEPTION_CODES = {"2074", "3020"}
+ECPAY_SELECTION_CHANNELS = {
+    ("HOME", "TCAT"): ShippingChannel.HOME_DELIVERY,
+    ("CVS", "UNIMART"): ShippingChannel.SEVEN_ELEVEN,
+    ("CVS", "UNIMARTC2C"): ShippingChannel.SEVEN_ELEVEN,
+    ("CVS", "UNIMARTFREEZE"): ShippingChannel.SEVEN_ELEVEN,
+    ("CVS", "FAMI"): ShippingChannel.FAMILY_MART,
+    ("CVS", "FAMIC2C"): ShippingChannel.FAMILY_MART,
+    ("CVS", "HILIFE"): ShippingChannel.HILIFE,
+    ("CVS", "HILIFEC2C"): ShippingChannel.HILIFE,
+}
 
 
 class ShipmentOperationRead(BaseModel):
@@ -215,6 +228,26 @@ async def _load_order(
 def _ensure_order_viewer(order: Order, user: User) -> None:
     if order.user_id != user.id and user.user_role != UserRole.ADMIN:
         raise HTTPException(status_code=404, detail="找不到訂單")
+
+
+async def _ensure_no_active_payment_attempt(
+    session: AsyncSession,
+    order_id: str,
+) -> None:
+    active_attempt_id = await session.scalar(
+        select(PaymentAttempt.id)
+        .where(
+            PaymentAttempt.order_id == order_id,
+            PaymentAttempt.status == PaymentStatus.PENDING,
+            PaymentAttempt.expires_at > _now(),
+        )
+        .limit(1)
+    )
+    if active_attempt_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="已有待確認付款，無法重新選擇物流",
+        )
 
 
 async def _shipping_profile(
@@ -402,6 +435,55 @@ def _status_from_provider(
     return None
 
 
+def _provider_status_time(
+    payload: Mapping[str, Any],
+) -> Optional[datetime]:
+    raw = str(payload.get("UpdateStatusDate", "")).strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, "%Y/%m/%d %H:%M:%S").replace(
+            tzinfo=ZoneInfo("Asia/Taipei")
+        )
+    except ValueError:
+        return None
+
+
+def _should_apply_provider_update(
+    shipment: Shipment,
+    payload: Mapping[str, Any],
+    target: Optional[ShipmentStatus],
+) -> bool:
+    if (
+        shipment.status == ShipmentStatus.DELIVERED
+        and target != ShipmentStatus.DELIVERED
+    ):
+        return False
+    current_time = _provider_status_time(shipment.provider_payload or {})
+    incoming_time = _provider_status_time(payload)
+    if current_time is not None and (
+        incoming_time is None or incoming_time <= current_time
+    ):
+        return False
+    return True
+
+
+def _channel_from_selection_result(
+    payload: Mapping[str, Any],
+) -> ShippingChannel:
+    logistics_type = str(payload.get("LogisticsType", "")).upper()
+    logistics_sub_type = str(payload.get("LogisticsSubType", "")).upper()
+    channel = ECPAY_SELECTION_CHANNELS.get(
+        (logistics_type, logistics_sub_type)
+    )
+    if channel is None:
+        raise HTTPException(
+            status_code=422,
+            detail="綠界回傳的物流通路不受支援，請重新選擇物流",
+        )
+    return channel
+
+
 async def _apply_shipment_status(
     session: AsyncSession,
     shipment: Shipment,
@@ -470,6 +552,7 @@ async def create_logistics_selection(
             status_code=409,
             detail="物流必須在付款前選擇",
         )
+    await _ensure_no_active_payment_attempt(session, order.id)
     actual_temperature = await _shipping_profile(
         session,
         order,
@@ -569,6 +652,7 @@ async def reissue_logistics_selection_link(
     _ensure_order_viewer(order, user)
     if order.payment_status != PaymentStatus.PENDING:
         raise HTTPException(status_code=409, detail="物流必須在付款前選擇")
+    await _ensure_no_active_payment_attempt(session, order.id)
     if order.fulfillment is None or order.fulfillment.shipment is None:
         raise HTTPException(status_code=404, detail="訂單尚未選擇物流")
     shipment = order.fulfillment.shipment
@@ -601,6 +685,7 @@ async def reissue_logistics_selection_link(
 )
 async def open_logistics_selection_page(
     token: str,
+    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
@@ -610,6 +695,8 @@ async def open_logistics_selection_page(
     which cannot carry a Bearer token, so the one-time token in the path is the
     credential — exactly like `/payments/{attempt_id}/checkout`.
     """
+    if client not in {"web", "native"}:
+        raise HTTPException(status_code=422, detail="不支援的物流返回方式")
     shipment = await _shipment_for_token(session, token)
     if shipment.status not in {
         ShipmentStatus.SELECTION_PENDING,
@@ -647,7 +734,10 @@ async def open_logistics_selection_page(
         and recipient_phone.isdigit()
     )
     subtotal = _product_subtotal(order, shipment)
-    query = urlencode({"order_id": order.id, "token": token})
+    callback_params = {"order_id": order.id, "token": token}
+    if client == "native":
+        callback_params["client"] = "native"
+    query = urlencode(callback_params)
     try:
         adapter = ecpay_logistics_adapter_from_settings(settings)
         page = await adapter.create_selection_page(
@@ -702,14 +792,18 @@ async def receive_logistics_selection_result(
     request: Request,
     order_id: str,
     token: str,
+    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> RedirectResponse:
+    if client not in {"web", "native"}:
+        raise HTTPException(status_code=422, detail="不支援的物流返回方式")
     order = await _load_order(session, order_id, lock=True)
     if order.fulfillment is None or order.fulfillment.shipment is None:
         raise HTTPException(status_code=404, detail="找不到物流選擇資料")
     shipment = order.fulfillment.shipment
     _verify_selection_token(shipment, token)
+    await _ensure_no_active_payment_attempt(session, order.id)
     try:
         envelope = await _request_json_envelope(request)
         data = ecpay_logistics_adapter_from_settings(
@@ -717,7 +811,31 @@ async def receive_logistics_selection_result(
         ).decode_selection_result(envelope)
     except (IntegrationError, ValueError) as exc:
         await session.rollback()
+        logger.exception(
+            "ECPay logistics selection result rejected order_id=%s: %s",
+            order_id,
+            exc,
+        )
         raise HTTPException(status_code=400, detail="物流選擇結果驗證失敗") from exc
+    actual_channel = _channel_from_selection_result(data)
+    actual_temperature = await _shipping_profile(
+        session,
+        order,
+        actual_channel,
+    )
+    if actual_temperature != shipment.temperature:
+        raise HTTPException(status_code=422, detail="綠界回傳的物流溫層與商品不符")
+    rate = await _effective_rate(
+        session,
+        actual_channel,
+        actual_temperature,
+    )
+    subtotal = _product_subtotal(order, shipment)
+    shipping_fee = shipping_fee_for_rate(subtotal, rate)
+    shipment.channel = actual_channel
+    shipment.temperature = actual_temperature
+    shipment.shipping_fee = shipping_fee
+    order.amount_total = subtotal + shipping_fee
     _update_shipment_provider_data(shipment, data)
     shipment.status = ShipmentStatus.READY_TO_CREATE
     # One-time use: the picker has done its job for this shipment.
@@ -740,10 +858,12 @@ async def receive_logistics_selection_result(
     redirect_query = urlencode(
         {"order_id": order.id, "logistics": "selected"}
     )
-    return RedirectResponse(
-        f"{settings.web_base_url.rstrip('/')}/orders?{redirect_query}",
-        status_code=status.HTTP_303_SEE_OTHER,
+    location = (
+        f"shilifangyuan://logistics-return?{redirect_query}"
+        if client == "native"
+        else f"{settings.web_base_url.rstrip('/')}/orders?{redirect_query}"
     )
+    return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @logistics_router.post(
@@ -805,6 +925,9 @@ async def create_formal_logistics_order(
     )
     if not temp_id:
         raise HTTPException(status_code=409, detail="缺少綠界暫存物流單編號")
+    order_id_snapshot = order.id
+    order_number = order.order_number
+    admin_id = admin.id
     adapter = ecpay_logistics_adapter_from_settings(settings)
     try:
         await adapter.update_temp_order(
@@ -823,20 +946,45 @@ async def create_formal_logistics_order(
         )
         result = await adapter.create_order(
             temp_logistics_id=temp_id,
-            merchant_trade_no=order.order_number,
+            merchant_trade_no=order_number,
         )
-    except (IntegrationError, ValueError) as exc:
+    except (IntegrationError, ValueError):
         await session.rollback()
-        raise HTTPException(
-            status_code=503,
-            detail="綠界正式物流單建立失敗",
-        ) from exc
-    shipment.ecpay_logistics_id = str(result["LogisticsID"])
+        try:
+            result = await adapter.query_order(
+                merchant_trade_no=order_number,
+            )
+            if str(result.get("MerchantTradeNo", "")) != order_number:
+                raise ValueError("綠界物流訂單交易編號不符")
+            if not str(result.get("LogisticsID", "")).strip():
+                raise ValueError("綠界物流訂單缺少物流編號")
+        except (IntegrationError, ValueError) as query_exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=503,
+                detail="綠界正式物流單建立失敗",
+            ) from query_exc
+        order = await _load_order(session, order_id_snapshot, lock=True)
+        if order.fulfillment is None or order.fulfillment.shipment is None:
+            raise HTTPException(status_code=409, detail="訂單尚未選擇物流")
+        shipment = order.fulfillment.shipment
+        if shipment.ecpay_logistics_id:
+            return ShipmentOperationRead(
+                shipment=_shipment_read(shipment),
+                provider=_safe_provider_payload(
+                    shipment.provider_payload or {}
+                ),
+            )
+    logistics_id = str(result.get("LogisticsID", "")).strip()
+    if not logistics_id:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail="綠界正式物流單建立失敗")
+    shipment.ecpay_logistics_id = logistics_id
     _update_shipment_provider_data(shipment, result)
     await _apply_shipment_status(session, shipment, ShipmentStatus.CREATED)
     session.add(
         AdminAudit(
-            actor_id=admin.id,
+            actor_id=admin_id,
             action="shipment.create",
             aggregate_type="shipment",
             aggregate_id=shipment.id,
@@ -877,10 +1025,11 @@ async def query_logistics_order(
     except (IntegrationError, ValueError) as exc:
         await session.rollback()
         raise HTTPException(status_code=503, detail="綠界物流查詢失敗") from exc
-    _update_shipment_provider_data(shipment, result)
     target = _status_from_provider(result)
-    if target is not None:
-        await _apply_shipment_status(session, shipment, target)
+    if _should_apply_provider_update(shipment, result, target):
+        _update_shipment_provider_data(shipment, result)
+        if target is not None:
+            await _apply_shipment_status(session, shipment, target)
     await session.commit()
     return ShipmentOperationRead(
         shipment=_shipment_read(shipment),
@@ -932,14 +1081,19 @@ async def logistics_status_callback(
     settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     try:
+        adapter = ecpay_logistics_adapter_from_settings(settings)
+    except (IntegrationError, ValueError):
+        return JSONResponse(
+            {"RtnCode": 0},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    try:
         envelope = await _request_json_envelope(request)
-        data = ecpay_logistics_adapter_from_settings(
-            settings
-        ).verify_callback(envelope)
+        data = adapter.verify_callback(envelope)
     except (HTTPException, IntegrationError, ValueError):
         await session.rollback()
         return JSONResponse(
-            {"RtnCode": 0},
+            adapter.callback_acknowledgement(success=False),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
     event_key = hashlib.sha256(
@@ -959,7 +1113,7 @@ async def logistics_status_callback(
         )
     )
     if existing is not None:
-        return JSONResponse({"RtnCode": 1})
+        return JSONResponse(adapter.callback_acknowledgement())
     shipment = await session.scalar(
         select(Shipment)
         .where(
@@ -976,13 +1130,14 @@ async def logistics_status_callback(
     if shipment is None:
         await session.rollback()
         return JSONResponse(
-            {"RtnCode": 0},
+            adapter.callback_acknowledgement(success=False),
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    _update_shipment_provider_data(shipment, data)
     target = _status_from_provider(data)
-    if target is not None:
-        await _apply_shipment_status(session, shipment, target)
+    if _should_apply_provider_update(shipment, data, target):
+        _update_shipment_provider_data(shipment, data)
+        if target is not None:
+            await _apply_shipment_status(session, shipment, target)
     session.add(
         ExternalEvent(
             provider="ecpay_logistics",
@@ -997,7 +1152,7 @@ async def logistics_status_callback(
         await session.commit()
     except IntegrityError:
         await session.rollback()
-    return JSONResponse({"RtnCode": 1})
+    return JSONResponse(adapter.callback_acknowledgement())
 
 
 @logistics_router.post(

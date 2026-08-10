@@ -1,23 +1,21 @@
-import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
+from typing import Any, Dict
 
 from ..config import Settings
 from .common import (
-    HTTPResponse,
     IntegrationConfigurationError,
     IntegrationResponseError,
     post_json,
 )
+from .email_sender import (
+    EMAIL_PATTERN,
+    EmailMessage,
+    EmailSendResult,
+    JsonTransport,
+)
 
 
 MAILERSEND_EMAIL_URL = "https://api.mailersend.com/v1/email"
-EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-JsonTransport = Callable[
-    [str, Mapping[str, Any], Optional[Mapping[str, str]], float],
-    Awaitable[HTTPResponse],
-]
 
 
 @dataclass(frozen=True)
@@ -37,32 +35,6 @@ class MailerSendSettings:
             raise IntegrationConfigurationError("MailerSend sender name is required")
         if not self.email_url.startswith("https://"):
             raise IntegrationConfigurationError("MailerSend URL must use HTTPS")
-
-
-@dataclass(frozen=True)
-class EmailMessage:
-    to_email: str
-    subject: str
-    text_content: str
-    html_content: Optional[str] = None
-    reply_to: Optional[str] = None
-
-    def validate(self) -> None:
-        if not EMAIL_PATTERN.fullmatch(self.to_email):
-            raise ValueError("Invalid recipient email")
-        if not self.subject.strip():
-            raise ValueError("Email subject is required")
-        if not self.text_content.strip():
-            raise ValueError("Email text content is required")
-        if self.reply_to and not EMAIL_PATTERN.fullmatch(self.reply_to):
-            raise ValueError("Invalid reply-to email")
-
-
-@dataclass(frozen=True)
-class EmailSendResult:
-    accepted: bool
-    provider_message_id: Optional[str]
-    status_code: int
 
 
 class MailerSendAdapter:
@@ -111,7 +83,12 @@ class MailerSendAdapter:
             ),
             None,
         )
-        return EmailSendResult(True, message_id, response.status_code)
+        return EmailSendResult(
+            True,
+            message_id,
+            response.status_code,
+            provider="mailersend",
+        )
 
 
 def mailersend_adapter_from_settings(settings: Settings) -> MailerSendAdapter:

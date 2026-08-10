@@ -53,6 +53,7 @@ import type {
   User,
   VoteProposal,
 } from "../types";
+import { hasMemberPricing } from "../lib/membership";
 import {
   normalizeActivityRead,
   normalizeAdminActivityRegistrationRead,
@@ -368,6 +369,7 @@ function getDemoUser(): User {
       display_name: "訪客",
       user_role: "customer",
       membership_type: "nonmember",
+      customer_number: "",
     }
   );
 }
@@ -384,8 +386,20 @@ function nextDemoMemberNumber() {
   return `SLF-${new Date().getFullYear()}-${String(highest + 1).padStart(4, "0")}`;
 }
 
+function nextDemoTraineeNumber() {
+  const highest = Object.values(demoState.memberships).reduce(
+    (current, membership) => {
+      const parts = membership?.trainee_number?.split("-") ?? [];
+      const sequence = Number(parts[parts.length - 1]);
+      return Number.isFinite(sequence) ? Math.max(current, sequence) : current;
+    },
+    0,
+  );
+  return `SLF-T-${new Date().getFullYear()}-${String(highest + 1).padStart(4, "0")}`;
+}
+
 function demoPrice(product: Product, user = getDemoUser()) {
-  return user.membership_type === "member"
+  return hasMemberPricing(user.membership_type)
     ? product.member_price
     : product.nonmember_price;
 }
@@ -696,10 +710,9 @@ export const api = {
         const campaign = demoState.campaigns.find((item) => item.id === id);
         if (!campaign) throw new ApiError("找不到這個共同購買", 404);
         const membershipType = getDemoUser().membership_type;
-        const unitPrice =
-          membershipType === "member"
-            ? campaign.member_price
-            : campaign.nonmember_price;
+        const unitPrice = hasMemberPricing(membershipType)
+          ? campaign.member_price
+          : campaign.nonmember_price;
         const productSubtotal = unitPrice * input.quantity;
         const rate =
           input.fulfillment_method === "ecpay_logistics"
@@ -732,7 +745,7 @@ export const api = {
       invoice_carrier_type: InvoiceCarrierType;
       invoice_carrier_value?: string;
       fulfillment_method?: FulfillmentMethod;
-      logistics_provider?: LogisticsProvider;
+      shipping_channel?: LogisticsProvider;
       delivery_address?: string;
     },
   ) {
@@ -744,6 +757,12 @@ export const api = {
             quantity: input.quantity,
             contact_email: input.contact_email,
             invoice_carrier_type: input.invoice_carrier_type,
+            fulfillment_method:
+              input.fulfillment_method ?? "cooperative_pickup",
+            ...(input.fulfillment_method === "ecpay_logistics" &&
+            input.shipping_channel
+              ? { shipping_channel: input.shipping_channel }
+              : {}),
             ...(input.invoice_carrier_value
               ? { invoice_carrier_value: input.invoice_carrier_value }
               : {}),
@@ -756,15 +775,14 @@ export const api = {
           throw new ApiError("剩餘數量不足", 409);
         }
         const user = getDemoUser();
-        const unitPrice =
-          user.membership_type === "member"
-            ? campaign.member_price
-            : campaign.nonmember_price;
+        const unitPrice = hasMemberPricing(user.membership_type)
+          ? campaign.member_price
+          : campaign.nonmember_price;
         const subtotal = unitPrice * input.quantity;
         const usesLogistics = input.fulfillment_method === "ecpay_logistics";
         const shippingFee =
           usesLogistics && subtotal < 1500
-            ? input.logistics_provider === "home_delivery"
+            ? input.shipping_channel === "home_delivery"
               ? 160
               : 70
             : 0;
@@ -803,7 +821,7 @@ export const api = {
             ? {
                 id: `shipment-${Date.now()}`,
                 logistics_provider:
-                  input.logistics_provider ?? "home_delivery",
+                  input.shipping_channel ?? "home_delivery",
                 temperature_zone: "ambient",
                 status: "draft",
                 tracking_number: null,
@@ -932,6 +950,8 @@ export const api = {
           body: {
             items: input.items,
             contact_email: input.contact_email,
+            fulfillment_method:
+              input.fulfillment_method ?? "cooperative_pickup",
             invoice_carrier_type: input.invoice_carrier_type,
             ...(input.invoice_carrier_value
               ? { invoice_carrier_value: input.invoice_carrier_value }
@@ -1575,11 +1595,17 @@ export const api = {
   }) {
     return fallback(
       () =>
-        request<{ message: string }>("/v1/auth/register", {
-          method: "POST",
-          body: input,
-        }),
-      async () => ({ message: "驗證信已寄出，請完成 Email 驗證。" }),
+        request<{ message: string; delivery_status: "queued" }>(
+          "/v1/auth/register",
+          {
+            method: "POST",
+            body: input,
+          },
+        ),
+      async () => ({
+        message: "帳號已建立，驗證信已排入寄送佇列，請稍候。",
+        delivery_status: "queued" as const,
+      }),
     );
   },
 
@@ -1597,22 +1623,35 @@ export const api = {
   resendVerification(email: string) {
     return fallback(
       () =>
-        request<{ message: string }>("/v1/auth/resend-verification", {
-          method: "POST",
-          body: { email },
-        }),
-      async () => ({ message: "驗證信已重新寄出。" }),
+        request<{ message: string; delivery_status: "queued" }>(
+          "/v1/auth/resend-verification",
+          {
+            method: "POST",
+            body: { email },
+          },
+        ),
+      async () => ({
+        message:
+          "重新寄送要求已排入寄送佇列；10 分鐘效期內，已產生的驗證碼皆可使用，任一驗證成功後全部失效。",
+        delivery_status: "queued" as const,
+      }),
     );
   },
 
   forgotPassword(email: string) {
     return fallback(
       () =>
-        request<{ message: string }>("/v1/auth/forgot-password", {
-          method: "POST",
-          body: { email },
-        }),
-      async () => ({ message: "若帳號存在，重設密碼信將寄到信箱。" }),
+        request<{ message: string; delivery_status: "queued" }>(
+          "/v1/auth/forgot-password",
+          {
+            method: "POST",
+            body: { email },
+          },
+        ),
+      async () => ({
+        message: "若帳號存在，密碼重設信的寄送要求已受理。",
+        delivery_status: "queued" as const,
+      }),
     );
   },
 
@@ -1698,9 +1737,10 @@ export const api = {
         }).then(normalizeMembershipApplicationRead);
       },
       async () => {
+        const user = getDemoUser();
         const application = findDemoMembershipApplication(
           demoState.membershipApplications,
-          getDemoUser().id,
+          user.id,
         );
         if (!application) throw new ApiError("請先填寫入社資料", 400);
         if (!isDemoMembershipApplicationEditable(application)) {
@@ -1716,6 +1756,11 @@ export const api = {
         application.status = "submitted";
         application.submitted_at = new Date().toISOString();
         application.review_note = null;
+        if (!demoState.memberships[user.id]) {
+          const pending = createPendingDemoMembership(user);
+          demoState.memberships[user.id] = pending.membership;
+          demoState.membershipCharges[user.id] = pending.charges;
+        }
         return structuredCloneSafe(application);
       },
     );
@@ -1940,7 +1985,7 @@ export const api = {
           user,
           membership ?? null,
           charges,
-          nextDemoMemberNumber(),
+          nextDemoTraineeNumber(),
           new Date().toISOString(),
         );
         if (activated && membership) {
@@ -1948,8 +1993,8 @@ export const api = {
           notices.unshift({
             id: `notification-membership-${Date.now()}`,
             kind: "membership",
-            title: "十里方圓會籍已啟用",
-            body: `社員編號 ${membership.member_number} 已啟用。`,
+            title: "已成為實習社員",
+            body: `實習社員編號 ${membership.trainee_number} 已啟用，可開始使用社員價。`,
             route: "/members",
             read_at: null,
             created_at: new Date().toISOString(),
@@ -2501,6 +2546,44 @@ export const api = {
     );
   },
 
+  adminActivateMember(id: string, reason: string) {
+    return fallback<Membership>(
+      () =>
+        request<unknown>(`/v1/admin/members/${id}/activate`, {
+          method: "POST",
+          body: { reason: reason || null },
+        }).then((value) => {
+          const membership = normalizeMembershipRead(value);
+          if (!membership) throw new ApiError("轉正結果不完整", 502);
+          return membership;
+        }),
+      async () => {
+        const membershipEntry = Object.entries(demoState.memberships).find(
+          ([, item]) => item?.id === id,
+        );
+        const userId = membershipEntry?.[0];
+        const membership = membershipEntry?.[1];
+        if (
+          !membership ||
+          membership.status !== "trainee" ||
+          !membership.trainee_number ||
+          membership.member_number
+        ) {
+          throw new ApiError("只有有效實習社員可以轉為正式社員", 409);
+        }
+        membership.member_number = nextDemoMemberNumber();
+        membership.status = "active";
+        membership.started_at = new Date().toISOString();
+        membership.status_reason = reason || null;
+        const account = Object.values(demoState.users).find(
+          ({ user }) => user.id === userId,
+        );
+        if (account) account.user.membership_type = "member";
+        return structuredCloneSafe(membership);
+      },
+    );
+  },
+
   adminMembershipAction(
     id: string,
     action: "suspend" | "resign" | "terminate" | "share-capital-return",
@@ -2542,7 +2625,7 @@ export const api = {
         > = {
           suspend: ["active"],
           resign: ["active", "suspended"],
-          terminate: ["pending_payment", "active", "suspended"],
+          terminate: ["pending_payment", "trainee", "active", "suspended"],
         };
         if (!allowedStatuses[action].includes(membership.status)) {
           throw new ApiError("此會籍目前不可執行該操作", 409);
@@ -2626,9 +2709,12 @@ export const api = {
               pending.charges;
           }
           approvedAccount.user.membership_type =
-            demoState.memberships[approvedAccount.user.id]?.status === "active"
+            demoState.memberships[approvedAccount.user.id]?.member_number
               ? "member"
-              : "nonmember";
+              : demoState.memberships[approvedAccount.user.id]
+                    ?.trainee_number
+                ? "trainee"
+                : "nonmember";
         }
         return structuredCloneSafe(application);
       },
@@ -3154,28 +3240,6 @@ export const api = {
     );
   },
 
-  cooperativeEducation() {
-    return request<{
-      lectures: { id: string; title: string; body: string; position: number }[];
-      passed: boolean;
-      required_for_membership: boolean;
-    }>("/v1/education");
-  },
-
-  startEducationAttempt() {
-    return request<{
-      attempt_id: string;
-      questions: { id: string; prompt: string; options: string[] }[];
-    }>("/v1/education/attempts", { method: "POST" });
-  },
-
-  submitEducationAttempt(attemptId: string, answers: Record<string, number>) {
-    return request<{ score: number; passed: boolean; correct: number; total: number }>(
-      `/v1/education/attempts/${attemptId}/submit`,
-      { method: "POST", body: { answers } },
-    );
-  },
-
   myPoints() {
     return request<{
       balance: number;
@@ -3208,7 +3272,25 @@ export const api = {
   },
 
   adminNonmemberSales(startsOn: string, endsOn: string) {
-    return request<{ total_revenue: number; nonmember_revenue: number; ratio: number; headroom_amount: number; level: string; transactions_blocked: boolean }>(`/v1/admin/finance/nonmember-sales?starts_on=${startsOn}&ends_on=${endsOn}`);
+    return request<{
+      total_revenue: number;
+      nonmember_revenue: number;
+      trainee_revenue: number;
+      member_revenue: number;
+      nonmember_ratio?: number;
+      trainee_ratio?: number;
+      member_ratio?: number;
+      sales_breakdown?: {
+        membership_type: "nonmember" | "trainee" | "member";
+        revenue: number;
+        ratio: number;
+      }[];
+      /** Legacy alias kept while older deployments are rolling forward. */
+      ratio?: number;
+      headroom_amount: number;
+      level: string;
+      transactions_blocked: boolean;
+    }>(`/v1/admin/finance/nonmember-sales?starts_on=${startsOn}&ends_on=${endsOn}`);
   },
 
   adminTaxLedger(startsOn: string, endsOn: string) {

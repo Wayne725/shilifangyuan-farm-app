@@ -58,8 +58,44 @@ const ordersSource = await readFile(
   new URL("../app/(tabs)/orders.tsx", import.meta.url),
   "utf8",
 );
+const orderDetailSource = await readFile(
+  new URL("../app/order/[id].tsx", import.meta.url),
+  "utf8",
+);
 const authSource = await readFile(
   new URL("../src/store/AuthContext.tsx", import.meta.url),
+  "utf8",
+);
+const typesSource = await readFile(
+  new URL("../src/types.ts", import.meta.url),
+  "utf8",
+);
+const socialProfileSource = await readFile(
+  new URL("../app/(tabs)/social-profile.tsx", import.meta.url),
+  "utf8",
+);
+const socialHomeSource = await readFile(
+  new URL("../app/(tabs)/social-home.tsx", import.meta.url),
+  "utf8",
+);
+const adminCooperativeSource = await readFile(
+  new URL("../app/admin-cooperative.tsx", import.meta.url),
+  "utf8",
+);
+const workspaceSource = await readFile(
+  new URL("../src/store/WorkspaceContext.tsx", import.meta.url),
+  "utf8",
+);
+const legacyCooperativeSource = await readFile(
+  new URL("../app/cooperative.tsx", import.meta.url),
+  "utf8",
+);
+const verifyEmailSource = await readFile(
+  new URL("../app/verify-email.tsx", import.meta.url),
+  "utf8",
+);
+const cartContextSource = await readFile(
+  new URL("../src/store/CartContext.tsx", import.meta.url),
   "utf8",
 );
 const productSection = demoSource
@@ -143,6 +179,7 @@ test("提供生活消費與社務系統雙工作區及各自五個底部入口",
     "social-profile",
   ]) {
     assert.match(tabsSource, new RegExp(`name="${route}"`));
+    assert.match(workspaceSource, new RegExp(`"/${route}"`));
   }
   assert.match(tabsSource, /name="cart".*href: null/s);
 });
@@ -213,9 +250,81 @@ test("入社付款返回後會輪詢會籍並同步社員價格", () => {
   assert.match(authSource, /queryClient\.clear\(\)/);
   assert.match(membersSource, /refetchInterval/);
   assert.match(membersSource, /paymentSyncUntil > Date\.now\(\)/);
+  assert.match(membersSource, /if \(!params\.payment\) return/);
+  assert.match(membersSource, /params\.payment === "paid"/);
   assert.match(membersSource, /status === "pending_payment"/);
   assert.match(membersSource, /auth-membership-sync/);
+  assert.match(membersSource, /membershipIdentityNeedsSync/);
+  assert.doesNotMatch(
+    membersSource,
+    /membership\.data\?\.status === "trainee"[\s\S]{0,120}user\?\.membership_type === "nonmember"/,
+  );
   assert.match(membersSource, /重新同步社員資格/);
+});
+
+test("驗證信重新寄送文案只承諾排隊與驗證碼效期", () => {
+  assert.match(verifyEmailSource, /10 分鐘效期內/);
+  assert.match(verifyEmailSource, /任一驗證成功後全部失效/);
+  assert.doesNotMatch(verifyEmailSource, /新信送達/);
+  assert.match(apiSource, /10 分鐘效期內/);
+  assert.doesNotMatch(apiSource, /新信送達/);
+});
+
+test("前端會籍契約區分一般買家、實習社員與正式社員編號", () => {
+  assert.match(typesSource, /"nonmember" \| "trainee" \| "member"/);
+  assert.match(typesSource, /customer_number: string \| null/);
+  assert.match(typesSource, /trainee_number\?: string \| null/);
+  assert.match(typesSource, /\| "trainee"\n  \| "active"/);
+  assert.match(membersSource, /實習社員編號/);
+  assert.match(membersSource, /正式社員編號/);
+  assert.match(membersSource, /一般買家編號/);
+});
+
+test("入社申請送出後即可付款，不以管理員審核作為前置", () => {
+  assert.doesNotMatch(membersSource, /status === "approved"/);
+  assert.match(membersSource, /送出申請後即可繳交入社費與股金/);
+  assert.match(apiSource, /createPendingDemoMembership\(user\)/);
+});
+
+test("實習社員享社員價但正式社務仍只開放正式社員", () => {
+  assert.match(membersSource, /membership_type === "trainee"/);
+  assert.match(membersSource, /等待管理員轉為正式社員/);
+  assert.match(socialHomeSource, /hasFormalMemberAccess/);
+  assert.match(socialHomeSource, /實習社員目前享有社員價/);
+});
+
+test("管理員可把實習社員手動轉為正式社員", () => {
+  assert.match(apiSource, /\/v1\/admin\/members\/\$\{id\}\/activate/);
+  assert.match(adminSource, /轉為正式社員/);
+  assert.match(adminSource, /trainee_number/);
+});
+
+test("社務第五個底部入口為更多並拆分正式社員服務", () => {
+  assert.match(tabsSource, /name="social-profile"[\s\S]*title: "更多"/);
+  for (const route of [
+    "social-account",
+    "social-points",
+    "social-wishes",
+    "social-meetings",
+    "social-surplus",
+  ]) {
+    assert.match(tabsSource, new RegExp(`name="${route}"`));
+  }
+  for (const label of ["個人資料", "積點與徽章", "願望", "會議", "結餘分配"]) {
+    assert.match(socialProfileSource, new RegExp(label));
+  }
+  assert.doesNotMatch(socialHomeSource, /合作教育/);
+  assert.doesNotMatch(socialProfileSource, /合作教育/);
+  assert.doesNotMatch(apiSource, /\/v1\/education/);
+  assert.match(legacyCooperativeSource, /Redirect href="\/\(tabs\)\/members"/);
+});
+
+test("銷售介面分開顯示三類成交金額與占比", () => {
+  assert.match(adminCooperativeSource, /一般買家銷售/);
+  assert.match(adminCooperativeSource, /實習社員銷售/);
+  assert.match(adminCooperativeSource, /正式社員銷售/);
+  assert.match(adminCooperativeSource, /trainee_revenue/);
+  assert.match(adminCooperativeSource, /member_revenue/);
 });
 
 test("綠界付款或物流返回遇冷啟動時會重試且保留手動查詢", () => {
@@ -245,11 +354,34 @@ test("一般訂單與團購結帳皆可選擇綠界物流", async () => {
   assert.match(apiSource, /logistics_provider/);
 });
 
-test("訂單建立後付款或物流失敗會導向既有訂單重試", () => {
-  for (const source of [checkoutSource, campaignDetailSource, mealDetailSource]) {
-    assert.match(source, /setupFailed: true/);
-    assert.match(source, /setup: "retry"/);
+test("訂單建立後付款或物流失敗不會重複建立一般與團購訂單", () => {
+  for (const source of [checkoutSource, campaignDetailSource]) {
+    assert.match(
+      source,
+      /submittedOrderId\s*\?\s*draftOrder\.data \?\? \(await api\.order/,
+    );
+    assert.match(source, /setSubmittedOrderId\(order\.id\)/);
+    assert.match(source, /draftOrderId \?\? null/);
+    assert.match(source, /router\.setParams\(\{ order_id: order\.id \}\)/);
+    assert.doesNotMatch(source, /setupFailed: true/);
   }
+  assert.match(checkoutSource, /pathname: "\/order\/\[id\]"/);
+  assert.match(checkoutSource, /return <LoadingState label="正在開啟訂單"/);
+  assert.match(checkoutSource, /enabled: items\.length > 0 && !submittedOrderId/);
+  assert.match(checkoutSource, /validDraftOrder\?\.items \?\? quote\.data\?\.items/);
+  assert.match(checkoutSource, /draftOrder\.data\?\.order_kind === "regular"/);
+  assert.doesNotMatch(
+    checkoutSource,
+    /if \(items\.length \|\| submit\.isPending\) return;/,
+  );
+  assert.match(orderDetailSource, /重新填寫物流資料/);
+  assert.match(orderDetailSource, /order_id: order\.id/);
+  assert.match(mealDetailSource, /setupFailed: true/);
+  assert.match(mealDetailSource, /setup: "retry"/);
+  assert.match(
+    cartContextSource,
+    /localStorage\?\.setItem\(CART_KEY, "\[\]"\)/,
+  );
   assert.match(campaignDetailSource, /quoteCampaign/);
   assert.match(campaignDetailSource, /後端報價/);
 });

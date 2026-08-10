@@ -1,5 +1,5 @@
 export type UserRole = "customer" | "admin";
-export type MembershipType = "member" | "nonmember";
+export type MembershipType = "nonmember" | "trainee" | "member";
 export type Workspace = "life" | "social";
 
 export type User = {
@@ -8,6 +8,7 @@ export type User = {
   display_name: string;
   user_role: UserRole;
   membership_type: MembershipType;
+  customer_number: string | null;
 };
 
 export type AuthSession = {
@@ -184,6 +185,8 @@ export type Order = {
   invoice_status: InvoiceStatus;
   membership_type_snapshot: MembershipType;
   amount_total: number;
+  contact_email?: string;
+  invoice_carrier_type?: InvoiceCarrierType;
   paid_at?: string | null;
   created_at: string;
   available_actions: OrderAction[];
@@ -280,6 +283,7 @@ export type DashboardSummary = {
 
 export type MembershipStatus =
   | "pending_payment"
+  | "trainee"
   | "active"
   | "suspended"
   | "resigned"
@@ -314,6 +318,7 @@ export type MembershipApplication = {
 export type Membership = {
   id: string;
   user_id?: string;
+  trainee_number?: string | null;
   member_number?: string | null;
   status: MembershipStatus;
   started_at?: string | null;

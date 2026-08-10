@@ -22,13 +22,15 @@ import {
   paymentLabels,
   shipmentStatusLabel,
 } from "../../src/lib/format";
-import { openPaymentPage } from "../../src/lib/payment";
+import { openLogisticsPage, openPaymentPage } from "../../src/lib/payment";
 import { api, getErrorMessage } from "../../src/services/api";
 import { colors, radii, spacing } from "../../src/theme";
 
 export default function OrderDetailScreen() {
-  const { id, setup } = useLocalSearchParams<{
+  const { id, logistics, payment, setup } = useLocalSearchParams<{
     id: string;
+    logistics?: string;
+    payment?: string;
     setup?: string;
   }>();
   const queryClient = useQueryClient();
@@ -55,7 +57,8 @@ export default function OrderDetailScreen() {
     mutationFn: () => api.reissueLogisticsSelectionLink(id),
     onSuccess: async (selection) => {
       if (selection.selection_url) {
-        await openPaymentPage(selection.selection_url);
+        await openLogisticsPage(selection.selection_url);
+        if (Platform.OS !== "web") await query.refetch();
         return;
       }
       await query.refetch();
@@ -100,10 +103,10 @@ export default function OrderDetailScreen() {
   // so surface the missing step instead of a payment button that 409s.
   const awaitingSelection =
     order.fulfillment?.method === "ecpay_logistics" &&
-    !!order.shipment &&
-    !["ready_to_create", "created", "in_transit", "delivered"].includes(
-      order.shipment.status,
-    );
+    (!order.shipment ||
+      !["ready_to_create", "created", "in_transit", "delivered"].includes(
+        order.shipment.status,
+      ));
   const canPay = order.available_actions.includes("pay") && !awaitingSelection;
   const canCancel = order.available_actions.includes("cancel");
   const fulfillmentStatus =
@@ -112,7 +115,11 @@ export default function OrderDetailScreen() {
   return (
     <Screen>
       <PageHeader
-        onBack={() => router.back()}
+        onBack={() =>
+          payment || logistics
+            ? router.replace("/(tabs)/orders")
+            : router.back()
+        }
         subtitle={`${
           order.order_kind === "group"
             ? "團購訂單"
@@ -123,6 +130,30 @@ export default function OrderDetailScreen() {
         title={order.order_number}
       />
       <View style={styles.content}>
+        {payment ? (
+          <InlineMessage
+            text={
+              order.payment_status === "paid"
+                ? "付款已完成，訂單狀態已更新。"
+                : payment === "failed"
+                  ? "本次付款未完成，請確認資料後重新付款。"
+                  : "已離開綠界付款頁，系統正在確認最終付款結果，請勿重複付款。"
+            }
+            tone={
+              order.payment_status === "paid"
+                ? "positive"
+                : payment === "failed"
+                  ? "danger"
+                  : "warning"
+            }
+          />
+        ) : null}
+        {logistics === "selected" ? (
+          <InlineMessage
+            text="物流資料已確認，現在可以繼續付款。"
+            tone="positive"
+          />
+        ) : null}
         {setup === "retry" ? (
           <InlineMessage
             text="訂單已安全建立，但付款或物流頁暫時未開啟。請在本頁重新操作，不要重複下單。"
@@ -262,13 +293,35 @@ export default function OrderDetailScreen() {
               text="尚未完成綠界物流門市或地址選擇，完成後才能付款。"
               tone="danger"
             />
-            <Button
-              icon="cube-outline"
-              label="繼續選擇物流"
-              loading={reselect.isPending}
-              onPress={() => reselect.mutate()}
-              variant="secondary"
-            />
+            {order.shipment ? (
+              <Button
+                icon="cube-outline"
+                label="繼續選擇物流"
+                loading={reselect.isPending}
+                onPress={() => reselect.mutate()}
+                variant="secondary"
+              />
+            ) : (
+              <Button
+                icon="create-outline"
+                label="重新填寫物流資料"
+                onPress={() =>
+                  order.order_kind === "group" && order.group_campaign_id
+                    ? router.push({
+                        pathname: "/campaign/[id]",
+                        params: {
+                          id: order.group_campaign_id,
+                          order_id: order.id,
+                        },
+                      })
+                    : router.push({
+                        pathname: "/checkout",
+                        params: { order_id: order.id },
+                      })
+                }
+                variant="secondary"
+              />
+            )}
           </>
         ) : null}
         {canPay ? (

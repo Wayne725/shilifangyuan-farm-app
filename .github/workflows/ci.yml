@@ -38,6 +38,7 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16
@@ -71,7 +72,8 @@ jobs:
         run: alembic downgrade base
       - name: Verify migration re-upgrade
         run: alembic upgrade head
-      - run: pytest
+      - name: Run pytest
+        run: pytest -vv --durations=20
 
   api-contract:
     runs-on: ubuntu-latest

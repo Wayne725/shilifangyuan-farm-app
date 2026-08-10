@@ -15,6 +15,7 @@ import {
 } from "../../src/components/ui";
 import { money } from "../../src/lib/format";
 import { imageFor } from "../../src/lib/images";
+import { hasMemberPricing } from "../../src/lib/membership";
 import { api } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { useCart } from "../../src/store/CartContext";
@@ -44,8 +45,8 @@ export default function ProductDetailScreen() {
   }
 
   const membership = user?.membership_type ?? "nonmember";
-  const price =
-    membership === "member" ? product.member_price : product.nonmember_price;
+  const memberPricing = hasMemberPricing(membership);
+  const price = memberPricing ? product.member_price : product.nonmember_price;
 
   return (
     <Screen
@@ -85,11 +86,11 @@ export default function ProductDetailScreen() {
         <View style={styles.priceRow}>
           <View>
             <Text style={styles.priceLabel}>
-              {membership === "member" ? "社員價" : "一般價"}
+              {memberPricing ? "社員價" : "一般價"}
             </Text>
             <Text style={styles.price}>{money(price)}</Text>
           </View>
-          {membership === "member" ? (
+          {memberPricing ? (
             <View style={styles.saving}>
               <Text style={styles.savingText}>
                 比一般價省 {money(product.nonmember_price - product.member_price)}

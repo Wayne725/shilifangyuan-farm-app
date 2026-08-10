@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from ..auth import (
 )
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationError
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..integrations.r2_storage import r2_document_storage_from_settings
@@ -27,7 +28,6 @@ from ..integrations.notifications import (
 )
 from ..models import (
     AdminAudit,
-    EducationAttempt,
     MemberDirectoryEntry,
     MemberProfile,
     Membership,
@@ -44,7 +44,6 @@ from ..models import (
     OutboxEvent,
     Refund,
     RefundStatus,
-    SystemSetting,
     User,
 )
 from ..schemas import (
@@ -66,22 +65,6 @@ from ..schemas import (
 
 
 membership_router = APIRouter(tags=["membership"])
-
-
-async def _require_education_if_enabled(
-    session: AsyncSession, user_id: str
-) -> None:
-    setting = await session.get(SystemSetting, "education_required_for_membership")
-    if not setting or not setting.value.get("enabled"):
-        return
-    passed = await session.scalar(
-        select(EducationAttempt.id).where(
-            EducationAttempt.user_id == user_id,
-            EducationAttempt.passed.is_(True),
-        )
-    )
-    if passed is None:
-        raise HTTPException(status_code=409, detail="請先完成合作教育並通過測驗")
 
 
 def _aware(value: datetime) -> datetime:
@@ -288,6 +271,53 @@ async def _save_profile_and_application(
     return application
 
 
+async def _ensure_membership_charges(
+    session: AsyncSession,
+    application: MembershipApplication,
+) -> Membership:
+    membership = await session.scalar(
+        select(Membership)
+        .where(Membership.user_id == application.user_id)
+        .with_for_update()
+    )
+    if membership is None:
+        membership = Membership(
+            user_id=application.user_id,
+            application_id=application.id,
+            status=MembershipStatus.PENDING_PAYMENT,
+        )
+        session.add(membership)
+        await session.flush()
+    elif membership.application_id is None:
+        membership.application_id = application.id
+    today = date.today()
+    for kind in (
+        MembershipChargeKind.ADMISSION_FEE,
+        MembershipChargeKind.SHARE_CAPITAL,
+    ):
+        existing = await session.scalar(
+            select(MembershipCharge.id).where(
+                MembershipCharge.application_id == application.id,
+                MembershipCharge.charge_kind == kind,
+            )
+        )
+        if existing is not None:
+            continue
+        schedule = await _active_fee_schedule(session, kind, today)
+        session.add(
+            MembershipCharge(
+                user_id=application.user_id,
+                application_id=application.id,
+                membership_id=membership.id,
+                fee_schedule_id=schedule.id,
+                charge_kind=kind,
+                amount=schedule.amount,
+            )
+        )
+    await session.flush()
+    return membership
+
+
 @membership_router.get(
     "/v1/membership/application",
     response_model=MembershipApplicationRead,
@@ -342,7 +372,6 @@ async def submit_my_application(
         raise HTTPException(status_code=409, detail="請先填寫入社資料")
     if application.status != MembershipApplicationStatus.DRAFT:
         raise HTTPException(status_code=409, detail="此申請目前不可送件")
-    await _require_education_if_enabled(session, user.id)
     profile = await session.scalar(
         select(MemberProfile.id).where(MemberProfile.user_id == user.id)
     )
@@ -358,6 +387,7 @@ async def submit_my_application(
             status_code=409,
             detail="請先上傳並確認身分證正反面及第二證件",
         )
+    await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.SUBMITTED
     application.submitted_at = datetime.now(timezone.utc)
     application.review_reason = None
@@ -409,6 +439,7 @@ async def resubmit_supplement(
             status_code=409,
             detail="請先上傳並確認身分證正反面及第二證件",
         )
+    await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.SUBMITTED
     application.submitted_at = datetime.now(timezone.utc)
     application.review_reason = None
@@ -455,8 +486,10 @@ async def withdraw_application(
     if membership is not None and (
         membership.activated_at is not None
         or membership.member_number is not None
+        or membership.trainee_number is not None
         or membership.status
         in {
+            MembershipStatus.TRAINEE,
             MembershipStatus.ACTIVE,
             MembershipStatus.SUSPENDED,
             MembershipStatus.RESIGNED,
@@ -963,41 +996,7 @@ async def approve_membership_application(
         < 3
     ):
         raise HTTPException(status_code=409, detail="申請人證件尚未齊全")
-    membership = await session.scalar(
-        select(Membership).where(Membership.user_id == application.user_id)
-    )
-    if membership is None:
-        membership = Membership(
-            user_id=application.user_id,
-            application_id=application.id,
-            status=MembershipStatus.PENDING_PAYMENT,
-        )
-        session.add(membership)
-        await session.flush()
-    today = date.today()
-    for kind in (
-        MembershipChargeKind.ADMISSION_FEE,
-        MembershipChargeKind.SHARE_CAPITAL,
-    ):
-        existing = await session.scalar(
-            select(MembershipCharge.id).where(
-                MembershipCharge.application_id == application.id,
-                MembershipCharge.charge_kind == kind,
-            )
-        )
-        if existing is not None:
-            continue
-        schedule = await _active_fee_schedule(session, kind, today)
-        session.add(
-            MembershipCharge(
-                user_id=application.user_id,
-                application_id=application.id,
-                membership_id=membership.id,
-                fee_schedule_id=schedule.id,
-                charge_kind=kind,
-                amount=schedule.amount,
-            )
-        )
+    membership = await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.APPROVED
     application.reviewed_by_id = admin.id
     application.reviewed_at = datetime.now(timezone.utc)
@@ -1050,9 +1049,38 @@ async def reject_membership_application(
         }
     ):
         raise HTTPException(status_code=409, detail="此申請目前不可駁回")
+    membership = await session.scalar(
+        select(Membership)
+        .where(Membership.user_id == application.user_id)
+        .options(selectinload(Membership.charges))
+        .with_for_update()
+    )
+    if membership is not None and (
+        membership.status
+        in {MembershipStatus.TRAINEE, MembershipStatus.ACTIVE}
+        or any(
+            charge.status == MembershipChargeStatus.PAID
+            for charge in membership.charges
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="此申請已有付款紀錄，請改走明確的終止與退款流程",
+        )
+    reviewed_at = datetime.now(timezone.utc)
+    if (
+        membership is not None
+        and membership.status == MembershipStatus.PENDING_PAYMENT
+    ):
+        membership.status = MembershipStatus.TERMINATED
+        membership.ended_at = reviewed_at
+        membership.status_reason = body.reason or "入社申請未通過"
+        for charge in membership.charges:
+            if charge.status == MembershipChargeStatus.PENDING:
+                charge.status = MembershipChargeStatus.WAIVED
     application.status = MembershipApplicationStatus.REJECTED
     application.reviewed_by_id = admin.id
-    application.reviewed_at = datetime.now(timezone.utc)
+    application.reviewed_at = reviewed_at
     application.review_reason = body.reason
     session.add(
         AdminAudit(
@@ -1183,6 +1211,7 @@ async def _transition_membership(
         },
         MembershipStatus.TERMINATED: {
             MembershipStatus.PENDING_PAYMENT,
+            MembershipStatus.TRAINEE,
             MembershipStatus.ACTIVE,
             MembershipStatus.SUSPENDED,
         },
@@ -1206,6 +1235,84 @@ async def _transition_membership(
             aggregate_type="membership",
             aggregate_id=membership.id,
             reason=body.reason,
+        )
+    )
+    await session.commit()
+    return MembershipRead.model_validate(membership)
+
+
+@membership_router.post(
+    "/v1/admin/members/{membership_id}/activate",
+    response_model=MembershipRead,
+)
+async def activate_trainee_membership(
+    membership_id: str,
+    body: MembershipApplicationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipRead:
+    if not body.reason:
+        raise HTTPException(status_code=422, detail="請填寫轉正原因")
+    membership = await session.scalar(
+        select(Membership)
+        .where(Membership.id == membership_id)
+        .options(selectinload(Membership.application))
+        .with_for_update()
+    )
+    if membership is None:
+        raise HTTPException(status_code=404, detail="找不到會籍")
+    if membership.status != MembershipStatus.TRAINEE:
+        raise HTTPException(status_code=409, detail="只有實習社員可以轉為正式社員")
+    if membership.trainee_number is None:
+        raise HTTPException(status_code=409, detail="實習社員編號資料不完整")
+    if (
+        membership.application is not None
+        and membership.application.status
+        in {
+            MembershipApplicationStatus.REJECTED,
+            MembershipApplicationStatus.WITHDRAWN,
+        }
+    ):
+        raise HTTPException(status_code=409, detail="此入社申請已結案，不可轉正")
+    current = datetime.now(timezone.utc)
+    membership.member_number = await next_identity_number(
+        session,
+        Membership.member_number,
+        "SLF",
+        current,
+    )
+    membership.status = MembershipStatus.ACTIVE
+    membership.activated_at = current
+    membership.status_reason = body.reason
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="membership.activated",
+            aggregate_type="membership",
+            aggregate_id=membership.id,
+            reason=body.reason,
+            data={
+                "trainee_number": membership.trainee_number,
+                "member_number": membership.member_number,
+            },
+        )
+    )
+    member_user = await session.get(User, membership.user_id)
+    await NotificationService(
+        SQLAlchemyNotificationRepository(session)
+    ).publish(
+        NotificationCommand(
+            user_id=membership.user_id,
+            event_type="membership.activated",
+            title="已成為十里方圓正式社員",
+            body=f"社員編號 {membership.member_number} 已啟用。",
+            data={
+                "membership_id": membership.id,
+                "trainee_number": membership.trainee_number,
+                "member_number": membership.member_number,
+            },
+            email=member_user.email if member_user else None,
+            dedupe_key=f"membership-activated:{membership.id}",
         )
     )
     await session.commit()
@@ -1359,7 +1466,7 @@ async def create_membership_fee_schedule(
     }
 
 
-async def activate_membership_if_fully_paid(
+async def start_traineeship_if_fully_paid(
     session: AsyncSession,
     membership_id: str,
     now: Optional[datetime] = None,
@@ -1379,7 +1486,11 @@ async def activate_membership_if_fully_paid(
         or membership.status != MembershipStatus.PENDING_PAYMENT
         or membership.application is None
         or membership.application.status
-        != MembershipApplicationStatus.APPROVED
+        not in {
+            MembershipApplicationStatus.SUBMITTED,
+            MembershipApplicationStatus.NEEDS_SUPPLEMENT,
+            MembershipApplicationStatus.APPROVED,
+        }
     ):
         return membership
     paid_kinds = {
@@ -1393,39 +1504,27 @@ async def activate_membership_if_fully_paid(
     }:
         return membership
     current = now or datetime.now(timezone.utc)
-    connection = await session.connection()
-    if connection.dialect.name == "postgresql":
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_key)"),
-            {"lock_key": 1_947_000_000 + current.year},
-        )
-    sequence = int(
-        await session.scalar(
-            select(func.count(Membership.id)).where(
-                Membership.activated_at.is_not(None),
-                func.extract("year", Membership.activated_at)
-                == current.year,
-            )
-        )
-        or 0
-    ) + 1
-    membership.member_number = f"SLF-{current.year}-{sequence:04d}"
-    membership.status = MembershipStatus.ACTIVE
-    membership.activated_at = current
+    membership.trainee_number = await next_identity_number(
+        session,
+        Membership.trainee_number,
+        "SLF-T",
+        current,
+    )
+    membership.status = MembershipStatus.TRAINEE
     member_user = await session.get(User, membership.user_id)
     service = NotificationService(SQLAlchemyNotificationRepository(session))
     await service.publish(
         NotificationCommand(
             user_id=membership.user_id,
-            event_type="membership.activated",
-            title="十里方圓會籍已啟用",
-            body=f"社員編號 {membership.member_number} 已啟用。",
+            event_type="membership.trainee_started",
+            title="已成為十里方圓實習社員",
+            body=f"實習社員編號 {membership.trainee_number} 已啟用。",
             data={
                 "membership_id": membership.id,
-                "member_number": membership.member_number,
+                "trainee_number": membership.trainee_number,
             },
             email=member_user.email if member_user else None,
-            dedupe_key=f"membership-activated:{membership.id}",
+            dedupe_key=f"membership-trainee:{membership.id}",
         )
     )
     return membership

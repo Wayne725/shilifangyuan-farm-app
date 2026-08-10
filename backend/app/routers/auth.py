@@ -19,6 +19,7 @@ from ..auth import (
 )
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..identity_numbers import next_identity_number
 from ..rate_limit import (
     LOGIN_RULE,
     PASSWORD_RESET_RULE,
@@ -54,6 +55,7 @@ def user_read(user: User) -> UserRead:
     membership = user.__dict__.get("membership")
     return UserRead(
         id=user.id,
+        customer_number=user.customer_number,
         email=user.email,
         display_name=user.display_name,
         user_role=user.user_role,
@@ -80,22 +82,15 @@ async def _issue_email_verification(
     user: User,
 ) -> str:
     now = datetime.now(timezone.utc)
-    await session.execute(
-        update(EmailVerificationToken)
-        .where(
-            EmailVerificationToken.user_id == user.id,
-            EmailVerificationToken.used_at.is_(None),
-        )
-        .values(used_at=now)
-    )
     raw_token = f"{secrets.randbelow(1_000_000):06d}"
-    session.add(
-        EmailVerificationToken(
-            user_id=user.id,
-            token_hash=_token_hash(raw_token),
-            expires_at=now + timedelta(minutes=10),
-        )
+    token = EmailVerificationToken(
+        user_id=user.id,
+        token_hash=_token_hash(raw_token),
+        expires_at=now + timedelta(minutes=10),
+        created_at=now,
     )
+    session.add(token)
+    await session.flush()
     session.add(
         OutboxEvent(
             event_type="auth.email_verification_requested",
@@ -105,6 +100,7 @@ async def _issue_email_verification(
                 "recipient": user.email,
                 "display_name": user.display_name,
                 "verification_token": raw_token,
+                "verification_token_id": token.id,
             },
         )
     )
@@ -117,7 +113,7 @@ def _development_token_response(
     token: str,
     settings: Settings,
 ) -> dict[str, str]:
-    response = {"message": message}
+    response = {"message": message, "delivery_status": "queued"}
     if settings.environment.strip().lower() == "development":
         response["development_token"] = token
     return response
@@ -136,6 +132,11 @@ async def register(
     if existing is not None:
         raise HTTPException(status_code=409, detail="此 Email 已註冊")
     user = User(
+        customer_number=await next_identity_number(
+            session,
+            User.customer_number,
+            "SLF-C",
+        ),
         email=email,
         display_name=body.display_name.strip(),
         password_hash=hash_password(body.password),
@@ -144,7 +145,7 @@ async def register(
     await session.flush()
     token = await _issue_email_verification(session, user)
     return _development_token_response(
-        "註冊完成，請至 Email 完成驗證",
+        "註冊完成，驗證信已排入寄送佇列，請稍候",
         token,
         settings,
     )
@@ -153,8 +154,11 @@ async def register(
 @auth_router.post("/verify-email")
 async def verify_email(
     body: VerifyEmailRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, str]:
+    verification_key = client_key(request, "verify-email")
+    enforce(verification_key, VERIFICATION_RULE)
     now = datetime.now(timezone.utc)
     record = await session.scalar(
         select(EmailVerificationToken)
@@ -171,13 +175,24 @@ async def verify_email(
     user = await session.get(User, record.user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="找不到此使用者")
-    record.used_at = now
+    await session.execute(
+        update(EmailVerificationToken)
+        .where(
+            EmailVerificationToken.user_id == record.user_id,
+            EmailVerificationToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
     user.email_verified_at = now
     await session.commit()
+    reset(verification_key)
     return {"message": "Email 驗證完成"}
 
 
-@auth_router.post("/resend-verification")
+@auth_router.post(
+    "/resend-verification",
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def resend_verification(
     body: ResendVerificationRequest,
     request: Request,
@@ -194,7 +209,14 @@ async def resend_verification(
     token = ""
     if user is not None and user.email_verified_at is None:
         token = await _issue_email_verification(session, user)
-    response = {"message": "若帳號尚未驗證，系統已重新寄出驗證信"}
+    response = {
+        "message": (
+            "若帳號尚未驗證，重新寄送要求已排入寄送佇列；"
+            "10 分鐘效期內，已產生的驗證碼皆可使用，"
+            "任一驗證成功後全部失效"
+        ),
+        "delivery_status": "queued",
+    }
     if (
         token
         and settings.environment.strip().lower() == "development"
@@ -203,7 +225,10 @@ async def resend_verification(
     return response
 
 
-@auth_router.post("/forgot-password")
+@auth_router.post(
+    "/forgot-password",
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def forgot_password(
     body: ForgotPasswordRequest,
     request: Request,
@@ -240,7 +265,10 @@ async def forgot_password(
             )
         )
         await session.commit()
-    response = {"message": "若帳號存在，系統已寄出密碼重設信"}
+    response = {
+        "message": "若帳號存在，密碼重設信的寄送要求已受理",
+        "delivery_status": "queued",
+    }
     if (
         raw_token
         and settings.environment.strip().lower() == "development"

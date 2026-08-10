@@ -34,7 +34,9 @@ export function canWithdrawDemoMembershipApplication(
   return !(
     membership.member_number ||
     membership.started_at ||
-    ["active", "suspended", "resigned"].includes(membership.status)
+    ["trainee", "active", "suspended", "resigned"].includes(
+      membership.status,
+    )
   );
 }
 
@@ -44,7 +46,12 @@ export function canPayDemoMembershipCharge(
   charge: MembershipCharge | null,
 ) {
   return (
-    application?.status === "approved" &&
+    Boolean(
+      application &&
+        ["submitted", "needs_revision", "approved"].includes(
+          application.status,
+        ),
+    ) &&
     membership?.status === "pending_payment" &&
     charge?.payment_status === "pending"
   );
@@ -58,6 +65,7 @@ export function createPendingDemoMembership(user: User): {
     membership: {
       id: `membership-${user.id}`,
       user_id: user.id,
+      trainee_number: null,
       member_number: null,
       status: "pending_payment",
       directory_visible: false,
@@ -90,8 +98,8 @@ export function activateDemoMembership(
   user: User,
   membership: Membership | null,
   charges: MembershipCharge[],
-  memberNumber: string,
-  activatedAt: string,
+  traineeNumber: string,
+  _activatedAt: string,
 ) {
   if (membership?.status !== "pending_payment") return false;
   const paidTypes = new Set(
@@ -102,9 +110,9 @@ export function activateDemoMembership(
   if (!paidTypes.has("joining_fee") || !paidTypes.has("share_capital")) {
     return false;
   }
-  membership.status = "active";
-  membership.member_number = memberNumber;
-  membership.started_at = activatedAt;
-  user.membership_type = "member";
+  membership.status = "trainee";
+  membership.trainee_number = traineeNumber;
+  membership.member_number = null;
+  user.membership_type = "trainee";
   return true;
 }

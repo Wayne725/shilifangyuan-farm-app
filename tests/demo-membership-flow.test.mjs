@@ -15,7 +15,7 @@ const apiSource = await readFile(
   "utf8",
 );
 
-test("內建展示審核會建立兩筆應繳款", () => {
+test("內建展示送出申請後會建立兩筆應繳款", () => {
   const user = {
     id: "user-test",
     email: "test@example.com",
@@ -35,7 +35,7 @@ test("內建展示審核會建立兩筆應繳款", () => {
   );
 });
 
-test("內建展示只有兩種款項皆付清才啟用社員價", () => {
+test("內建展示只有兩種款項皆付清才轉為實習社員並啟用社員價", () => {
   const user = {
     id: "user-test",
     email: "test@example.com",
@@ -50,7 +50,7 @@ test("內建展示只有兩種款項皆付清才啟用社員價", () => {
       user,
       membership,
       charges,
-      "SLF-2026-0020",
+      "SLF-T-2026-0020",
       "2026-08-01T00:00:00.000Z",
     ),
     false,
@@ -63,14 +63,15 @@ test("內建展示只有兩種款項皆付清才啟用社員價", () => {
       user,
       membership,
       charges,
-      "SLF-2026-0020",
+      "SLF-T-2026-0020",
       "2026-08-01T00:00:00.000Z",
     ),
     true,
   );
-  assert.equal(membership.status, "active");
-  assert.equal(membership.member_number, "SLF-2026-0020");
-  assert.equal(user.membership_type, "member");
+  assert.equal(membership.status, "trainee");
+  assert.equal(membership.trainee_number, "SLF-T-2026-0020");
+  assert.equal(membership.member_number, null);
+  assert.equal(user.membership_type, "trainee");
 });
 
 test("內建 API 依登入者隔離費用並接上審核與啟用狀態機", () => {
@@ -128,7 +129,7 @@ test("啟用後不可撤回，終止的待付款會籍也不可再繳款", () =>
   const application = {
     id: "application-test",
     user_id: user.id,
-    status: "approved",
+    status: "submitted",
   };
 
   assert.equal(

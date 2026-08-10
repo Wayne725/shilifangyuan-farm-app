@@ -22,7 +22,7 @@ import {
   StatusPill,
 } from "../src/components/ui";
 import { confirmAction } from "../src/lib/confirm";
-import { openPaymentPage } from "../src/lib/payment";
+import { openExternalPage, openPaymentPage } from "../src/lib/payment";
 import {
   campaignLabels,
   fulfillmentStatusLabel,
@@ -138,6 +138,7 @@ const membershipDocumentLabels = {
 } as const;
 
 type AdminMembershipAction =
+  | "activate"
   | "suspend"
   | "resign"
   | "terminate"
@@ -145,6 +146,7 @@ type AdminMembershipAction =
 
 const membershipStatusLabels: Record<Membership["status"], string> = {
   pending_payment: "待繳入社款",
+  trainee: "實習社員",
   active: "有效",
   suspended: "停權",
   resigned: "已退社",
@@ -152,6 +154,7 @@ const membershipStatusLabels: Record<Membership["status"], string> = {
 };
 
 const membershipActionLabels: Record<AdminMembershipAction, string> = {
+  activate: "轉為正式社員",
   suspend: "停權",
   resign: "辦理退社",
   terminate: "終止會籍",
@@ -159,8 +162,16 @@ const membershipActionLabels: Record<AdminMembershipAction, string> = {
 };
 
 function membershipActionsFor(
-  status: Membership["status"],
+  membership: Membership,
 ): AdminMembershipAction[] {
+  const { status } = membership;
+  if (
+    status === "trainee" &&
+    membership.trainee_number &&
+    !membership.member_number
+  ) {
+    return ["activate", "terminate"];
+  }
   if (status === "active") return ["suspend", "resign", "terminate"];
   if (status === "suspended") return ["resign", "terminate"];
   if (status === "pending_payment") return ["terminate"];
@@ -601,7 +612,7 @@ export default function AdminScreen() {
         setMessage("內建展示模式已驗證合成測試證件；連接 R2 後可開啟短效檢視網址。");
         return;
       }
-      await openPaymentPage(result.download_url);
+      await openExternalPage(result.download_url);
     },
   });
   const manageMembership = useMutation({
@@ -622,6 +633,14 @@ export default function AdminScreen() {
           destructive: boolean;
         }
       > = {
+        activate: {
+          title: "轉為正式社員",
+          message:
+            "確認線下訓練、審核與面試皆已完成後，系統會核發新的正式社員編號；實習社員編號仍永久保留。確定轉正嗎？",
+          confirmLabel: "確認轉正",
+          reason: "管理員確認線下入社流程已完成",
+          destructive: false,
+        },
         suspend: {
           title: "停權社員會籍",
           message:
@@ -663,7 +682,9 @@ export default function AdminScreen() {
         destructive: selected.destructive,
       });
       if (!confirmed) return null;
-      return api.adminMembershipAction(id, action, selected.reason);
+      return action === "activate"
+        ? api.adminActivateMember(id, selected.reason)
+        : api.adminMembershipAction(id, action, selected.reason);
     },
     onSuccess: async (result, variables) => {
       if (!result) return;
@@ -675,7 +696,9 @@ export default function AdminScreen() {
         );
       }
       await announce(
-        variables.action === "share-capital-return"
+        variables.action === "activate"
+          ? "實習社員已轉為正式社員"
+          : variables.action === "share-capital-return"
           ? "Sandbox 股金返還紀錄已建立"
           : "社員會籍狀態已更新",
       );
@@ -1936,7 +1959,7 @@ export default function AdminScreen() {
             const isCurrentAdmin = membership.user_id === user.id;
             const availableActions = isCurrentAdmin
               ? []
-              : membershipActionsFor(membership.status).filter(
+              : membershipActionsFor(membership).filter(
                   (action) =>
                     action !== "share-capital-return" ||
                     !returnedShareCapitalIds.includes(membership.id),
@@ -1945,8 +1968,24 @@ export default function AdminScreen() {
               <View key={membership.id} style={styles.adminCard}>
                 <CardTitle
                   status={membershipStatusLabels[membership.status]}
-                  title={membership.member_number ?? "尚未編社員號"}
+                  title={
+                    membership.member_number ??
+                    membership.trainee_number ??
+                    "尚未編社員號"
+                  }
                 />
+                <Text style={styles.rowMeta}>
+                  {membership.member_number
+                    ? `正式社員編號 ${membership.member_number}`
+                    : membership.trainee_number
+                      ? `實習社員編號 ${membership.trainee_number}`
+                      : "尚未取得實習社員編號"}
+                </Text>
+                {membership.member_number && membership.trainee_number ? (
+                  <Text style={styles.rowMeta}>
+                    原實習社員編號 {membership.trainee_number}
+                  </Text>
+                ) : null}
                 <Text style={styles.rowMeta}>
                   {membership.nickname || "社員"}
                   {membership.started_at
@@ -1985,6 +2024,7 @@ export default function AdminScreen() {
                           })
                         }
                         variant={
+                          action === "activate" ||
                           action === "share-capital-return"
                             ? "secondary"
                             : action === "suspend"

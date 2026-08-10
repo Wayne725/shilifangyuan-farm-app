@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import io
-import random
 from datetime import date, datetime, time, timezone
 from typing import Any, Literal, Optional
 
@@ -10,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import get_current_user, require_active_member, require_admin
@@ -18,9 +17,6 @@ from ..database import get_session
 from ..models import (
     AdminAudit,
     BadgeDefinition,
-    EducationAttempt,
-    EducationLecture,
-    EducationQuestion,
     FiscalYear,
     GroupCampaign,
     GroupDecisionStatus,
@@ -44,7 +40,6 @@ from ..models import (
     SalesChannel,
     SurplusDistribution,
     SurplusLedger,
-    SystemSetting,
     TaxType,
     User,
     Wish,
@@ -268,28 +263,40 @@ async def nonmember_sales(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     start, end = _period(starts_on, ends_on)
-    total, nonmember = (
+    rows = (
         await session.execute(
             select(
-                func.coalesce(func.sum(Order.amount_total), 0),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (Order.membership_type_snapshot == MembershipType.NONMEMBER, Order.amount_total),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ),
-            ).where(
+                Order.membership_type_snapshot,
+                func.coalesce(func.sum(OrderItem.subtotal), 0),
+            )
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .where(
                 Order.payment_status == PaymentStatus.PAID,
                 Order.paid_at >= start,
                 Order.paid_at <= end,
             )
+            .group_by(Order.membership_type_snapshot)
         )
-    ).one()
-    total, nonmember = int(total), int(nonmember)
-    ratio = nonmember / total if total else 0.0
+    ).all()
+    revenue_by_type = {
+        membership_type: int(revenue)
+        for membership_type, revenue in rows
+    }
+    revenues = {
+        membership_type: revenue_by_type.get(membership_type, 0)
+        for membership_type in (
+            MembershipType.NONMEMBER,
+            MembershipType.TRAINEE,
+            MembershipType.MEMBER,
+        )
+    }
+    total = sum(revenues.values())
+    ratios = {
+        membership_type: revenue / total if total else 0.0
+        for membership_type, revenue in revenues.items()
+    }
+    nonmember = revenues[MembershipType.NONMEMBER]
+    ratio = ratios[MembershipType.NONMEMBER]
     level = "limit" if ratio >= 0.30 else "warning" if ratio >= 0.25 else "normal"
     if level != "normal":
         existing = await session.scalar(
@@ -315,6 +322,23 @@ async def nonmember_sales(
         "total_revenue": total,
         "nonmember_revenue": nonmember,
         "ratio": ratio,
+        "nonmember_ratio": ratio,
+        "trainee_revenue": revenues[MembershipType.TRAINEE],
+        "trainee_ratio": ratios[MembershipType.TRAINEE],
+        "member_revenue": revenues[MembershipType.MEMBER],
+        "member_ratio": ratios[MembershipType.MEMBER],
+        "sales_breakdown": [
+            {
+                "membership_type": membership_type.value,
+                "revenue": revenues[membership_type],
+                "ratio": ratios[membership_type],
+            }
+            for membership_type in (
+                MembershipType.NONMEMBER,
+                MembershipType.TRAINEE,
+                MembershipType.MEMBER,
+            )
+        ],
         "warning_threshold": 0.25,
         "legal_limit": 0.30,
         "headroom_amount": max(int(total * 0.30) - nonmember, 0),
@@ -379,105 +403,6 @@ async def export_tax_ledger(
         f"tax-ledger-{starts_on}-{ends_on}.csv",
         [["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"], *rows],
     )
-
-
-class EducationSubmit(BaseModel):
-    answers: dict[str, int]
-
-
-@cooperative_router.get("/v1/education")
-async def education_content(
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    lectures = (
-        await session.scalars(
-            select(EducationLecture).where(EducationLecture.is_active.is_(True)).order_by(EducationLecture.position)
-        )
-    ).all()
-    passed = bool(
-        await session.scalar(
-            select(EducationAttempt.id).where(EducationAttempt.user_id == user.id, EducationAttempt.passed.is_(True))
-        )
-    )
-    setting = await session.get(SystemSetting, "education_required_for_membership")
-    return {
-        "lectures": [{"id": item.id, "title": item.title, "body": item.body, "position": item.position} for item in lectures],
-        "passed": passed,
-        "required_for_membership": bool(setting and setting.value.get("enabled")),
-    }
-
-
-@cooperative_router.post("/v1/education/attempts", status_code=status.HTTP_201_CREATED)
-async def start_education_attempt(
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    questions = list(
-        (
-            await session.scalars(
-                select(EducationQuestion).where(EducationQuestion.is_active.is_(True))
-            )
-        ).all()
-    )
-    if len(questions) < 3:
-        raise HTTPException(status_code=409, detail="教育題庫尚未完成設定")
-    selected = random.SystemRandom().sample(questions, 3)
-    attempt = EducationAttempt(user_id=user.id, question_ids=[item.id for item in selected])
-    session.add(attempt)
-    await session.commit()
-    return {
-        "attempt_id": attempt.id,
-        "questions": [{"id": item.id, "prompt": item.prompt, "options": item.options} for item in selected],
-    }
-
-
-@cooperative_router.post("/v1/education/attempts/{attempt_id}/submit")
-async def submit_education_attempt(
-    attempt_id: str,
-    body: EducationSubmit,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
-    attempt = await session.scalar(
-        select(EducationAttempt).where(EducationAttempt.id == attempt_id, EducationAttempt.user_id == user.id).with_for_update()
-    )
-    if attempt is None:
-        raise HTTPException(status_code=404, detail="找不到測驗")
-    if attempt.submitted_at is not None:
-        raise HTTPException(status_code=409, detail="此測驗已提交")
-    questions = (
-        await session.scalars(select(EducationQuestion).where(EducationQuestion.id.in_(attempt.question_ids)))
-    ).all()
-    correct = sum(body.answers.get(item.id) == item.correct_option for item in questions)
-    score = correct * 100 // len(questions)
-    attempt.answers = body.answers
-    attempt.score = score
-    attempt.passed = correct == len(questions)
-    attempt.submitted_at = utcnow()
-    await session.commit()
-    return {"score": score, "passed": attempt.passed, "correct": correct, "total": len(questions)}
-
-
-class EducationPolicyUpdate(BaseModel):
-    enabled: bool
-
-
-@cooperative_router.put("/v1/admin/settings/education-required")
-async def update_education_policy(
-    body: EducationPolicyUpdate,
-    admin: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
-) -> dict[str, bool]:
-    setting = await session.get(SystemSetting, "education_required_for_membership")
-    if setting is None:
-        setting = SystemSetting(key="education_required_for_membership")
-        session.add(setting)
-    setting.value = {"enabled": body.enabled}
-    setting.updated_by_id = admin.id
-    session.add(AdminAudit(actor_id=admin.id, action="education.policy_updated", aggregate_type="system_setting", aggregate_id=admin.id, data=setting.value))
-    await session.commit()
-    return {"enabled": body.enabled}
 
 
 async def _point_account(session: AsyncSession, user_id: str) -> PointAccount:

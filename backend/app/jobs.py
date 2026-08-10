@@ -31,9 +31,9 @@ from .integrations.payment_service import (
     payment_adapter_from_settings,
     release_attempt_reservations,
 )
-from .integrations.mailersend import (
+from .integrations.email_sender import (
     EmailMessage,
-    mailersend_adapter_from_settings,
+    email_sender_from_settings,
 )
 from .models import (
     Activity,
@@ -946,7 +946,7 @@ async def _process_email_event(
     settings: Settings, event: OutboxEvent
 ) -> None:
     payload = event.payload
-    await mailersend_adapter_from_settings(settings).send(
+    await email_sender_from_settings(settings).send(
         EmailMessage(
             to_email=str(payload["to_email"]),
             subject=str(payload["subject"]),
@@ -976,7 +976,7 @@ async def _process_auth_email_event(
             f"{settings.web_base_url.rstrip('/')}/reset-password?token={token}"
         )
         text = f"請使用以下連結重設密碼：{action_url}"
-    await mailersend_adapter_from_settings(settings).send(
+    await email_sender_from_settings(settings).send(
         EmailMessage(
             to_email=str(payload["recipient"]),
             subject=subject,

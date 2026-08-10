@@ -27,6 +27,7 @@ import {
   proposalLabels,
 } from "../../src/lib/format";
 import { imageFor } from "../../src/lib/images";
+import { hasMemberPricing } from "../../src/lib/membership";
 import { api } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, shadows, spacing } from "../../src/theme";
@@ -42,6 +43,9 @@ const tabs: { value: HubTab; label: string }[] = [
 
 function CampaignCard({ campaign }: { campaign: GroupCampaign }) {
   const { user } = useAuth();
+  const memberPricing = hasMemberPricing(
+    user?.membership_type ?? "nonmember",
+  );
   const progress = Math.min(
     100,
     (campaign.paid_quantity / campaign.min_paid_quantity) * 100,
@@ -59,11 +63,11 @@ function CampaignCard({ campaign }: { campaign: GroupCampaign }) {
         })
       }
       price={money(
-        user?.membership_type === "member"
+        memberPricing
           ? campaign.member_price
           : campaign.nonmember_price,
       )}
-      priceLabel={user?.membership_type === "member" ? "社員價" : "一般價"}
+      priceLabel={memberPricing ? "社員價" : "一般價"}
       progress={progress}
       progressLabel={`${campaign.paid_quantity}/${campaign.min_paid_quantity} 組`}
       title={campaign.title}

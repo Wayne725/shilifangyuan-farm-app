@@ -49,6 +49,7 @@ class UserRole(str, enum.Enum):
 
 class MembershipType(str, enum.Enum):
     MEMBER = "member"
+    TRAINEE = "trainee"
     NONMEMBER = "nonmember"
 
 
@@ -63,6 +64,7 @@ class MembershipApplicationStatus(str, enum.Enum):
 
 class MembershipStatus(str, enum.Enum):
     PENDING_PAYMENT = "pending_payment"
+    TRAINEE = "trainee"
     ACTIVE = "active"
     SUSPENDED = "suspended"
     RESIGNED = "resigned"
@@ -315,6 +317,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    customer_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, unique=True, index=True
+    )
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -532,6 +537,9 @@ class Membership(Base):
         unique=True,
     )
     member_number: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, unique=True, index=True
+    )
+    trainee_number: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, unique=True, index=True
     )
     status: Mapped[MembershipStatus] = mapped_column(

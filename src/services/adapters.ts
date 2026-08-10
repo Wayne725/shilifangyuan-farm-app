@@ -183,6 +183,7 @@ export function normalizeMembershipRead(value: unknown): Membership | null {
   return {
     id: text(membership.id),
     user_id: text(membership.user_id) || undefined,
+    trainee_number: (membership.trainee_number ?? null) as string | null,
     member_number: (membership.member_number ?? null) as string | null,
     status: membership.status as Membership["status"],
     started_at: (membership.activated_at ?? membership.started_at ?? null) as
@@ -197,7 +198,7 @@ export function normalizeMembershipRead(value: unknown): Membership | null {
     ),
     nickname: text(
       directory.nickname ?? membership.nickname,
-      text(membership.member_number, "社員"),
+      text(membership.member_number ?? membership.trainee_number, "社員"),
     ),
     avatar_url: (directory.avatar_url ?? membership.avatar_url ?? null) as
       | string

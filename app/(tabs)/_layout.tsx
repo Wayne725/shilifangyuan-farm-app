@@ -26,7 +26,15 @@ const icons: Record<
     active: "chatbubbles",
     inactive: "chatbubbles-outline",
   },
-  "social-profile": { active: "person", inactive: "person-outline" },
+  "social-profile": {
+    active: "ellipsis-horizontal-circle",
+    inactive: "ellipsis-horizontal-circle-outline",
+  },
+  "social-account": { active: "person", inactive: "person-outline" },
+  "social-points": { active: "ribbon", inactive: "ribbon-outline" },
+  "social-wishes": { active: "sparkles", inactive: "sparkles-outline" },
+  "social-meetings": { active: "people", inactive: "people-outline" },
+  "social-surplus": { active: "pie-chart", inactive: "pie-chart-outline" },
 };
 
 export default function TabLayout() {
@@ -95,7 +103,27 @@ export default function TabLayout() {
         />
         <Tabs.Screen
           name="social-profile"
-          options={{ href: life ? null : "/social-profile", title: "我的" }}
+          options={{ href: life ? null : "/social-profile", title: "更多" }}
+        />
+        <Tabs.Screen
+          name="social-account"
+          options={{ href: null, title: "個人資料" }}
+        />
+        <Tabs.Screen
+          name="social-points"
+          options={{ href: null, title: "積點與徽章" }}
+        />
+        <Tabs.Screen
+          name="social-wishes"
+          options={{ href: null, title: "願望" }}
+        />
+        <Tabs.Screen
+          name="social-meetings"
+          options={{ href: null, title: "會議" }}
+        />
+        <Tabs.Screen
+          name="social-surplus"
+          options={{ href: null, title: "結餘分配" }}
         />
       </Tabs>
     </View>

@@ -10,8 +10,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.auth import hash_password, make_token_pair
 from app.database import Base, get_session
 from app.models import (
-    EducationLecture,
-    EducationQuestion,
     Membership,
     MembershipStatus,
     MembershipType,
@@ -63,17 +61,17 @@ async def cooperative_context():
             session.add(order)
             await session.flush()
             session.add(OrderItem(order_id=order.id, product_name=f"品項 {number}", unit_label="份", quantity=1, unit_price=amount, subtotal=amount, tax_type=TaxType.TAXABLE if number == 3 else TaxType.TAX_EXEMPT))
-        lectures = []
-        for position in range(1, 4):
-            lecture = EducationLecture(title=f"講義 {position}", body="合作教育", position=position)
-            session.add(lecture)
-            await session.flush()
-            session.add(EducationQuestion(lecture_id=lecture.id, prompt=f"題目 {position}", options=["錯", "對"], correct_option=1))
-            lectures.append(lecture)
         await session.commit()
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield {"client": client, "admin": admin, "member_a": member_a, "member_b": member_b}
+            yield {
+                "client": client,
+                "session": session,
+                "admin": admin,
+                "member_a": member_a,
+                "member_b": member_b,
+                "customer": customer,
+            }
     await engine.dispose()
 
 
@@ -111,16 +109,98 @@ async def test_finance_monitor_tax_and_irreversible_surplus(cooperative_context)
 
 
 @pytest.mark.asyncio
-async def test_education_points_and_wish_launch(cooperative_context) -> None:
+async def test_sales_report_separates_product_revenue_by_checkout_identity(
+    cooperative_context,
+) -> None:
+    session = cooperative_context["session"]
+    now = datetime.now(timezone.utc)
+    trainee = User(
+        email="core-trainee@example.com",
+        display_name="實習社員",
+        password_hash=hash_password("trainee-pass-123"),
+        email_verified_at=now,
+        membership=Membership(
+            status=MembershipStatus.TRAINEE,
+            trainee_number="SLF-T-2026-0088",
+        ),
+    )
+    session.add(trainee)
+    await session.flush()
+    extra_orders = [
+        ("CORE-TRAINEE", trainee, MembershipType.TRAINEE, 190, 150),
+        (
+            "CORE-NONMEMBER-SHIPPING",
+            cooperative_context["customer"],
+            MembershipType.NONMEMBER,
+            260,
+            200,
+        ),
+    ]
+    for number, user, identity, amount_total, product_subtotal in extra_orders:
+        order = Order(
+            order_number=number,
+            order_kind=OrderKind.REGULAR,
+            sales_channel=SalesChannel.REGULAR,
+            user_id=user.id,
+            membership_type_snapshot=identity,
+            amount_total=amount_total,
+            contact_email=user.email,
+            payment_status=PaymentStatus.PAID,
+            paid_at=now,
+        )
+        session.add(order)
+        await session.flush()
+        session.add(
+            OrderItem(
+                order_id=order.id,
+                product_name=number,
+                unit_label="份",
+                quantity=1,
+                unit_price=product_subtotal,
+                subtotal=product_subtotal,
+                tax_type=TaxType.TAXABLE,
+            )
+        )
+    await session.commit()
+
+    query = "starts_on=2020-01-01&ends_on=2030-12-31"
+    response = await cooperative_context["client"].get(
+        f"/v1/admin/finance/nonmember-sales?{query}",
+        headers=headers(cooperative_context["admin"]),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_revenue"] == 950
+    assert body["nonmember_revenue"] == 400
+    assert body["trainee_revenue"] == 150
+    assert body["member_revenue"] == 400
+    assert body["nonmember_ratio"] == pytest.approx(400 / 950)
+    assert body["trainee_ratio"] == pytest.approx(150 / 950)
+    assert body["member_ratio"] == pytest.approx(400 / 950)
+    assert body["sales_breakdown"] == [
+        {
+            "membership_type": "nonmember",
+            "revenue": 400,
+            "ratio": pytest.approx(400 / 950),
+        },
+        {
+            "membership_type": "trainee",
+            "revenue": 150,
+            "ratio": pytest.approx(150 / 950),
+        },
+        {
+            "membership_type": "member",
+            "revenue": 400,
+            "ratio": pytest.approx(400 / 950),
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_points_and_wish_launch(cooperative_context) -> None:
     client = cooperative_context["client"]
     member = cooperative_context["member_a"]
-    started = await client.post("/v1/education/attempts", headers=headers(member))
-    assert started.status_code == 201
-    payload = started.json()
-    answers = {question["id"]: 1 for question in payload["questions"]}
-    submitted = await client.post(f"/v1/education/attempts/{payload['attempt_id']}/submit", json={"answers": answers}, headers=headers(member))
-    assert submitted.json()["passed"] is True
-
     wish = await client.post("/v1/wishes", json={"name": "新作物", "description": "希望共同採購"}, headers=headers(member))
     assert wish.status_code == 201
     wish_id = wish.json()["id"]

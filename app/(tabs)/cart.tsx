@@ -13,10 +13,19 @@ import {
 } from "../../src/components/ui";
 import { money } from "../../src/lib/format";
 import { imageFor } from "../../src/lib/images";
+import { hasMemberPricing } from "../../src/lib/membership";
 import { api } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { useCart } from "../../src/store/CartContext";
 import { colors, radii, spacing } from "../../src/theme";
+import type { LogisticsProvider } from "../../src/types";
+
+const logisticsLabels: Record<LogisticsProvider, string> = {
+  home_delivery: "宅配",
+  seven_eleven: "7-ELEVEN 取貨",
+  family_mart: "全家取貨",
+  hilife: "萊爾富取貨",
+};
 
 export default function CartScreen() {
   const { user, isAuthenticated } = useAuth();
@@ -30,12 +39,46 @@ export default function CartScreen() {
     return product ? [{ item, product }] : [];
   });
   const total = totalFor(products);
+  const memberPricing = hasMemberPricing(
+    user?.membership_type ?? "nonmember",
+  );
   // Shipping is limited to one temperature zone per order; warn here rather
   // than at the last step of checkout.
   const mixedTemperature =
     new Set(
       lines.map(({ product }) => product.temperature_zone ?? "ambient"),
     ).size > 1;
+  const logisticsBlockedProducts = lines
+    .filter(({ product }) => product.is_shippable !== true)
+    .map(({ product }) => product.name);
+  const availableLogistics =
+    lines.length && !mixedTemperature && !logisticsBlockedProducts.length
+      ? lines
+          .map(({ product }) =>
+            product.allowed_logistics?.length
+              ? product.allowed_logistics
+              : (["home_delivery"] as LogisticsProvider[]),
+          )
+          .reduce((available, channels) =>
+            available.filter((channel) => channels.includes(channel)),
+          )
+      : [];
+  const logisticsMessage = mixedTemperature
+    ? `不同溫層無法同筆配送：${lines
+        .map(
+          ({ product }) =>
+            `${product.name}（${product.temperature_zone ?? "ambient"}）`,
+        )
+        .join("、")}。可分開結帳，或改選現場取貨。`
+    : logisticsBlockedProducts.length
+      ? `${logisticsBlockedProducts.join("、")}未開放物流配送，目前可選現場取貨。`
+      : availableLogistics.length
+        ? `可選現場取貨，物流可用：${availableLogistics
+            .map((channel) => logisticsLabels[channel])
+            .join("、")}（運費另計）。`
+        : `購物車商品的物流通路沒有交集：${lines
+            .map(({ product }) => product.name)
+            .join("、")}。目前可選現場取貨。`;
 
   return (
     <Screen
@@ -62,7 +105,7 @@ export default function CartScreen() {
       <PageHeader
         subtitle={
           user
-            ? `目前套用${user.membership_type === "member" ? "社員" : "非社員"}價格`
+            ? `目前套用${memberPricing ? "社員" : "一般買家"}價格`
             : "目前顯示非社員價格，登入後結帳"
         }
         title="購物車"
@@ -72,10 +115,9 @@ export default function CartScreen() {
       ) : lines.length ? (
         <View style={styles.content}>
           {lines.map(({ item, product }) => {
-            const unitPrice =
-              user?.membership_type === "member"
-                ? product.member_price
-                : product.nonmember_price;
+            const unitPrice = memberPricing
+              ? product.member_price
+              : product.nonmember_price;
             return (
               <View key={product.id} style={styles.line}>
                 <Image
@@ -126,13 +168,9 @@ export default function CartScreen() {
             />
             <View style={styles.pickupCopy}>
               <Text style={styles.pickupTitle}>
-                下一步選擇現場取貨或物流配送
+                下一步選擇取貨方式
               </Text>
-              <Text style={styles.pickupText}>
-                {mixedTemperature
-                  ? "購物車含不同溫層商品，物流需分開結帳；現場取貨不受限制。"
-                  : "結帳時可選合作社取貨，或宅配與超商取貨（運費另計）。"}
-              </Text>
+              <Text style={styles.pickupText}>{logisticsMessage}</Text>
             </View>
           </View>
         </View>

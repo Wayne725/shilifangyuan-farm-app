@@ -18,6 +18,13 @@ from .ecpay_logistics import (
     encrypt_ecpay_logistics_data,
 )
 from .pii_crypto import VersionedPIICipher, pii_cipher_from_settings
+from .email_sender import (
+    EmailMessage,
+    EmailSendResult,
+    EmailSender,
+    FailoverEmailSender,
+    email_sender_from_settings,
+)
 from .r2_storage import (
     DocumentHead,
     DocumentUploadTicket,
@@ -26,6 +33,7 @@ from .r2_storage import (
     r2_document_storage_from_settings,
 )
 from .mailersend import MailerSendAdapter, MailerSendSettings
+from .resend import ResendAdapter, ResendSettings
 
 __all__ = [
     "ECPayAIOAdapter",
@@ -38,15 +46,22 @@ __all__ = [
     "LocalSandboxRefundAdapter",
     "DocumentHead",
     "DocumentUploadTicket",
+    "EmailMessage",
+    "EmailSender",
+    "EmailSendResult",
+    "FailoverEmailSender",
     "R2DocumentStorage",
     "R2StorageSettings",
     "MailerSendAdapter",
     "MailerSendSettings",
+    "ResendAdapter",
+    "ResendSettings",
     "UpdateTempLogisticsRequest",
     "VersionedPIICipher",
     "build_check_mac_value",
     "decrypt_ecpay_logistics_data",
     "ecpay_logistics_adapter_from_settings",
+    "email_sender_from_settings",
     "encrypt_ecpay_logistics_data",
     "pii_cipher_from_settings",
     "r2_document_storage_from_settings",

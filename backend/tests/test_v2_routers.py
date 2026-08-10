@@ -34,13 +34,17 @@ from app.models import (
     MembershipDocument,
     MembershipDocumentStatus,
     MembershipDocumentType,
+    MembershipFeeSchedule,
     MembershipStatus,
     Notification,
     Order,
     OutboxEvent,
     PaymentStatus,
+    Product,
+    ProductCategory,
     Refund,
     ReservationStatus,
+    TaxType,
     User,
     UserRole,
 )
@@ -48,6 +52,7 @@ from app.routers.auth import auth_router
 from app.routers.community import community_router
 from app.routers.meals import meals_router
 from app.routers.membership import membership_router
+from app.routers.orders import orders_router
 
 
 def make_test_settings() -> Settings:
@@ -81,6 +86,7 @@ async def v2_context():
         application.include_router(membership_router)
         application.include_router(community_router)
         application.include_router(meals_router)
+        application.include_router(orders_router)
 
         async def override_get_session():
             yield session
@@ -165,6 +171,16 @@ async def test_auth_register_verify_login_refresh_and_reset(
     registered = await client.post("/v1/auth/register", json=registration)
 
     assert registered.status_code == 201
+    assert registered.json()["delivery_status"] == "queued"
+    assert "寄送佇列" in registered.json()["message"]
+    registered_user = await v2_context["session"].scalar(
+        select(User).where(User.email == "new.user@example.com")
+    )
+    assert registered_user is not None
+    assert registered_user.customer_number.startswith(
+        f"SLF-C-{datetime.now(timezone.utc).year}-"
+    )
+    assert len(registered_user.customer_number.rsplit("-", 1)[1]) == 4
     verification_token = registered.json()["development_token"]
     assert verification_token.isdigit()
     assert len(verification_token) == 6
@@ -181,23 +197,27 @@ async def test_auth_register_verify_login_refresh_and_reset(
         "/v1/auth/resend-verification",
         json={"email": "new.user@example.com"},
     )
-    assert resent.status_code == 200
+    assert resent.status_code == 202
+    assert resent.json()["delivery_status"] == "queued"
+    assert "已排入寄送佇列" in resent.json()["message"]
+    assert "10 分鐘效期內" in resent.json()["message"]
+    assert "任一驗證成功後全部失效" in resent.json()["message"]
     resent_token = resent.json()["development_token"]
     assert resent_token != verification_token
-    superseded = await client.post(
+    previous_code_before_delivery = await client.post(
         "/v1/auth/verify-email",
         json={"token": verification_token},
     )
-    assert superseded.status_code == 400
+    assert previous_code_before_delivery.status_code == 200
 
-    verified = await client.post(
+    replacement_after_verification = await client.post(
         "/v1/auth/verify-email",
         json={"token": resent_token},
     )
-    assert verified.status_code == 200
+    assert replacement_after_verification.status_code == 400
     reused_token = await client.post(
         "/v1/auth/verify-email",
-        json={"token": resent_token},
+        json={"token": verification_token},
     )
     assert reused_token.status_code == 400
 
@@ -211,6 +231,7 @@ async def test_auth_register_verify_login_refresh_and_reset(
     assert logged_in.status_code == 200
     tokens = logged_in.json()
     assert tokens["user"]["membership_type"] == "nonmember"
+    assert tokens["user"]["customer_number"] == registered_user.customer_number
     me = await client.get(
         "/v1/auth/me",
         headers={"Authorization": f"Bearer {tokens['access_token']}"},
@@ -229,6 +250,9 @@ async def test_auth_register_verify_login_refresh_and_reset(
         "/v1/auth/forgot-password",
         json={"email": "new.user@example.com"},
     )
+    assert forgot.status_code == 202
+    assert forgot.json()["delivery_status"] == "queued"
+    assert "已受理" in forgot.json()["message"]
     reset_token = forgot.json()["development_token"]
     reset = await client.post(
         "/v1/auth/reset-password",
@@ -304,6 +328,60 @@ async def test_membership_me_wrapper_includes_separate_directory_entry(
 
 
 @pytest.mark.asyncio
+async def test_trainee_order_uses_member_price_and_trainee_snapshot(
+    v2_context,
+) -> None:
+    session = v2_context["session"]
+    now = datetime.now(timezone.utc)
+    trainee = User(
+        customer_number="SLF-C-2026-0088",
+        email="trainee-buyer@example.com",
+        display_name="實習社員買家",
+        password_hash=hash_password("trainee-buyer-pass-123"),
+        email_verified_at=now,
+        membership=Membership(
+            trainee_number="SLF-T-2026-0088",
+            status=MembershipStatus.TRAINEE,
+        ),
+    )
+    product = Product(
+        slug="trainee-priced-product",
+        name="社員價測試品",
+        description="",
+        category=ProductCategory.PROCESSED,
+        unit="份",
+        member_price=80,
+        nonmember_price=120,
+        stock_quantity=10,
+        tax_type=TaxType.TAXABLE,
+    )
+    session.add_all([trainee, product])
+    await session.commit()
+    payload = {
+        "items": [{"product_id": product.id, "quantity": 2}],
+    }
+
+    quote = await v2_context["client"].post(
+        "/v1/orders/quote",
+        json=payload,
+        headers=auth_headers(trainee),
+    )
+    created = await v2_context["client"].post(
+        "/v1/orders",
+        json={**payload, "contact_email": trainee.email},
+        headers=auth_headers(trainee),
+    )
+
+    assert quote.status_code == 200
+    assert quote.json()["membership_type"] == "trainee"
+    assert quote.json()["amount_total"] == 160
+    assert created.status_code == 201
+    assert created.json()["membership_type_snapshot"] == "trainee"
+    assert created.json()["items"][0]["product_id"] == product.id
+    assert created.json()["items"][0]["unit_price"] == 80
+
+
+@pytest.mark.asyncio
 async def test_membership_application_read_includes_private_profile_and_documents(
     v2_context,
 ) -> None:
@@ -364,7 +442,7 @@ async def test_membership_application_read_includes_private_profile_and_document
 
 
 @pytest.mark.asyncio
-async def test_membership_application_encrypts_profile_and_approval_adds_charges(
+async def test_membership_submission_adds_charges_before_admin_approval(
     v2_context,
 ) -> None:
     client = v2_context["client"]
@@ -408,6 +486,22 @@ async def test_membership_application_encrypts_profile_and_approval_adds_charges
             ]
         )
 
+    schedule_date = date.today() - timedelta(days=1)
+    for charge_kind, amount in (
+        ("admission_fee", 500),
+        ("share_capital", 1000),
+    ):
+        schedule = await client.post(
+            "/v1/admin/membership-fee-schedules",
+            json={
+                "charge_kind": charge_kind,
+                "amount": amount,
+                "effective_from": schedule_date.isoformat(),
+            },
+            headers=auth_headers(admin),
+        )
+        assert schedule.status_code == 201
+
     missing_documents = await client.post(
         "/v1/membership/application/submit",
         headers=headers,
@@ -445,6 +539,31 @@ async def test_membership_application_encrypts_profile_and_approval_adds_charges
     )
     assert submitted.status_code == 200
     assert submitted.json()["status"] == "submitted"
+    pending_membership = await session.scalar(
+        select(Membership).where(Membership.user_id == applicant.id)
+    )
+    assert pending_membership is not None
+    assert pending_membership.status == MembershipStatus.PENDING_PAYMENT
+    charges_before_approval = (
+        await session.scalars(
+            select(MembershipCharge).where(
+                MembershipCharge.user_id == applicant.id
+            )
+        )
+    ).all()
+    assert {
+        charge.charge_kind: (charge.amount, charge.status)
+        for charge in charges_before_approval
+    } == {
+        MembershipChargeKind.ADMISSION_FEE: (
+            500,
+            MembershipChargeStatus.PENDING,
+        ),
+        MembershipChargeKind.SHARE_CAPITAL: (
+            1000,
+            MembershipChargeStatus.PENDING,
+        ),
+    }
 
     supplement_requested = await client.post(
         f"/v1/admin/membership-applications/{application.id}/request-supplement",
@@ -471,22 +590,6 @@ async def test_membership_application_encrypts_profile_and_approval_adds_charges
     assert supplemented.status_code == 200
     assert supplemented.json()["status"] == "submitted"
     assert supplemented.json()["profile"]["address"] == updated_profile["address"]
-
-    schedule_date = date.today() - timedelta(days=1)
-    for charge_kind, amount in (
-        ("admission_fee", 500),
-        ("share_capital", 1000),
-    ):
-        schedule = await client.post(
-            "/v1/admin/membership-fee-schedules",
-            json={
-                "charge_kind": charge_kind,
-                "amount": amount,
-                "effective_from": schedule_date.isoformat(),
-            },
-            headers=auth_headers(admin),
-        )
-        assert schedule.status_code == 201
 
     approved = await client.post(
         f"/v1/admin/membership-applications/{application.id}/approve",
@@ -602,6 +705,175 @@ async def test_activated_membership_cannot_withdraw_application(
 
 
 @pytest.mark.asyncio
+async def test_admin_cannot_reject_application_after_any_membership_charge_is_paid(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    applicant = v2_context["applicant"]
+    application = MembershipApplication(
+        user_id=applicant.id,
+        status=MembershipApplicationStatus.SUBMITTED,
+    )
+    schedule = MembershipFeeSchedule(
+        charge_kind=MembershipChargeKind.ADMISSION_FEE,
+        amount=500,
+        effective_from=date.today(),
+    )
+    session.add_all([application, schedule])
+    await session.flush()
+    membership = Membership(
+        user_id=applicant.id,
+        application_id=application.id,
+        status=MembershipStatus.PENDING_PAYMENT,
+    )
+    session.add(membership)
+    await session.flush()
+    session.add(
+        MembershipCharge(
+            user_id=applicant.id,
+            application_id=application.id,
+            membership_id=membership.id,
+            fee_schedule_id=schedule.id,
+            charge_kind=MembershipChargeKind.ADMISSION_FEE,
+            amount=500,
+            status=MembershipChargeStatus.PAID,
+            receipt_number="RCPT-REJECT-BLOCKED-001",
+            paid_at=datetime.now(timezone.utc),
+        )
+    )
+    await session.commit()
+
+    rejected = await client.post(
+        f"/v1/admin/membership-applications/{application.id}/reject",
+        json={"reason": "資料未通過"},
+        headers=auth_headers(admin),
+    )
+    application_after = await client.get(
+        f"/v1/admin/membership-applications/{application.id}",
+        headers=auth_headers(admin),
+    )
+    memberships_after = await client.get(
+        "/v1/admin/members",
+        headers=auth_headers(admin),
+    )
+
+    assert rejected.status_code == 409
+    assert application_after.json()["status"] == "submitted"
+    saved_membership = next(
+        item
+        for item in memberships_after.json()
+        if item["id"] == membership.id
+    )
+    assert saved_membership["status"] == "pending_payment"
+
+
+@pytest.mark.asyncio
+async def test_admin_rejects_unpaid_application_and_closes_membership_charges(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    applicant = v2_context["applicant"]
+    application = MembershipApplication(
+        user_id=applicant.id,
+        status=MembershipApplicationStatus.SUBMITTED,
+    )
+    schedule = MembershipFeeSchedule(
+        charge_kind=MembershipChargeKind.ADMISSION_FEE,
+        amount=500,
+        effective_from=date.today(),
+    )
+    session.add_all([application, schedule])
+    await session.flush()
+    membership = Membership(
+        user_id=applicant.id,
+        application_id=application.id,
+        status=MembershipStatus.PENDING_PAYMENT,
+    )
+    session.add(membership)
+    await session.flush()
+    session.add(
+        MembershipCharge(
+            user_id=applicant.id,
+            application_id=application.id,
+            membership_id=membership.id,
+            fee_schedule_id=schedule.id,
+            charge_kind=MembershipChargeKind.ADMISSION_FEE,
+            amount=500,
+        )
+    )
+    await session.commit()
+
+    rejected = await client.post(
+        f"/v1/admin/membership-applications/{application.id}/reject",
+        json={"reason": "資料未通過"},
+        headers=auth_headers(admin),
+    )
+    memberships_after = await client.get(
+        "/v1/admin/members",
+        headers=auth_headers(admin),
+    )
+    charges_after = await client.get(
+        "/v1/membership/charges",
+        headers=auth_headers(applicant),
+    )
+
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+    saved_membership = next(
+        item
+        for item in memberships_after.json()
+        if item["id"] == membership.id
+    )
+    assert saved_membership["status"] == "terminated"
+    assert charges_after.json()[0]["status"] == "waived"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("membership_status", "trainee_number", "member_number"),
+    [
+        (MembershipStatus.TRAINEE, "SLF-T-2026-0042", None),
+        (MembershipStatus.ACTIVE, "SLF-T-2026-0042", "SLF-2026-0042"),
+    ],
+)
+async def test_admin_cannot_reject_application_after_membership_rights_begin(
+    v2_context,
+    membership_status: MembershipStatus,
+    trainee_number: str,
+    member_number: str | None,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    applicant = v2_context["applicant"]
+    application = MembershipApplication(
+        user_id=applicant.id,
+        status=MembershipApplicationStatus.SUBMITTED,
+    )
+    membership = Membership(
+        user_id=applicant.id,
+        application=application,
+        status=membership_status,
+        trainee_number=trainee_number,
+        member_number=member_number,
+    )
+    session.add(membership)
+    await session.commit()
+
+    rejected = await client.post(
+        f"/v1/admin/membership-applications/{application.id}/reject",
+        json={"reason": "資料未通過"},
+        headers=auth_headers(admin),
+    )
+
+    assert rejected.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_admin_membership_actions_enforce_valid_transitions(
     v2_context,
 ) -> None:
@@ -639,6 +911,123 @@ async def test_admin_membership_actions_enforce_valid_transitions(
         headers=headers,
     )
     assert invalid_termination.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_admin_promotes_trainee_and_preserves_both_numbers(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    now = datetime.now(timezone.utc)
+    trainee = User(
+        customer_number="SLF-C-2026-0099",
+        email="trainee@example.com",
+        display_name="實習社員",
+        password_hash=hash_password("trainee-pass-123"),
+        email_verified_at=now,
+        membership=Membership(
+            trainee_number="SLF-T-2026-0001",
+            status=MembershipStatus.TRAINEE,
+        ),
+    )
+    session.add(trainee)
+    await session.flush()
+    application = MembershipApplication(
+        user_id=trainee.id,
+        status=MembershipApplicationStatus.APPROVED,
+    )
+    session.add(application)
+    await session.flush()
+    trainee.membership.application_id = application.id
+    await session.commit()
+
+    trainee_headers = auth_headers(trainee)
+    directory_before_activation = await client.get(
+        "/v1/members/directory",
+        headers=trainee_headers,
+    )
+    proposal_before_activation = await client.post(
+        "/v1/member-proposals",
+        json={
+            "title": "實習社員不可發起治理提案",
+            "body": "此請求應被正式社員權限擋下。",
+        },
+        headers=trainee_headers,
+    )
+    assert directory_before_activation.status_code == 403
+    assert proposal_before_activation.status_code == 403
+
+    withdrawn = await client.post(
+        "/v1/membership/application/withdraw",
+        json={"reason": "實習社員不可撤回成一般申請人"},
+        headers=auth_headers(trainee),
+    )
+    assert withdrawn.status_code == 409
+
+    promoted = await client.post(
+        f"/v1/admin/members/{trainee.membership.id}/activate",
+        json={"reason": "線下訓練、審核與面試完成"},
+        headers=auth_headers(admin),
+    )
+
+    assert promoted.status_code == 200
+    body = promoted.json()
+    assert body["status"] == "active"
+    assert body["trainee_number"] == "SLF-T-2026-0001"
+    assert body["member_number"].startswith(f"SLF-{now.year}-")
+    assert body["activated_at"] is not None
+    directory_after_activation = await client.get(
+        "/v1/members/directory",
+        headers=trainee_headers,
+    )
+    assert directory_after_activation.status_code == 200
+
+    repeated = await client.post(
+        f"/v1/admin/members/{trainee.membership.id}/activate",
+        json={"reason": "不可重複轉正"},
+        headers=auth_headers(admin),
+    )
+    assert repeated.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "application_status",
+    [
+        MembershipApplicationStatus.REJECTED,
+        MembershipApplicationStatus.WITHDRAWN,
+    ],
+)
+async def test_admin_cannot_promote_trainee_with_closed_application(
+    v2_context,
+    application_status: MembershipApplicationStatus,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    applicant = v2_context["applicant"]
+    application = MembershipApplication(
+        user_id=applicant.id,
+        status=application_status,
+    )
+    membership = Membership(
+        user_id=applicant.id,
+        application=application,
+        trainee_number="SLF-T-2026-0098",
+        status=MembershipStatus.TRAINEE,
+    )
+    session.add(membership)
+    await session.commit()
+
+    promoted = await client.post(
+        f"/v1/admin/members/{membership.id}/activate",
+        json={"reason": "線下流程完成"},
+        headers=auth_headers(admin),
+    )
+
+    assert promoted.status_code == 409
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 from urllib.parse import urlencode
@@ -14,7 +15,11 @@ from ..auth import get_current_user
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..integrations.common import IntegrationError
-from ..integrations.ecpay import CheckoutForm
+from ..integrations.ecpay import (
+    CheckoutForm,
+    build_check_mac_value,
+    callback_event_key,
+)
 from ..integrations.payment_service import (
     PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
@@ -33,6 +38,7 @@ from ..models import (
 
 
 payments_router = APIRouter(tags=["payments"])
+logger = logging.getLogger(__name__)
 
 
 class PaymentAttemptResponse(BaseModel):
@@ -142,6 +148,7 @@ async def get_payment_attempt_status(
 )
 async def payment_checkout(
     attempt_id: str,
+    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
@@ -158,9 +165,23 @@ async def payment_checkout(
         raise HTTPException(status_code=410, detail="付款頁已失效")
     if not attempt.checkout_payload:
         raise HTTPException(status_code=409, detail="付款頁尚未建立")
+    fields = {
+        key: str(value) for key, value in attempt.checkout_payload.items()
+    }
+    if client == "native":
+        fields["OrderResultURL"] = (
+            f"{settings.app_base_url.rstrip('/')}/payments/result?client=native"
+        )
+        fields["CheckMacValue"] = build_check_mac_value(
+            fields,
+            settings.ecpay_payment_hash_key,
+            settings.ecpay_payment_hash_iv,
+        )
+    elif client != "web":
+        raise HTTPException(status_code=422, detail="不支援的付款返回方式")
     form = CheckoutForm(
         action_url=settings.ecpay_payment_aio_url,
-        fields={key: str(value) for key, value in attempt.checkout_payload.items()},
+        fields=fields,
     )
     return HTMLResponse(
         content=form.to_html(),
@@ -191,8 +212,13 @@ async def ecpay_payment_callback(
             acknowledgement,
             headers={"Cache-Control": "no-store"},
         )
-    except (IntegrationError, PaymentApplicationError, ValueError):
+    except (IntegrationError, PaymentApplicationError, ValueError) as exc:
         await session.rollback()
+        logger.exception(
+            "ECPay payment callback rejected merchant_trade_no=%s: %s",
+            payload.get("MerchantTradeNo", "missing"),
+            exc,
+        )
         return PlainTextResponse(
             "0|ERROR",
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -203,13 +229,17 @@ async def ecpay_payment_callback(
 @payments_router.post("/payments/result", response_class=RedirectResponse)
 async def ecpay_payment_result(
     request: Request,
+    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> RedirectResponse:
+    if client not in {"web", "native"}:
+        raise HTTPException(status_code=422, detail="不支援的付款返回方式")
     form = await request.form()
     payload = {str(key): str(value) for key, value in form.items()}
     try:
-        verified = payment_adapter_from_settings(settings).verify_callback(payload)
+        adapter = payment_adapter_from_settings(settings)
+        verified = adapter.verify_callback(payload)
     except (IntegrationError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="付款結果驗證失敗") from exc
 
@@ -220,22 +250,44 @@ async def ecpay_payment_result(
     )
     if attempt is None:
         raise HTTPException(status_code=404, detail="找不到付款資料")
-    if attempt.order_id is not None:
-        query = urlencode({"order_id": attempt.order_id, "payment": "return"})
-        location = "{}/orders?{}".format(
-            settings.web_base_url.rstrip("/"),
-            query,
+    order_id = attempt.order_id
+    membership_charge_id = attempt.membership_charge_id
+    try:
+        repository = SQLAlchemyPaymentCallbackRepository(session)
+        await repository.apply_ecpay_payment_callback(
+            callback_event_key(verified),
+            verified,
+        )
+        await session.refresh(attempt)
+        payment_state = attempt.status.value
+    except (IntegrationError, PaymentApplicationError, ValueError) as exc:
+        await session.rollback()
+        logger.exception(
+            "ECPay browser result could not be applied merchant_trade_no=%s: %s",
+            verified.get("MerchantTradeNo", "missing"),
+            exc,
+        )
+        payment_state = "confirming"
+    if order_id is not None:
+        query = urlencode(
+            {"order_id": order_id, "payment": payment_state}
+        )
+        location = (
+            f"shilifangyuan://payment-return?{query}"
+            if client == "native"
+            else f"{settings.web_base_url.rstrip('/')}/orders?{query}"
         )
     else:
         query = urlencode(
             {
-                "membership_charge_id": attempt.membership_charge_id,
-                "payment": "return",
+                "membership_charge_id": membership_charge_id,
+                "payment": payment_state,
             }
         )
-        location = "{}/members?{}".format(
-            settings.web_base_url.rstrip("/"),
-            query,
+        location = (
+            f"shilifangyuan://payment-return?{query}"
+            if client == "native"
+            else f"{settings.web_base_url.rstrip('/')}/members?{query}"
         )
     return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
 

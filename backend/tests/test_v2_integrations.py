@@ -206,7 +206,17 @@ def test_logistics_callback_validates_encryption_merchant_and_age() -> None:
     callback = json.loads(logistics_response(callback_data).body)
 
     assert adapter.verify_callback(callback, now=NOW) == callback_data
-    assert adapter.callback_acknowledgement() == {"RtnCode": 1}
+    acknowledgement = adapter.callback_acknowledgement(now=NOW)
+    assert acknowledgement["MerchantID"] == LOGISTICS_MERCHANT_ID
+    assert acknowledgement["RpHeader"] == {
+        "Timestamp": str(int(NOW.timestamp()))
+    }
+    assert acknowledgement["TransCode"] == 1
+    assert decrypt_ecpay_logistics_data(
+        acknowledgement["Data"],
+        LOGISTICS_HASH_KEY,
+        LOGISTICS_HASH_IV,
+    ) == {"RtnCode": 1, "RtnMsg": "成功"}
 
     with pytest.raises(IntegrationResponseError, match="timestamp"):
         adapter.verify_callback(
@@ -389,6 +399,8 @@ def sandbox_settings(**overrides) -> Settings:
     values = {
         "_env_file": None,
         "environment": "sandbox",
+        "app_base_url": "https://api.example.test",
+        "web_base_url": "https://app.example.test",
         "jwt_secret": "j" * 32,
         "internal_reconcile_secret": "r" * 32,
         "demo_reset_confirmation": "reset-code-strong",

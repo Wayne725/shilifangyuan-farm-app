@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Platform } from "react-native";
 
+import { hasMemberPricing } from "../lib/membership";
 import type { CartItem, Product } from "../types";
 import { useAuth } from "./AuthContext";
 
@@ -83,7 +84,16 @@ export function CartProvider({ children }: PropsWithChildren) {
     );
   };
 
-  const clear = () => setItems([]);
+  const clear = () => {
+    if (Platform.OS === "web") {
+      try {
+        globalThis.localStorage?.setItem(CART_KEY, "[]");
+      } catch {
+        // The in-memory cart is still cleared when storage is unavailable.
+      }
+    }
+    setItems([]);
+  };
 
   const totalFor = (products: Product[]) =>
     items.reduce((total, item) => {
@@ -91,10 +101,9 @@ export function CartProvider({ children }: PropsWithChildren) {
         (candidate) => candidate.id === item.product_id,
       );
       if (!product) return total;
-      const price =
-        user?.membership_type === "member"
-          ? product.member_price
-          : product.nonmember_price;
+      const price = hasMemberPricing(user?.membership_type ?? "nonmember")
+        ? product.member_price
+        : product.nonmember_price;
       return total + price * item.quantity;
     }, 0);
 

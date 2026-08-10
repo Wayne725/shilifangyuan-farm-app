@@ -16,6 +16,11 @@ const socialRoutes = new Set([
   "/activities",
   "/member-proposals",
   "/social-profile",
+  "/social-account",
+  "/social-points",
+  "/social-wishes",
+  "/social-meetings",
+  "/social-surplus",
 ]);
 const lifeRoutes = new Set([
   "/home",

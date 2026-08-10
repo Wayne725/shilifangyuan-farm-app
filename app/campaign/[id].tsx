@@ -29,7 +29,12 @@ import {
   money,
 } from "../../src/lib/format";
 import { imageFor } from "../../src/lib/images";
-import { openPaymentPage } from "../../src/lib/payment";
+import { getLogisticsBlockers } from "../../src/lib/checkoutValidation";
+import { hasMemberPricing } from "../../src/lib/membership";
+import {
+  openLogisticsPage,
+  openPaymentPage,
+} from "../../src/lib/payment";
 import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
@@ -40,7 +45,10 @@ import type {
 } from "../../src/types";
 
 export default function CampaignDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, order_id: draftOrderId } = useLocalSearchParams<{
+    id: string;
+    order_id?: string;
+  }>();
   const queryClient = useQueryClient();
   const { user, isAuthenticated } = useAuth();
   const [quantity, setQuantity] = useState(1);
@@ -54,6 +62,9 @@ export default function CampaignDetailScreen() {
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [recipientName, setRecipientName] = useState(user?.display_name ?? "");
   const [recipientPhone, setRecipientPhone] = useState("");
+  const [submittedOrderId, setSubmittedOrderId] = useState<string | null>(
+    draftOrderId ?? null,
+  );
   const query = useQuery({
     queryKey: ["campaign", id],
     queryFn: () => api.campaign(id),
@@ -63,6 +74,21 @@ export default function CampaignDetailScreen() {
     queryKey: ["shipping-rates"],
     queryFn: api.shippingRates,
   });
+  const draftOrder = useQuery({
+    queryKey: ["order", submittedOrderId],
+    queryFn: () => api.order(submittedOrderId!),
+    enabled: isAuthenticated && Boolean(submittedOrderId),
+  });
+
+  useEffect(() => {
+    const order = draftOrder.data;
+    const method = order?.fulfillment?.method;
+    if (order?.order_kind !== "group" || order.group_campaign_id !== id) return;
+    setQuantity(order.items[0]?.quantity ?? 1);
+    if (method === "cooperative_pickup" || method === "ecpay_logistics") {
+      setFulfillmentMethod(method);
+    }
+  }, [draftOrder.data, id]);
   const campaignTemperature = query.data?.temperature_zone ?? "ambient";
   const quote = useQuery({
     queryKey: [
@@ -80,7 +106,7 @@ export default function CampaignDetailScreen() {
           ? { shipping_channel: logisticsProvider }
           : {}),
       }),
-    enabled: isAuthenticated && Boolean(query.data),
+    enabled: isAuthenticated && Boolean(query.data) && !submittedOrderId,
     retry: false,
   });
 
@@ -97,57 +123,55 @@ export default function CampaignDetailScreen() {
 
   const join = useMutation({
     mutationFn: async () => {
-      if (carrier === "mobile_barcode") {
+      if (!submittedOrderId && carrier === "mobile_barcode") {
         const result = await api.validateMobileBarcode(barcode);
         if (!result.valid) throw new Error(result.message ?? "手機條碼格式不正確");
       }
-      const order = await api.joinCampaign(id, {
-        quantity,
-        contact_email: email,
-        invoice_carrier_type: carrier,
-        ...(carrier === "mobile_barcode"
-          ? { invoice_carrier_value: barcode }
-          : {}),
-      });
-      try {
-        if (fulfillmentMethod === "ecpay_logistics") {
-          const selection = await api.createLogisticsSelection(order.id, {
-            channel: logisticsProvider,
-            temperature: campaignTemperature,
-            recipient_name: recipientName.trim(),
-            recipient_phone: recipientPhone.trim(),
-            shipping_address: deliveryAddress.trim(),
+      const order = submittedOrderId
+        ? draftOrder.data ?? (await api.order(submittedOrderId))
+        : await api.joinCampaign(id, {
+            quantity,
+            contact_email: email,
+            invoice_carrier_type: carrier,
+            fulfillment_method: fulfillmentMethod,
+            ...(fulfillmentMethod === "ecpay_logistics"
+              ? { shipping_channel: logisticsProvider }
+              : {}),
+            ...(carrier === "mobile_barcode"
+              ? { invoice_carrier_value: barcode }
+              : {}),
           });
-          if (selection.selection_url) {
-            return { order, payment: null, selection, setupFailed: false };
-          }
-        }
-        const payment = await api.createPaymentAttempt(order.id);
-        return { order, payment, selection: null, setupFailed: false };
-      } catch {
-        return {
-          order,
-          payment: null,
-          selection: null,
-          setupFailed: true,
-        };
+      if (order.order_kind !== "group" || order.group_campaign_id !== id) {
+        throw new Error("這個待續訂單不屬於目前團購，請回訂單列表處理");
       }
+      if (!submittedOrderId) {
+        setSubmittedOrderId(order.id);
+        router.setParams({ order_id: order.id });
+      }
+      const orderFulfillmentMethod =
+        order.fulfillment?.method ?? fulfillmentMethod;
+      if (orderFulfillmentMethod === "ecpay_logistics") {
+        const selection = await api.createLogisticsSelection(order.id, {
+          channel: logisticsProvider,
+          temperature: campaignTemperature,
+          recipient_name: recipientName.trim(),
+          recipient_phone: recipientPhone.trim(),
+          shipping_address: deliveryAddress.trim(),
+        });
+        return { order, payment: null, selection };
+      }
+      const payment = await api.createPaymentAttempt(order.id);
+      return { order, payment, selection: null };
     },
-    onSuccess: async ({ order, payment, selection, setupFailed }) => {
+    onSuccess: async ({ order, payment, selection }) => {
+      setSubmittedOrderId(order.id);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["campaigns"] }),
         queryClient.invalidateQueries({ queryKey: ["campaign", id] }),
         queryClient.invalidateQueries({ queryKey: ["orders"] }),
       ]);
-      if (setupFailed) {
-        router.replace({
-          pathname: "/order/[id]",
-          params: { id: order.id, setup: "retry" },
-        });
-        return;
-      }
       if (selection?.selection_url) {
-        await openPaymentPage(selection.selection_url);
+        await openLogisticsPage(selection.selection_url);
         if (Platform.OS === "web") return;
         router.replace({ pathname: "/order/[id]", params: { id: order.id } });
         return;
@@ -183,6 +207,28 @@ export default function CampaignDetailScreen() {
   }
 
   const campaign = query.data;
+  const validDraftOrder =
+    draftOrder.data?.order_kind === "group" &&
+    draftOrder.data.group_campaign_id === id
+      ? draftOrder.data
+      : null;
+  const draftProductSubtotal =
+    validDraftOrder?.items.reduce((sum, item) => sum + item.subtotal, 0) ?? 0;
+  const activeQuote =
+    quote.data ??
+    (validDraftOrder
+      ? {
+          amount_total: validDraftOrder.amount_total,
+          membership_type: validDraftOrder.membership_type_snapshot,
+          product_subtotal: draftProductSubtotal,
+          quantity: validDraftOrder.items[0]?.quantity ?? 1,
+          shipping_fee: Math.max(
+            validDraftOrder.amount_total - draftProductSubtotal,
+            0,
+          ),
+          unit_price: validDraftOrder.items[0]?.unit_price ?? 0,
+        }
+      : null);
   const availableProviders = campaign.can_ship
     ? campaign.allowed_logistics
     : [];
@@ -191,14 +237,37 @@ export default function CampaignDetailScreen() {
       rate.channel === logisticsProvider &&
       rate.temperature === campaignTemperature,
   );
+  const selectedProviderLabel =
+    {
+      home_delivery: "宅配",
+      seven_eleven: "7-ELEVEN",
+      family_mart: "全家",
+      hilife: "萊爾富",
+    }[logisticsProvider] ?? "所選物流";
+  const logisticsBlockers =
+    fulfillmentMethod === "ecpay_logistics"
+      ? getLogisticsBlockers({
+          deliveryAddress,
+          incompatibleTemperature: false,
+          logisticsProviderLabel: selectedProviderLabel,
+          missingRate: !rates.isLoading && !rates.isError && !selectedRate,
+          recipientName,
+          recipientPhone,
+          shippingDataError: rates.isError,
+          shippingDataLoading: rates.isLoading,
+          unsupportedProductNames: availableProviders.includes(logisticsProvider)
+            ? []
+            : [campaign.title],
+        })
+      : [];
   const membership =
-    quote.data?.membership_type ?? user?.membership_type ?? "nonmember";
+    activeQuote?.membership_type ?? user?.membership_type ?? "nonmember";
+  const memberPricing = hasMemberPricing(membership);
   const unitPrice =
-    membership === "member"
-      ? campaign.member_price
-      : campaign.nonmember_price;
+    activeQuote?.unit_price ??
+    (memberPricing ? campaign.member_price : campaign.nonmember_price);
   const maxQuantity = Math.max(
-    1,
+    quantity,
     Math.min(campaign.per_user_cap, campaign.available_quantity),
   );
   const isOpen =
@@ -235,12 +304,12 @@ export default function CampaignDetailScreen() {
         <View style={styles.pricePanel}>
           <View>
             <Text style={styles.priceLabel}>
-              {membership === "member" ? "社員團購價" : "非社員團購價"}
+              {memberPricing ? "社員團購價" : "非社員團購價"}
             </Text>
             <Text style={styles.price}>{money(unitPrice)}</Text>
           </View>
           <Text style={styles.otherPrice}>
-            {membership === "member"
+            {memberPricing
               ? `非社員 ${money(campaign.nonmember_price)}`
               : `社員 ${money(campaign.member_price)}`}
           </Text>
@@ -294,7 +363,7 @@ export default function CampaignDetailScreen() {
           />
         </View>
 
-        {isOpen ? (
+        {isOpen || Boolean(submittedOrderId) ? (
           isAuthenticated ? (
             <View style={styles.joinPanel}>
               <Text style={styles.sectionTitle}>加入共同購買</Text>
@@ -304,6 +373,7 @@ export default function CampaignDetailScreen() {
                   <Text style={styles.fieldHint}>付款成功才計入門檻</Text>
                 </View>
                 <QuantityControl
+                  disabled={Boolean(submittedOrderId)}
                   max={maxQuantity}
                   onChange={setQuantity}
                   value={quantity}
@@ -324,14 +394,17 @@ export default function CampaignDetailScreen() {
                   <Pressable
                     accessibilityRole="radio"
                     accessibilityState={{
+                      disabled: Boolean(submittedOrderId),
                       selected: fulfillmentMethod === option.value,
                     }}
+                    disabled={Boolean(submittedOrderId)}
                     key={option.value}
                     onPress={() => setFulfillmentMethod(option.value)}
                     style={[
                       styles.carrier,
                       fulfillmentMethod === option.value &&
                         styles.carrierSelected,
+                      submittedOrderId && styles.choiceLocked,
                     ]}
                   >
                     <View
@@ -427,12 +500,19 @@ export default function CampaignDetailScreen() {
                       />
                     </>
                   ) : null}
+                  {logisticsBlockers.length ? (
+                    <InlineMessage
+                      text={`目前無法進入下一步：${logisticsBlockers.join("；")}`}
+                      tone="danger"
+                    />
+                  ) : null}
                 </>
               ) : null}
 
               <Text style={styles.fieldLabel}>發票通知 Email</Text>
               <TextInput
                 autoCapitalize="none"
+                editable={!submittedOrderId}
                 keyboardType="email-address"
                 onChangeText={setEmail}
                 placeholder="name@example.com"
@@ -449,12 +529,17 @@ export default function CampaignDetailScreen() {
                 ].map((option) => (
                   <Pressable
                     accessibilityRole="radio"
-                    accessibilityState={{ selected: carrier === option.value }}
+                    accessibilityState={{
+                      disabled: Boolean(submittedOrderId),
+                      selected: carrier === option.value,
+                    }}
+                    disabled={Boolean(submittedOrderId)}
                     key={option.value}
                     onPress={() => setCarrier(option.value)}
                     style={[
                       styles.carrier,
                       carrier === option.value && styles.carrierSelected,
+                      submittedOrderId && styles.choiceLocked,
                     ]}
                   >
                     <View
@@ -470,6 +555,7 @@ export default function CampaignDetailScreen() {
               {carrier === "mobile_barcode" ? (
                 <TextInput
                   autoCapitalize="characters"
+                  editable={!submittedOrderId}
                   onChangeText={setBarcode}
                   placeholder="/ABC+123"
                   placeholderTextColor={colors.sage}
@@ -484,43 +570,52 @@ export default function CampaignDetailScreen() {
                   tone="danger"
                 />
               ) : null}
-              {quote.isError ? (
+              {!submittedOrderId && quote.isError ? (
                 <InlineMessage
                   text="後端目前無法完成報價，重新計價前不會建立訂單。"
                   tone="danger"
                 />
               ) : null}
+              {submittedOrderId && (draftOrder.isError || !validDraftOrder) ? (
+                <InlineMessage
+                  text="無法讀取這筆待續團購訂單，請回訂單列表確認或取消後重新加入。"
+                  tone="danger"
+                />
+              ) : null}
+              {submittedOrderId ? (
+                <InlineMessage text="團購訂單已建立；數量、履約與發票資料已鎖定，本次只會重試同一筆付款或物流流程。" />
+              ) : null}
               <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>後端報價</Text>
+                <Text style={styles.totalLabel}>
+                  {submittedOrderId ? "既有訂單" : "後端報價"}
+                </Text>
                 <Text style={styles.total}>
-                  {quote.data ? money(quote.data.amount_total) : "計價中"}
+                  {activeQuote ? money(activeQuote.amount_total) : "計價中"}
                 </Text>
               </View>
-              {quote.data ? (
+              {activeQuote ? (
                 <Text style={styles.fieldHint}>
-                  商品 {money(quote.data.product_subtotal)}
-                  {quote.data.shipping_fee > 0
-                    ? `＋運費 ${money(quote.data.shipping_fee)}`
+                  商品 {money(activeQuote.product_subtotal)}
+                  {activeQuote.shipping_fee > 0
+                    ? `＋運費 ${money(activeQuote.shipping_fee)}`
                     : fulfillmentMethod === "ecpay_logistics"
-                      ? "＋免運"
+                      ? submittedOrderId && !validDraftOrder?.shipment
+                        ? "；物流完成後確認運費"
+                        : "＋免運"
                       : ""}
-                  ；建單時會再次驗證社員資格、名額與費率。
+                  {submittedOrderId
+                    ? "；重試不會建立第二筆訂單。"
+                    : "；建單時會再次驗證社員資格、名額與費率。"}
                 </Text>
               ) : null}
               <Button
                 disabled={
+                  (submittedOrderId
+                    ? draftOrder.isLoading || !validDraftOrder
+                    : quote.isLoading || quote.isError || !quote.data) ||
                   !email.includes("@") ||
-                  quote.isLoading ||
-                  quote.isError ||
-                  !quote.data ||
                   (fulfillmentMethod === "ecpay_logistics" &&
-                    (!deliveryAddress.trim() ||
-                      !recipientName.trim() ||
-                      recipientPhone.trim().length < 8 ||
-                      rates.isLoading ||
-                      rates.isError ||
-                      !availableProviders.includes(logisticsProvider) ||
-                      !selectedRate))
+                    logisticsBlockers.length > 0)
                 }
                 icon="card-outline"
                 label={
@@ -635,6 +730,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   carriers: { flexDirection: "row", gap: 8 },
+  choiceLocked: { opacity: 0.55 },
   providerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   provider: {
     alignItems: "center",

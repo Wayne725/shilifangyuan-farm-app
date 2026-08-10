@@ -26,6 +26,7 @@ export const demoUsers: Record<string, { password: string; user: User }> = {
       display_name: "林雨青",
       user_role: "customer",
       membership_type: "member",
+      customer_number: "SLF-C-2026-0001",
     },
   },
   "customer@shilifangyuan.tw": {
@@ -36,6 +37,7 @@ export const demoUsers: Record<string, { password: string; user: User }> = {
       display_name: "張以安",
       user_role: "customer",
       membership_type: "nonmember",
+      customer_number: "SLF-C-2026-0002",
     },
   },
   "supplement@shilifangyuan.tw": {
@@ -46,6 +48,7 @@ export const demoUsers: Record<string, { password: string; user: User }> = {
       display_name: "補件申請人",
       user_role: "customer",
       membership_type: "nonmember",
+      customer_number: "SLF-C-2026-0003",
     },
   },
   "pending@shilifangyuan.tw": {
@@ -56,6 +59,7 @@ export const demoUsers: Record<string, { password: string; user: User }> = {
       display_name: "陳嘉禾",
       user_role: "customer",
       membership_type: "nonmember",
+      customer_number: "SLF-C-2026-0004",
     },
   },
   "admin@shilifangyuan.tw": {
@@ -66,6 +70,7 @@ export const demoUsers: Record<string, { password: string; user: User }> = {
       display_name: "合作社管理員",
       user_role: "admin",
       membership_type: "member",
+      customer_number: null,
     },
   },
 };
@@ -760,6 +765,7 @@ export const demoMembershipApplications: MembershipApplication[] = [
 export const demoMemberships: Record<string, Membership | null> = {
   "user-member": {
     id: "membership-member",
+    trainee_number: "SLF-T-2026-0008",
     member_number: "SLF-2026-0008",
     status: "active",
     started_at: "2026-03-18T00:00:00.000Z",
@@ -772,6 +778,7 @@ export const demoMemberships: Record<string, Membership | null> = {
   "user-applicant-supplement": null,
   "user-applicant-payment": {
     id: "membership-applicant",
+    trainee_number: null,
     member_number: null,
     status: "pending_payment",
     directory_visible: false,
@@ -781,6 +788,7 @@ export const demoMemberships: Record<string, Membership | null> = {
   },
   "user-admin": {
     id: "membership-admin",
+    trainee_number: "SLF-T-2026-0001",
     member_number: "SLF-2026-0001",
     status: "active",
     started_at: "2026-01-02T00:00:00.000Z",

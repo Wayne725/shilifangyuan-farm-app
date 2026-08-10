@@ -21,6 +21,8 @@
 6. 設定三組不同的強密碼、管理員重設確認碼及所有外部服務密鑰；部署版不可沿用 README 的範例管理員密碼。
 7. 重新部署 API 與 Web。
 
+`APP_BASE_URL` 必須是綠界可連線的公開 HTTPS API 根網址，供付款 `ReturnURL`／`OrderResultURL` 與物流 `ClientReplyURL` 使用；`WEB_BASE_URL` 必須是公開 HTTPS Web 根網址，供後端完成驗證後導回訂單或社員頁。兩者都不可填入 localhost、內網網址或額外路徑。
+
 ## 必要環境變數
 
 ### FastAPI
@@ -106,14 +108,22 @@ Web 版會從瀏覽器直接以簽名 URL 上傳測試證件。部署 Web 前，
 - Bucket 必須維持私有，不可啟用公開網域或 `r2.dev`；檔案讀取只走後端產生的兩分鐘簽名 URL。
 - `Content-Length` 不會納入簽名 Header，避免瀏覽器無法手動設定而導致簽名失敗；後端仍會在確認上傳時比對實際大小、Content-Type 與 SHA-256 metadata。
 
-### MailerSend
+### Email（Resend 主用、MailerSend 備援）
+
+使用 Resend 作為主用供應商時設定：
+
+- `RESEND_API_KEY`
+- `EMAIL_FROM_EMAIL`
+- `EMAIL_FROM_NAME=十里方圓`
+
+選配的 MailerSend 備援／舊部署相容變數：
 
 - `MAILERSEND_API_TOKEN`
 - `MAILERSEND_FROM_EMAIL`
 - `MAILERSEND_FROM_NAME=十里方圓`
 
-寄件地址必須屬於 MailerSend 已驗證的寄件網域。綠界發票 Stage 不接受真實 Email；真實收件地址只傳給 MailerSend。
-Sandbox 會在啟動時檢查 API Key 與寄件地址，未設定時 Render 部署會直接失敗並列出缺少的變數。
+`EMAIL_FROM_EMAIL` 必須屬於 Resend 已驗證的寄件網域；啟用備援時，`MAILERSEND_FROM_EMAIL` 也必須屬於 MailerSend 已驗證網域。若同時設定兩組 API Key，系統先使用 Resend，失敗時才改用 MailerSend；只設定舊 MailerSend 三個變數的部署仍可運作。綠界發票 Stage 不接受真實 Email；真實收件地址只傳給寄信供應商。
+Sandbox 與 Production 都會在啟動時檢查至少一組供應商 API Key 與寄件地址，未設定時部署會直接失敗並列出缺少的變數。
 
 ## GitHub Actions
 
@@ -127,22 +137,24 @@ Repository Settings → Secrets and variables → Actions 新增：
 ## 展示前檢查
 
 1. 確認 PostgreSQL 尚未超過 30 天期限。
-2. 若資料庫已重建，確認 Alembic migration 與 seed 執行成功。
+2. 確認 Alembic 已升級至 `0005_trainee_membership`，既有 customer 已取得 `SLF-C` 且管理員沒有一般買家編號；若資料庫已重建，也確認 seed 執行成功。
 3. 開啟 `/health` 暖機，避免教授等待 Render 冷啟動。
-4. 登入社員、非社員與管理員帳號各一次。
-5. 使用綠界測試卡完成一筆付款。
+4. 登入正式社員、一般買家與管理員帳號各一次，並驗證兩款入社款項完成後會先成為實習社員。
+5. 使用綠界測試卡完成一筆付款，確認 Web 回到正確訂單且顯示付款結果。
 6. 確認 GitHub Actions 最近一次 reconciliation 成功。
 7. 執行管理員「重設展示資料」，恢復補件申請、待付款入社、接近額滿活動、記名提案、便當待取與配送中訂單。
-8. 確認 MailerSend 寄件網域仍為 verified。
+8. 確認 Resend 寄件網域仍為 verified；若啟用備援，也確認 MailerSend 網域狀態。
 9. 使用測試檔驗證 R2 上傳、管理員短效查看 URL 及 Demo reset 刪除。
-10. 以綠界物流 Stage 完成一次通路選擇與建單。
+10. 以綠界物流 Stage 完成一次通路選擇與建單，確認選擇完成後可回訂單並繼續付款。
+11. 使用 development build 測試付款與物流，確認瀏覽器分別透過 `shilifangyuan://payment-return`、`shilifangyuan://logistics-return` 自動關閉並返回 App。
 
 ## 手機展示相容性
 
 - 現場主路徑使用 Render Web，付款後可自動回到訂單頁。
 - Expo SDK 57 可搭配對應版本 Expo Go 測試 Android 裝置／模擬器及 iOS 模擬器。
 - 目前實體 iPhone 無法側載舊版或指定 SDK 的 Expo Go；若一定要原生展示，請事先製作 development build。
-- 手機原生付款以系統瀏覽器開啟，回到 App 後重新整理付款狀態。
+- development build 與 production build 會以系統瀏覽器開啟付款及物流頁，完成後透過 `shilifangyuan://` 自動關閉瀏覽器並回到 App，再向後端查詢最終狀態。
+- Expo Go 不保證接收專案自訂 scheme；使用者需手動切回 App，由訂單或會籍頁重新查詢狀態。
 
 ## Sandbox 限制
 
@@ -151,6 +163,6 @@ Repository Settings → Secrets and variables → Actions 新增：
 - B2C 發票 Stage 不會送財政部，也不會寄綠界官方發票信。
 - 物流 Stage 不會自動模擬出貨後的貨態通知；後台手動推進只能用於 Sandbox。
 - Sandbox 證件頁禁止上傳真實證件。
-- Expo Go 不保證付款後自動 deep link；手機回到 App 後會重新查詢付款狀態。
+- Expo Go 不保證付款或物流完成後自動 deep link；手機手動回到 App 後會重新查詢狀態。
 - 實體 iPhone 的 App Store 版 Expo Go 可能與 SDK 57 不相容，請改用 Web 或 development build。
 - `ChoosePayment=Credit` 在部分 iOS 環境仍可能顯示 Apple Pay。

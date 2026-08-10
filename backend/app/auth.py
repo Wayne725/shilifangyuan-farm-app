@@ -79,7 +79,12 @@ def create_token(
         MembershipType.MEMBER
         if membership is not None
         and membership.status == MembershipStatus.ACTIVE
-        else MembershipType.NONMEMBER
+        else (
+            MembershipType.TRAINEE
+            if membership is not None
+            and membership.status == MembershipStatus.TRAINEE
+            else MembershipType.NONMEMBER
+        )
     )
     payload = {
         "sub": user.id,
@@ -211,6 +216,11 @@ def membership_type_for_user(user: User) -> MembershipType:
         and membership.status == MembershipStatus.ACTIVE
     ):
         return MembershipType.MEMBER
+    if (
+        isinstance(membership, Membership)
+        and membership.status == MembershipStatus.TRAINEE
+    ):
+        return MembershipType.TRAINEE
     return MembershipType.NONMEMBER
 
 

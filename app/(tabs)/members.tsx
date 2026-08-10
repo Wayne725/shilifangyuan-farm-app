@@ -25,6 +25,7 @@ import {
 } from "../../src/lib/documentUpload";
 import { money } from "../../src/lib/format";
 import { confirmAction } from "../../src/lib/confirm";
+import { membershipIdentityNeedsSync } from "../../src/lib/membership";
 import { openPaymentPage } from "../../src/lib/payment";
 import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
@@ -131,19 +132,25 @@ export default function MembersScreen() {
         ? 2000
         : false,
   });
+  const membershipNeedsAuthSync = Boolean(
+    membership.data &&
+      user &&
+      membershipIdentityNeedsSync(
+        membership.data.status,
+        user.membership_type,
+      ),
+  );
   const authMembershipSync = useQuery({
     queryKey: ["auth-membership-sync", user?.id],
     queryFn: refreshUser,
-    enabled:
-      membership.data?.status === "active" &&
-      user?.membership_type !== "member",
+    enabled: membershipNeedsAuthSync,
     retry: 4,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   });
   const directory = useQuery({
     queryKey: ["member-directory"],
     queryFn: api.memberDirectory,
-    enabled: membership.data?.status === "active",
+    enabled: user?.membership_type === "member",
   });
 
   useEffect(() => {
@@ -169,9 +176,17 @@ export default function MembersScreen() {
   }, [membership.data]);
 
   useEffect(() => {
-    if (params.payment !== "return") return;
+    if (!params.payment) return;
     setPaymentSyncUntil(Date.now() + 60_000);
-    setMessage("已從綠界返回，正在確認付款與會籍狀態");
+    setMessage(
+      params.payment === "paid"
+        ? "付款完成，正在同步款項與實習社員資格"
+        : ["failed", "expired"].includes(params.payment)
+          ? "這次付款未完成，可重新發起付款"
+          : params.payment === "late_paid_refund_required"
+            ? "付款逾時入帳，系統正在確認退款狀態"
+            : "已從綠界返回，正在確認付款與會籍狀態",
+    );
   }, [params.membership_charge_id, params.payment]);
 
   useEffect(() => {
@@ -243,7 +258,7 @@ export default function MembersScreen() {
           application.data?.consented_at ?? new Date().toISOString(),
       }),
     onSuccess: async () => {
-      setMessage("入社申請已送出");
+      setMessage("入社申請已送出，可開始繳交入社費與股金");
       await refresh();
     },
   });
@@ -355,9 +370,15 @@ export default function MembersScreen() {
     );
   }
 
-  const isMember = membership.data?.status === "active";
+  const isFormalMember = user?.membership_type === "member";
+  const isTrainee = user?.membership_type === "trainee";
+  const hasActiveMembership =
+    ["trainee", "active"].includes(membership.data?.status ?? "") &&
+    (isFormalMember || isTrainee);
   const wasMembershipActivated = Boolean(
-    membership.data?.member_number || membership.data?.started_at,
+    membership.data?.trainee_number ||
+      membership.data?.member_number ||
+      membership.data?.started_at,
   );
   const canPayMembershipCharges =
     membership.data?.status === "pending_payment";
@@ -373,30 +394,41 @@ export default function MembersScreen() {
     canEditApplication &&
     Object.values(form).every((value) => value.trim()) &&
     confirmed.length === 3;
+  const messageTone = ["failed", "expired"].includes(params.payment ?? "")
+    ? "danger"
+    : params.payment && params.payment !== "paid"
+      ? "warning"
+      : "positive";
 
   return (
     <Screen>
       <PageHeader
         subtitle={
-          isMember
+          isFormalMember
             ? "管理會籍資訊，並認識自願公開資料的社員。"
-            : "完成資料、測試證件與審核後，再繳交入社費及股金。"
+            : isTrainee
+              ? "已享有社員價；完成線下流程後，由管理員轉為正式社員。"
+            : "完成資料與測試證件，送出申請後即可繳交入社費與股金。"
         }
-        title={isMember ? "社員服務" : "入社申請"}
+        title={
+          isFormalMember
+            ? "正式社員服務"
+            : isTrainee
+              ? "實習社員"
+              : "入社申請"
+        }
       />
       <View style={styles.content}>
-        {message ? <InlineMessage text={message} tone="positive" /> : null}
+        {message ? <InlineMessage text={message} tone={messageTone} /> : null}
         {error ? (
           <InlineMessage text={getErrorMessage(error)} tone="danger" />
         ) : null}
-        {user?.membership_type !== "member" &&
-        authMembershipSync.isFetching ? (
-          <InlineMessage text="會籍已啟用，正在更新社員價格。" />
-        ) : user?.membership_type !== "member" &&
-          authMembershipSync.isError ? (
+        {membershipNeedsAuthSync && authMembershipSync.isFetching ? (
+          <InlineMessage text="會籍狀態已更新，正在同步帳號權限。" />
+        ) : membershipNeedsAuthSync && authMembershipSync.isError ? (
           <View style={styles.syncError}>
             <InlineMessage
-              text="會籍已啟用，但社員價格尚未同步。"
+              text="會籍狀態已更新，但帳號權限尚未同步。"
               tone="danger"
             />
             <Button
@@ -408,7 +440,7 @@ export default function MembersScreen() {
           </View>
         ) : null}
 
-        {isMember ? (
+        {hasActiveMembership ? (
           <>
             <View style={styles.memberCard}>
               <View style={styles.memberIdentity}>
@@ -421,21 +453,42 @@ export default function MembersScreen() {
                   <Text style={styles.memberName}>
                     {membership.data?.nickname}
                   </Text>
+                  <Text style={styles.memberNumberLabel}>
+                    {isTrainee ? "實習社員編號" : "正式社員編號"}
+                  </Text>
                   <Text style={styles.memberNumber}>
-                    {membership.data?.member_number}
+                    {isTrainee
+                      ? membership.data?.trainee_number
+                      : membership.data?.member_number}
                   </Text>
                 </View>
               </View>
-              <StatusPill label="有效會籍" tone="positive" />
-              <Text style={styles.memberBio}>{membership.data?.bio}</Text>
-              <Text style={styles.visibility}>
-                社員名錄：
-                {membership.data?.directory_visible ? "自願公開" : "不公開"}
-              </Text>
+              <StatusPill
+                label={isTrainee ? "實習社員・社員價" : "正式社員"}
+                tone="positive"
+              />
+              {membership.data?.bio ? (
+                <Text style={styles.memberBio}>{membership.data.bio}</Text>
+              ) : null}
+              {isFormalMember ? (
+                <Text style={styles.visibility}>
+                  社員名錄：
+                  {membership.data?.directory_visible ? "自願公開" : "不公開"}
+                </Text>
+              ) : null}
             </View>
 
-            <Text style={styles.sectionTitle}>我的公開名錄</Text>
-            <View style={styles.formCard}>
+            {isTrainee ? (
+              <InlineMessage
+                text="入社費與股金已繳清，現在享有社員價。線下流程完成後，請等待管理員轉為正式社員；活動、提案、投票、積點與結餘分配尚未開放。"
+                tone="positive"
+              />
+            ) : null}
+
+            {isFormalMember ? (
+              <>
+                <Text style={styles.sectionTitle}>我的公開名錄</Text>
+                <View style={styles.formCard}>
               <View style={styles.switchRow}>
                 <View style={styles.switchCopy}>
                   <Text style={styles.fieldLabel}>公開給其他有效社員</Text>
@@ -500,7 +553,9 @@ export default function MembersScreen() {
                 onPress={() => updateDirectory.mutate()}
                 variant="secondary"
               />
-            </View>
+                </View>
+              </>
+            ) : null}
 
             <Text style={styles.sectionTitle}>款項與系統收據</Text>
             {(charges.data ?? []).map((charge) => (
@@ -540,47 +595,53 @@ export default function MembersScreen() {
               </View>
             ))}
 
-            <Text style={styles.sectionTitle}>社員名錄</Text>
-            {directory.isLoading ? (
-              <LoadingState label="載入社員名錄" />
-            ) : directory.isError ? (
-              <EmptyState
-                action="重新載入"
-                description="目前無法取得社員名錄。"
-                onAction={() => directory.refetch()}
-                title="社員名錄載入失敗"
-              />
-            ) : directory.data?.length ? (
-              <View style={styles.directoryGrid}>
-                {directory.data.map((member) => (
-                  <View key={member.id} style={styles.directoryCard}>
-                    <View style={styles.smallAvatar}>
-                      <Text style={styles.smallAvatarText}>
-                        {member.nickname.slice(0, 1)}
-                      </Text>
-                    </View>
-                    <Text style={styles.directoryName}>{member.nickname}</Text>
-                    <Text style={styles.directoryExpertise}>
-                      {member.expertise ?? "社員"}
-                    </Text>
-                    <Text numberOfLines={3} style={styles.directoryBio}>
-                      {member.bio}
-                    </Text>
+            {isFormalMember ? (
+              <>
+                <Text style={styles.sectionTitle}>社員名錄</Text>
+                {directory.isLoading ? (
+                  <LoadingState label="載入社員名錄" />
+                ) : directory.isError ? (
+                  <EmptyState
+                    action="重新載入"
+                    description="目前無法取得社員名錄。"
+                    onAction={() => directory.refetch()}
+                    title="社員名錄載入失敗"
+                  />
+                ) : directory.data?.length ? (
+                  <View style={styles.directoryGrid}>
+                    {directory.data.map((member) => (
+                      <View key={member.id} style={styles.directoryCard}>
+                        <View style={styles.smallAvatar}>
+                          <Text style={styles.smallAvatarText}>
+                            {member.nickname.slice(0, 1)}
+                          </Text>
+                        </View>
+                        <Text style={styles.directoryName}>{member.nickname}</Text>
+                        <Text style={styles.directoryExpertise}>
+                          {member.expertise ?? "社員"}
+                        </Text>
+                        <Text numberOfLines={3} style={styles.directoryBio}>
+                          {member.bio}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
-                ))}
-              </View>
-            ) : (
-              <EmptyState
-                description="目前沒有社員選擇公開資料。"
-                title="名錄尚無資料"
-              />
-            )}
+                ) : (
+                  <EmptyState
+                    description="目前沒有社員選擇公開資料。"
+                    title="名錄尚無資料"
+                  />
+                )}
+              </>
+            ) : null}
           </>
         ) : (
           <>
             <View style={styles.progressCard}>
               <View>
-                <Text style={styles.progressLabel}>目前進度</Text>
+                <Text style={styles.progressLabel}>一般買家編號</Text>
+                <Text style={styles.customerNumber}>{user?.customer_number}</Text>
+                <Text style={styles.progressLabel}>入社進度</Text>
                 <Text style={styles.progressTitle}>
                   {application.data
                     ? applicationLabels[application.data.status]
@@ -702,9 +763,13 @@ export default function MembersScreen() {
               onPress={() => submit.mutate()}
             />
 
-            {application.data?.status === "approved" ? (
+            {(charges.data?.length ?? 0) > 0 &&
+            ["submitted", "needs_revision", "approved"].includes(
+              application.data?.status ?? "",
+            ) ? (
               <>
                 <Text style={styles.sectionTitle}>入社款項</Text>
+                <InlineMessage text="資料審核可與付款後續並行；入社費與股金都付清後，先取得實習社員資格與社員價。" />
                 {!canPayMembershipCharges ? (
                   <InlineMessage
                     text="目前會籍狀態不可付款，請洽合作社確認。"
@@ -769,6 +834,13 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   progressLabel: { color: "#C9D8D0", fontSize: 12 },
+  customerNumber: {
+    color: colors.white,
+    fontSize: 15,
+    fontWeight: "900",
+    marginBottom: 8,
+    marginTop: 2,
+  },
   progressTitle: {
     color: colors.white,
     fontSize: 21,
@@ -861,6 +933,7 @@ const styles = StyleSheet.create({
   avatarText: { color: colors.forest, fontSize: 20, fontWeight: "900" },
   memberCopy: { marginLeft: 11 },
   memberName: { color: colors.white, fontSize: 18, fontWeight: "900" },
+  memberNumberLabel: { color: "#C9D8D0", fontSize: 11, marginTop: 4 },
   memberNumber: { color: "#C9D8D0", fontSize: 12, marginTop: 4 },
   memberBio: { color: "#E0E7E2", fontSize: 13, lineHeight: 20 },
   visibility: { color: "#C9D8D0", fontSize: 12 },

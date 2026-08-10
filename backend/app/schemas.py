@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -61,6 +62,7 @@ class DemoResetRequest(BaseModel):
 
 class UserRead(ApiModel):
     id: str
+    customer_number: Optional[str] = None
     email: EmailStr
     display_name: str
     user_role: UserRole
@@ -445,6 +447,7 @@ class OrderCreate(BaseModel):
     contact_email: EmailStr
     invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
+    fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
 
 
 class GroupJoinRequest(BaseModel):
@@ -452,6 +455,22 @@ class GroupJoinRequest(BaseModel):
     contact_email: EmailStr
     invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
+    fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
+    shipping_channel: Optional[ShippingChannel] = None
+
+    @model_validator(mode="after")
+    def validate_shipping_channel(self) -> "GroupJoinRequest":
+        if self.fulfillment_method not in {
+            FulfillmentMethod.COOPERATIVE_PICKUP,
+            FulfillmentMethod.ECPAY_LOGISTICS,
+        }:
+            raise ValueError("團購只支援合作社取貨或綠界物流")
+        if (
+            self.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
+            and self.shipping_channel is None
+        ):
+            raise ValueError("物流配送必須選擇通路")
+        return self
 
 
 class GroupJoinQuoteRequest(BaseModel):
@@ -461,6 +480,11 @@ class GroupJoinQuoteRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_shipping_channel(self) -> "GroupJoinQuoteRequest":
+        if self.fulfillment_method not in {
+            FulfillmentMethod.COOPERATIVE_PICKUP,
+            FulfillmentMethod.ECPAY_LOGISTICS,
+        }:
+            raise ValueError("團購只支援合作社取貨或綠界物流")
         if (
             self.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
             and self.shipping_channel is None
@@ -480,6 +504,10 @@ class GroupJoinQuoteRead(ApiModel):
 
 class OrderItemRead(ApiModel):
     id: str
+    product_id: Optional[str] = Field(
+        default=None,
+        validation_alias="source_product_id",
+    )
     product_name: str
     unit_label: str
     quantity: int
@@ -608,6 +636,7 @@ class MembershipRead(ApiModel):
     id: str
     user_id: str
     member_number: Optional[str]
+    trainee_number: Optional[str]
     status: MembershipStatus
     activated_at: Optional[datetime]
     suspended_at: Optional[datetime]
@@ -1026,6 +1055,45 @@ class LogisticsSelectionRequest(BaseModel):
     recipient_name: str = Field(min_length=1, max_length=120)
     recipient_phone: str = Field(min_length=8, max_length=40)
     shipping_address: str = Field(min_length=1, max_length=500)
+
+    @field_validator("recipient_name")
+    @classmethod
+    def validate_recipient_name(cls, value: str) -> str:
+        name = value.strip()
+        weighted_length = sum(2 if ord(character) > 0x7F else 1 for character in name)
+        if not 4 <= weighted_length <= 10 or not all(
+            character.isalpha() for character in name
+        ):
+            raise ValueError(
+                "收件姓名需為 2–5 個中文字或 4–10 個英文字，不可含數字、空格或符號"
+            )
+        return name
+
+    @field_validator("recipient_phone")
+    @classmethod
+    def validate_recipient_phone(cls, value: str) -> str:
+        phone = re.sub(r"\s", "", value)
+        valid = (
+            re.fullmatch(r"09\d{8}", phone)
+            if phone.startswith("09")
+            else re.fullmatch(r"0\d{1,2}-?\d{6,8}", phone)
+        )
+        if valid is None:
+            raise ValueError(
+                "手機需為 09 開頭的 10 碼數字；市話請輸入含區碼的完整號碼"
+            )
+        return phone
+
+    @field_validator("shipping_address")
+    @classmethod
+    def validate_shipping_address(cls, value: str) -> str:
+        address = value.strip()
+        weighted_length = sum(
+            2 if ord(character) > 0x7F else 1 for character in address
+        )
+        if not address or weighted_length > 60:
+            raise ValueError("配送地址不可為空，且不得超過綠界允許的 60 字元")
+        return address
 
 
 class ShippingRateInput(BaseModel):

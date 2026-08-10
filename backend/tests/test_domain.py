@@ -338,6 +338,7 @@ async def test_seed_is_idempotent_and_resettable() -> None:
             select(User).where(User.email == "member@shilifangyuan.tw")
         )
         assert verify_password(DEMO_PASSWORD, seeded_user.password_hash)
+        assert seeded_user.customer_number.startswith("SLF-C-")
         reset = await reset_demo_data(session)
         assert reset["products"] == 12
         assert await session.scalar(select(func.count(Product.id))) == 12

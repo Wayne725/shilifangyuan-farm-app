@@ -17,6 +17,7 @@ import {
 
 import { imageFor } from "../lib/images";
 import { money } from "../lib/format";
+import { hasMemberPricing } from "../lib/membership";
 import { colors, radii, shadows, spacing } from "../theme";
 import type { MembershipType, Product } from "../types";
 import { useAuth } from "../store/AuthContext";
@@ -360,8 +361,8 @@ export function ProductCard({
   onAdd?: () => void;
   compact?: boolean;
 }) {
-  const price =
-    membership === "member" ? product.member_price : product.nonmember_price;
+  const memberPricing = hasMemberPricing(membership);
+  const price = memberPricing ? product.member_price : product.nonmember_price;
   return (
     <CatalogCard
       badge={product.badge}
@@ -372,7 +373,7 @@ export function ProductCard({
       onAction={onAdd}
       onPress={onPress}
       price={money(price)}
-      priceLabel={membership === "member" ? "社員價" : "一般價"}
+      priceLabel={memberPricing ? "社員價" : "一般價"}
       title={product.name}
     />
   );
@@ -501,11 +502,13 @@ export function QuantityControl({
   onChange,
   min = 1,
   max = 99,
+  disabled = false,
 }: {
   value: number;
   onChange: (value: number) => void;
   min?: number;
   max?: number;
+  disabled?: boolean;
 }) {
   return (
     <View
@@ -517,13 +520,13 @@ export function QuantityControl({
       <Pressable
         accessibilityLabel="減少數量"
         accessibilityRole="button"
-        accessibilityState={{ disabled: value <= min }}
-        disabled={value <= min}
+        accessibilityState={{ disabled: disabled || value <= min }}
+        disabled={disabled || value <= min}
         onPress={() => onChange(Math.max(min, value - 1))}
         style={styles.quantityButton}
       >
         <Ionicons
-          color={value <= min ? colors.sage : colors.forest}
+          color={disabled || value <= min ? colors.sage : colors.forest}
           name="remove"
           size={19}
         />
@@ -532,13 +535,13 @@ export function QuantityControl({
       <Pressable
         accessibilityLabel="增加數量"
         accessibilityRole="button"
-        accessibilityState={{ disabled: value >= max }}
-        disabled={value >= max}
+        accessibilityState={{ disabled: disabled || value >= max }}
+        disabled={disabled || value >= max}
         onPress={() => onChange(Math.min(max, value + 1))}
         style={styles.quantityButton}
       >
         <Ionicons
-          color={value >= max ? colors.sage : colors.forest}
+          color={disabled || value >= max ? colors.sage : colors.forest}
           name="add"
           size={19}
         />

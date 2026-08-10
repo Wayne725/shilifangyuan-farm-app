@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from app.domain import DomainError
+from app.domain import DomainError, price_for_membership
 from app.models import (
     Activity,
     ActivityRegistration,
@@ -31,6 +31,7 @@ from app.v2_domain import (
     meal_available_quantity,
     next_activity_registration_status,
     promote_activity_waitlist,
+    require_active_membership,
     shipping_fee_for_rate,
     tally_member_votes,
     validate_meal_preorder,
@@ -66,6 +67,15 @@ def test_active_membership_is_the_only_membership_truth() -> None:
         == MembershipType.NONMEMBER
     )
     assert derived_membership_type(None) == MembershipType.NONMEMBER
+
+
+def test_trainee_gets_member_pricing_without_active_member_rights() -> None:
+    trainee = Membership(status=MembershipStatus.TRAINEE)
+
+    assert derived_membership_type(trainee) == MembershipType.TRAINEE
+    assert price_for_membership(90, 120, MembershipType.TRAINEE) == 90
+    with pytest.raises(DomainError, match="僅限有效社員"):
+        require_active_membership(trainee)
 
 
 def test_activity_capacity_uses_fifo_waitlist_and_promotes_first() -> None:

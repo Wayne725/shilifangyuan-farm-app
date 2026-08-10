@@ -120,7 +120,11 @@ async def test_background_reconcile_is_single_flight(
         async def __aexit__(self, exc_type, exc, traceback):
             return False
 
-    async def fake_lazy_reconcile(session, settings):
+    async def fake_lazy_reconcile(
+        session,
+        settings,
+        minimum_interval_seconds=60.0,
+    ):
         nonlocal calls
         calls += 1
         started.set()
@@ -130,7 +134,7 @@ async def test_background_reconcile_is_single_flight(
     monkeypatch.setattr(jobs_module, "lazy_reconcile", fake_lazy_reconcile)
 
     first = schedule_background_reconcile(payment_settings())
-    await started.wait()
+    await asyncio.wait_for(started.wait(), timeout=2)
     second = schedule_background_reconcile(payment_settings())
     await asyncio.sleep(0)
 
@@ -218,7 +222,7 @@ async def make_pending_membership(database_session):
     )
     application = MembershipApplication(
         user=user,
-        status=MembershipApplicationStatus.APPROVED,
+        status=MembershipApplicationStatus.SUBMITTED,
     )
     membership = Membership(
         user=user,
@@ -346,7 +350,7 @@ async def make_meal_order(
 
 
 @pytest.mark.asyncio
-async def test_two_membership_charge_payments_activate_and_create_receipts(
+async def test_two_membership_charge_payments_create_trainee_and_receipts(
     database_session,
     fake_payment,
 ) -> None:
@@ -403,9 +407,9 @@ async def test_two_membership_charge_payments_activate_and_create_receipts(
     assert capital.status == MembershipChargeStatus.PAID
     assert capital.receipt_number
     assert admission.receipt_number != capital.receipt_number
-    assert membership.status == MembershipStatus.ACTIVE
-    assert membership.member_number
-    assert membership.member_number.startswith("SLF-")
+    assert membership.status == MembershipStatus.TRAINEE
+    assert membership.trainee_number.startswith("SLF-T-2026-")
+    assert membership.member_number is None
     assert await database_session.scalar(
         select(func.count(Invoice.id))
     ) == 0
@@ -518,7 +522,7 @@ async def test_duplicate_membership_charge_payment_records_sandbox_refund(
 
 
 @pytest.mark.asyncio
-async def test_late_final_charge_preserves_active_membership_and_refunds_once(
+async def test_late_final_charge_preserves_trainee_membership_and_refunds_once(
     database_session,
     fake_payment,
 ) -> None:
@@ -562,7 +566,7 @@ async def test_late_final_charge_preserves_active_membership_and_refunds_once(
     original_receipt = capital.receipt_number
 
     assert current_result == "paid"
-    assert membership.status == MembershipStatus.ACTIVE
+    assert membership.status == MembershipStatus.TRAINEE
     assert capital.status == MembershipChargeStatus.PAID
     assert original_receipt
 
@@ -579,7 +583,7 @@ async def test_late_final_charge_preserves_active_membership_and_refunds_once(
     await database_session.refresh(capital)
 
     assert late_result == "late_paid_refund_required"
-    assert membership.status == MembershipStatus.ACTIVE
+    assert membership.status == MembershipStatus.TRAINEE
     assert capital.status == MembershipChargeStatus.PAID
     assert capital.receipt_number == original_receipt
     assert await database_session.scalar(

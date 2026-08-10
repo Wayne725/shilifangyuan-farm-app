@@ -17,7 +17,7 @@
 - 物流：綠界全方位物流 Stage；宅配、7-ELEVEN、全家、萊爾富
 - 私密證件：Cloudflare R2 私有 Bucket、短效簽名 URL
 - 私密欄位：版本化 AES-256-GCM
-- 通知：App 通知中心、MailerSend Email
+- 通知：App 通知中心、Resend Email（MailerSend 備援）
 - 部署：Render Static Site、Web Service、PostgreSQL
 
 ## 前端啟動
@@ -59,8 +59,8 @@ API 文件：
 
 | 身分 | Email | 密碼 |
 | --- | --- | --- |
-| 社員 | `member@shilifangyuan.tw` | `member123` |
-| 非社員 | `customer@shilifangyuan.tw` | `customer123` |
+| 正式社員 | `member@shilifangyuan.tw` | `member123` |
+| 一般買家 | `customer@shilifangyuan.tw` | `customer123` |
 | 管理員 | `admin@shilifangyuan.tw` | `admin123` |
 | 補件申請人 | `supplement@shilifangyuan.tw` | `customer123` |
 | 待付款申請人 | `pending@shilifangyuan.tw` | `customer123` |
@@ -73,22 +73,25 @@ API 文件：
 
 ### 入社與社員資格
 
-1. 自行註冊，並用驗證信中的連結（`/verify-email?token=…`）完成 Email 驗證。
+1. 自行註冊，並用驗證信中的連結（`/verify-email?token=…`）完成 Email 驗證；一般買家會取得 `SLF-C-YYYY-####` 編號。
 2. 填寫入社資料並上傳三份證件；App 會在本機算出 SHA-256，直接 PUT 到 R2 私有 Bucket 後才向後端確認。**Sandbox 禁止上傳真實證件**，請使用測試素材。
-3. 管理員要求補件、核准或駁回。
-4. 核准後分別繳交示範入社費 500 元與股金 1,000 元。
-5. 兩筆綠界 Stage 付款皆成功後，產生 `SLF-YYYY-####` 社員編號。
+3. 送出申請後即建立入社費與股金兩筆應繳款，不必等待管理員完成資料審核；補件與審核可和付款分開進行。
+4. 分別繳交示範入社費 500 元與股金 1,000 元。兩款皆付款成功後成為實習社員，取得 `SLF-T-YYYY-####` 實習社員編號與社員價。
+5. 入社訓練、面試及後續確認在線下進行，線上系統不提供教育講義、測驗或訓練完成紀錄。
+6. 管理員確認線下流程完成後，在後台手動轉為正式社員，另行核發 `SLF-YYYY-####` 正式社員編號；實習社員編號永久保留且不與正式編號混用。
 
-API 的社員資格只由 `memberships.status=active` 推導；`users.membership_type` 僅保留舊資料相容，不參與授權。
+API 以 `memberships.status` 為資格真相；`trainee` 與 `active` 都使用社員價，但只有 `active` 正式社員可使用社員名錄、活動、治理提案、積點、願望、會議及結餘分配。`users.membership_type` 僅保留舊資料相容，不參與授權。
 
 ### 一般購物
 
-1. 訪客瀏覽商品，登入社員或非社員帳號。
-2. 後端依社員資格重新計價。
+1. 訪客瀏覽商品，登入一般買家、實習社員或正式社員帳號。
+2. 後端依下單當下資格重新計價；實習社員與正式社員都使用社員價。
 3. 建立訂單與 15 分鐘庫存保留。
 4. 前往綠界 Stage 付款。
 5. 管理員推進備貨、可取貨、已取貨。
 6. 完成取貨後開立 B2C 測試電子發票。
+
+管理後台依下單時身分快照分開顯示一般買家、實習社員、正式社員三類銷售額及比例。統計只加總已付款、未退款訂單的商品小計 `OrderItem.subtotal`，不含運費。
 
 ### 共同購買
 
@@ -102,9 +105,9 @@ API 的社員資格只由 `memberships.status=active` 推導；`users.membership
 
 ### 社員活動與治理提案
 
-- 有效社員可建立免費活動，管理員審核後發布；滿額後採 FIFO 候補與自動遞補。
-- 社員治理提案與商品團購提案分離。表決採公開記名 `yes / no / abstain`，棄權計入最低投票數，贊成必須多於反對。
-- 合作教育本版不實作，也不阻擋入社；待決事項集中於 `docs/UNRESOLVED.md`。
+- 正式社員可建立免費活動，管理員審核後發布；滿額後採 FIFO 候補與自動遞補。
+- 正式社員治理提案與商品團購提案分離。表決採公開記名 `yes / no / abstain`，棄權計入最低投票數，贊成必須多於反對。
+- 實習社員只有社員價與本人入社進度，不開放正式社員的參與及治理權限；線上合作教育功能已停用。
 
 ### 便當預購
 
@@ -120,6 +123,7 @@ API 的社員資格只由 `memberships.status=active` 推導；`users.membership
 - 流程為三步：建立訂單 → 綠界物流選擇頁（選門市或確認地址）→ 付款。未完成選擇的訂單無法付款。
 - 選擇頁以一次性、30 分鐘到期的 token 開啟，不需 Bearer token；瀏覽器導頁無法帶 Authorization header，與付款頁 `/payments/{attempt_id}/checkout` 相同設計。
 - 買家中途離開可在訂單頁按「繼續選擇物流」重新取得連結。
+- Web 會在付款或物流選擇完成後回到訂單／社員頁；development build 與 production build 透過 `shilifangyuan://payment-return`、`shilifangyuan://logistics-return` 自動回 App。Expo Go 無法保證接收自訂 scheme，需手動切回後重新查詢狀態。
 - 運費一律由後端 `shipping_rates` 費率表計算，App 不內建任何金額；展示費率為超商 70 元、常溫宅配 160 元、冷藏宅配 220 元，商品小計滿 1,500 元免運。
 - 綠界物流 Stage 不會自動模擬後續貨態，因此管理後台提供有稽核紀錄的 Sandbox 貨態推進（依 已建立 → 配送中 → 已送達 逐級推進，不可跳級）。
 
@@ -152,11 +156,11 @@ CI 的 `api-contract` job 會重新匯出並在檔案過期時失敗。
 
 - 綠界 AIO Stage 不動真實款項。
 - AIO Stage 沒有實際信用卡退款 API；退款完成只代表本系統狀態、庫存與通知已完成。
-- 綠界發票 Stage 不會送財政部，也不會寄官方發票信；App 另外以 MailerSend 寄開立通知。
+- 綠界發票 Stage 不會送財政部，也不會寄官方發票信；App 另外以 Resend（MailerSend 備援）寄開立通知。
 - 綠界物流 Stage 可選通路、建單及查詢，但不會自動推送後續配送狀態。
 - 入社頁只接受測試素材；正式證件隱私告知、保存期限與刪除政策尚待合作社決定。
 - 入社費、股金及股金返還只產生系統收據／Sandbox 紀錄，不開電子發票。
-- Expo Go 的付款流程由使用者手動切回 App，再向後端查詢結果；正式安裝版已預留 `shilifangyuan://`。
+- development build 與 production build 已使用 `shilifangyuan://` 自動承接付款及物流返回；Expo Go 仍需由使用者手動切回 App，再向後端查詢結果。
 - Expo SDK 57 目前無法直接由實體 iPhone 的 App Store 版 Expo Go 開啟；現場以 Web 為主，或事先準備 development build。
 - 商品正式稅別、正式入社費／股金、物流合約與校園供餐資料仍需合作社確認。
 

@@ -13,18 +13,22 @@ import {
   StatusPill,
 } from "../../src/components/ui";
 import { dateTime } from "../../src/lib/format";
+import { hasFormalMemberAccess } from "../../src/lib/membership";
 import { api } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
 
 export default function SocialHomeScreen() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const membership = useQuery({
     queryKey: ["membership"],
     queryFn: api.membership,
     enabled: isAuthenticated,
   });
-  const isMember = membership.data?.status === "active";
+  const isMember = hasFormalMemberAccess(
+    user?.membership_type ?? "nonmember",
+  );
+  const isTrainee = user?.membership_type === "trainee";
   const activities = useQuery({
     queryKey: ["activities"],
     queryFn: api.activities,
@@ -60,21 +64,27 @@ export default function SocialHomeScreen() {
               <Ionicons color={colors.forest} name="id-card-outline" size={25} />
             </View>
             <View style={styles.applicationCopy}>
-              <Text style={styles.applicationTitle}>開始入社程序</Text>
+              <Text style={styles.applicationTitle}>
+                {isTrainee ? "實習社員資格已啟用" : "開始入社程序"}
+              </Text>
               <Text style={styles.applicationText}>
-                填寫基本資料、加入測試證件，再送交社務小組審核。
+                {isTrainee
+                  ? `實習社員目前享有社員價，編號 ${membership.data?.trainee_number ?? "同步中"}。`
+                  : `一般買家編號 ${user?.customer_number ?? "同步中"}；填寫資料後可開始入社程序。`}
               </Text>
             </View>
           </View>
           <Button
             icon="arrow-forward"
-            label="查看入社進度"
+            label={isTrainee ? "查看實習社員資料" : "查看入社進度"}
             onPress={() => router.push("/(tabs)/members")}
           />
           <View style={styles.memberOnly}>
             <Ionicons color={colors.moss} name="lock-closed-outline" size={20} />
             <Text style={styles.memberOnlyText}>
-              活動、社員名錄與治理提案只對有效社員開放。
+              {isTrainee
+                ? "完成線下流程並由管理員轉正後，才會開放活動、社員名錄、提案、投票、積點與結餘分配。"
+                : "活動、社員名錄與治理提案只對正式社員開放。"}
             </Text>
           </View>
         </View>
@@ -89,13 +99,6 @@ export default function SocialHomeScreen() {
             </View>
             <StatusPill label="會籍有效" tone="positive" />
           </View>
-          <Button
-            icon="leaf-outline"
-            label="合作教育、積點、願望與會議"
-            onPress={() => router.push("/cooperative" as never)}
-            variant="secondary"
-          />
-
           <SectionHeader
             action="全部活動"
             onAction={() => router.push("/(tabs)/activities")}

@@ -16,12 +16,13 @@ import {
 } from "../../src/components/ui";
 import { dateTime } from "../../src/lib/format";
 import { imageFor } from "../../src/lib/images";
+import { hasFormalMemberAccess } from "../../src/lib/membership";
 import { api, getErrorMessage } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, shadows, spacing } from "../../src/theme";
 
 export default function ActivitiesScreen() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
@@ -36,7 +37,9 @@ export default function ActivitiesScreen() {
     queryFn: api.membership,
     enabled: isAuthenticated,
   });
-  const isMember = membership.data?.status === "active";
+  const isMember = hasFormalMemberAccess(
+    user?.membership_type ?? "nonmember",
+  );
   const query = useQuery({
     queryKey: ["activities"],
     queryFn: api.activities,
@@ -110,10 +113,14 @@ export default function ActivitiesScreen() {
         <PageHeader title="社員活動" />
         <EmptyState
           action="查看入社程序"
-          description="會籍啟用後即可查看活動詳情與報名。"
+          description={
+            user?.membership_type === "trainee"
+              ? "實習社員已享社員價；轉為正式社員後才可查看與報名活動。"
+              : "轉為正式社員後即可查看活動詳情與報名。"
+          }
           icon="id-card-outline"
           onAction={() => router.push("/(tabs)/members")}
-          title="社員限定"
+          title="正式社員限定"
         />
       </Screen>
     );

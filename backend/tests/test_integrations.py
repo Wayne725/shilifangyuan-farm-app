@@ -10,7 +10,12 @@ from sqlalchemy.orm import selectinload
 from app.config import Settings
 from app.database import Base
 from app.integrations.ecpay import build_check_mac_value
-from app.integrations.common import HTTPResponse
+from app.integrations.common import HTTPResponse, IntegrationResponseError
+from app.integrations.email_sender import (
+    EmailSendResult,
+    FailoverEmailSender,
+    email_sender_from_settings,
+)
 from app.integrations.invoice import (
     ECPayInvoiceAdapter,
     ECPayInvoiceSettings,
@@ -38,6 +43,7 @@ from app.integrations.mailersend import (
     MailerSendAdapter,
     MailerSendSettings,
 )
+from app.integrations.resend import ResendAdapter, ResendSettings
 from app.models import (
     InventoryReservation,
     ExternalEvent,
@@ -287,6 +293,155 @@ async def test_mailersend_adapter_uses_mocked_network() -> None:
     assert result.provider_message_id == "message-123"
     assert captured["headers"]["Authorization"] == "Bearer mlsn.test-secret"
     assert captured["payload"]["from"]["name"] == "十里方圓"
+
+
+@pytest.mark.asyncio
+async def test_resend_adapter_accepts_email_through_public_api() -> None:
+    captured = {}
+
+    async def transport(url, payload, headers, timeout):
+        captured.update(
+            {"url": url, "payload": payload, "headers": headers}
+        )
+        return HTTPResponse(
+            status_code=200,
+            body='{"id":"resend-message-123"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    adapter = ResendAdapter(
+        ResendSettings(
+            api_key="re_test-secret",
+            sender_email="sender@example.test",
+        ),
+        transport=transport,
+    )
+    result = await adapter.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="付款成功",
+            text_content="訂單已付款。",
+        )
+    )
+
+    assert result.provider_message_id == "resend-message-123"
+    assert captured == {
+        "url": "https://api.resend.com/emails",
+        "payload": {
+            "from": "十里方圓 <sender@example.test>",
+            "to": ["buyer@example.test"],
+            "subject": "付款成功",
+            "text": "訂單已付款。",
+        },
+        "headers": {"Authorization": "Bearer re_test-secret"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_email_sender_falls_back_when_primary_provider_rejects() -> None:
+    class RejectingSender:
+        async def send(self, message):
+            raise IntegrationResponseError("primary unavailable")
+
+    class AcceptingSender:
+        async def send(self, message):
+            return EmailSendResult(
+                accepted=True,
+                provider_message_id="fallback-message-123",
+                status_code=202,
+                provider="mailersend",
+            )
+
+    sender = FailoverEmailSender([RejectingSender(), AcceptingSender()])
+
+    result = await sender.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="付款成功",
+            text_content="訂單已付款。",
+        )
+    )
+
+    assert result.provider == "mailersend"
+    assert result.provider_message_id == "fallback-message-123"
+
+
+@pytest.mark.asyncio
+async def test_configured_sender_prefers_resend_then_mailersend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    async def reject_resend(self, message):
+        calls.append("resend")
+        raise IntegrationResponseError("resend unavailable")
+
+    async def accept_mailersend(self, message):
+        calls.append("mailersend")
+        return EmailSendResult(
+            accepted=True,
+            provider_message_id="mailersend-message-123",
+            status_code=202,
+            provider="mailersend",
+        )
+
+    monkeypatch.setattr(ResendAdapter, "send", reject_resend)
+    monkeypatch.setattr(MailerSendAdapter, "send", accept_mailersend)
+    sender = email_sender_from_settings(
+        Settings(
+            _env_file=None,
+            resend_api_key="re_test-secret",
+            email_from_email="sender@example.test",
+            mailersend_api_token="mlsn.test-secret",
+            mailersend_from_email="sender@example.test",
+        )
+    )
+
+    result = await sender.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="付款成功",
+            text_content="訂單已付款。",
+        )
+    )
+
+    assert calls == ["resend", "mailersend"]
+    assert result.provider == "mailersend"
+
+
+@pytest.mark.asyncio
+async def test_email_sender_skips_invalid_resend_when_mailersend_is_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def accept_mailersend(self, message):
+        return EmailSendResult(
+            accepted=True,
+            provider_message_id="mailersend-valid-backup",
+            status_code=202,
+            provider="mailersend",
+        )
+
+    monkeypatch.setattr(MailerSendAdapter, "send", accept_mailersend)
+    sender = email_sender_from_settings(
+        Settings(
+            _env_file=None,
+            resend_api_key="re_test-secret",
+            email_from_email="broken@sender",
+            mailersend_api_token="mlsn.test-secret",
+            mailersend_from_email="sender@example.test",
+        )
+    )
+
+    result = await sender.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="驗證信",
+            text_content="驗證碼 123456",
+        )
+    )
+
+    assert result.provider == "mailersend"
+    assert result.provider_message_id == "mailersend-valid-backup"
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ import {
 } from "../../src/components/ui";
 import { dateTime } from "../../src/lib/format";
 import { api, getErrorMessage } from "../../src/services/api";
+import { hasFormalMemberAccess } from "../../src/lib/membership";
 import { useAuth } from "../../src/store/AuthContext";
 import { colors, radii, spacing } from "../../src/theme";
 import type {
@@ -299,7 +300,7 @@ function ProposalCard({ proposal }: { proposal: MemberProposal }) {
 }
 
 export default function MemberProposalsScreen() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
@@ -311,7 +312,9 @@ export default function MemberProposalsScreen() {
     queryFn: api.membership,
     enabled: isAuthenticated,
   });
-  const isMember = membership.data?.status === "active";
+  const isMember = hasFormalMemberAccess(
+    user?.membership_type ?? "nonmember",
+  );
   const query = useQuery({
     queryKey: ["member-proposals"],
     queryFn: api.memberProposals,
@@ -365,9 +368,13 @@ export default function MemberProposalsScreen() {
         <PageHeader title="社員提案" />
         <EmptyState
           action="查看入社程序"
-          description="會籍啟用後即可提出提案、討論與記名表決。"
+          description={
+            user?.membership_type === "trainee"
+              ? "實習社員已享社員價；轉為正式社員後才可提案與表決。"
+              : "轉為正式社員後即可提出提案、討論與記名表決。"
+          }
           onAction={() => router.push("/(tabs)/members")}
-          title="社員限定"
+          title="正式社員限定"
         />
       </Screen>
     );

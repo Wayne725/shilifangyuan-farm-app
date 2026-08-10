@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   Platform,
@@ -18,8 +18,9 @@ import {
   PageHeader,
   Screen,
 } from "../src/components/ui";
+import { getLogisticsBlockers } from "../src/lib/checkoutValidation";
 import { membershipLabel, money } from "../src/lib/format";
-import { openPaymentPage } from "../src/lib/payment";
+import { openLogisticsPage, openPaymentPage } from "../src/lib/payment";
 import { api, getErrorMessage } from "../src/services/api";
 import { useAuth } from "../src/store/AuthContext";
 import { useCart } from "../src/store/CartContext";
@@ -31,7 +32,17 @@ import type {
   TemperatureZone,
 } from "../src/types";
 
+const logisticsOptions: { value: LogisticsProvider; label: string }[] = [
+  { value: "home_delivery", label: "宅配" },
+  { value: "seven_eleven", label: "7-ELEVEN" },
+  { value: "family_mart", label: "全家" },
+  { value: "hilife", label: "萊爾富" },
+];
+
 export default function CheckoutScreen() {
+  const { order_id: draftOrderId } = useLocalSearchParams<{
+    order_id?: string;
+  }>();
   const { user } = useAuth();
   const { items, clear } = useCart();
   const [email, setEmail] = useState(user?.email ?? "");
@@ -44,11 +55,13 @@ export default function CheckoutScreen() {
   const [recipientName, setRecipientName] = useState(user?.display_name ?? "");
   const [recipientPhone, setRecipientPhone] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
-  const [submittedOrderId, setSubmittedOrderId] = useState<string | null>(null);
+  const [submittedOrderId, setSubmittedOrderId] = useState<string | null>(
+    draftOrderId ?? null,
+  );
   const quote = useQuery({
     queryKey: ["quote", items],
     queryFn: () => api.quote(items),
-    enabled: items.length > 0,
+    enabled: items.length > 0 && !submittedOrderId,
   });
   const products = useQuery({
     queryKey: ["products"],
@@ -58,59 +71,82 @@ export default function CheckoutScreen() {
     queryKey: ["shipping-rates"],
     queryFn: api.shippingRates,
   });
+  const draftOrder = useQuery({
+    queryKey: ["order", submittedOrderId],
+    queryFn: () => api.order(submittedOrderId!),
+    enabled: Boolean(user && submittedOrderId),
+  });
+  const validDraftOrder =
+    draftOrder.data?.order_kind === "regular" ? draftOrder.data : null;
+  const activeItems = validDraftOrder?.items ?? quote.data?.items ?? [];
+
+  useEffect(() => {
+    const method = validDraftOrder?.fulfillment?.method;
+    if (
+      validDraftOrder &&
+      (method === "cooperative_pickup" || method === "ecpay_logistics")
+    ) {
+      setFulfillmentMethod(method);
+    }
+    if (validDraftOrder?.contact_email) {
+      setEmail(validDraftOrder.contact_email);
+    }
+    if (validDraftOrder?.invoice_carrier_type) {
+      setCarrier(validDraftOrder.invoice_carrier_type);
+    }
+    if (validDraftOrder?.shipment?.logistics_provider) {
+      setLogisticsProvider(validDraftOrder.shipment.logistics_provider);
+    }
+  }, [draftOrder.data]);
 
   const submit = useMutation({
     mutationFn: async () => {
       if (!user) throw new Error("請先登入");
-      if (carrier === "mobile_barcode") {
+      if (!submittedOrderId && carrier === "mobile_barcode") {
         const result = await api.validateMobileBarcode(barcode);
         if (!result.valid) throw new Error(result.message ?? "手機條碼格式不正確");
       }
-      const order = await api.createOrder({
-        items,
-        contact_email: email,
-        invoice_carrier_type: carrier,
-        ...(carrier === "mobile_barcode"
-          ? { invoice_carrier_value: barcode }
-          : {}),
-      });
+      const order = submittedOrderId
+        ? draftOrder.data ?? (await api.order(submittedOrderId))
+        : await api.createOrder({
+            items,
+            contact_email: email,
+            fulfillment_method: fulfillmentMethod,
+            invoice_carrier_type: carrier,
+            ...(carrier === "mobile_barcode"
+              ? { invoice_carrier_value: barcode }
+              : {}),
+          });
+      if (order.order_kind !== "regular") {
+        throw new Error("這個待續訂單不屬於一般購物車，請回訂單列表處理");
+      }
+      if (!submittedOrderId) {
+        setSubmittedOrderId(order.id);
+        router.setParams({ order_id: order.id });
+      }
 
       // Pickup can go straight to payment. Shipping has to visit ECPay's
       // picker first, because that is what fixes the address and the fee.
-      try {
-        if (fulfillmentMethod !== "ecpay_logistics") {
-          const payment = await api.createPaymentAttempt(order.id);
-          return { order, payment, selection: null, setupFailed: false };
-        }
-        const selection = await api.createLogisticsSelection(order.id, {
-          channel: logisticsProvider,
-          temperature: cartTemperature,
-          recipient_name: recipientName.trim(),
-          recipient_phone: recipientPhone.trim(),
-          shipping_address: deliveryAddress.trim(),
-        });
-        return { order, payment: null, selection, setupFailed: false };
-      } catch {
-        return {
-          order,
-          payment: null,
-          selection: null,
-          setupFailed: true,
-        };
+      const orderFulfillmentMethod =
+        order.fulfillment?.method ?? fulfillmentMethod;
+      if (orderFulfillmentMethod !== "ecpay_logistics") {
+        const payment = await api.createPaymentAttempt(order.id);
+        return { order, payment, selection: null };
       }
+      const selection = await api.createLogisticsSelection(order.id, {
+        channel: logisticsProvider,
+        temperature: cartTemperature,
+        recipient_name: recipientName.trim(),
+        recipient_phone: recipientPhone.trim(),
+        shipping_address: deliveryAddress.trim(),
+      });
+      return { order, payment: null, selection };
     },
-    onSuccess: async ({ order, payment, selection, setupFailed }) => {
+    onSuccess: async ({ order, payment, selection }) => {
       setSubmittedOrderId(order.id);
       clear();
-      if (setupFailed) {
-        router.replace({
-          pathname: "/order/[id]",
-          params: { id: order.id, setup: "retry" },
-        });
-        return;
-      }
       if (selection?.selection_url) {
-        await openPaymentPage(selection.selection_url);
+        await openLogisticsPage(selection.selection_url);
         if (Platform.OS === "web") return;
         router.replace({ pathname: "/order/[id]", params: { id: order.id } });
         return;
@@ -127,15 +163,30 @@ export default function CheckoutScreen() {
   });
 
   useEffect(() => {
-    if (!items.length && !submittedOrderId && !submit.isPending) {
-      router.replace("/(tabs)/cart");
-    }
+    if (items.length || submittedOrderId || submit.isPending) return;
+    router.replace("/(tabs)/cart");
   }, [items.length, submittedOrderId, submit.isPending]);
 
-  if (!items.length) {
-    return null;
+  if (submittedOrderId && draftOrder.isLoading) {
+    return <LoadingState label="正在開啟訂單" />;
   }
-  if (quote.isError) {
+  if (submittedOrderId && (draftOrder.isError || !validDraftOrder)) {
+    return (
+      <Screen>
+        <PageHeader onBack={() => router.back()} title="確認結帳" />
+        <EmptyState
+          action="回訂單列表"
+          description="無法讀取這筆待續的一般訂單，請從訂單列表重新確認。"
+          onAction={() => router.replace("/(tabs)/orders")}
+          title="訂單恢復失敗"
+        />
+      </Screen>
+    );
+  }
+  if (!items.length && !submittedOrderId) {
+    return <LoadingState label="正在開啟購物車" />;
+  }
+  if (!submittedOrderId && quote.isError) {
     return (
       <Screen>
         <PageHeader onBack={() => router.back()} title="確認結帳" />
@@ -148,9 +199,17 @@ export default function CheckoutScreen() {
       </Screen>
     );
   }
-  const productAmount = quote.data?.amount_total ?? 0;
+  const productAmount = activeItems.reduce(
+    (total, item) => total + item.subtotal,
+    0,
+  );
+  const activeProductIds = new Set(
+    activeItems
+      .map((item) => item.product_id)
+      .filter((productId): productId is string => Boolean(productId)),
+  );
   const cartProducts = (products.data ?? []).filter((product) =>
-    items.some((item) => item.product_id === product.id),
+    activeProductIds.has(product.id),
   );
   const temperatureZones = new Set(
     cartProducts.map((product) => product.temperature_zone ?? "ambient"),
@@ -158,12 +217,7 @@ export default function CheckoutScreen() {
   const incompatibleTemperature = temperatureZones.size > 1;
   const cartTemperature: TemperatureZone =
     (Array.from(temperatureZones)[0] as TemperatureZone) ?? "ambient";
-  const providers: LogisticsProvider[] = [
-    "home_delivery",
-    "seven_eleven",
-    "family_mart",
-    "hilife",
-  ];
+  const providers = logisticsOptions.map((option) => option.value);
   const availableProviders = providers.filter((provider) =>
     cartProducts.every(
       (product) =>
@@ -184,10 +238,38 @@ export default function CheckoutScreen() {
   };
   const selectedFee = feeFor(logisticsProvider);
   const shippingFee =
-    fulfillmentMethod === "ecpay_logistics" ? (selectedFee ?? 0) : 0;
+    fulfillmentMethod === "ecpay_logistics"
+      ? (validDraftOrder?.shipment?.shipping_fee ?? selectedFee ?? 0)
+      : 0;
   const missingRate =
     fulfillmentMethod === "ecpay_logistics" && selectedFee === null;
-  const payableAmount = productAmount + shippingFee;
+  const payableAmount = validDraftOrder?.shipment
+    ? validDraftOrder.amount_total
+    : productAmount + shippingFee;
+  const selectedProviderLabel =
+    logisticsOptions.find((option) => option.value === logisticsProvider)
+      ?.label ?? "所選物流";
+  const unsupportedProductNames = cartProducts
+    .filter(
+      (product) =>
+        product.is_shippable === false ||
+        !(product.allowed_logistics ?? providers).includes(logisticsProvider),
+    )
+    .map((product) => product.name);
+  const logisticsBlockers =
+    fulfillmentMethod === "ecpay_logistics"
+      ? getLogisticsBlockers({
+          deliveryAddress,
+          incompatibleTemperature,
+          logisticsProviderLabel: selectedProviderLabel,
+          missingRate,
+          recipientName,
+          recipientPhone,
+          shippingDataError: products.isError || rates.isError,
+          shippingDataLoading: products.isLoading || rates.isLoading,
+          unsupportedProductNames,
+        })
+      : [];
 
   return (
     <Screen>
@@ -196,7 +278,7 @@ export default function CheckoutScreen() {
         subtitle="選擇現場取貨或配送，再確認電子發票與付款資料。"
         title="確認結帳"
       />
-      {quote.isLoading ? (
+      {!submittedOrderId && quote.isLoading ? (
         <LoadingState label="計算訂單金額" />
       ) : (
         <View style={styles.content}>
@@ -206,10 +288,14 @@ export default function CheckoutScreen() {
                 訂購內容
               </Text>
               <Text style={styles.identity}>
-                {membershipLabel(user?.membership_type ?? "nonmember")}價格
+                {membershipLabel(
+                  validDraftOrder?.membership_type_snapshot ??
+                    user?.membership_type ??
+                    "nonmember",
+                )}價格
               </Text>
             </View>
-            {(quote.data?.items ?? []).map((item, index) => (
+            {activeItems.map((item, index) => (
               <View key={`${item.product_name}-${index}`} style={styles.item}>
                 <View style={styles.itemCopy}>
                   <Text style={styles.itemName}>{item.product_name}</Text>
@@ -252,14 +338,17 @@ export default function CheckoutScreen() {
               <Pressable
                 accessibilityRole="radio"
                 accessibilityState={{
+                  disabled: Boolean(submittedOrderId),
                   selected: fulfillmentMethod === option.value,
                 }}
+                disabled={Boolean(submittedOrderId)}
                 key={option.value}
                 onPress={() => setFulfillmentMethod(option.value)}
                 style={[
                   styles.fulfillmentChoice,
                   fulfillmentMethod === option.value &&
                     styles.fulfillmentChoiceSelected,
+                  submittedOrderId && styles.choiceLocked,
                 ]}
               >
                 <View
@@ -278,12 +367,7 @@ export default function CheckoutScreen() {
               <>
                 <Text style={styles.fieldLabel}>配送通路</Text>
                 <View style={styles.logisticsGrid}>
-                  {[
-                    { value: "home_delivery" as const, label: "宅配" },
-                    { value: "seven_eleven" as const, label: "7-ELEVEN" },
-                    { value: "family_mart" as const, label: "全家" },
-                    { value: "hilife" as const, label: "萊爾富" },
-                  ].map((provider) => {
+                  {logisticsOptions.map((provider) => {
                     const fee = feeFor(provider.value);
                     const disabled =
                       !availableProviders.includes(provider.value) ||
@@ -302,7 +386,7 @@ export default function CheckoutScreen() {
                         onPress={() => setLogisticsProvider(provider.value)}
                         style={[
                           styles.logisticsChoice,
-                          selected && styles.logisticsChoiceSelected,
+                          selected && !disabled && styles.logisticsChoiceSelected,
                           disabled && styles.logisticsChoiceDisabled,
                         ]}
                       >
@@ -351,6 +435,12 @@ export default function CheckoutScreen() {
                       variant="secondary"
                     />
                   </>
+                ) : null}
+                {logisticsBlockers.length ? (
+                  <InlineMessage
+                    text={`目前無法進入下一步：${logisticsBlockers.join("；")}`}
+                    tone="danger"
+                  />
                 ) : null}
                 <Text style={styles.shippingHint}>
                   {rateFor(logisticsProvider)
@@ -408,6 +498,7 @@ export default function CheckoutScreen() {
             <Text style={styles.fieldLabel}>發票通知 Email</Text>
             <TextInput
               autoCapitalize="none"
+              editable={!submittedOrderId}
               keyboardType="email-address"
               onChangeText={setEmail}
               placeholder="name@example.com"
@@ -423,12 +514,17 @@ export default function CheckoutScreen() {
               ].map((option) => (
                 <Pressable
                   accessibilityRole="radio"
-                  accessibilityState={{ selected: carrier === option.value }}
+                  accessibilityState={{
+                    disabled: Boolean(submittedOrderId),
+                    selected: carrier === option.value,
+                  }}
+                  disabled={Boolean(submittedOrderId)}
                   key={option.value}
                   onPress={() => setCarrier(option.value)}
                   style={[
                     styles.carrier,
                     carrier === option.value && styles.carrierSelected,
+                    submittedOrderId && styles.choiceLocked,
                   ]}
                 >
                   <View
@@ -444,6 +540,7 @@ export default function CheckoutScreen() {
             {carrier === "mobile_barcode" ? (
               <TextInput
                 autoCapitalize="characters"
+                editable={!submittedOrderId}
                 onChangeText={setBarcode}
                 placeholder="/ABC+123"
                 placeholderTextColor={colors.sage}
@@ -462,21 +559,17 @@ export default function CheckoutScreen() {
               tone="danger"
             />
           ) : null}
+          {submittedOrderId ? (
+            <InlineMessage text="訂單已建立；商品、取貨方式與發票資料已鎖定，本次只會重試同一筆付款或物流流程。" />
+          ) : null}
           <Button
             disabled={
-              !quote.data ||
+              draftOrder.isLoading ||
+              activeItems.length === 0 ||
+              (submittedOrderId ? !validDraftOrder : !quote.data) ||
               !email.includes("@") ||
               (fulfillmentMethod === "ecpay_logistics" &&
-                (!deliveryAddress.trim() ||
-                  !recipientName.trim() ||
-                  recipientPhone.trim().length < 8 ||
-                  products.isLoading ||
-                  rates.isLoading ||
-                  products.isError ||
-                  rates.isError ||
-                  incompatibleTemperature ||
-                  missingRate ||
-                  !availableProviders.includes(logisticsProvider)))
+                logisticsBlockers.length > 0)
             }
             icon={
               fulfillmentMethod === "ecpay_logistics"
@@ -561,6 +654,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sageLight,
     borderColor: colors.sage,
   },
+  choiceLocked: { opacity: 0.55 },
   choiceCopy: { flex: 1 },
   lineTitle: { color: colors.forest, fontSize: 14, fontWeight: "900" },
   lineHint: { color: colors.muted, fontSize: 13, marginTop: 3 },

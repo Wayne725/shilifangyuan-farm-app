@@ -478,11 +478,17 @@ async def join_campaign(
         campaign.nonmember_price,
         membership_type,
     )
+    if body.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS and (
+        not campaign.can_ship
+        or campaign.shipping_temperature is None
+        or body.shipping_channel not in (campaign.allowed_shipping_channels or [])
+    ):
+        raise HTTPException(status_code=409, detail="此團購不支援選擇的物流通路")
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.GROUP,
         sales_channel=SalesChannel.GROUP,
-        fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
+        fulfillment_method=body.fulfillment_method,
         user_id=user.id,
         group_campaign=campaign,
         membership_type_snapshot=membership_type,
@@ -503,7 +509,7 @@ async def join_campaign(
             )
         ],
         fulfillment=OrderFulfillment(
-            method=FulfillmentMethod.COOPERATIVE_PICKUP,
+            method=body.fulfillment_method,
             status=FulfillmentState.PENDING_CONFIRMATION,
         ),
     )

@@ -20,8 +20,9 @@ import { api, getErrorMessage } from "../../src/services/api";
 import { colors, radii, spacing } from "../../src/theme";
 
 export default function MealOrderDetailScreen() {
-  const { id, setup } = useLocalSearchParams<{
+  const { id, payment, setup } = useLocalSearchParams<{
     id: string;
+    payment?: string;
     setup?: string;
   }>();
   const queryClient = useQueryClient();
@@ -87,7 +88,32 @@ export default function MealOrderDetailScreen() {
   const order = query.data;
   return (
     <Screen>
-      <PageHeader onBack={() => router.back()} title="取餐憑證" />
+      <PageHeader
+        onBack={() =>
+          payment ? router.replace("/(tabs)/orders") : router.back()
+        }
+        title="取餐憑證"
+      />
+      {payment ? (
+        <View style={styles.message}>
+          <InlineMessage
+            text={
+              order.payment_status === "paid"
+                ? "付款已完成，正在準備取餐憑證。"
+                : payment === "failed"
+                  ? "本次付款未完成，請確認資料後重新付款。"
+                  : "系統正在確認最終付款結果，請勿重複付款。"
+            }
+            tone={
+              order.payment_status === "paid"
+                ? "positive"
+                : payment === "failed"
+                  ? "danger"
+                  : "warning"
+            }
+          />
+        </View>
+      ) : null}
       {setup === "retry" ? (
         <View style={styles.message}>
           <InlineMessage

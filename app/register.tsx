@@ -57,7 +57,8 @@ export default function RegisterScreen() {
       <PageHeader onBack={() => router.back()} title="建立帳號" />
       <View style={styles.content}>
         <Text style={styles.intro}>
-          帳號建立後需完成 Email 驗證，才能送出入社申請與進行購買。
+          帳號建立後，驗證信會先排入寄送佇列；完成 Email
+          驗證後才能送出入社申請與進行購買。
         </Text>
         <View style={styles.field}>
           <Text style={styles.label}>顯示名稱</Text>
@@ -106,7 +107,7 @@ export default function RegisterScreen() {
         <View style={styles.verifyPanel}>
           <Text style={styles.panelTitle}>完成 Email 驗證</Text>
           <Text style={styles.panelText}>
-            輸入驗證信中的 6 位數驗證碼。
+            收到驗證信後，輸入信中的 6 位數驗證碼。
           </Text>
           <TextInput
             keyboardType="number-pad"

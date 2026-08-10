@@ -347,7 +347,11 @@ async def create_membership_payment_attempt(
         raise PaymentApplicationError("找不到入社應繳款")
     if (
         charge.application.status
-        != MembershipApplicationStatus.APPROVED
+        not in {
+            MembershipApplicationStatus.SUBMITTED,
+            MembershipApplicationStatus.NEEDS_SUPPLEMENT,
+            MembershipApplicationStatus.APPROVED,
+        }
         or charge.membership.status
         != MembershipStatus.PENDING_PAYMENT
     ):
@@ -592,7 +596,12 @@ class SQLAlchemyPaymentCallbackRepository:
                 SQLAlchemyNotificationRepository(self.session)
             )
             if (
-                application.status != MembershipApplicationStatus.APPROVED
+                application.status
+                not in {
+                    MembershipApplicationStatus.SUBMITTED,
+                    MembershipApplicationStatus.NEEDS_SUPPLEMENT,
+                    MembershipApplicationStatus.APPROVED,
+                }
                 or membership.status != MembershipStatus.PENDING_PAYMENT
             ):
                 attempt.status = PaymentStatus.LATE_PAID_REFUND_REQUIRED
@@ -655,9 +664,9 @@ class SQLAlchemyPaymentCallbackRepository:
             charge.receipt_number = (
                 f"SLFR-{current:%Y%m%d}-{charge.id.replace('-', '')[:8].upper()}"
             )
-            from ..routers.membership import activate_membership_if_fully_paid
+            from ..routers.membership import start_traineeship_if_fully_paid
 
-            membership = await activate_membership_if_fully_paid(
+            membership = await start_traineeship_if_fully_paid(
                 self.session,
                 charge.membership_id,
                 current,

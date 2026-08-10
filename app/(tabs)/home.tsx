@@ -21,6 +21,7 @@ import {
   SegmentControl,
 } from "../../src/components/ui";
 import { campaignLabels, money, shortDate } from "../../src/lib/format";
+import { hasMemberPricing } from "../../src/lib/membership";
 import { api } from "../../src/services/api";
 import { useAuth } from "../../src/store/AuthContext";
 import { useCart } from "../../src/store/CartContext";
@@ -66,6 +67,7 @@ export default function HomeScreen() {
     .filter((campaign) => campaign.intake_status === "open")
     .slice(0, 2);
   const membership = user?.membership_type ?? "nonmember";
+  const memberPricing = hasMemberPricing(membership);
 
   return (
     <Screen>
@@ -109,11 +111,11 @@ export default function HomeScreen() {
                   })
                 }
                 price={money(
-                  membership === "member"
+                  memberPricing
                     ? campaign.member_price
                     : campaign.nonmember_price,
                 )}
-                priceLabel={membership === "member" ? "社員價" : "一般價"}
+                priceLabel={memberPricing ? "社員價" : "一般價"}
                 progress={
                   (campaign.paid_quantity / campaign.min_paid_quantity) * 100
                 }
@@ -186,7 +188,7 @@ export default function HomeScreen() {
           </Text>
         </View>
         <Text style={styles.priceHint}>
-          {membership === "member" ? "社員價" : "一般價"}
+          {memberPricing ? "社員價" : "一般價"}
         </Text>
       </View>
     </Screen>
