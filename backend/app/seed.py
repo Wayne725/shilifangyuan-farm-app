@@ -1318,6 +1318,17 @@ async def sync_preview_demo_data(
         if not verify_password(password, user.password_hash):
             user.password_hash = hash_password(password)
 
+    product_images = {
+        product["slug"]: product["image_url"] for product in PRODUCTS
+    }
+    demo_products = list(
+        await session.scalars(
+            select(Product).where(Product.slug.in_(product_images))
+        )
+    )
+    for product in demo_products:
+        product.image_url = product_images[product.slug]
+
     existing_event = await session.scalar(
         select(MealEvent.id).where(
             MealEvent.id == "meal-event-preorder-demo"

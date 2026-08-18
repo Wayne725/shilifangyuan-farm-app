@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch, formatDate, formatMoney, resolveAsset } from "../lib/api";
+import { apiFetch, formatDate, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import {
   beginGroupCheckout,
   shippingChannelLabels,
@@ -122,7 +122,7 @@ export function GroupCampaignPage() {
       <Link className="text-link" to="/shop"><ArrowLeft size={17} />回到共同團購</Link>
       <div className="offer-hero">
         <div className="offer-image">
-          <img src={resolveAsset(item.image_url)} alt={item.title} />
+          <img src={resolveAsset(item.image_url)} alt={item.title} onError={replaceBrokenAsset} />
           <span>{item.intake_status}</span>
         </div>
         <div className="offer-copy">

@@ -106,7 +106,7 @@ export function OrdersPage() {
         <p className="eyebrow">ORDER HISTORY</p>
         <h1>登入後查看訂單進度。</h1>
         <p>物流選店、綠界付款或配送中斷時，都能從這裡安全地繼續。</p>
-        <button className="button button-primary" type="button" onClick={openLogin}>社員登入</button>
+        <button className="button button-primary" type="button" onClick={openLogin}>帳號登入</button>
       </section>
     );
   }

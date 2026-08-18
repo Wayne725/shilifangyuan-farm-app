@@ -2,8 +2,10 @@ import {
   ArrowRight,
   CheckCircle,
   EnvelopeSimple,
+  HandHeart,
   Key,
   LockKey,
+  ShoppingBag,
   UserPlus,
 } from "@phosphor-icons/react";
 import { Link, useSearch } from "@tanstack/react-router";
@@ -42,7 +44,7 @@ function AuthLayout({
           <h1>{title}</h1>
           <p>{description}</p>
         </div>
-        <small>社員與一般消費者共用同一組帳號</small>
+        <small>兩種註冊共用同一套登入，社員資格另依入社流程確認</small>
       </aside>
       <div className="auth-page-body">{children}</div>
     </section>
@@ -78,6 +80,8 @@ function AuthResult({
 }
 
 export function RegisterPage() {
+  const search = useSearch({ from: "/register" });
+  const intent = search.intent;
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -111,12 +115,54 @@ export function RegisterPage() {
     }
   };
 
+  if (!intent) {
+    return (
+      <AuthLayout
+        eyebrow="CHOOSE YOUR PATH"
+        title="選擇註冊方式"
+        description="先確認你要一般消費，或希望接續提出入社申請。"
+        icon={<UserPlus size={29} weight="light" />}
+      >
+        <div className="registration-choice">
+          <div className="registration-choice-heading">
+            <p className="eyebrow">ACCOUNT TYPE</p>
+            <h2>你想如何參與？</h2>
+            <p>兩種方式都會先建立登入帳號，之後仍可申請或調整社員資格。</p>
+          </div>
+          <div className="registration-choice-grid">
+            <Link className="registration-choice-card member" to="/register" search={{ intent: "member" }}>
+              <HandHeart size={30} weight="light" />
+              <span>MEMBERSHIP</span>
+              <h3>社員註冊</h3>
+              <p>建立帳號並接續填寫入社申請；完成審核、繳費及合作社確認後才取得社員資格。</p>
+              <strong>開始社員註冊 <ArrowRight size={18} /></strong>
+            </Link>
+            <Link className="registration-choice-card customer" to="/register" search={{ intent: "customer" }}>
+              <ShoppingBag size={30} weight="light" />
+              <span>GENERAL CUSTOMER</span>
+              <h3>一般消費者註冊</h3>
+              <p>建立一般消費帳號，可購物、結帳、查詢訂單；不會自動取得社員資格。</p>
+              <strong>開始一般註冊 <ArrowRight size={18} /></strong>
+            </Link>
+          </div>
+          <p className="auth-switch">
+            已經有帳號？ <LoginButton />
+          </p>
+        </div>
+      </AuthLayout>
+    );
+  }
+
+  const isMemberIntent = intent === "member";
+
   return (
     <AuthLayout
-      eyebrow="CREATE ACCOUNT"
-      title="建立合作帳號"
-      description="完成 Email 驗證後，就能使用購物、訂單與合作社服務。"
-      icon={<UserPlus size={29} weight="light" />}
+      eyebrow={isMemberIntent ? "MEMBERSHIP REGISTRATION" : "CUSTOMER REGISTRATION"}
+      title={isMemberIntent ? "社員註冊" : "一般消費者註冊"}
+      description={isMemberIntent
+        ? "先建立並驗證帳號，登入後接續填寫入社申請。"
+        : "完成 Email 驗證後，即可使用購物、結帳與訂單服務。"}
+      icon={isMemberIntent ? <HandHeart size={29} weight="light" /> : <ShoppingBag size={29} weight="light" />}
     >
       {result ? (
         <AuthResult
@@ -127,15 +173,21 @@ export function RegisterPage() {
           <Link
             className="button button-primary"
             to="/verify-email"
-            search={{ email, token: result.development_token }}
+            search={{ email, token: result.development_token, intent }}
           >
             輸入驗證碼 <ArrowRight size={17} />
           </Link>
         </AuthResult>
       ) : (
         <div className="auth-card">
+          <Link className="registration-back" to="/register" search={{ intent: undefined }}>
+            重新選擇註冊方式
+          </Link>
           <p className="eyebrow">ACCOUNT DETAILS</p>
-          <h2>基本資料</h2>
+          <h2>{isMemberIntent ? "建立入社用帳號" : "建立消費帳號"}</h2>
+          {isMemberIntent && (
+            <p className="registration-notice">這一步只建立登入帳號；Email 驗證完成後，還需要填寫入社資料並交由合作社確認。</p>
+          )}
           <form className="auth-form" onSubmit={submit}>
             <label className="field">
               顯示名稱
@@ -260,10 +312,21 @@ export function VerifyEmailPage() {
       icon={<EnvelopeSimple size={29} weight="light" />}
     >
       {verified ? (
-        <AuthResult title="Email 驗證完成" message="你的帳號已可登入使用。">
-          <button className="button button-primary" type="button" onClick={openLogin}>
-            登入系統 <ArrowRight size={17} />
-          </button>
+        <AuthResult
+          title="Email 驗證完成"
+          message={search.intent === "member"
+            ? "帳號已建立，登入後即可接續填寫入社申請。"
+            : "你的一般消費帳號已可登入使用。"}
+        >
+          {search.intent === "member" ? (
+            <Link className="button button-primary" to="/membership">
+              前往入社申請 <ArrowRight size={17} />
+            </Link>
+          ) : (
+            <button className="button button-primary" type="button" onClick={openLogin}>
+              登入開始使用 <ArrowRight size={17} />
+            </button>
+          )}
         </AuthResult>
       ) : (
         <div className="auth-card">

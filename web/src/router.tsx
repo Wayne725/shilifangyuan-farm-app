@@ -25,9 +25,16 @@ interface AccountSearch {
   payment?: string;
 }
 
+type RegisterIntent = "member" | "customer";
+
+interface RegisterSearch {
+  intent?: RegisterIntent;
+}
+
 interface VerifyEmailSearch {
   email?: string;
   token?: string;
+  intent?: RegisterIntent;
 }
 
 interface ResetPasswordSearch {
@@ -48,6 +55,12 @@ const homeRoute = createRoute({
 const registerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/register",
+  validateSearch: (search: Record<string, unknown>): RegisterSearch => ({
+    intent:
+      search.intent === "member" || search.intent === "customer"
+        ? search.intent
+        : undefined,
+  }),
   component: page("./pages/AuthFlowPages", "RegisterPage"),
 });
 
@@ -57,6 +70,10 @@ const verifyEmailRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): VerifyEmailSearch => ({
     email: typeof search.email === "string" ? search.email : undefined,
     token: typeof search.token === "string" ? search.token : undefined,
+    intent:
+      search.intent === "member" || search.intent === "customer"
+        ? search.intent
+        : undefined,
   }),
   component: page("./pages/AuthFlowPages", "VerifyEmailPage"),
 });

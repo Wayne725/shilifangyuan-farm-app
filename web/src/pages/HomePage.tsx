@@ -5,7 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
-import { apiFetch, resolveAsset } from "../lib/api";
+import { apiFetch, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import type { Activity, Product } from "../lib/types";
 
 export function HomePage() {
@@ -62,6 +62,7 @@ export function HomePage() {
             <img
               src={resolveAsset(heroProduct?.image_url || "/assets/products/rice.jpg")}
               alt={heroProduct?.name || "合作社選品白米"}
+              onError={replaceBrokenAsset}
             />
           </div>
           <div className="hero-note">
@@ -156,7 +157,7 @@ export function HomePage() {
           {!user && (
             <button className="quiet-placeholder quiet-placeholder-button" type="button" onClick={openLogin}>
               <CirclesThreePlus size={26} weight="light" />
-              <p>社員登入後顯示本月活動。</p>
+              <p>登入正式社員帳號後顯示本月活動。</p>
             </button>
           )}
           {activities.data?.length === 0 && (

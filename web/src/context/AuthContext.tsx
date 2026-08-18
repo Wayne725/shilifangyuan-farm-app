@@ -72,10 +72,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             <Dialog.Close className="icon-button dialog-close" aria-label="關閉">
               <X size={20} weight="light" />
             </Dialog.Close>
-            <p className="eyebrow">MEMBER ACCESS</p>
+            <p className="eyebrow">ACCOUNT ACCESS</p>
             <Dialog.Title>回到合作生活</Dialog.Title>
             <Dialog.Description>
-              使用你的合作社帳號登入。
+              社員與一般消費者都使用合作社帳號登入。
             </Dialog.Description>
             <form className="login-form" onSubmit={login}>
               <label>
@@ -101,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 忘記密碼
               </a>
               <a href="/register" onClick={() => setOpen(false)}>
-                建立帳號
+                註冊帳號
               </a>
             </div>
             <p className="dialog-footnote">

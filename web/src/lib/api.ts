@@ -94,6 +94,15 @@ export function resolveAsset(imageUrl?: string | null): string {
   return imageUrl.replace(/^\/assets/, "");
 }
 
+export function replaceBrokenAsset(event: {
+  currentTarget: HTMLImageElement;
+}): void {
+  const fallback = resolveAsset();
+  if (event.currentTarget.getAttribute("src") !== fallback) {
+    event.currentTarget.src = fallback;
+  }
+}
+
 export function formatMoney(value: number): string {
   return new Intl.NumberFormat("zh-TW", {
     style: "currency",

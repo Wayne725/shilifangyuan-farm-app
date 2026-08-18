@@ -457,6 +457,10 @@ async def test_preview_seed_syncs_new_fixture_and_demo_passwords(
         demo_nonmember_password="preview-customer-password",
     )
     monkeypatch.setattr("app.seed.get_settings", lambda: preview_settings)
+    rice = await database_session.scalar(
+        select(Product).where(Product.slug == "rice")
+    )
+    rice.image_url = "/assets/products/rice.png"
     await database_session.execute(
         delete(MealEvent).where(MealEvent.id == "meal-event-preorder-demo")
     )
@@ -474,6 +478,10 @@ async def test_preview_seed_syncs_new_fixture_and_demo_passwords(
         select(User).where(User.email == "admin@shilifangyuan.tw")
     )
     assert verify_password("preview-admin-password", admin.password_hash)
+    rice = await database_session.scalar(
+        select(Product).where(Product.slug == "rice")
+    )
+    assert rice.image_url == "/assets/products/rice.jpg"
 
 
 @pytest.mark.asyncio

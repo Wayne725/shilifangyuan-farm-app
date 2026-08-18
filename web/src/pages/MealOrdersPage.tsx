@@ -39,7 +39,7 @@ export function MealOrdersPage() {
     if (!selectedId && orders.data?.[0]) setSelectedId(orders.data[0].id);
   }, [orders.data, selectedId]);
 
-  if (!user) return <section className="account-gate"><BowlFood size={45} weight="light" /><p className="eyebrow">MEAL ORDERS</p><h1>登入後查看取餐憑證。</h1><p>付款完成後，QR 與六位取餐碼會安全保存在這裡。</p><button className="button button-primary" type="button" onClick={openLogin}>社員登入</button></section>;
+  if (!user) return <section className="account-gate"><BowlFood size={45} weight="light" /><p className="eyebrow">MEAL ORDERS</p><h1>登入後查看取餐憑證。</h1><p>付款完成後，QR 與六位取餐碼會安全保存在這裡。</p><button className="button button-primary" type="button" onClick={openLogin}>帳號登入</button></section>;
 
   return (
     <section className="orders-page meal-orders-page">

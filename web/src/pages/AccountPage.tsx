@@ -91,7 +91,7 @@ export function AccountPage() {
         <p className="eyebrow">MEMBER CENTER</p>
         <h1>你的合作生活，集中在這裡。</h1>
         <p>登入後查看社員資格、應繳款、點數、徽章、盈餘分配與通知。</p>
-        <button className="button button-primary" type="button" onClick={openLogin}>社員登入</button>
+        <button className="button button-primary" type="button" onClick={openLogin}>帳號登入</button>
       </section>
     );
   }

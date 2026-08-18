@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
-import { apiFetch, formatMoney, resolveAsset } from "../lib/api";
+import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import {
   beginCheckout,
   shippingChannelLabels,
@@ -180,7 +180,7 @@ export function CheckoutPage() {
             </div>
             {cart.map(({ product, quantity }) => (
               <article className="checkout-item" key={product.id}>
-                <img src={resolveAsset(product.image_url)} alt={product.name} />
+                <img src={resolveAsset(product.image_url)} alt={product.name} onError={replaceBrokenAsset} />
                 <div>
                   <small>{product.supplier_name || product.category}</small>
                   <h3>{product.name}</h3>

@@ -1,7 +1,7 @@
 import { ArrowRight, Basket, Plus } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 
-import { formatMoney, resolveAsset } from "../lib/api";
+import { formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import type { Product } from "../lib/types";
 
 export function SectionHeading({
@@ -42,7 +42,7 @@ export function ProductCard({
   return (
     <article className="product-card">
       <Link className="product-image-frame" to="/products/$productId" params={{ productId: product.id }}>
-        <img src={resolveAsset(product.image_url)} alt={product.name} />
+        <img src={resolveAsset(product.image_url)} alt={product.name} onError={replaceBrokenAsset} />
         <span>{product.category}</span>
       </Link>
       <div className="product-copy">

@@ -15,6 +15,9 @@ async function readTree(directory) {
 const source = await readTree(new URL("../web/src/", import.meta.url));
 const router = await readFile(new URL("../web/src/router.tsx", import.meta.url), "utf8");
 const commerce = await readFile(new URL("../web/src/lib/commerce.ts", import.meta.url), "utf8");
+const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
+const shared = await readFile(new URL("../web/src/components/Shared.tsx", import.meta.url), "utf8");
+const authFlows = await readFile(new URL("../web/src/pages/AuthFlowPages.tsx", import.meta.url), "utf8");
 
 test("生活消費保留商品、團購、便當、付款與物流", () => {
   for (const marker of ["/v1/products", "/v1/group-campaigns", "/v1/meal-events", "beginCheckout", "beginGroupCheckout", "beginMealCheckout", "shippingEligibility", "selection-link"]) assert.match(source + commerce, new RegExp(marker.replaceAll("/", "\\/")));
@@ -42,4 +45,15 @@ test("正式 Web 採路由分包且不含 React Native 或行內樣式", () => {
   assert.doesNotMatch(source, /from ["']react-native/);
   assert.doesNotMatch(source, /expo-router/);
   assert.doesNotMatch(source, /style=\{\{/);
+});
+
+test("商品圖保持四比三且壞圖有一致備援", () => {
+  assert.match(styles, /\.product-image-frame\s*\{[^}]*display:\s*block;[^}]*aspect-ratio:\s*4\s*\/\s*3;/s);
+  assert.match(shared, /onError=\{replaceBrokenAsset\}/);
+});
+
+test("註冊入口先區分社員申請與一般消費者", () => {
+  assert.match(authFlows, /社員註冊/);
+  assert.match(authFlows, /一般消費者註冊/);
+  assert.match(router, /intent:\s*search\.intent === "member" \|\| search\.intent === "customer"/);
 });

@@ -585,6 +585,8 @@ p {
 }
 
 .product-card {
+  display: grid;
+  grid-template-rows: auto 1fr;
   min-width: 0;
   background: var(--paper-light);
   border: 1px solid var(--line);
@@ -598,7 +600,8 @@ p {
 
 .product-image-frame {
   position: relative;
-  height: 290px;
+  display: block;
+  aspect-ratio: 4 / 3;
   overflow: hidden;
   background: var(--paper-deep);
 }
@@ -626,6 +629,8 @@ p {
 }
 
 .product-copy {
+  display: flex;
+  flex-direction: column;
   padding: 22px;
 }
 
@@ -663,6 +668,7 @@ p {
   display: flex;
   align-items: end;
   justify-content: space-between;
+  margin-top: auto;
   padding-top: 17px;
   border-top: 1px solid var(--line);
 }
@@ -4612,8 +4618,119 @@ p {
 }
 
 .auth-card,
-.auth-result {
+.auth-result,
+.registration-choice {
   width: min(100%, 560px);
+}
+
+.registration-choice {
+  width: min(100%, 760px);
+}
+
+.registration-choice-heading {
+  margin-bottom: 30px;
+}
+
+.registration-choice-heading h2 {
+  margin: 10px 0 12px;
+  font-family: var(--serif);
+  font-size: clamp(34px, 4vw, 48px);
+  line-height: 1.05;
+}
+
+.registration-choice-heading > p:last-child,
+.registration-notice {
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.75;
+}
+
+.registration-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.registration-choice-card {
+  display: flex;
+  min-height: 330px;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 30px;
+  background: var(--paper-light);
+  border: 1px solid var(--line);
+  transition: color 260ms var(--ease), background-color 260ms var(--ease), border-color 260ms var(--ease), transform 260ms var(--ease);
+}
+
+.registration-choice-card.member {
+  border-top: 4px solid var(--moss);
+}
+
+.registration-choice-card.customer {
+  border-top: 4px solid var(--harbor);
+}
+
+.registration-choice-card > svg {
+  margin-bottom: 38px;
+  color: var(--harbor-dark);
+}
+
+.registration-choice-card > span {
+  color: var(--brass);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+}
+
+.registration-choice-card h3 {
+  margin: 10px 0 14px;
+  font-family: var(--serif);
+  font-size: 30px;
+}
+
+.registration-choice-card p {
+  margin-bottom: 28px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.75;
+}
+
+.registration-choice-card strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.registration-choice-card:hover {
+  color: var(--paper-light);
+  background: var(--moss-dark);
+  border-color: var(--moss-dark);
+  transform: translateY(-3px);
+}
+
+.registration-choice-card:hover > svg,
+.registration-choice-card:hover > span,
+.registration-choice-card:hover p {
+  color: rgba(250, 248, 241, 0.72);
+}
+
+.registration-back {
+  display: inline-flex;
+  margin-bottom: 28px;
+  padding-bottom: 4px;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--line-strong);
+  font-size: 10px;
+}
+
+.registration-notice {
+  margin: -18px 0 26px;
+  padding: 14px 16px;
+  background: var(--harbor-pale);
+  border-left: 3px solid var(--harbor);
 }
 
 .auth-card > h2,
@@ -6060,6 +6177,14 @@ p {
     grid-template-columns: 1fr;
   }
 
+  .registration-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .registration-choice-card {
+    min-height: 280px;
+  }
+
   .auth-result-actions .button {
     width: 100%;
   }
@@ -6194,10 +6319,6 @@ p {
   .product-grid,
   .catalog-grid {
     grid-template-columns: 1fr;
-  }
-
-  .product-image-frame {
-    height: 310px;
   }
 
   .workspace-passage {

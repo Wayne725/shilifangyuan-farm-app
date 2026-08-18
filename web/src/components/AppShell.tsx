@@ -77,7 +77,7 @@ export function AppShell() {
           ) : (
             <button className="account-button" type="button" onClick={openLogin}>
               <SignIn size={20} weight="light" />
-              <span>社員登入</span>
+              <span>帳號登入</span>
             </button>
           )}
           <button
@@ -134,7 +134,7 @@ export function AppShell() {
                 setMobileOpen(false);
               }}
             >
-              社員登入
+              帳號登入
             </button>
           )}
         </nav>
