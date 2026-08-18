@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.auth import (
     decode_token,
@@ -14,6 +14,7 @@ from app.auth import (
     require_admin,
     verify_password,
 )
+from app.config import Settings
 from app.domain import (
     DomainError,
     apply_paid_quantity,
@@ -438,6 +439,41 @@ async def test_seed_reuses_reference_data_created_by_migration(
     assert await database_session.scalar(
         select(func.count(PickupLocation.id))
     ) == 5
+
+
+@pytest.mark.asyncio
+async def test_preview_seed_syncs_new_fixture_and_demo_passwords(
+    database_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await seed_demo_data(database_session)
+    preview_settings = Settings(
+        _env_file=None,
+        environment="preview",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        demo_admin_password="preview-admin-password",
+        demo_member_password="preview-member-password",
+        demo_nonmember_password="preview-customer-password",
+    )
+    monkeypatch.setattr("app.seed.get_settings", lambda: preview_settings)
+    await database_session.execute(
+        delete(MealEvent).where(MealEvent.id == "meal-event-preorder-demo")
+    )
+    await database_session.commit()
+
+    result = await seed_demo_data(database_session)
+
+    assert result["users"] == 0
+    assert await database_session.scalar(
+        select(MealEvent.id).where(
+            MealEvent.id == "meal-event-preorder-demo"
+        )
+    )
+    admin = await database_session.scalar(
+        select(User).where(User.email == "admin@shilifangyuan.tw")
+    )
+    assert verify_password("preview-admin-password", admin.password_hash)
 
 
 @pytest.mark.asyncio

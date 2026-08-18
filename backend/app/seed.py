@@ -7,8 +7,8 @@ from typing import Dict, List
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .auth import hash_password
-from .config import get_settings
+from .auth import hash_password, verify_password
+from .config import Settings, get_settings
 from .database import SessionLocal
 from .integrations.common import IntegrationError
 from .integrations.pii_crypto import (
@@ -342,8 +342,11 @@ PRODUCT_SUPPLIERS = {
 
 
 async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
     existing = await session.scalar(select(User.id).limit(1))
     if existing is not None:
+        await sync_preview_demo_data(session, settings, now)
         return {
             "users": 0,
             "products": 0,
@@ -352,8 +355,6 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             "pickup_locations": 0,
         }
 
-    settings = get_settings()
-    now = datetime.now(timezone.utc)
     admin_password_hash = hash_password(settings.demo_admin_password)
     member_password_hash = hash_password(settings.demo_member_password)
     nonmember_password_hash = hash_password(settings.demo_nonmember_password)
@@ -1292,6 +1293,74 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
         "suppliers": len(suppliers),
         "pickup_locations": len(pickup_locations),
     }
+
+
+async def sync_preview_demo_data(
+    session: AsyncSession,
+    settings: Settings,
+    now: datetime,
+) -> None:
+    if settings.environment.strip().lower() != "preview":
+        return
+
+    demo_passwords = {
+        "admin@shilifangyuan.tw": settings.demo_admin_password,
+        "member@shilifangyuan.tw": settings.demo_member_password,
+        "customer@shilifangyuan.tw": settings.demo_nonmember_password,
+    }
+    demo_users = list(
+        await session.scalars(
+            select(User).where(User.email.in_(demo_passwords))
+        )
+    )
+    for user in demo_users:
+        password = demo_passwords[user.email]
+        if not verify_password(password, user.password_hash):
+            user.password_hash = hash_password(password)
+
+    existing_event = await session.scalar(
+        select(MealEvent.id).where(
+            MealEvent.id == "meal-event-preorder-demo"
+        )
+    )
+    if existing_event is None:
+        await session.execute(
+            delete(MealEventOffering).where(
+                MealEventOffering.meal_event_id
+                == "meal-event-preorder-demo"
+            )
+        )
+        meal = await session.scalar(
+            select(Meal).where(Meal.slug == "seasonal-coop-lunchbox")
+        )
+        admin_id = await session.scalar(
+            select(User.id).where(User.user_role == UserRole.ADMIN)
+        )
+        if meal is not None and admin_id is not None:
+            session.add(
+                MealEvent(
+                    id="meal-event-preorder-demo",
+                    title="今日展示便當（虛擬資料）",
+                    location="合作社門市展示取餐區",
+                    ordering_starts_at=now - timedelta(hours=2),
+                    ordering_ends_at=now + timedelta(days=1),
+                    pickup_starts_at=now + timedelta(days=2, hours=3),
+                    pickup_ends_at=now + timedelta(days=2, hours=5),
+                    status=MealEventStatus.PUBLISHED,
+                    created_by_id=admin_id,
+                    offerings=[
+                        MealEventOffering(
+                            id="meal-offering-preorder-demo",
+                            meal_id=meal.id,
+                            price=120,
+                            capacity=20,
+                            paid_quantity=0,
+                            position=1,
+                        )
+                    ],
+                )
+            )
+    await session.commit()
 
 
 async def reset_demo_data(session: AsyncSession) -> Dict[str, int]:
