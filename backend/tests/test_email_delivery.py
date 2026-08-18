@@ -1,64 +1,45 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.jobs as jobs_module
-from app.config import Settings, get_settings
-from app.database import Base, get_session
 from app.integrations.email_sender import EmailSendResult
 from app.integrations.common import IntegrationResponseError
 from app.jobs import jobs_router
 from app.rate_limit import reset_all
 from app.routers.auth import auth_router
+from tests.support import api_test_context, make_test_settings
 
 
 @pytest.fixture
-async def email_app(monkeypatch: pytest.MonkeyPatch):
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        settings = Settings(
-            _env_file=None,
-            environment="development",
-            internal_reconcile_secret="email-reconcile-secret",
-        )
+async def email_app(database_session, monkeypatch: pytest.MonkeyPatch):
+    settings = make_test_settings(
+        environment="development",
+        internal_reconcile_secret="email-reconcile-secret",
+    )
 
-        class AcceptedSender:
-            async def send(self, message):
-                return EmailSendResult(
-                    accepted=True,
-                    provider_message_id="accepted-message",
-                    status_code=200,
-                    provider="resend",
-                )
+    class AcceptedSender:
+        async def send(self, message):
+            return EmailSendResult(
+                accepted=True,
+                provider_message_id="accepted-message",
+                status_code=200,
+                provider="resend",
+            )
 
-        monkeypatch.setattr(
-            jobs_module,
-            "email_sender_from_settings",
-            lambda _settings: AcceptedSender(),
-        )
-        application = FastAPI()
-        application.include_router(auth_router)
-        application.include_router(jobs_router)
-
-        async def override_get_session():
-            yield session
-
-        application.dependency_overrides[get_session] = override_get_session
-        application.dependency_overrides[get_settings] = lambda: settings
+    monkeypatch.setattr(
+        jobs_module,
+        "email_sender_from_settings",
+        lambda _settings: AcceptedSender(),
+    )
+    async with api_test_context(
+        database_session,
+        [auth_router, jobs_router],
+        settings=settings,
+    ) as client:
         reset_all()
-        async with AsyncClient(
-            transport=ASGITransport(app=application),
-            base_url="http://test",
-        ) as client:
-            yield client, settings
+        yield client, settings
         reset_all()
-    await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -43,7 +43,7 @@ def settings(**overrides) -> Settings:
     return Settings(**values)
 
 
-@pytest.mark.parametrize("environment", ["sandbox", "production"])
+@pytest.mark.parametrize("environment", ["preview", "sandbox", "production"])
 def test_secure_environments_reject_default_secrets(environment: str) -> None:
     runtime_settings = settings(environment=environment)
 
@@ -57,7 +57,7 @@ def test_secure_environments_reject_default_secrets(environment: str) -> None:
     assert DEFAULT_RECONCILE_SECRET not in message
 
 
-@pytest.mark.parametrize("environment", ["sandbox", "production"])
+@pytest.mark.parametrize("environment", ["preview", "sandbox", "production"])
 def test_secure_environments_reject_short_custom_secrets(
     environment: str,
 ) -> None:
@@ -106,6 +106,14 @@ def test_secure_environments_accept_long_nondefault_secrets() -> None:
                 "v1": base64.b64encode(b"p" * 32).decode("ascii"),
             }
         ),
+    ).validate_runtime_secrets()
+
+
+def test_preview_accepts_strong_secrets_without_external_integrations() -> None:
+    settings(
+        environment="preview",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
     ).validate_runtime_secrets()
 
 

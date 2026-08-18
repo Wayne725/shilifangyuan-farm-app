@@ -310,7 +310,7 @@ async def create_payment_attempt(
         order_result_url="{}/payments/result".format(
             settings.app_base_url.rstrip("/")
         ),
-        client_back_url="{}/order/{}".format(
+        client_back_url="{}/orders?order_id={}".format(
             settings.web_base_url.rstrip("/"), order.id
         ),
         custom_fields={"CustomField1": order.id},
@@ -408,7 +408,7 @@ async def create_membership_payment_attempt(
         order_result_url="{}/payments/result".format(
             settings.app_base_url.rstrip("/")
         ),
-        client_back_url="{}/members".format(
+        client_back_url="{}/account".format(
             settings.web_base_url.rstrip("/")
         ),
         custom_fields={

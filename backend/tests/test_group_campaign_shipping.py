@@ -3,12 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.auth import make_token_pair
-from app.database import Base, get_session
 from app.domain import apply_paid_quantity
 from app.models import (
     GroupCampaign,
@@ -34,11 +29,7 @@ from app.models import (
 )
 from app.routers.groups import groups_router
 from app.routers.proposals import proposals_router
-
-
-def auth_headers(user: User) -> dict[str, str]:
-    token = make_token_pair(user)["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+from tests.support import api_test_context, auth_headers
 
 
 def campaign_payload(product_id: str, **overrides) -> dict:
@@ -65,21 +56,12 @@ def campaign_payload(product_id: str, **overrides) -> dict:
 
 
 @pytest.fixture
-async def campaign_context():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        application = FastAPI()
-        application.include_router(groups_router)
-        application.include_router(proposals_router)
-
-        async def override_get_session():
-            yield session
-
-        application.dependency_overrides[get_session] = override_get_session
-
+async def campaign_context(database_session):
+    async with api_test_context(
+        database_session,
+        [groups_router, proposals_router],
+    ) as client:
+        session = database_session
         admin = User(
             email="admin@example.test",
             display_name="管理員",
@@ -131,19 +113,14 @@ async def campaign_context():
         session.add(proposal)
         await session.commit()
 
-        async with AsyncClient(
-            transport=ASGITransport(app=application),
-            base_url="http://test",
-        ) as client:
-            yield {
-                "client": client,
-                "session": session,
-                "admin": admin,
-                "proposer": proposer,
-                "product": product,
-                "proposal": proposal,
-            }
-    await engine.dispose()
+        yield {
+            "client": client,
+            "session": session,
+            "admin": admin,
+            "proposer": proposer,
+            "product": product,
+            "proposal": proposal,
+        }
 
 
 @pytest.mark.asyncio

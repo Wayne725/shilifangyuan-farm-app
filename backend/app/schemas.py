@@ -42,6 +42,7 @@ from .models import (
     ShipmentStatus,
     ShippingChannel,
     ShippingTemperature,
+    SupplierAccreditationStatus,
     TargetType,
     TaxType,
     UserRole,
@@ -112,6 +113,10 @@ class TokenResponse(ApiModel):
 
 class ProductRead(ApiModel):
     id: str
+    product_number: Optional[str] = None
+    sku: Optional[str] = None
+    supplier_id: Optional[str] = None
+    supplier_name: Optional[str] = None
     slug: str
     name: str
     description: str
@@ -129,6 +134,9 @@ class ProductRead(ApiModel):
 
 
 class ProductCreate(BaseModel):
+    product_number: Optional[str] = Field(default=None, max_length=40)
+    sku: Optional[str] = Field(default=None, max_length=80)
+    supplier_id: Optional[str] = None
     name: str = Field(min_length=1, max_length=120)
     description: str = ""
     category: ProductCategory
@@ -161,6 +169,9 @@ class ProductCreate(BaseModel):
 
 
 class ProductUpdate(BaseModel):
+    product_number: Optional[str] = Field(default=None, max_length=40)
+    sku: Optional[str] = Field(default=None, max_length=80)
+    supplier_id: Optional[str] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     description: Optional[str] = None
     category: Optional[ProductCategory] = None
@@ -180,7 +191,13 @@ class ProductUpdate(BaseModel):
     def reject_null_for_required_columns(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
-        nullable_fields = {"image_url", "shipping_temperature"}
+        nullable_fields = {
+            "image_url",
+            "shipping_temperature",
+            "product_number",
+            "sku",
+            "supplier_id",
+        }
         null_fields = sorted(
             field
             for field, value in data.items()
@@ -448,6 +465,7 @@ class OrderCreate(BaseModel):
     invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
+    pickup_location_id: Optional[str] = None
 
 
 class GroupJoinRequest(BaseModel):
@@ -456,6 +474,7 @@ class GroupJoinRequest(BaseModel):
     invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
+    pickup_location_id: Optional[str] = None
     shipping_channel: Optional[ShippingChannel] = None
 
     @model_validator(mode="after")
@@ -526,6 +545,7 @@ class OrderRead(ApiModel):
     meal_event_id: Optional[str] = None
     membership_type_snapshot: MembershipType
     amount_total: int
+    tax_amount: int = 0
     contact_email: EmailStr
     invoice_carrier_type: InvoiceCarrierType
     fulfillment_status: FulfillmentStatus
@@ -551,6 +571,20 @@ class RefundRequest(BaseModel):
 
 class FulfillmentUpdate(BaseModel):
     status: FulfillmentStatus
+    pickup_starts_at: Optional[datetime] = None
+    pickup_ends_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_pickup_window(self) -> "FulfillmentUpdate":
+        if (self.pickup_starts_at is None) != (self.pickup_ends_at is None):
+            raise ValueError("取貨起訖時間必須同時提供")
+        if (
+            self.pickup_starts_at is not None
+            and self.pickup_ends_at is not None
+            and self.pickup_ends_at <= self.pickup_starts_at
+        ):
+            raise ValueError("取貨結束時間必須晚於開始時間")
+        return self
 
 
 class NotificationRead(ApiModel):
@@ -570,6 +604,14 @@ class MembershipProfileInput(BaseModel):
     address: str = Field(min_length=1, max_length=500)
     emergency_contact: str = Field(min_length=1, max_length=240)
     consent_version: str = Field(min_length=1, max_length=40)
+    identity_number: Optional[str] = Field(default=None, min_length=6, max_length=20)
+    gender: Optional[str] = Field(default=None, max_length=40)
+    place_of_origin: Optional[str] = Field(default=None, max_length=120)
+    occupation: Optional[str] = Field(default=None, max_length=120)
+    registered_address: Optional[str] = Field(default=None, max_length=500)
+    correspondence_address: Optional[str] = Field(default=None, max_length=500)
+    landline_phone: Optional[str] = Field(default=None, max_length=40)
+    line_id: Optional[str] = Field(default=None, max_length=120)
 
 
 class MembershipApplicationSubmit(MembershipProfileInput):
@@ -588,6 +630,14 @@ class MembershipProfileRead(BaseModel):
     emergency_contact: str
     consent_version: str
     consented_at: datetime
+    identity_number: Optional[str] = None
+    gender: Optional[str] = None
+    place_of_origin: Optional[str] = None
+    occupation: Optional[str] = None
+    registered_address: Optional[str] = None
+    correspondence_address: Optional[str] = None
+    landline_phone: Optional[str] = None
+    line_id: Optional[str] = None
 
 
 class MembershipDocumentRead(ApiModel):
@@ -642,6 +692,11 @@ class MembershipRead(ApiModel):
     suspended_at: Optional[datetime]
     ended_at: Optional[datetime]
     status_reason: Optional[str]
+    share_certificate_number: Optional[str] = None
+    share_capital_amount: int = 0
+    share_count: int = 0
+    share_subscribed_on: Optional[date] = None
+    share_paid_on: Optional[date] = None
 
 
 class MembershipChargeRead(ApiModel):
@@ -1032,6 +1087,7 @@ class MealEventCancelRequest(BaseModel):
 class OrderFulfillmentRead(ApiModel):
     method: FulfillmentMethod
     status: FulfillmentState
+    pickup_location_id: Optional[str] = None
     pickup_location: Optional[str]
     pickup_starts_at: Optional[datetime]
     pickup_ends_at: Optional[datetime]
@@ -1120,3 +1176,118 @@ class ShippingRateRead(ApiModel):
     effective_from: date
     effective_to: Optional[date]
     is_active: bool
+
+
+class PickupLocationCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9-]+$")
+    name: str = Field(min_length=1, max_length=160)
+    address: str = Field(default="", max_length=500)
+    instructions: str = Field(default="", max_length=2000)
+    sort_order: int = Field(default=0, ge=0, le=100000)
+    is_active: bool = True
+
+
+class PickupLocationUpdate(BaseModel):
+    code: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=40,
+        pattern=r"^[a-z0-9-]+$",
+    )
+    name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    address: Optional[str] = Field(default=None, max_length=500)
+    instructions: Optional[str] = Field(default=None, max_length=2000)
+    sort_order: Optional[int] = Field(default=None, ge=0, le=100000)
+    is_active: Optional[bool] = None
+
+
+class PickupLocationRead(ApiModel):
+    id: str
+    code: str
+    name: str
+    address: str
+    instructions: str
+    sort_order: int
+    is_active: bool
+
+
+class SupplierCreate(BaseModel):
+    supplier_number: Optional[str] = Field(default=None, max_length=40)
+    business_name: str = Field(min_length=1, max_length=160)
+    tax_id: Optional[str] = Field(default=None, pattern=r"^\d{8}$")
+    responsible_person: str = Field(min_length=1, max_length=120)
+    contact_person: str = Field(min_length=1, max_length=120)
+    phone: str = Field(min_length=8, max_length=40)
+    email: EmailStr
+    line_id: Optional[str] = Field(default=None, max_length=120)
+    settlement_terms: str = Field(default="", max_length=4000)
+    bank_account: str = Field(min_length=4, max_length=200)
+    is_active: bool = False
+
+
+class SupplierUpdate(BaseModel):
+    supplier_number: Optional[str] = Field(default=None, max_length=40)
+    business_name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    tax_id: Optional[str] = Field(default=None, pattern=r"^\d{8}$")
+    responsible_person: Optional[str] = Field(
+        default=None, min_length=1, max_length=120
+    )
+    contact_person: Optional[str] = Field(
+        default=None, min_length=1, max_length=120
+    )
+    phone: Optional[str] = Field(default=None, min_length=8, max_length=40)
+    email: Optional[EmailStr] = None
+    line_id: Optional[str] = Field(default=None, max_length=120)
+    settlement_terms: Optional[str] = Field(default=None, max_length=4000)
+    bank_account: Optional[str] = Field(default=None, min_length=4, max_length=200)
+    is_active: Optional[bool] = None
+
+
+class SupplierAccreditationCreate(BaseModel):
+    reviewed_on: date
+    process_notes: str = Field(min_length=1, max_length=10000)
+    status: SupplierAccreditationStatus
+    result_notes: str = Field(default="", max_length=10000)
+
+
+class SupplierAccreditationRead(ApiModel):
+    id: str
+    supplier_id: str
+    reviewed_on: date
+    reviewer_id: str
+    status: SupplierAccreditationStatus
+    process_notes: str
+    result_notes: str
+    created_at: datetime
+
+
+class SupplierDocumentRead(ApiModel):
+    id: str
+    supplier_id: str
+    accreditation_id: Optional[str]
+    label: str
+    content_type: str
+    size_bytes: int
+    checksum_sha256: Optional[str]
+    confirmed_at: Optional[datetime]
+    created_at: datetime
+
+
+class SupplierRead(BaseModel):
+    id: str
+    supplier_number: Optional[str]
+    business_name: str
+    tax_id: Optional[str]
+    responsible_person: str
+    contact_person: str
+    phone: str
+    email: EmailStr
+    line_id: Optional[str]
+    settlement_terms: str
+    bank_account: str
+    accredited_on: Optional[date]
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    accreditations: List[SupplierAccreditationRead] = Field(default_factory=list)
+    documents: List[SupplierDocumentRead] = Field(default_factory=list)

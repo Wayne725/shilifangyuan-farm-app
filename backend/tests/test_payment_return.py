@@ -3,12 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.config import Settings, get_settings
-from app.database import Base, get_session
+from app.config import Settings
 from app.integrations.ecpay import build_check_mac_value
 from app.models import (
     FulfillmentMethod,
@@ -23,6 +19,7 @@ from app.models import (
     User,
 )
 from app.routers.payments import payments_router
+from tests.support import api_test_context, make_test_settings
 
 
 MERCHANT_ID = "3002607"
@@ -31,11 +28,7 @@ HASH_IV = "EkRm7iFT261dpevs"
 
 
 def payment_settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        environment="test",
-        app_base_url="https://api.example.test",
-        web_base_url="https://app.example.test",
+    return make_test_settings(
         ecpay_payment_merchant_id=MERCHANT_ID,
         ecpay_payment_hash_key=HASH_KEY,
         ecpay_payment_hash_iv=HASH_IV,
@@ -64,21 +57,13 @@ def successful_result(attempt: PaymentAttempt) -> dict[str, str]:
 
 
 @pytest.fixture
-async def payment_return_context():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        app = FastAPI()
-        app.include_router(payments_router)
-
-        async def override_get_session():
-            yield session
-
-        app.dependency_overrides[get_session] = override_get_session
-        app.dependency_overrides[get_settings] = payment_settings
-
+async def payment_return_context(database_session):
+    async with api_test_context(
+        database_session,
+        [payments_router],
+        settings=payment_settings(),
+    ) as client:
+        session = database_session
         user = User(
             email="buyer@example.test",
             display_name="付款買家",
@@ -123,13 +108,7 @@ async def payment_return_context():
         session.add_all([user, order, attempt])
         await session.commit()
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-            follow_redirects=False,
-        ) as client:
-            yield client, session, order, attempt
-    await engine.dispose()
+        yield client, session, order, attempt
 
 
 @pytest.mark.asyncio
@@ -174,32 +153,6 @@ async def test_order_result_repository_error_still_redirects_to_confirming(
     assert response.headers["location"] == (
         f"https://app.example.test/orders?order_id={order_id}"
         "&payment=confirming"
-    )
-
-
-@pytest.mark.asyncio
-async def test_native_checkout_returns_to_app_scheme(
-    payment_return_context,
-) -> None:
-    client, _session, order, attempt = payment_return_context
-
-    checkout = await client.get(
-        f"/payments/{attempt.id}/checkout?client=native",
-    )
-    assert checkout.status_code == 200
-    assert (
-        "https://api.example.test/payments/result?client=native"
-        in checkout.text
-    )
-
-    result = await client.post(
-        "/payments/result?client=native",
-        data=successful_result(attempt),
-    )
-    assert result.status_code == 303
-    assert result.headers["location"] == (
-        f"shilifangyuan://payment-return?order_id={order.id}"
-        "&payment=paid"
     )
 
 

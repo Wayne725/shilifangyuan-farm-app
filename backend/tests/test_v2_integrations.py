@@ -16,7 +16,10 @@ from app.integrations.ecpay_logistics import (
     decrypt_ecpay_logistics_data,
     encrypt_ecpay_logistics_data,
 )
-from app.integrations.pii_crypto import VersionedPIICipher
+from app.integrations.pii_crypto import (
+    VersionedPIICipher,
+    pii_cipher_from_settings,
+)
 from app.integrations.r2_storage import (
     MAX_MEMBERSHIP_DOCUMENT_BYTES,
     R2DocumentStorage,
@@ -77,6 +80,20 @@ def test_logistics_aes_matches_official_vector_and_round_trips() -> None:
         LOGISTICS_HASH_KEY,
         LOGISTICS_HASH_IV,
     ) == {"Name": "Test", "ID": "A123456789"}
+
+
+def test_preview_pii_key_is_stable_without_a_configured_keyring() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="preview",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+    )
+    first = pii_cipher_from_settings(settings)
+    second = pii_cipher_from_settings(settings)
+    encrypted = first.encrypt_text("展示資料", associated_data="preview")
+
+    assert second.decrypt_text(encrypted, associated_data="preview") == "展示資料"
 
 
 @pytest.mark.asyncio

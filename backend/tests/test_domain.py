@@ -6,7 +6,6 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.auth import (
     decode_token,
@@ -15,7 +14,6 @@ from app.auth import (
     require_admin,
     verify_password,
 )
-from app.database import Base
 from app.domain import (
     DomainError,
     apply_paid_quantity,
@@ -39,11 +37,16 @@ from app.models import (
     MembershipFeeSchedule,
     MembershipStatus,
     MembershipType,
+    MealEvent,
+    MealEventStatus,
+    Meeting,
     Order,
     OrderFulfillment,
     OrderKind,
     PaymentStatus,
     PaymentAttempt,
+    PickupLocation,
+    PointTransaction,
     Product,
     ProposalStatus,
     ShippingChannel,
@@ -51,12 +54,15 @@ from app.models import (
     ShippingTemperature,
     Shipment,
     ShipmentStatus,
+    Supplier,
+    SurplusDistribution,
     TargetType,
     ReservationStatus,
     SalesChannel,
     User,
     UserRole,
     VoteProposal,
+    Wish,
 )
 from app.seed import DEMO_PASSWORD, reset_demo_data, seed_demo_data
 from app.routers.orders import request_order_refund
@@ -306,6 +312,7 @@ def test_admin_fulfillment_actions_match_route_guards() -> None:
 
 def test_password_hash_and_jwt_round_trip() -> None:
     user = make_user()
+    assert user.password_hash.startswith("pbkdf2_sha256$210000$")
     assert verify_password("password123", user.password_hash)
     assert not verify_password("wrong-password", user.password_hash)
     tokens = make_token_pair(user)
@@ -322,157 +329,183 @@ async def test_customer_cannot_use_admin_dependency() -> None:
 
 
 @pytest.mark.asyncio
-async def test_seed_is_idempotent_and_resettable() -> None:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        first = await seed_demo_data(session)
-        second = await seed_demo_data(session)
-        product_count = await session.scalar(select(func.count(Product.id)))
-        assert first["products"] == 12
-        assert second["products"] == 0
-        assert product_count == 12
-        seeded_user = await session.scalar(
-            select(User).where(User.email == "member@shilifangyuan.tw")
+async def test_seed_is_idempotent_and_resettable(database_session) -> None:
+    first = await seed_demo_data(database_session)
+    second = await seed_demo_data(database_session)
+    product_count = await database_session.scalar(select(func.count(Product.id)))
+    assert first["products"] == 12
+    assert first["suppliers"] == 3
+    assert first["pickup_locations"] == 5
+    assert second["products"] == 0
+    assert product_count == 12
+    assert await database_session.scalar(select(func.count(Supplier.id))) == 3
+    assert await database_session.scalar(
+        select(func.count(PickupLocation.id))
+    ) == 5
+    assert await database_session.scalar(
+        select(func.count(Product.id)).where(
+            Product.product_number.is_(None)
         )
-        assert verify_password(DEMO_PASSWORD, seeded_user.password_hash)
-        assert seeded_user.customer_number.startswith("SLF-C-")
-        reset = await reset_demo_data(session)
-        assert reset["products"] == 12
-        assert await session.scalar(select(func.count(Product.id))) == 12
-    await engine.dispose()
+    ) == 0
+    assert await database_session.scalar(
+        select(func.count(Product.id)).where(Product.supplier_id.is_(None))
+    ) == 0
+    assert await database_session.scalar(
+        select(func.count(PointTransaction.id))
+    ) == 2
+    assert await database_session.scalar(select(func.count(Wish.id))) == 1
+    assert await database_session.scalar(select(func.count(Meeting.id))) == 1
+    assert await database_session.scalar(select(func.count(MealEvent.id))) == 2
+    assert await database_session.scalar(
+        select(func.count(MealEvent.id)).where(
+            MealEvent.status == MealEventStatus.PUBLISHED
+        )
+    ) == 1
+    assert await database_session.scalar(
+        select(func.count(SurplusDistribution.id))
+    ) == 1
+    seeded_user = await database_session.scalar(
+        select(User).where(User.email == "member@shilifangyuan.tw")
+    )
+    assert verify_password(DEMO_PASSWORD, seeded_user.password_hash)
+    assert seeded_user.customer_number.startswith("SLF-C-")
+    seeded_membership = await database_session.scalar(
+        select(Membership).where(Membership.user_id == seeded_user.id)
+    )
+    assert seeded_membership.share_capital_amount == 1000
+    assert seeded_membership.share_count == 10
+    reset = await reset_demo_data(database_session)
+    assert reset["products"] == 12
+    assert reset["suppliers"] == 3
+    assert reset["pickup_locations"] == 5
+    assert await database_session.scalar(select(func.count(Product.id))) == 12
 
 
 @pytest.mark.asyncio
-async def test_seed_reuses_reference_data_created_by_migration() -> None:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        session.add_all(
-            [
-                MembershipFeeSchedule(
-                    id="migration-admission",
-                    charge_kind=MembershipChargeKind.ADMISSION_FEE,
-                    amount=500,
+async def test_seed_reuses_reference_data_created_by_migration(
+    database_session,
+) -> None:
+    database_session.add_all(
+        [
+            MembershipFeeSchedule(
+                id="migration-admission",
+                charge_kind=MembershipChargeKind.ADMISSION_FEE,
+                amount=500,
+                effective_from=date(2026, 1, 1),
+            ),
+            MembershipFeeSchedule(
+                id="migration-share",
+                charge_kind=MembershipChargeKind.SHARE_CAPITAL,
+                amount=1000,
+                effective_from=date(2026, 1, 1),
+            ),
+            PickupLocation(
+                id="pickup-coop-store",
+                code="coop-store",
+                name="合作社門市（水木書苑內左側）",
+                address="",
+                instructions="",
+                sort_order=10,
+            ),
+            *[
+                ShippingRate(
+                    channel=channel,
+                    temperature=temperature,
+                    fee=70,
+                    free_shipping_threshold=1500,
                     effective_from=date(2026, 1, 1),
-                ),
-                MembershipFeeSchedule(
-                    id="migration-share",
-                    charge_kind=MembershipChargeKind.SHARE_CAPITAL,
-                    amount=1000,
-                    effective_from=date(2026, 1, 1),
-                ),
-                *[
-                    ShippingRate(
-                        channel=channel,
-                        temperature=temperature,
-                        fee=70,
-                        free_shipping_threshold=1500,
-                        effective_from=date(2026, 1, 1),
-                    )
-                    for channel, temperature in (
-                        (ShippingChannel.HOME_DELIVERY, ShippingTemperature.AMBIENT),
-                        (ShippingChannel.SEVEN_ELEVEN, ShippingTemperature.AMBIENT),
-                        (ShippingChannel.FAMILY_MART, ShippingTemperature.AMBIENT),
-                        (ShippingChannel.HILIFE, ShippingTemperature.AMBIENT),
-                        (ShippingChannel.HOME_DELIVERY, ShippingTemperature.CHILLED),
-                        (ShippingChannel.HOME_DELIVERY, ShippingTemperature.FROZEN),
-                    )
-                ],
-            ]
-        )
-        await session.commit()
-
-        result = await seed_demo_data(session)
-
-        assert result["users"] > 0
-        assert await session.scalar(
-            select(func.count(MembershipFeeSchedule.id))
-        ) == 2
-        assert await session.scalar(select(func.count(ShippingRate.id))) == 6
-    await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_refund_releases_consumed_reservation_only_once() -> None:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        user = make_user()
-        product = Product(
-            id="product-1",
-            slug="refund-rice",
-            name="退款白米",
-            category="米・雜糧",
-            unit="包",
-            member_price=100,
-            nonmember_price=120,
-            stock_quantity=8,
-        )
-        order = Order(
-            id="order-refund",
-            order_number="REFUND001",
-            order_kind=OrderKind.REGULAR,
-            user=user,
-            membership_type_snapshot=user.membership_type,
-            amount_total=200,
-            contact_email=user.email,
-            payment_status=PaymentStatus.PAID,
-            fulfillment_status="pending_confirmation",
-            reservations=[
-                InventoryReservation(
-                    source_product_id=product.id,
-                    quantity=2,
-                    status=ReservationStatus.CONSUMED,
-                    expires_at=NOW,
+                )
+                for channel, temperature in (
+                    (ShippingChannel.HOME_DELIVERY, ShippingTemperature.AMBIENT),
+                    (ShippingChannel.SEVEN_ELEVEN, ShippingTemperature.AMBIENT),
+                    (ShippingChannel.FAMILY_MART, ShippingTemperature.AMBIENT),
+                    (ShippingChannel.HILIFE, ShippingTemperature.AMBIENT),
+                    (ShippingChannel.HOME_DELIVERY, ShippingTemperature.CHILLED),
+                    (ShippingChannel.HOME_DELIVERY, ShippingTemperature.FROZEN),
                 )
             ],
-        )
-        session.add_all([product, order])
-        await session.flush()
+        ]
+    )
+    await database_session.commit()
 
-        await request_order_refund(session, order, user, "測試退款")
-        assert product.stock_quantity == 10
-        assert order.reservations[0].status == ReservationStatus.RELEASED
-        with pytest.raises(HTTPException, match="只有已付款"):
-            await request_order_refund(session, order, user, "重複退款")
-        assert product.stock_quantity == 10
-    await engine.dispose()
+    result = await seed_demo_data(database_session)
+
+    assert result["users"] > 0
+    assert await database_session.scalar(
+        select(func.count(MembershipFeeSchedule.id))
+    ) == 2
+    assert await database_session.scalar(select(func.count(ShippingRate.id))) == 6
+    assert await database_session.scalar(
+        select(func.count(PickupLocation.id))
+    ) == 5
 
 
 @pytest.mark.asyncio
-async def test_demo_reset_preserves_payment_tombstone() -> None:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        await seed_demo_data(session)
-        order = await session.scalar(select(Order).limit(1))
-        session.add(
-            PaymentAttempt(
-                order_id=order.id,
-                merchant_trade_no="RESET202607290001",
-                amount=order.amount_total,
+async def test_refund_releases_consumed_reservation_only_once(
+    database_session,
+) -> None:
+    user = make_user()
+    product = Product(
+        id="product-1",
+        slug="refund-rice",
+        name="退款白米",
+        category="米・雜糧",
+        unit="包",
+        member_price=100,
+        nonmember_price=120,
+        stock_quantity=8,
+    )
+    order = Order(
+        id="order-refund",
+        order_number="REFUND001",
+        order_kind=OrderKind.REGULAR,
+        user=user,
+        membership_type_snapshot=user.membership_type,
+        amount_total=200,
+        contact_email=user.email,
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status="pending_confirmation",
+        reservations=[
+            InventoryReservation(
+                source_product_id=product.id,
+                quantity=2,
+                status=ReservationStatus.CONSUMED,
                 expires_at=NOW,
             )
-        )
-        await session.commit()
+        ],
+    )
+    database_session.add_all([product, order])
+    await database_session.flush()
 
-        await reset_demo_data(session)
-        tombstone = await session.scalar(
-            select(ExternalEvent).where(
-                ExternalEvent.provider == "ecpay_reset",
-                ExternalEvent.external_event_key == "RESET202607290001",
-            )
+    await request_order_refund(database_session, order, user, "測試退款")
+    assert product.stock_quantity == 10
+    assert order.reservations[0].status == ReservationStatus.RELEASED
+    with pytest.raises(HTTPException, match="只有已付款"):
+        await request_order_refund(database_session, order, user, "重複退款")
+    assert product.stock_quantity == 10
+
+
+@pytest.mark.asyncio
+async def test_demo_reset_preserves_payment_tombstone(database_session) -> None:
+    await seed_demo_data(database_session)
+    order = await database_session.scalar(select(Order).limit(1))
+    database_session.add(
+        PaymentAttempt(
+            order_id=order.id,
+            merchant_trade_no="RESET202607290001",
+            amount=order.amount_total,
+            expires_at=NOW,
         )
-        assert tombstone is not None
-        assert tombstone.processed
-        assert await session.scalar(select(func.count(PaymentAttempt.id))) == 0
-    await engine.dispose()
+    )
+    await database_session.commit()
+
+    await reset_demo_data(database_session)
+    tombstone = await database_session.scalar(
+        select(ExternalEvent).where(
+            ExternalEvent.provider == "ecpay_reset",
+            ExternalEvent.external_event_key == "RESET202607290001",
+        )
+    )
+    assert tombstone is not None
+    assert tombstone.processed
+    assert await database_session.scalar(select(func.count(PaymentAttempt.id))) == 0

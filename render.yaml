@@ -24,11 +24,11 @@ services:
           name: shilifangyuan-db
           property: connectionString
       - key: APP_ENV
-        value: sandbox
+        value: preview
       - key: APP_BASE_URL
-        sync: false
+        value: https://shilifangyuan-api.onrender.com
       - key: WEB_BASE_URL
-        sync: false
+        value: https://shilifangyuan-web.onrender.com
       - key: JWT_SECRET
         generateValue: true
       - key: RECONCILE_SECRET
@@ -39,84 +39,16 @@ services:
         sync: false
       - key: DEMO_NONMEMBER_PASSWORD
         sync: false
-      - key: DEMO_RESET_CONFIRMATION
-        sync: false
-      - key: ECPAY_PAYMENT_MERCHANT_ID
-        sync: false
-      - key: ECPAY_PAYMENT_HASH_KEY
-        sync: false
-      - key: ECPAY_PAYMENT_HASH_IV
-        sync: false
-      - key: ECPAY_PAYMENT_STAGE
-        value: "true"
-      - key: ECPAY_INVOICE_MERCHANT_ID
-        sync: false
-      - key: ECPAY_INVOICE_HASH_KEY
-        sync: false
-      - key: ECPAY_INVOICE_HASH_IV
-        sync: false
-      - key: ECPAY_INVOICE_STAGE
-        value: "true"
-      - key: ECPAY_LOGISTICS_MERCHANT_ID
-        sync: false
-      - key: ECPAY_LOGISTICS_HASH_KEY
-        sync: false
-      - key: ECPAY_LOGISTICS_HASH_IV
-        sync: false
-      - key: ECPAY_LOGISTICS_PLATFORM_ID
-        sync: false
-      - key: ECPAY_LOGISTICS_STAGE
-        value: "true"
-      - key: ECPAY_LOGISTICS_SENDER_NAME
-        value: 十里方圓
-      - key: ECPAY_LOGISTICS_SENDER_ZIP_CODE
-        sync: false
-      - key: ECPAY_LOGISTICS_SENDER_ADDRESS
-        sync: false
-      - key: CLOUDFLARE_R2_ACCOUNT_ID
-        sync: false
-      - key: CLOUDFLARE_R2_ACCESS_KEY_ID
-        sync: false
-      - key: CLOUDFLARE_R2_SECRET_ACCESS_KEY
-        sync: false
-      - key: CLOUDFLARE_R2_BUCKET
-        sync: false
-      - key: CLOUDFLARE_R2_ENDPOINT_URL
-        sync: false
-      - key: R2_PRESIGNED_PUT_SECONDS
-        value: "300"
-      - key: R2_PRESIGNED_GET_SECONDS
-        value: "120"
-      - key: MEMBERSHIP_DOCUMENT_MAX_BYTES
-        value: "8388608"
-      - key: PII_ENCRYPTION_KEYS_JSON
-        sync: false
-      - key: PII_ENCRYPTION_CURRENT_VERSION
-        value: v1
-      - key: RESEND_API_KEY
-        sync: false
-      - key: EMAIL_FROM_EMAIL
-        sync: false
-      - key: EMAIL_FROM_NAME
-        value: 十里方圓
-      - key: MAILERSEND_API_TOKEN
-        sync: false
-      - key: MAILERSEND_FROM_EMAIL
-        sync: false
-      - key: MAILERSEND_FROM_NAME
-        value: 十里方圓
 
   - type: web
     name: shilifangyuan-web
     branch: codex/v2-social-commerce
     runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm export:web
-    staticPublishPath: ./dist
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: ./web/dist
     envVars:
-      - key: EXPO_PUBLIC_API_URL
-        sync: false
-      - key: EXPO_PUBLIC_APP_ENV
-        value: sandbox
+      - key: VITE_API_BASE_URL
+        value: https://shilifangyuan-api.onrender.com
     routes:
       - type: rewrite
         source: /*

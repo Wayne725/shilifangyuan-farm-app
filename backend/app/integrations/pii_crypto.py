@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -202,6 +203,17 @@ class VersionedPIICipher:
 
 
 def pii_cipher_from_settings(settings: Settings) -> VersionedPIICipher:
+    if (
+        settings.environment.strip().lower() == "preview"
+        and not settings.pii_encryption_keys_json.strip()
+    ):
+        preview_key = hashlib.sha256(
+            f"shilifangyuan-preview-pii:{settings.jwt_secret}".encode("utf-8")
+        ).digest()
+        return VersionedPIICipher(
+            {settings.pii_encryption_current_version: preview_key},
+            settings.pii_encryption_current_version,
+        )
     return VersionedPIICipher.from_json(
         settings.pii_encryption_keys_json,
         settings.pii_encryption_current_version,

@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from ..auth import get_optional_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
-from ..models import GroupBundle, GroupBundleItem, Product, User, UserRole
+from ..models import GroupBundle, GroupBundleItem, Product, Supplier, User, UserRole
 from ..schemas import (
     BundleCreate,
     BundleItemRead,
@@ -75,7 +75,7 @@ async def list_products(
     current_user: Optional[User] = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> List[Product]:
-    query = select(Product)
+    query = select(Product).options(selectinload(Product.supplier))
     if current_user is None or current_user.user_role != UserRole.ADMIN:
         query = query.where(Product.is_active.is_(True))
     result = await session.scalars(
@@ -92,9 +92,9 @@ async def get_product(
     session: AsyncSession = Depends(get_session),
 ) -> Product:
     product = await session.scalar(
-        select(Product).where(
-            Product.id == product_id, Product.is_active.is_(True)
-        )
+        select(Product)
+        .where(Product.id == product_id, Product.is_active.is_(True))
+        .options(selectinload(Product.supplier))
     )
     if product is None:
         raise HTTPException(status_code=404, detail="找不到商品")
@@ -112,6 +112,15 @@ async def create_product(
     session: AsyncSession = Depends(get_session),
 ) -> Product:
     values = body.model_dump(mode="json")
+    if body.supplier_id is not None:
+        supplier = await session.scalar(
+            select(Supplier).where(
+                Supplier.id == body.supplier_id,
+                Supplier.is_active.is_(True),
+            )
+        )
+        if supplier is None:
+            raise HTTPException(status_code=422, detail="找不到已啟用的供應者")
     for _attempt in range(3):
         product = Product(slug=make_product_slug(body.name), **values)
         session.add(product)
@@ -120,10 +129,16 @@ async def create_product(
         except IntegrityError as exc:
             await session.rollback()
             if not is_slug_conflict(exc):
-                raise
+                raise HTTPException(
+                    status_code=409,
+                    detail="產品編號或 SKU 已存在",
+                ) from exc
             continue
-        await session.refresh(product)
-        return product
+        return await session.scalar(
+            select(Product)
+            .where(Product.id == product.id)
+            .options(selectinload(Product.supplier))
+        )
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail="無法建立唯一商品代碼，請重試",
@@ -143,6 +158,15 @@ async def update_product(
     if product is None:
         raise HTTPException(status_code=404, detail="找不到商品")
     updates = body.model_dump(exclude_unset=True, mode="json")
+    if "supplier_id" in updates and updates["supplier_id"] is not None:
+        supplier = await session.scalar(
+            select(Supplier).where(
+                Supplier.id == updates["supplier_id"],
+                Supplier.is_active.is_(True),
+            )
+        )
+        if supplier is None:
+            raise HTTPException(status_code=422, detail="找不到已啟用的供應者")
     member_price = updates.get("member_price", product.member_price)
     nonmember_price = updates.get(
         "nonmember_price", product.nonmember_price
@@ -154,9 +178,19 @@ async def update_product(
         )
     for field, value in updates.items():
         setattr(product, field, value)
-    await session.commit()
-    await session.refresh(product)
-    return product
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="產品編號或 SKU 已存在",
+        ) from exc
+    return await session.scalar(
+        select(Product)
+        .where(Product.id == product.id)
+        .options(selectinload(Product.supplier))
+    )
 
 
 @catalog_router.get("/v1/group-bundles", response_model=List[BundleRead])

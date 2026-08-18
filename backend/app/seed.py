@@ -43,6 +43,7 @@ from .models import (
     MealEvent,
     MealEventOffering,
     MealEventStatus,
+    MeetingType,
     MemberDirectoryEntry,
     MemberBadge,
     MemberProfile,
@@ -75,7 +76,9 @@ from .models import (
     PasswordResetToken,
     PaymentAttempt,
     PaymentStatus,
+    PickupLocation,
     PointAccount,
+    PointSourceType,
     PointTransaction,
     Product,
     ProposalStatus,
@@ -88,6 +91,10 @@ from .models import (
     ShippingChannel,
     ShippingRate,
     ShippingTemperature,
+    Supplier,
+    SupplierAccreditation,
+    SupplierAccreditationStatus,
+    SupplierDocument,
     SurplusDistribution,
     SurplusLedger,
     SystemSetting,
@@ -99,6 +106,7 @@ from .models import (
     VoteProposal,
     Wish,
     WishSupport,
+    WishStatus,
     ExternalEvent,
 )
 
@@ -117,7 +125,7 @@ PRODUCTS = [
         "nonmember_price": 55,
         "stock_quantity": 60,
         "tax_type": TaxType.TAX_EXEMPT,
-        "image_url": "/assets/products/bok-choy.png",
+        "image_url": "/assets/products/bok-choy.jpg",
     },
     {
         "slug": "spinach",
@@ -141,7 +149,7 @@ PRODUCTS = [
         "nonmember_price": 105,
         "stock_quantity": 50,
         "tax_type": TaxType.TAX_EXEMPT,
-        "image_url": "/assets/products/fruit-corn.png",
+        "image_url": "/assets/products/fruit-corn.jpg",
     },
     {
         "slug": "sweet-potato",
@@ -153,7 +161,7 @@ PRODUCTS = [
         "nonmember_price": 95,
         "stock_quantity": 40,
         "tax_type": TaxType.TAX_EXEMPT,
-        "image_url": "/assets/products/sweet-potato.png",
+        "image_url": "/assets/products/sweet-potato.jpg",
     },
     {
         "slug": "tomatoes",
@@ -165,7 +173,7 @@ PRODUCTS = [
         "nonmember_price": 100,
         "stock_quantity": 36,
         "tax_type": TaxType.TAX_EXEMPT,
-        "image_url": "/assets/products/tomatoes.png",
+        "image_url": "/assets/products/tomatoes.jpg",
     },
     {
         "slug": "carrot",
@@ -189,7 +197,7 @@ PRODUCTS = [
         "nonmember_price": 250,
         "stock_quantity": 30,
         "tax_type": TaxType.TAX_EXEMPT,
-        "image_url": "/assets/products/rice.png",
+        "image_url": "/assets/products/rice.jpg",
     },
     {
         "slug": "eggs",
@@ -201,7 +209,7 @@ PRODUCTS = [
         "nonmember_price": 140,
         "stock_quantity": 80,
         "tax_type": TaxType.TAX_EXEMPT,
-        "image_url": "/assets/products/eggs.png",
+        "image_url": "/assets/products/eggs.jpg",
     },
     {
         "slug": "pineapple",
@@ -237,7 +245,7 @@ PRODUCTS = [
         "nonmember_price": 210,
         "stock_quantity": 24,
         "tax_type": TaxType.TAXABLE,
-        "image_url": "/assets/products/black-bean-soy-sauce.png",
+        "image_url": "/assets/products/black-bean-soy-sauce.jpg",
     },
     {
         "slug": "pineapple-jam",
@@ -249,15 +257,100 @@ PRODUCTS = [
         "nonmember_price": 190,
         "stock_quantity": 20,
         "tax_type": TaxType.TAXABLE,
-        "image_url": "/assets/products/pineapple-jam.png",
+        "image_url": "/assets/products/pineapple-jam.jpg",
     },
 ]
+
+
+PICKUP_LOCATIONS = [
+    {
+        "id": "pickup-coop-store",
+        "code": "coop-store",
+        "name": "合作社門市（水木書苑內左側）",
+        "address": "",
+        "instructions": "",
+        "sort_order": 10,
+    },
+    {
+        "id": "pickup-tsmc-building",
+        "code": "tsmc-building",
+        "name": "台積館",
+        "address": "",
+        "instructions": "",
+        "sort_order": 20,
+    },
+    {
+        "id": "pickup-education-building",
+        "code": "education-building",
+        "name": "教育學院大樓",
+        "address": "",
+        "instructions": "",
+        "sort_order": 30,
+    },
+    {
+        "id": "pickup-humanities-building",
+        "code": "humanities-building",
+        "name": "人社院",
+        "address": "",
+        "instructions": "",
+        "sort_order": 40,
+    },
+    {
+        "id": "pickup-incubation-center",
+        "code": "incubation-center",
+        "name": "創新育成大樓",
+        "address": "",
+        "instructions": "",
+        "sort_order": 50,
+    },
+]
+
+
+SUPPLIER_DEMOS = [
+    {
+        "id": "supplier-demo-produce",
+        "supplier_number": "SUP-2026-0001",
+        "business_name": "田野共好農場（展示）",
+        "contact_person": "測試接洽人甲",
+        "email": "produce@example.test",
+        "reviewed_days_ago": 90,
+    },
+    {
+        "id": "supplier-demo-eggs",
+        "supplier_number": "SUP-2026-0002",
+        "business_name": "共好蛋場（展示）",
+        "contact_person": "測試接洽人乙",
+        "email": "eggs@example.test",
+        "reviewed_days_ago": 70,
+    },
+    {
+        "id": "supplier-demo-pantry",
+        "supplier_number": "SUP-2026-0003",
+        "business_name": "日常加工室（展示）",
+        "contact_person": "測試接洽人丙",
+        "email": "pantry@example.test",
+        "reviewed_days_ago": 45,
+    },
+]
+
+
+PRODUCT_SUPPLIERS = {
+    "eggs": "supplier-demo-eggs",
+    "black-bean-soy-sauce": "supplier-demo-pantry",
+    "pineapple-jam": "supplier-demo-pantry",
+}
 
 
 async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
     existing = await session.scalar(select(User.id).limit(1))
     if existing is not None:
-        return {"users": 0, "products": 0, "campaigns": 0}
+        return {
+            "users": 0,
+            "products": 0,
+            "campaigns": 0,
+            "suppliers": 0,
+            "pickup_locations": 0,
+        }
 
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -346,6 +439,68 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
     except IntegrationError:
         seed_cipher = VersionedPIICipher({"v1": bytes(32)}, "v1")
 
+    pickup_locations = []
+    for location_data in PICKUP_LOCATIONS:
+        existing_location = await session.scalar(
+            select(PickupLocation).where(
+                PickupLocation.code == location_data["code"]
+            )
+        )
+        if existing_location is None:
+            pickup_locations.append(PickupLocation(**location_data))
+    session.add_all(pickup_locations)
+
+    suppliers = []
+    for supplier_data in SUPPLIER_DEMOS:
+        supplier_id = supplier_data["id"]
+        aad = f"supplier:{supplier_id}"
+        reviewed_on = (now - timedelta(
+            days=supplier_data["reviewed_days_ago"]
+        )).date()
+        supplier = Supplier(
+            id=supplier_id,
+            supplier_number=supplier_data["supplier_number"],
+            business_name=supplier_data["business_name"],
+            tax_id=None,
+            responsible_person_encrypted=seed_cipher.encrypt_text(
+                "測試負責人",
+                associated_data=aad,
+            ),
+            contact_person_encrypted=seed_cipher.encrypt_text(
+                supplier_data["contact_person"],
+                associated_data=aad,
+            ),
+            phone_encrypted=seed_cipher.encrypt_text(
+                "0900000000",
+                associated_data=aad,
+            ),
+            email_encrypted=seed_cipher.encrypt_text(
+                supplier_data["email"],
+                associated_data=aad,
+            ),
+            line_id_encrypted=None,
+            settlement_terms="每月彙整一次，實際條件待合作社確認。",
+            bank_account_encrypted=seed_cipher.encrypt_text(
+                "SANDBOX-DEMO",
+                associated_data=aad,
+            ),
+            encryption_key_version=seed_cipher.current_version,
+            accredited_on=reviewed_on,
+            is_active=True,
+            accreditations=[
+                SupplierAccreditation(
+                    reviewed_on=reviewed_on,
+                    reviewer_id=users[0].id,
+                    process_notes="展示用審認紀錄；正式文件與訪查結果待匯入。",
+                    status=SupplierAccreditationStatus.APPROVED,
+                    result_notes="展示資料通過。",
+                )
+            ],
+        )
+        suppliers.append(supplier)
+    session.add_all(suppliers)
+    await session.flush()
+
     effective_from = date(now.year, 1, 1)
     fee_schedules = []
     for schedule_id, charge_kind, amount in (
@@ -378,6 +533,11 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             id=f"membership-{index:02d}",
             user_id=user.id,
             member_number=f"SLF-{now.year}-{index:04d}",
+            share_certificate_number=f"SHARE-{now.year}-{index:04d}",
+            share_capital_amount=1000,
+            share_count=10,
+            share_subscribed_on=(now - timedelta(days=120 - index)).date(),
+            share_paid_on=(now - timedelta(days=115 - index)).date(),
             status=MembershipStatus.ACTIVE,
             activated_at=now - timedelta(days=90 - index),
         )
@@ -534,7 +694,18 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
         ]
     )
 
-    products = [Product(**data) for data in PRODUCTS]
+    products = [
+        Product(
+            **data,
+            product_number=f"P-{index:04d}",
+            sku=data["slug"].upper(),
+            supplier_id=PRODUCT_SUPPLIERS.get(
+                data["slug"],
+                "supplier-demo-produce",
+            ),
+        )
+        for index, data in enumerate(PRODUCTS, start=1)
+    ]
     session.add_all(products)
     await session.flush()
     by_slug = {product.slug: product for product in products}
@@ -777,6 +948,103 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
     )
     session.add_all([activity, member_proposal])
 
+    point_account = PointAccount(
+        id="point-account-member-demo",
+        user_id=users[1].id,
+    )
+    wish = Wish(
+        id="wish-local-grains-demo",
+        proposer_id=users[1].id,
+        name="在地雜糧早餐組",
+        description="希望一起尋找可定期供應的燕麥、芝麻與無糖豆粉組合。",
+        expected_price=280,
+        status=WishStatus.SOURCING,
+        admin_note="已聯繫兩位友善耕作供應者，等待樣品與報價。",
+        created_at=now - timedelta(days=5),
+    )
+    meeting = Meeting(
+        id="meeting-affairs-demo",
+        meeting_type=MeetingType.AFFAIRS,
+        title="八月社務會議（展示）",
+        agenda=[
+            {"title": "秋季共同購買排程"},
+            {"title": "社員活動與取貨站輪值"},
+            {"title": "供應者審認進度"},
+        ],
+        starts_at=now - timedelta(days=12),
+        location="合作社門市",
+        created_by_id=users[0].id,
+    )
+    fiscal_year = FiscalYear(
+        id="fiscal-year-demo",
+        label=f"{now.year - 1} 年度（展示）",
+        starts_on=date(now.year - 1, 1, 1),
+        ends_on=date(now.year - 1, 12, 31),
+        reserve_percentage=50,
+        confirmed_at=now - timedelta(days=45),
+        confirmed_by_id=users[0].id,
+    )
+    session.add_all([point_account, wish, meeting, fiscal_year])
+    await session.flush()
+    session.add_all(
+        [
+            PointTransaction(
+                id="point-activity-demo",
+                account_id=point_account.id,
+                amount=80,
+                source_type=PointSourceType.ACTIVITY,
+                reference_id=activity.id,
+                note="社員活動參與",
+            ),
+            PointTransaction(
+                id="point-vote-demo",
+                account_id=point_account.id,
+                amount=120,
+                source_type=PointSourceType.VOTE,
+                reference_id=member_proposal.id,
+                note="社員提案參與",
+            ),
+            *[
+                WishSupport(
+                    wish_id=wish.id,
+                    user_id=user.id,
+                    created_at=now - timedelta(days=4, hours=index),
+                )
+                for index, user in enumerate(active_member_users[:6])
+            ],
+            *[
+                MeetingAttendance(
+                    meeting_id=meeting.id,
+                    member_id=user.id,
+                    attended=True,
+                    checked_in_at=meeting.starts_at,
+                )
+                for user in active_member_users[:7]
+            ],
+            MeetingResolution(
+                meeting_id=meeting.id,
+                title="九月試辦產地共學",
+                resolution_text="由社務小組整理場地與交通方案，下次會議確認。",
+            ),
+            SurplusLedger(
+                id="surplus-ledger-demo",
+                fiscal_year_id=fiscal_year.id,
+                total_revenue=480000,
+                total_cost=420000,
+                total_surplus=60000,
+                reserve_amount=30000,
+                distributable_surplus=30000,
+            ),
+            SurplusDistribution(
+                fiscal_year_id=fiscal_year.id,
+                member_id=users[1].id,
+                contribution_amount=1600,
+                contribution_basis_points=1067,
+                distribution_amount=320,
+            ),
+        ]
+    )
+
     meals = [
         Meal(
             id="meal-seasonal-demo",
@@ -828,7 +1096,28 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             ),
         ],
     )
-    session.add(meal_event)
+    preorder_event = MealEvent(
+        id="meal-event-preorder-demo",
+        title="今日展示便當（虛擬資料）",
+        location="合作社門市展示取餐區",
+        ordering_starts_at=now - timedelta(hours=2),
+        ordering_ends_at=now + timedelta(days=1),
+        pickup_starts_at=now + timedelta(days=2, hours=3),
+        pickup_ends_at=now + timedelta(days=2, hours=5),
+        status=MealEventStatus.PUBLISHED,
+        created_by_id=users[0].id,
+        offerings=[
+            MealEventOffering(
+                id="meal-offering-preorder-demo",
+                meal_id=meals[0].id,
+                price=120,
+                capacity=20,
+                paid_quantity=0,
+                position=1,
+            )
+        ],
+    )
+    session.add_all([meal_event, preorder_event])
     await session.flush()
     meal_order = Order(
         id="order-meal-pickup-demo",
@@ -1000,6 +1289,8 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
         "users": len(users),
         "products": len(products),
         "campaigns": 1,
+        "suppliers": len(suppliers),
+        "pickup_locations": len(pickup_locations),
     }
 
 
@@ -1091,6 +1382,10 @@ async def reset_demo_data(session: AsyncSession) -> Dict[str, int]:
         GroupBundleItem,
         GroupBundle,
         Product,
+        SupplierDocument,
+        SupplierAccreditation,
+        Supplier,
+        PickupLocation,
         MemberDirectoryEntry,
         MembershipCharge,
         MembershipFeeSchedule,
@@ -1114,7 +1409,8 @@ async def main() -> None:
         counts = await seed_demo_data(session)
     print(
         "Seed complete: users={users}, products={products}, "
-        "campaigns={campaigns}".format(**counts)
+        "campaigns={campaigns}, suppliers={suppliers}, "
+        "pickup_locations={pickup_locations}".format(**counts)
     )
 
 

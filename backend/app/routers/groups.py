@@ -20,6 +20,7 @@ from ..domain import (
     aware,
     campaign_available_quantity,
     confirm_campaign,
+    included_tax_amount,
     price_for_membership,
     validate_campaign_schedule,
     validate_group_join,
@@ -41,6 +42,7 @@ from ..models import (
     OrderKind,
     OutboxEvent,
     PaymentStatus,
+    PickupLocation,
     Product,
     ReservationStatus,
     SalesChannel,
@@ -484,6 +486,21 @@ async def join_campaign(
         or body.shipping_channel not in (campaign.allowed_shipping_channels or [])
     ):
         raise HTTPException(status_code=409, detail="此團購不支援選擇的物流通路")
+    pickup_location = None
+    if body.pickup_location_id is not None:
+        if body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP:
+            raise HTTPException(
+                status_code=422,
+                detail="只有合作社取貨可選擇領取地點",
+            )
+        pickup_location = await session.scalar(
+            select(PickupLocation).where(
+                PickupLocation.id == body.pickup_location_id,
+                PickupLocation.is_active.is_(True),
+            )
+        )
+        if pickup_location is None:
+            raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.GROUP,
@@ -493,6 +510,7 @@ async def join_campaign(
         group_campaign=campaign,
         membership_type_snapshot=membership_type,
         amount_total=unit_price * body.quantity,
+        tax_amount=included_tax_amount(unit_price * body.quantity, tax_type),
         contact_email=body.contact_email.lower(),
         invoice_carrier_type=body.invoice_carrier_type,
         invoice_carrier_value=body.invoice_carrier_value,
@@ -511,6 +529,12 @@ async def join_campaign(
         fulfillment=OrderFulfillment(
             method=body.fulfillment_method,
             status=FulfillmentState.PENDING_CONFIRMATION,
+            pickup_location_id=(
+                pickup_location.id if pickup_location is not None else None
+            ),
+            pickup_location=(
+                pickup_location.name if pickup_location is not None else None
+            ),
         ),
     )
     session.add(order)

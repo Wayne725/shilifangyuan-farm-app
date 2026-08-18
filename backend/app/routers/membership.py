@@ -95,6 +95,12 @@ def _profile_aad(user_id: str) -> str:
     return f"member-profile:{user_id}"
 
 
+def _decrypt_optional(cipher, value: Optional[str], aad: str) -> Optional[str]:
+    if value is None:
+        return None
+    return cipher.decrypt_text(value, associated_data=aad)
+
+
 def _cipher(settings: Settings):
     try:
         return pii_cipher_from_settings(settings)
@@ -190,6 +196,31 @@ async def _application_response(
             ),
             consent_version=profile.consent_version,
             consented_at=_aware(profile.consented_at),
+            identity_number=_decrypt_optional(
+                cipher, profile.identity_number_encrypted, aad
+            ),
+            gender=_decrypt_optional(cipher, profile.gender_encrypted, aad),
+            place_of_origin=_decrypt_optional(
+                cipher, profile.place_of_origin_encrypted, aad
+            ),
+            occupation=_decrypt_optional(
+                cipher, profile.occupation_encrypted, aad
+            ),
+            registered_address=_decrypt_optional(
+                cipher, profile.registered_address_encrypted, aad
+            ),
+            correspondence_address=(
+                _decrypt_optional(
+                    cipher,
+                    profile.correspondence_address_encrypted,
+                    aad,
+                )
+                or cipher.decrypt_text(profile.address_encrypted, associated_data=aad)
+            ),
+            landline_phone=_decrypt_optional(
+                cipher, profile.landline_phone_encrypted, aad
+            ),
+            line_id=_decrypt_optional(cipher, profile.line_id_encrypted, aad),
         )
     return MembershipApplicationRead(
         id=application.id,
@@ -249,6 +280,28 @@ async def _save_profile_and_application(
             associated_data=_profile_aad(user.id),
         ),
     }
+    optional_private_fields = {
+        "identity_number_encrypted": body.identity_number,
+        "gender_encrypted": body.gender,
+        "place_of_origin_encrypted": body.place_of_origin,
+        "occupation_encrypted": body.occupation,
+        "registered_address_encrypted": body.registered_address,
+        "correspondence_address_encrypted": (
+            body.correspondence_address or body.address
+        ),
+        "landline_phone_encrypted": body.landline_phone,
+        "line_id_encrypted": body.line_id,
+    }
+    for field, value in optional_private_fields.items():
+        if value is not None:
+            encrypted[field] = (
+                cipher.encrypt_text(
+                    value,
+                    associated_data=_profile_aad(user.id),
+                )
+                if value
+                else None
+            )
     profile = await session.scalar(
         select(MemberProfile).where(MemberProfile.user_id == user.id)
     )

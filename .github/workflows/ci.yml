@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   frontend-quality:
     runs-on: ubuntu-latest
@@ -18,23 +22,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
-
-  frontend-export:
-    needs: frontend-quality
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [web, ios, android]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm export:${{ matrix.platform }}
+      - run: pnpm build
 
   backend:
     runs-on: ubuntu-latest
@@ -73,7 +61,7 @@ jobs:
       - name: Verify migration re-upgrade
         run: alembic upgrade head
       - name: Run pytest
-        run: pytest -vv --durations=20
+        run: pytest -q --durations=20
 
   api-contract:
     runs-on: ubuntu-latest
@@ -84,16 +72,13 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.txt
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
       - run: pip install -r backend/requirements.txt
       - name: Re-export the API route manifest
         working-directory: backend
-        run: python -m scripts.export_openapi_paths ../src/services/api.routes.json
+        run: python -m scripts.export_openapi_paths ../web/src/lib/api.routes.json
       - name: Fail if the committed manifest is stale
-        run: git diff --exit-code -- src/services/api.routes.json
-      - run: pnpm install --frozen-lockfile
-      - run: node --test tests/api-routes.test.mjs
+        run: git diff --exit-code -- web/src/lib/api.routes.json
+      - run: node --test tests/web-api-routes.test.mjs

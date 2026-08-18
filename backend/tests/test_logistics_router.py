@@ -6,16 +6,11 @@ from datetime import date, datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 
 import app.routers.logistics as logistics_module
-from app.auth import make_token_pair
-from app.config import Settings, get_settings
-from app.database import Base, get_session
+from app.config import Settings
 from app.integrations.common import IntegrationResponseError
 from app.integrations.ecpay_logistics import (
     decrypt_ecpay_logistics_data,
@@ -49,6 +44,7 @@ from app.models import (
 from app.routers.logistics import logistics_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
+from tests.support import api_test_context, auth_headers, make_test_settings
 
 
 class FakeLogisticsAdapter:
@@ -151,12 +147,8 @@ class FakeLogisticsAdapter:
         }
 
 
-def make_test_settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        environment="test",
-        app_base_url="https://api.example.test",
-        web_base_url="https://app.example.test",
+def logistics_settings() -> Settings:
+    return make_test_settings(
         ecpay_payment_merchant_id="3002607",
         ecpay_payment_hash_key="pwFHCqoQZGmho4w6",
         ecpay_payment_hash_iv="EkRm7iFT261dpevs",
@@ -172,36 +164,14 @@ def make_test_settings() -> Settings:
 
 
 @pytest.fixture
-async def database_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        yield session
-    await engine.dispose()
-
-
-@pytest.fixture
 async def logistics_context(database_session, monkeypatch):
-    settings = make_test_settings()
+    settings = logistics_settings()
     adapter = FakeLogisticsAdapter()
     monkeypatch.setattr(
         logistics_module,
         "ecpay_logistics_adapter_from_settings",
         lambda _settings: adapter,
     )
-    application = FastAPI()
-    application.include_router(logistics_router)
-    application.include_router(orders_router)
-    application.include_router(payments_router)
-
-    async def override_get_session():
-        yield database_session
-
-    application.dependency_overrides[get_session] = override_get_session
-    application.dependency_overrides[get_settings] = lambda: settings
-
     admin = User(
         email="admin@example.com",
         display_name="管理員",
@@ -264,10 +234,10 @@ async def logistics_context(database_session, monkeypatch):
     database_session.add_all([order, rate])
     await database_session.commit()
 
-    async with AsyncClient(
-        transport=ASGITransport(app=application),
-        base_url="http://test",
-        follow_redirects=False,
+    async with api_test_context(
+        database_session,
+        [logistics_router, orders_router, payments_router],
+        settings=settings,
     ) as client:
         yield {
             "client": client,
@@ -279,11 +249,6 @@ async def logistics_context(database_session, monkeypatch):
             "session": database_session,
             "settings": settings,
         }
-
-
-def auth_headers(user: User) -> dict[str, str]:
-    token = make_token_pair(user)["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 def selection_payload(**overrides) -> dict:
@@ -620,43 +585,6 @@ async def test_selection_result_rejects_payment_attempt_created_during_picker(
 
     assert callback.status_code == 409
     assert callback.json()["detail"] == "已有待確認付款，無法重新選擇物流"
-
-
-@pytest.mark.asyncio
-async def test_native_logistics_selection_returns_to_app_scheme(
-    logistics_context,
-) -> None:
-    context = logistics_context
-    client = context["client"]
-    order = context["order"]
-    customer = context["customer"]
-    adapter = context["adapter"]
-
-    selection = await client.post(
-        f"/v1/orders/{order.id}/logistics/selection",
-        json=selection_payload(),
-        headers=auth_headers(customer),
-    )
-    selection_path = urlparse(selection.json()["selection_url"]).path
-
-    page = await client.get(selection_path, params={"client": "native"})
-
-    assert page.status_code == 200
-    callback_url = urlparse(adapter.selection_request.client_reply_url)
-    callback_query = parse_qs(callback_url.query)
-    assert callback_query["client"] == ["native"]
-
-    callback = await client.post(
-        callback_url.path,
-        params={key: values[0] for key, values in callback_query.items()},
-        json={"provider": "mocked"},
-    )
-
-    assert callback.status_code == 303
-    assert callback.headers["location"] == (
-        f"shilifangyuan://logistics-return?order_id={order.id}"
-        "&logistics=selected"
-    )
 
 
 async def prepare_formal_shipment(context) -> None:

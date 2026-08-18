@@ -18,6 +18,7 @@ from ..database import get_session
 from ..domain import (
     DomainError,
     ensure_self_cancel_allowed,
+    included_tax_amount,
     order_available_actions,
     price_for_membership,
     remove_paid_quantity,
@@ -38,6 +39,7 @@ from ..models import (
     OrderKind,
     OutboxEvent,
     PaymentStatus,
+    PickupLocation,
     Product,
     Refund,
     RefundStatus,
@@ -83,6 +85,7 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         meal_event_id=order.meal_event_id,
         membership_type_snapshot=order.membership_type_snapshot,
         amount_total=order.amount_total,
+        tax_amount=order.tax_amount,
         contact_email=order.contact_email,
         invoice_carrier_type=order.invoice_carrier_type,
         fulfillment_status=order.fulfillment_status,
@@ -207,6 +210,21 @@ async def create_order(
     quote = await quote_products(
         session, consolidate_lines(body.items), user, lock=True
     )
+    pickup_location = None
+    if body.pickup_location_id is not None:
+        if body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP:
+            raise HTTPException(
+                status_code=422,
+                detail="只有合作社取貨可選擇領取地點",
+            )
+        pickup_location = await session.scalar(
+            select(PickupLocation).where(
+                PickupLocation.id == body.pickup_location_id,
+                PickupLocation.is_active.is_(True),
+            )
+        )
+        if pickup_location is None:
+            raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.REGULAR,
@@ -215,6 +233,10 @@ async def create_order(
         user_id=user.id,
         membership_type_snapshot=membership_type_for_user(user),
         amount_total=quote.amount_total,
+        tax_amount=sum(
+            included_tax_amount(line.subtotal, line.tax_type)
+            for line in quote.items
+        ),
         contact_email=body.contact_email.lower(),
         invoice_carrier_type=body.invoice_carrier_type,
         invoice_carrier_value=body.invoice_carrier_value,
@@ -233,6 +255,12 @@ async def create_order(
         fulfillment=OrderFulfillment(
             method=body.fulfillment_method,
             status=FulfillmentState.PENDING_CONFIRMATION,
+            pickup_location_id=(
+                pickup_location.id if pickup_location is not None else None
+            ),
+            pickup_location=(
+                pickup_location.name if pickup_location is not None else None
+            ),
         ),
     )
     session.add(order)
@@ -495,6 +523,9 @@ async def update_fulfillment(
             FulfillmentStatus.CANCELLED: FulfillmentState.CANCELLED,
         }
         fulfillment.status = state_map[body.status]
+        if body.pickup_starts_at is not None:
+            fulfillment.pickup_starts_at = body.pickup_starts_at
+            fulfillment.pickup_ends_at = body.pickup_ends_at
         if body.status == FulfillmentStatus.PICKED_UP:
             fulfillment.fulfilled_at = datetime.now(timezone.utc)
     if body.status == FulfillmentStatus.PICKED_UP:

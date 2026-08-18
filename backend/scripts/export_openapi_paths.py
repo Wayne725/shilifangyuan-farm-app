@@ -1,8 +1,8 @@
-"""Export the API's route table so the App's client can be checked against it.
+"""Export the API's route table so the Web client can be checked against it.
 
 Run from the `backend/` directory:
 
-    python -m scripts.export_openapi_paths ../src/services/api.routes.json
+    python -m scripts.export_openapi_paths ../web/src/lib/api.routes.json
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def export(destination: Path) -> list[str]:
 
 if __name__ == "__main__":
     target = Path(
-        sys.argv[1] if len(sys.argv) > 1 else "../src/services/api.routes.json"
+        sys.argv[1] if len(sys.argv) > 1 else "../web/src/lib/api.routes.json"
     )
     exported = export(target)
     print(f"{len(exported)} routes written to {target}")

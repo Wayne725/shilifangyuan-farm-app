@@ -4,17 +4,12 @@ import asyncio
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 
 import app.integrations.payment_service as payment_module
 import app.jobs as jobs_module
-from app.auth import make_token_pair
 from app.config import Settings
-from app.database import Base, get_session
 from app.domain import order_available_actions
 from app.integrations.ecpay import CheckoutForm
 from app.integrations.invoice import InvoiceIssueResult
@@ -76,6 +71,7 @@ from app.models import (
     User,
 )
 from app.routers.membership import membership_router
+from tests.support import api_test_context, auth_headers, make_test_settings
 
 
 class FakePaymentAdapter:
@@ -147,21 +143,12 @@ async def test_background_reconcile_is_single_flight(
 
 
 def payment_settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        environment="test",
-        app_base_url="https://api.example.test",
-        web_base_url="https://app.example.test",
+    return make_test_settings(
         ecpay_payment_merchant_id="3002607",
         ecpay_payment_hash_key="pwFHCqoQZGmho4w6",
         ecpay_payment_hash_iv="EkRm7iFT261dpevs",
         payment_reservation_minutes=15,
     )
-
-
-def auth_headers(user: User) -> dict[str, str]:
-    token = make_token_pair(user)["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 def successful_callback(
@@ -184,17 +171,6 @@ def successful_callback(
         ).strftime("%Y/%m/%d %H:%M:%S"),
         "TradeNo": trade_no,
     }
-
-
-@pytest.fixture
-async def database_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        yield session
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -414,16 +390,9 @@ async def test_two_membership_charge_payments_create_trainee_and_receipts(
         select(func.count(Invoice.id))
     ) == 0
 
-    application = FastAPI()
-    application.include_router(membership_router)
-
-    async def override_get_session():
-        yield database_session
-
-    application.dependency_overrides[get_session] = override_get_session
-    async with AsyncClient(
-        transport=ASGITransport(app=application),
-        base_url="http://test",
+    async with api_test_context(
+        database_session,
+        [membership_router],
     ) as client:
         for charge in (admission, capital):
             response = await client.get(

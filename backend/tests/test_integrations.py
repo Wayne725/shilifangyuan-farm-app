@@ -4,11 +4,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 
 from app.config import Settings
-from app.database import Base
 from app.integrations.ecpay import build_check_mac_value
 from app.integrations.common import HTTPResponse, IntegrationResponseError
 from app.integrations.email_sender import (
@@ -73,6 +71,7 @@ from app.models import (
     TargetType,
     User,
 )
+from tests.support import make_test_settings
 
 
 INVOICE_MERCHANT_ID = "2000132"
@@ -80,21 +79,8 @@ INVOICE_HASH_KEY = "ejCk326UnaZWKisg"
 INVOICE_HASH_IV = "q9jcZX8Ib9LM8wYk"
 
 
-@pytest.fixture
-async def database_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        yield session
-    await engine.dispose()
-
-
 def payment_settings() -> Settings:
-    return Settings(
-        app_base_url="https://api.example.test",
-        web_base_url="https://app.example.test",
+    return make_test_settings(
         ecpay_payment_merchant_id=TEST_PAYMENT_MERCHANT_ID,
         ecpay_payment_hash_key=TEST_PAYMENT_HASH_KEY,
         ecpay_payment_hash_iv=TEST_PAYMENT_HASH_IV,

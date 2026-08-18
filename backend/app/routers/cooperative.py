@@ -604,7 +604,8 @@ async def list_meetings(
     result = []
     for meeting in meetings:
         attended = int(await session.scalar(select(func.count(MeetingAttendance.id)).where(MeetingAttendance.meeting_id == meeting.id, MeetingAttendance.attended.is_(True))) or 0)
-        result.append({"id": meeting.id, "meeting_type": meeting.meeting_type, "title": meeting.title, "agenda": meeting.agenda, "starts_at": meeting.starts_at, "location": meeting.location, "attended_count": attended, "eligible_member_count": active_members, "attendance_rate": attended / active_members if active_members else 0})
+        resolutions = (await session.scalars(select(MeetingResolution).where(MeetingResolution.meeting_id == meeting.id).order_by(MeetingResolution.created_at))).all()
+        result.append({"id": meeting.id, "meeting_type": meeting.meeting_type, "title": meeting.title, "agenda": meeting.agenda, "starts_at": meeting.starts_at, "location": meeting.location, "attended_count": attended, "eligible_member_count": active_members, "attendance_rate": attended / active_members if active_members else 0, "resolutions": [{"id": resolution.id, "title": resolution.title, "resolution_text": resolution.resolution_text, "member_proposal_id": resolution.member_proposal_id, "created_at": resolution.created_at} for resolution in resolutions]})
     return result
 
 

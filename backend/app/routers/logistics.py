@@ -685,7 +685,6 @@ async def reissue_logistics_selection_link(
 )
 async def open_logistics_selection_page(
     token: str,
-    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
@@ -695,8 +694,6 @@ async def open_logistics_selection_page(
     which cannot carry a Bearer token, so the one-time token in the path is the
     credential — exactly like `/payments/{attempt_id}/checkout`.
     """
-    if client not in {"web", "native"}:
-        raise HTTPException(status_code=422, detail="不支援的物流返回方式")
     shipment = await _shipment_for_token(session, token)
     if shipment.status not in {
         ShipmentStatus.SELECTION_PENDING,
@@ -735,8 +732,6 @@ async def open_logistics_selection_page(
     )
     subtotal = _product_subtotal(order, shipment)
     callback_params = {"order_id": order.id, "token": token}
-    if client == "native":
-        callback_params["client"] = "native"
     query = urlencode(callback_params)
     try:
         adapter = ecpay_logistics_adapter_from_settings(settings)
@@ -771,7 +766,7 @@ async def open_logistics_selection_page(
         await session.rollback()
         raise HTTPException(
             status_code=503,
-            detail="綠界物流選擇頁目前無法使用",
+            detail="物流選擇服務目前尚未開啟；訂單已保留，可稍後續辦",
         ) from exc
     await session.commit()
     return HTMLResponse(
@@ -792,12 +787,9 @@ async def receive_logistics_selection_result(
     request: Request,
     order_id: str,
     token: str,
-    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> RedirectResponse:
-    if client not in {"web", "native"}:
-        raise HTTPException(status_code=422, detail="不支援的物流返回方式")
     order = await _load_order(session, order_id, lock=True)
     if order.fulfillment is None or order.fulfillment.shipment is None:
         raise HTTPException(status_code=404, detail="找不到物流選擇資料")
@@ -858,11 +850,7 @@ async def receive_logistics_selection_result(
     redirect_query = urlencode(
         {"order_id": order.id, "logistics": "selected"}
     )
-    location = (
-        f"shilifangyuan://logistics-return?{redirect_query}"
-        if client == "native"
-        else f"{settings.web_base_url.rstrip('/')}/orders?{redirect_query}"
-    )
+    location = f"{settings.web_base_url.rstrip('/')}/orders?{redirect_query}"
     return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
 
 

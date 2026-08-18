@@ -6,14 +6,8 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.auth import hash_password, make_token_pair
-from app.config import Settings, get_settings
-from app.database import Base, get_session
 from app.models import (
     ActivityRegistration,
     ActivityRegistrationStatus,
@@ -53,14 +47,17 @@ from app.routers.community import community_router
 from app.routers.meals import meals_router
 from app.routers.membership import membership_router
 from app.routers.orders import orders_router
+from tests.support import (
+    api_test_context,
+    auth_headers,
+    fast_password_hash,
+    make_test_settings,
+)
 
 
-def make_test_settings() -> Settings:
-    return Settings(
-        _env_file=None,
+def settings():
+    return make_test_settings(
         environment="development",
-        app_base_url="https://api.example.test",
-        web_base_url="https://app.example.test",
         pii_encryption_keys_json=json.dumps(
             {
                 "v1": base64.b64encode(b"p" * 32).decode("ascii"),
@@ -69,49 +66,38 @@ def make_test_settings() -> Settings:
     )
 
 
-def auth_headers(user: User) -> dict[str, str]:
-    token = make_token_pair(user)["access_token"]
-    return {"Authorization": f"Bearer {token}"}
-
-
 @pytest.fixture
-async def v2_context():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        application = FastAPI()
-        application.include_router(auth_router)
-        application.include_router(membership_router)
-        application.include_router(community_router)
-        application.include_router(meals_router)
-        application.include_router(orders_router)
-
-        async def override_get_session():
-            yield session
-
-        application.dependency_overrides[get_session] = override_get_session
-        application.dependency_overrides[get_settings] = make_test_settings
-
+async def v2_context(database_session):
+    async with api_test_context(
+        database_session,
+        [
+            auth_router,
+            membership_router,
+            community_router,
+            meals_router,
+            orders_router,
+        ],
+        settings=settings(),
+    ) as client:
+        session = database_session
         now = datetime.now(timezone.utc)
         admin = User(
             email="admin@example.com",
             display_name="管理員",
-            password_hash=hash_password("admin-pass-123"),
+            password_hash=fast_password_hash("admin-pass-123"),
             user_role=UserRole.ADMIN,
             email_verified_at=now,
         )
         applicant = User(
             email="applicant@example.com",
             display_name="申請人",
-            password_hash=hash_password("applicant-pass-123"),
+            password_hash=fast_password_hash("applicant-pass-123"),
             email_verified_at=now,
         )
         member_a = User(
             email="member-a@example.com",
             display_name="社員甲",
-            password_hash=hash_password("member-a-pass-123"),
+            password_hash=fast_password_hash("member-a-pass-123"),
             email_verified_at=now,
             membership=Membership(
                 member_number="SLF-2026-0001",
@@ -122,7 +108,7 @@ async def v2_context():
         member_b = User(
             email="member-b@example.com",
             display_name="社員乙",
-            password_hash=hash_password("member-b-pass-123"),
+            password_hash=fast_password_hash("member-b-pass-123"),
             email_verified_at=now,
             membership=Membership(
                 member_number="SLF-2026-0002",
@@ -133,7 +119,7 @@ async def v2_context():
         customer_b = User(
             email="customer-b@example.com",
             display_name="一般顧客乙",
-            password_hash=hash_password("customer-b-pass-123"),
+            password_hash=fast_password_hash("customer-b-pass-123"),
             email_verified_at=now,
         )
         session.add_all(
@@ -141,20 +127,15 @@ async def v2_context():
         )
         await session.commit()
 
-        async with AsyncClient(
-            transport=ASGITransport(app=application),
-            base_url="http://test",
-        ) as client:
-            yield {
-                "client": client,
-                "session": session,
-                "admin": admin,
-                "applicant": applicant,
-                "member_a": member_a,
-                "member_b": member_b,
-                "customer_b": customer_b,
-            }
-    await engine.dispose()
+        yield {
+            "client": client,
+            "session": session,
+            "admin": admin,
+            "applicant": applicant,
+            "member_a": member_a,
+            "member_b": member_b,
+            "customer_b": customer_b,
+        }
 
 
 @pytest.mark.asyncio
@@ -337,7 +318,7 @@ async def test_trainee_order_uses_member_price_and_trainee_snapshot(
         customer_number="SLF-C-2026-0088",
         email="trainee-buyer@example.com",
         display_name="實習社員買家",
-        password_hash=hash_password("trainee-buyer-pass-123"),
+        password_hash=fast_password_hash("trainee-buyer-pass-123"),
         email_verified_at=now,
         membership=Membership(
             trainee_number="SLF-T-2026-0088",
@@ -925,7 +906,7 @@ async def test_admin_promotes_trainee_and_preserves_both_numbers(
         customer_number="SLF-C-2026-0099",
         email="trainee@example.com",
         display_name="實習社員",
-        password_hash=hash_password("trainee-pass-123"),
+        password_hash=fast_password_hash("trainee-pass-123"),
         email_verified_at=now,
         membership=Membership(
             trainee_number="SLF-T-2026-0001",

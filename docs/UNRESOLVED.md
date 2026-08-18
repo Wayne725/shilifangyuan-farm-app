@@ -28,6 +28,11 @@
 | 一鍵清空資料的端點仍存在 | 高 | `/v1/admin/demo/reset`，目前靠 `environment` 與確認碼阻擋 | `routers/catalog.py:250` |
 | Rate limiting 為單機記憶體 | 中。多實例部署即失效 | 刻意的 Sandbox 取捨，已於檔案內註明 | `rate_limit.py` |
 | PII 金鑰無輪替與備份機制 | 中。金鑰遺失等於所有社員個資永久無法解密 | 支援版本化金鑰，但沒有輪替流程與保管規範 | `integrations/pii_crypto.py` |
+| 供應者審認文件尚無上傳／調閱 API | 中。可保存供應者與審認紀錄，但無法從管理介面附加 PDF／JPG 證明文件 | 已有 `supplier_documents` 資料表與讀取欄位，仍需泛化目前只服務入社證件的 R2 流程 | `models.py`、`routers/operations.py` |
 | 綠界仍全部指向 Stage | 中。正式環境需簽約，且 `validate_runtime_secrets` 目前強制 stage 旗標為 true | 所有預設 URL 為 `-stage` | `config.py:51-91`、`config.py:181` |
 | Render 免費方案 | 中。免費 PostgreSQL 30 天後刪除且無自動備份；服務閒置會休眠 | 展示用設定 | `render.yaml` |
 | 無錯誤監控 | 中。線上發生例外不會有人知道 | 未接任何 APM／Sentry | — |
+
+## 真實資料格式待確認
+
+合作社提供的社員、交易、產品、供應者與審認資料格式已整理於 `docs/REAL_DATA_MAPPING.md`。其中社員編號含身分證片段與出生年、手機作會員編號、股金歷程、稅額快照及供應者文件保存規則仍需政策或會計確認；在確認前不將可推知個資的編碼規則自動套用到正式資料。

@@ -1,25 +1,30 @@
-# 十里方圓 Sandbox 部署手冊
+# 十里方圓部署手冊
 
 ## 服務組成
 
-- `shilifangyuan-web`：Expo Web 靜態網站
+- `shilifangyuan-web`：Vite React 靜態網站
 - `shilifangyuan-api`：FastAPI 公開 HTTPS API
 - `shilifangyuan-db`：PostgreSQL
 - GitHub Actions：每 10 分鐘執行一次期限、付款、退款、發票與通知結算
 
-根目錄的 `render.yaml` 已定義三個 Render 資源。免費 Web Service 閒置後會休眠，免費 PostgreSQL 會在建立 30 天後到期，因此此設定只適合展示與測試。
+根目錄的 `render.yaml` 已定義三個 Render 資源。免費 Web Service 閒置後會休眠，免費 PostgreSQL 會在建立 30 天後到期，因此免費方案只適合展示與測試；正式營運需使用持久化資料庫、備份與不中斷服務方案。
+
+目前 Blueprint 預設使用 `APP_ENV=preview`：只建立虛擬展示資料，金流、物流、Email 與真實證件上傳維持停用。Preview 仍要求平台產生強 JWT／reconciliation 密鑰，個資展示欄位的加密金鑰會由 JWT 密鑰穩定衍生；升級 Sandbox 或 Production 前必須改用獨立的 `PII_ENCRYPTION_KEYS_JSON`。
 
 ## 建立 Render Blueprint
 
 1. 將專案推送到私人 GitHub repository。
 2. 在 Render 選擇 **New → Blueprint**，連接該 repository。
-3. 建立服務後，將 API 的公開網址填入：
+3. 若 Render 因名稱已被使用而更改服務網址，將 API 的公開網址填入：
    - API 服務的 `APP_BASE_URL`
-   - Web 服務的 `EXPO_PUBLIC_API_URL`
+   - Web 服務的 `VITE_API_BASE_URL`
 4. 將 Web 公開網址填入 API 服務的 `WEB_BASE_URL`。
-5. 建立不公開且未啟用 `r2.dev` 的 Cloudflare R2 Bucket。
-6. 設定三組不同的強密碼、管理員重設確認碼及所有外部服務密鑰；部署版不可沿用 README 的範例管理員密碼。
-7. 重新部署 API 與 Web。
+5. 設定三組不同的強展示密碼；部署版不可沿用 README 的範例密碼。
+6. 重新部署 API 與 Web。
+
+Cloudflare R2、Email 與綠界憑證只在升級成整合測試 Sandbox 時才需要設定。
+
+`VITE_API_BASE_URL` 必須填 FastAPI 的公開 HTTPS 根網址，不含 `/v1`。新版 Web 在本機由 Vite 代理 `/v1`，正式靜態站則直接呼叫這個公開網址。
 
 `APP_BASE_URL` 必須是綠界可連線的公開 HTTPS API 根網址，供付款 `ReturnURL`／`OrderResultURL` 與物流 `ClientReplyURL` 使用；`WEB_BASE_URL` 必須是公開 HTTPS Web 根網址，供後端完成驗證後導回訂單或社員頁。兩者都不可填入 localhost、內網網址或額外路徑。
 
@@ -94,7 +99,7 @@ Web 版會從瀏覽器直接以簽名 URL 上傳測試證件。部署 Web 前，
   {
     "AllowedOrigins": [
       "https://<your-render-static-site>.onrender.com",
-      "http://localhost:8081"
+      "http://127.0.0.1:4173"
     ],
     "AllowedMethods": ["PUT"],
     "AllowedHeaders": ["Content-Type", "x-amz-meta-sha256"],
@@ -137,7 +142,7 @@ Repository Settings → Secrets and variables → Actions 新增：
 ## 展示前檢查
 
 1. 確認 PostgreSQL 尚未超過 30 天期限。
-2. 確認 Alembic 已升級至 `0005_trainee_membership`，既有 customer 已取得 `SLF-C` 且管理員沒有一般買家編號；若資料庫已重建，也確認 seed 執行成功。
+2. 確認 Alembic 已升級至最新 migration，既有 customer 已取得 `SLF-C` 且管理員沒有一般買家編號；若資料庫已重建，也確認 seed 執行成功。
 3. 開啟 `/health` 暖機，避免教授等待 Render 冷啟動。
 4. 登入正式社員、一般買家與管理員帳號各一次，並驗證兩款入社款項完成後會先成為實習社員。
 5. 使用綠界測試卡完成一筆付款，確認 Web 回到正確訂單且顯示付款結果。
@@ -146,23 +151,33 @@ Repository Settings → Secrets and variables → Actions 新增：
 8. 確認 Resend 寄件網域仍為 verified；若啟用備援，也確認 MailerSend 網域狀態。
 9. 使用測試檔驗證 R2 上傳、管理員短效查看 URL 及 Demo reset 刪除。
 10. 以綠界物流 Stage 完成一次通路選擇與建單，確認選擇完成後可回訂單並繼續付款。
-11. 使用 development build 測試付款與物流，確認瀏覽器分別透過 `shilifangyuan://payment-return`、`shilifangyuan://logistics-return` 自動關閉並返回 App。
+11. 以桌機與手機尺寸各完成一次付款與物流流程，確認後端會導回 Web 的訂單頁。
+
+## 正式營運上線條件
+
+1. PostgreSQL 使用付費持久化方案，設定每日備份、還原演練與資料保留期限。
+2. `APP_ENV=production`，綠界金流、發票、物流三組 Stage 旗標改為 `false`，使用正式合約提供的三組獨立商店密鑰，並將所有 `ECPAY_*_URL` 改成綠界當期正式端點；預設值仍是 Stage 網址。
+3. `APP_BASE_URL`、`WEB_BASE_URL`、`VITE_API_BASE_URL` 全部使用正式 HTTPS 網域；確認綠界可連入付款、物流與發票 callback。
+4. 設定正式寄件人姓名、郵遞區號與地址，完成綠界物流測試單、列印託運單、貨態回傳與異常件處理。
+5. 驗證 Email 寄件網域的 SPF、DKIM、DMARC，實測註冊驗證、密碼重設、訂單與社務通知。
+6. R2 Bucket 維持私有，只允許正式 Web Origin PUT；設定證件保存、刪除、調閱權限與個資事件處理程序。
+7. 將 JWT、PII、reconciliation 與第三方密鑰放在平台 Secret 管理中，完成輪替流程，不沿用任何展示密碼。
+8. 啟用錯誤監控、服務存活監控、付款／物流 reconciliation 告警、管理員稽核紀錄保存與流量限制。
+9. 以一筆低額真實訂單完成付款、發票、物流、Email、取消與退款的端到端驗收，再開放一般使用者。
+
+正式上線不只是「架後端與資料庫」：前兩者讓資料可持久化；金流、物流、Email 還各自需要正式合約、驗證網域、公開 callback、密鑰與營運流程。
 
 ## 手機展示相容性
 
-- 現場主路徑使用 Render Web，付款後可自動回到訂單頁。
-- Expo SDK 57 可搭配對應版本 Expo Go 測試 Android 裝置／模擬器及 iOS 模擬器。
-- 目前實體 iPhone 無法側載舊版或指定 SDK 的 Expo Go；若一定要原生展示，請事先製作 development build。
-- development build 與 production build 會以系統瀏覽器開啟付款及物流頁，完成後透過 `shilifangyuan://` 自動關閉瀏覽器並回到 App，再向後端查詢最終狀態。
-- Expo Go 不保證接收專案自訂 scheme；使用者需手動切回 App，由訂單或會籍頁重新查詢狀態。
+- 使用同一個 Render Web 網址，不需安裝 App。
+- 上線前以 iPhone Safari、Android Chrome 及桌機瀏覽器驗證登入、結帳、物流返回與 QR 顯示。
+- 付款與物流託管頁完成後由後端導回公開 `WEB_BASE_URL`，再重新查詢最終狀態。
 
 ## Sandbox 限制
 
 - AIO Stage 不動真實款項。
-- AIO Stage 沒有可實際測試的信用卡退款 API；App 的退款完成代表本系統 Sandbox 狀態、庫存及通知已完成。
+- AIO Stage 沒有可實際測試的信用卡退款 API；退款完成只代表本系統 Sandbox 狀態、庫存及通知已完成。
 - B2C 發票 Stage 不會送財政部，也不會寄綠界官方發票信。
 - 物流 Stage 不會自動模擬出貨後的貨態通知；後台手動推進只能用於 Sandbox。
 - Sandbox 證件頁禁止上傳真實證件。
-- Expo Go 不保證付款或物流完成後自動 deep link；手機手動回到 App 後會重新查詢狀態。
-- 實體 iPhone 的 App Store 版 Expo Go 可能與 SDK 57 不相容，請改用 Web 或 development build。
 - `ChoosePayment=Credit` 在部分 iOS 環境仍可能顯示 Apple Pay。

@@ -15,6 +15,7 @@ DEFAULT_RECONCILE_SECRET = "change-this-reconcile-secret"
 MIN_RUNTIME_SECRET_LENGTH = 32
 MIN_RESET_CONFIRMATION_LENGTH = 8
 SECURE_ENVIRONMENTS = {"sandbox", "production"}
+REMOTE_ENVIRONMENTS = {"preview", *SECURE_ENVIRONMENTS}
 R2_REQUIRED_SETTINGS = (
     "CLOUDFLARE_R2_ACCOUNT_ID",
     "CLOUDFLARE_R2_ACCESS_KEY_ID",
@@ -36,7 +37,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_minutes: int = 30
     refresh_token_days: int = 7
-    cors_origins: List[str] = Field(default_factory=lambda: ["http://localhost:8081"])
+    cors_origins: List[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+            "http://localhost:8081",
+        ]
+    )
     internal_reconcile_secret: str = Field(
         default=DEFAULT_RECONCILE_SECRET,
         validation_alias=AliasChoices(
@@ -44,7 +51,7 @@ class Settings(BaseSettings):
         ),
     )
     app_base_url: str = "http://localhost:8000"
-    web_base_url: str = "http://localhost:8081"
+    web_base_url: str = "http://127.0.0.1:4173"
     ecpay_payment_merchant_id: str = ""
     ecpay_payment_hash_key: str = ""
     ecpay_payment_hash_iv: str = ""
@@ -139,7 +146,7 @@ class Settings(BaseSettings):
 
     def validate_runtime_secrets(self) -> None:
         environment = self.environment.strip().lower()
-        if environment not in SECURE_ENVIRONMENTS:
+        if environment not in REMOTE_ENVIRONMENTS:
             return
 
         invalid_secrets = [
@@ -163,17 +170,18 @@ class Settings(BaseSettings):
                 "DEMO_RESET_CONFIRMATION"
                 f"（至少 {MIN_RESET_CONFIRMATION_LENGTH} 字元）"
             )
-        from .integrations.common import IntegrationConfigurationError
-        from .integrations.email_sender import email_sender_from_settings
+        if environment in SECURE_ENVIRONMENTS:
+            from .integrations.common import IntegrationConfigurationError
+            from .integrations.email_sender import email_sender_from_settings
 
-        try:
-            email_sender_from_settings(self)
-        except IntegrationConfigurationError:
-            invalid_secrets.append(
-                "RESEND_API_KEY/EMAIL_FROM_EMAIL 或 "
-                "MAILERSEND_API_TOKEN/MAILERSEND_FROM_EMAIL"
-                "（至少一組設定必須完整有效）"
-            )
+            try:
+                email_sender_from_settings(self)
+            except IntegrationConfigurationError:
+                invalid_secrets.append(
+                    "RESEND_API_KEY/EMAIL_FROM_EMAIL 或 "
+                    "MAILERSEND_API_TOKEN/MAILERSEND_FROM_EMAIL"
+                    "（至少一組設定必須完整有效）"
+                )
         if environment == "sandbox":
             for name, value in (
                 ("APP_BASE_URL", self.app_base_url),

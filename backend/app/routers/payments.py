@@ -17,7 +17,6 @@ from ..database import get_session
 from ..integrations.common import IntegrationError
 from ..integrations.ecpay import (
     CheckoutForm,
-    build_check_mac_value,
     callback_event_key,
 )
 from ..integrations.payment_service import (
@@ -75,7 +74,7 @@ async def start_payment(
         await session.rollback()
         raise HTTPException(
             status_code=503,
-            detail="測試金流目前無法建立付款頁，請確認後端金流設定",
+            detail="線上付款目前尚未開啟；訂單已保留，可稍後從訂單中心續辦",
         ) from exc
 
 
@@ -105,7 +104,7 @@ async def start_membership_payment(
         await session.rollback()
         raise HTTPException(
             status_code=503,
-            detail="測試金流目前無法建立付款頁，請確認後端金流設定",
+            detail="線上付款目前尚未開啟；繳款紀錄已保留，可稍後續辦",
         ) from exc
 
 
@@ -148,7 +147,6 @@ async def get_payment_attempt_status(
 )
 async def payment_checkout(
     attempt_id: str,
-    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
@@ -168,17 +166,6 @@ async def payment_checkout(
     fields = {
         key: str(value) for key, value in attempt.checkout_payload.items()
     }
-    if client == "native":
-        fields["OrderResultURL"] = (
-            f"{settings.app_base_url.rstrip('/')}/payments/result?client=native"
-        )
-        fields["CheckMacValue"] = build_check_mac_value(
-            fields,
-            settings.ecpay_payment_hash_key,
-            settings.ecpay_payment_hash_iv,
-        )
-    elif client != "web":
-        raise HTTPException(status_code=422, detail="不支援的付款返回方式")
     form = CheckoutForm(
         action_url=settings.ecpay_payment_aio_url,
         fields=fields,
@@ -229,12 +216,9 @@ async def ecpay_payment_callback(
 @payments_router.post("/payments/result", response_class=RedirectResponse)
 async def ecpay_payment_result(
     request: Request,
-    client: str = "web",
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> RedirectResponse:
-    if client not in {"web", "native"}:
-        raise HTTPException(status_code=422, detail="不支援的付款返回方式")
     form = await request.form()
     payload = {str(key): str(value) for key, value in form.items()}
     try:
@@ -272,11 +256,7 @@ async def ecpay_payment_result(
         query = urlencode(
             {"order_id": order_id, "payment": payment_state}
         )
-        location = (
-            f"shilifangyuan://payment-return?{query}"
-            if client == "native"
-            else f"{settings.web_base_url.rstrip('/')}/orders?{query}"
-        )
+        location = f"{settings.web_base_url.rstrip('/')}/orders?{query}"
     else:
         query = urlencode(
             {
@@ -284,11 +264,7 @@ async def ecpay_payment_result(
                 "payment": payment_state,
             }
         )
-        location = (
-            f"shilifangyuan://payment-return?{query}"
-            if client == "native"
-            else f"{settings.web_base_url.rstrip('/')}/members?{query}"
-        )
+        location = f"{settings.web_base_url.rstrip('/')}/account?{query}"
     return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
 
 

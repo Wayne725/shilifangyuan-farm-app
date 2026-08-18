@@ -1,57 +1,34 @@
-# 十里方圓視覺規格
+# 十里方圓 Web 視覺規格
 
-## 設計定位
+## 設計方向
 
-- 平台：iOS／Android 跨平台中性
-- 類型：生活消費、社務、活動與現場服務
-- 氛圍：台灣產地、溫暖、可信任、帶有紙張與竹籃的自然質感
-- 結構：圖片帶動瀏覽，訂單與管理頁則保持清楚、扁平
-
-## Design Bible
+正式介面採溫暖、安靜、可信任的自然編輯風格，桌機與手機共用同一套響應式 Web。資訊密度依任務調整：公開頁重視產地與商品，訂單與管理頁重視狀態、表格和下一步操作。
 
 | 項目 | 規格 |
-|---|---|
+| --- | --- |
 | 主色 | 深林綠 `#173F35` |
-| 行動色 | 柿橘 `#E35E2F` |
-| 背景 | 暖米白 `#F5F0E6` |
-| 輔助色 | 鼠尾草綠 `#A9B5A0` |
-| 文字 | 炭黑 `#252B28` |
-| 字體方向 | 系統繁體中文字體、清楚的人文無襯線 |
-| 間距 | 8pt 基準 |
-| 圓角 | 10／16／22px，避免所有元素都膠囊化 |
-| 圖像 | 竹籃、亞麻與自然晨光下的農產品攝影 |
-| 工作區 | 頁首固定「生活消費｜社務系統」雙選項切換 |
-| 生活消費導覽 | 首頁／團購／便當／訂單／我的；購物車移至頁首 |
-| 社務導覽 | 社務首頁／社員／活動／提案／我的 |
-| 管理導覽 | 總覽／販售／訂單與物流／社務／設定 |
-| 觸控與文字 | 觸控區至少 44px，輔助文字至少 12px |
-| 商品圖 | 列表 4:3、詳情 3:2 且限制最大高度 |
-| 活動圖 | 16:9 |
+| 行動色 | 柿橘 `#C65A32` |
+| 背景 | 暖象牙 `#F4F0E7` |
+| 輔助色 | 鼠尾草 `#A9B5A0` |
+| 狀態色 | 低飽和港灣藍綠 `#477E7A` |
+| 文字 | 墨黑 `#252B28` |
+| 字體 | 繁體中文系統字體，標題使用編輯式比例 |
+| 間距 | 8px 基準，頁面區塊 24–64px |
+| 圓角 | 10／16／24px，避免全面膠囊化 |
+| 圖片 | 農產 4:3、活動 16:9、自然光與真實材質 |
+| 互動 | 觸控區至少 44px，狀態不只依賴顏色 |
 
-## 生成提示詞摘要
+## 導覽與元件
 
-設計與缺少的展示素材使用內建圖像生成工具建立，共用以下提示詞基準：
+- 頁首統一連到生活消費、社務、訂單、帳戶與管理工作台。
+- 管理端共用 `AdminNav`，模組分為總覽、商品、團購、便當、社務與財務。
+- 商品、團購與餐點保留一致的圖片比例與價格層級。
+- 長標題可換行並自動縮小，避免切字或超出卡片。
+- 正式頁面移除開發註解與冗長小說明，只保留風險、資格和不可逆操作提示。
+- 表單、空狀態、錯誤、載入與成功訊息使用同一套語言與間距。
 
-> 高擬真跨平台農產品電商 App「十里方圓」，繁體中文，暖米白紙張質感、深林綠與柿橘，清楚的安全區與底部導覽；使用台灣產地農產品攝影，排除紫藍漸層、玻璃擬態、巢狀卡片與網站式版面。
+## 素材
 
-一般商品、團購與便當一律使用同一個 `CatalogCard`。團購只增加狀態、截止、門檻及細進度條，長描述放到詳情，避免團購圖片佔滿首屏。
-
-商品素材提示詞基準：
-
-> 台灣農產的寫實編輯式商品攝影，單一產品放在竹籃、米色亞麻與深色木桌上，柔和晨光、正方形構圖、無人物、無包裝、無文字、無 Logo、無浮水印。
-
-新上架商品尚無照片時，改用包含多種蔬果、米袋與無標示牛皮紙包裝的中性竹籃攝影，避免錯把小白菜照片套用到其他品項。
-
-## 本次生成素材
-
-### 便當 4:3
-
-> Photorealistic editorial food photography for a Taiwanese cooperative mobile app: a wholesome Taiwanese lunchbox with white rice, seasonal green vegetables, colorful side dishes, tofu, and a soy-glazed main dish, arranged neatly in a reusable rectangular bento box. Warm natural wood, beige linen, a subtle bamboo basket edge, soft morning daylight, trustworthy local-farm atmosphere, appetizing but realistic, clean 4:3 composition with breathing room, no people, no hands, no text, no logo, no watermark, no brand packaging.
-
-檔案：`assets/meals/taiwanese-lunchbox.png`
-
-### 社員健行 16:9
-
-> Photorealistic documentary-style editorial photography for a Taiwanese cooperative community app: five Taiwanese adults of varied ages hiking together on a lush subtropical forest trail, seen naturally from a slight distance, friendly conversation and mutual support, practical daypacks and outdoor clothing in forest green, beige, rust orange and navy. Soft overcast daylight through leaves, warm trustworthy community feeling, realistic candid composition, wide 16:9 frame with breathing room for app crop, no staged poses, no text, no logos, no watermark.
-
-檔案：`assets/community/member-hike.png`
+- `assets/meals/taiwanese-lunchbox.png`：便當場次 4:3 圖片。
+- `assets/community/member-hike.png`：社員活動 16:9 圖片。
+- 其他商品與活動圖由 `assets/` 集中提供，Vite 以 public directory 直接載入。

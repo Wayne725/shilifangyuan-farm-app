@@ -16,7 +16,7 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
-from ..domain import DomainError, order_available_actions
+from ..domain import DomainError, included_tax_amount, order_available_actions
 from ..integrations.notifications import (
     NotificationCommand,
     NotificationService,
@@ -539,6 +539,13 @@ async def create_meal_order(
         meal_event_id=event.id,
         membership_type_snapshot=membership_type_for_user(user),
         amount_total=quote.amount_total,
+        tax_amount=sum(
+            included_tax_amount(
+                by_id[item.offering_id].price * item.quantity,
+                by_id[item.offering_id].meal.tax_type,
+            )
+            for item in body.items
+        ),
         contact_email=body.contact_email.lower(),
         invoice_carrier_type=body.invoice_carrier_type,
         invoice_carrier_value=body.invoice_carrier_value,

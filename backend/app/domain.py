@@ -19,6 +19,7 @@ from .models import (
     ProposalStatus,
     SalesChannel,
     ShipmentStatus,
+    TaxType,
     VoteProposal,
 )
 
@@ -48,6 +49,13 @@ def price_for_membership(
     }:
         return member_price
     return nonmember_price
+
+
+def included_tax_amount(subtotal: int, tax_type: TaxType) -> int:
+    """Return the 5% tax included in a tax-inclusive TWD subtotal."""
+    if tax_type == TaxType.TAX_EXEMPT:
+        return 0
+    return subtotal * 5 // 105
 
 
 def product_price(product: Product, membership_type: MembershipType) -> int:

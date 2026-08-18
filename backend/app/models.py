@@ -313,6 +313,12 @@ class OutboxStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class SupplierAccreditationStatus(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -423,6 +429,26 @@ class MemberProfile(Base):
     birth_date_encrypted: Mapped[str] = mapped_column(Text)
     address_encrypted: Mapped[str] = mapped_column(Text)
     emergency_contact_encrypted: Mapped[str] = mapped_column(Text)
+    identity_number_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    gender_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    place_of_origin_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    occupation_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    registered_address_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    correspondence_address_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    landline_phone_encrypted: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
+    line_id_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     encryption_key_version: Mapped[str] = mapped_column(String(32), default="v1")
     consent_version: Mapped[str] = mapped_column(String(40))
     consented_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -557,6 +583,15 @@ class Membership(Base):
         DateTime(timezone=True), nullable=True
     )
     status_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    share_certificate_number: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0)
+    share_count: Mapped[int] = mapped_column(Integer, default=0)
+    share_subscribed_on: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+    share_paid_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
@@ -684,6 +719,116 @@ class MemberDirectoryEntry(Base):
     user: Mapped[User] = relationship(back_populates="directory_entry")
 
 
+class Supplier(Base):
+    __tablename__ = "suppliers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    supplier_number: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, unique=True, index=True
+    )
+    business_name: Mapped[str] = mapped_column(String(160), index=True)
+    tax_id: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, unique=True, index=True
+    )
+    responsible_person_encrypted: Mapped[str] = mapped_column(Text)
+    contact_person_encrypted: Mapped[str] = mapped_column(Text)
+    phone_encrypted: Mapped[str] = mapped_column(Text)
+    email_encrypted: Mapped[str] = mapped_column(Text)
+    line_id_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    settlement_terms: Mapped[str] = mapped_column(Text, default="")
+    bank_account_encrypted: Mapped[str] = mapped_column(Text)
+    encryption_key_version: Mapped[str] = mapped_column(String(32), default="v1")
+    accredited_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    products: Mapped[List["Product"]] = relationship(back_populates="supplier")
+    accreditations: Mapped[List["SupplierAccreditation"]] = relationship(
+        back_populates="supplier",
+        cascade="all, delete-orphan",
+        order_by="SupplierAccreditation.reviewed_on",
+    )
+    documents: Mapped[List["SupplierDocument"]] = relationship(
+        back_populates="supplier", cascade="all, delete-orphan"
+    )
+
+
+class SupplierAccreditation(Base):
+    __tablename__ = "supplier_accreditations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    supplier_id: Mapped[str] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="CASCADE"), index=True
+    )
+    reviewed_on: Mapped[date] = mapped_column(Date, index=True)
+    reviewer_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    process_notes: Mapped[str] = mapped_column(Text)
+    status: Mapped[SupplierAccreditationStatus] = mapped_column(
+        enum_type(
+            SupplierAccreditationStatus,
+            "supplier_accreditation_status",
+        ),
+        default=SupplierAccreditationStatus.PENDING,
+        index=True,
+    )
+    result_notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    supplier: Mapped[Supplier] = relationship(back_populates="accreditations")
+    reviewer: Mapped[User] = relationship()
+    documents: Mapped[List["SupplierDocument"]] = relationship(
+        back_populates="accreditation"
+    )
+
+
+class SupplierDocument(Base):
+    __tablename__ = "supplier_documents"
+    __table_args__ = (
+        CheckConstraint("size_bytes > 0", name="size_positive"),
+        CheckConstraint("size_bytes <= 8388608", name="size_at_most_8mb"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    supplier_id: Mapped[str] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="CASCADE"), index=True
+    )
+    accreditation_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("supplier_accreditations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    label: Mapped[str] = mapped_column(String(160))
+    object_key: Mapped[str] = mapped_column(String(512), unique=True)
+    content_type: Mapped[str] = mapped_column(String(80))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    checksum_sha256: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    supplier: Mapped[Supplier] = relationship(back_populates="documents")
+    accreditation: Mapped[Optional[SupplierAccreditation]] = relationship(
+        back_populates="documents"
+    )
+
+
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
@@ -697,6 +842,15 @@ class Product(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    product_number: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, unique=True, index=True
+    )
+    sku: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, unique=True, index=True
+    )
+    supplier_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(Text, default="")
@@ -722,6 +876,13 @@ class Product(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+    supplier: Mapped[Optional[Supplier]] = relationship(back_populates="products")
+
+    @property
+    def supplier_name(self) -> Optional[str]:
+        supplier = self.__dict__.get("supplier")
+        return supplier.business_name if supplier is not None else None
 
 
 class GroupBundle(Base):
@@ -1338,6 +1499,7 @@ class Order(Base):
         enum_type(MembershipType, "order_membership_type")
     )
     amount_total: Mapped[int] = mapped_column(Integer)
+    tax_amount: Mapped[int] = mapped_column(Integer, default=0)
     contact_email: Mapped[str] = mapped_column(String(320))
     invoice_carrier_type: Mapped[InvoiceCarrierType] = mapped_column(
         enum_type(InvoiceCarrierType, "invoice_carrier_type"),
@@ -1441,6 +1603,11 @@ class OrderFulfillment(Base):
     order_id: Mapped[str] = mapped_column(
         ForeignKey("orders.id", ondelete="CASCADE"), unique=True, index=True
     )
+    pickup_location_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("pickup_locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     method: Mapped[FulfillmentMethod] = mapped_column(
         enum_type(FulfillmentMethod, "order_fulfillment_method"), index=True
     )
@@ -1487,8 +1654,33 @@ class OrderFulfillment(Base):
     )
 
     order: Mapped[Order] = relationship(back_populates="fulfillment")
+    pickup_location_record: Mapped[Optional["PickupLocation"]] = relationship(
+        back_populates="fulfillments"
+    )
     shipment: Mapped[Optional["Shipment"]] = relationship(
         back_populates="fulfillment", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class PickupLocation(Base):
+    __tablename__ = "pickup_locations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    address: Mapped[str] = mapped_column(String(500), default="")
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    fulfillments: Mapped[List[OrderFulfillment]] = relationship(
+        back_populates="pickup_location_record"
     )
 
 

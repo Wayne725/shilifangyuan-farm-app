@@ -3,12 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.auth import hash_password, make_token_pair
-from app.database import Base, get_session
 from app.models import (
     Membership,
     MembershipStatus,
@@ -23,31 +18,22 @@ from app.models import (
     UserRole,
 )
 from app.routers.cooperative import cooperative_router
-
-
-def headers(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {make_token_pair(user)['access_token']}"}
+from tests.support import api_test_context, auth_headers, fast_password_hash
 
 
 @pytest.fixture
-async def cooperative_context():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        app = FastAPI()
-        app.include_router(cooperative_router)
-
-        async def session_override():
-            yield session
-
-        app.dependency_overrides[get_session] = session_override
+async def cooperative_context(database_session):
+    async with api_test_context(
+        database_session,
+        [cooperative_router],
+    ) as client:
+        session = database_session
         now = datetime.now(timezone.utc)
-        admin = User(email="finance-admin@example.com", display_name="財務管理員", password_hash=hash_password("admin-pass-123"), user_role=UserRole.ADMIN, email_verified_at=now)
-        member_a = User(email="core-a@example.com", display_name="社員甲", password_hash=hash_password("member-pass-123"), email_verified_at=now, membership=Membership(status=MembershipStatus.ACTIVE, member_number="CORE-1", activated_at=now))
-        member_b = User(email="core-b@example.com", display_name="社員乙", password_hash=hash_password("member-pass-123"), email_verified_at=now, membership=Membership(status=MembershipStatus.ACTIVE, member_number="CORE-2", activated_at=now))
-        customer = User(email="core-c@example.com", display_name="非社員", password_hash=hash_password("member-pass-123"), email_verified_at=now)
+        password_hash = fast_password_hash("fixture-pass-123")
+        admin = User(email="finance-admin@example.com", display_name="財務管理員", password_hash=password_hash, user_role=UserRole.ADMIN, email_verified_at=now)
+        member_a = User(email="core-a@example.com", display_name="社員甲", password_hash=password_hash, email_verified_at=now, membership=Membership(status=MembershipStatus.ACTIVE, member_number="CORE-1", activated_at=now))
+        member_b = User(email="core-b@example.com", display_name="社員乙", password_hash=password_hash, email_verified_at=now, membership=Membership(status=MembershipStatus.ACTIVE, member_number="CORE-2", activated_at=now))
+        customer = User(email="core-c@example.com", display_name="非社員", password_hash=password_hash, email_verified_at=now)
         session.add_all([admin, member_a, member_b, customer])
         await session.flush()
 
@@ -63,22 +49,20 @@ async def cooperative_context():
             session.add(OrderItem(order_id=order.id, product_name=f"品項 {number}", unit_label="份", quantity=1, unit_price=amount, subtotal=amount, tax_type=TaxType.TAXABLE if number == 3 else TaxType.TAX_EXEMPT))
         await session.commit()
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield {
-                "client": client,
-                "session": session,
-                "admin": admin,
-                "member_a": member_a,
-                "member_b": member_b,
-                "customer": customer,
-            }
-    await engine.dispose()
+        yield {
+            "client": client,
+            "session": session,
+            "admin": admin,
+            "member_a": member_a,
+            "member_b": member_b,
+            "customer": customer,
+        }
 
 
 @pytest.mark.asyncio
 async def test_finance_monitor_tax_and_irreversible_surplus(cooperative_context) -> None:
     client = cooperative_context["client"]
-    admin_headers = headers(cooperative_context["admin"])
+    admin_headers = auth_headers(cooperative_context["admin"])
     query = "starts_on=2020-01-01&ends_on=2030-12-31"
     monitor = await client.get(f"/v1/admin/finance/nonmember-sales?{query}", headers=admin_headers)
     assert monitor.status_code == 200
@@ -103,7 +87,7 @@ async def test_finance_monitor_tax_and_irreversible_surplus(cooperative_context)
     assert confirmed.status_code == 201
     repeated = await client.post("/v1/admin/surplus/confirm", json=body, headers=admin_headers)
     assert repeated.status_code == 409
-    mine = await client.get("/v1/me/surplus-distributions", headers=headers(cooperative_context["member_a"]))
+    mine = await client.get("/v1/me/surplus-distributions", headers=auth_headers(cooperative_context["member_a"]))
     assert mine.status_code == 200
     assert mine.json()[0]["distribution_amount"] == 188
 
@@ -117,7 +101,7 @@ async def test_sales_report_separates_product_revenue_by_checkout_identity(
     trainee = User(
         email="core-trainee@example.com",
         display_name="實習社員",
-        password_hash=hash_password("trainee-pass-123"),
+        password_hash=fast_password_hash("trainee-pass-123"),
         email_verified_at=now,
         membership=Membership(
             status=MembershipStatus.TRAINEE,
@@ -166,7 +150,7 @@ async def test_sales_report_separates_product_revenue_by_checkout_identity(
     query = "starts_on=2020-01-01&ends_on=2030-12-31"
     response = await cooperative_context["client"].get(
         f"/v1/admin/finance/nonmember-sales?{query}",
-        headers=headers(cooperative_context["admin"]),
+        headers=auth_headers(cooperative_context["admin"]),
     )
 
     assert response.status_code == 200
@@ -201,10 +185,10 @@ async def test_sales_report_separates_product_revenue_by_checkout_identity(
 async def test_points_and_wish_launch(cooperative_context) -> None:
     client = cooperative_context["client"]
     member = cooperative_context["member_a"]
-    wish = await client.post("/v1/wishes", json={"name": "新作物", "description": "希望共同採購"}, headers=headers(member))
+    wish = await client.post("/v1/wishes", json={"name": "新作物", "description": "希望共同採購"}, headers=auth_headers(member))
     assert wish.status_code == 201
     wish_id = wish.json()["id"]
-    launched = await client.put(f"/v1/admin/wishes/{wish_id}/status", json={"status": "launched", "launched_product_id": "product-demo", "proposer_points": 120}, headers=headers(cooperative_context["admin"]))
+    launched = await client.put(f"/v1/admin/wishes/{wish_id}/status", json={"status": "launched", "launched_product_id": "product-demo", "proposer_points": 120}, headers=auth_headers(cooperative_context["admin"]))
     assert launched.status_code == 200
-    points = await client.get("/v1/me/points", headers=headers(member))
+    points = await client.get("/v1/me/points", headers=auth_headers(member))
     assert points.json()["balance"] == 120
