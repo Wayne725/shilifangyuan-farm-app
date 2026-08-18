@@ -21,6 +21,13 @@ test("CI 驗證 Vite、前端契約、後端與 migration", () => {
   assert.doesNotMatch(workflow, /expo export/);
 });
 
+test("API 契約工作會先安裝前端解析器依賴", () => {
+  const apiContractJob = workflow.match(/  api-contract:\n[\s\S]*$/)?.[0] ?? "";
+
+  assert.match(apiContractJob, /pnpm\/action-setup@v4/);
+  assert.match(apiContractJob, /pnpm install --frozen-lockfile/);
+});
+
 test("部署手冊保留私有 R2 與正式上線條件", () => {
   assert.match(deployment, /R2 Bucket CORS/);
   assert.match(deployment, /x-amz-meta-sha256/);

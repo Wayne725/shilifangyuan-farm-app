@@ -72,10 +72,13 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.txt
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
       - run: pip install -r backend/requirements.txt
+      - run: pnpm install --frozen-lockfile
       - name: Re-export the API route manifest
         working-directory: backend
         run: python -m scripts.export_openapi_paths ../web/src/lib/api.routes.json

@@ -47,8 +47,10 @@ test("正式 Web 採路由分包且不含 React Native 或行內樣式", () => {
   assert.doesNotMatch(source, /style=\{\{/);
 });
 
-test("商品圖保持四比三且壞圖有一致備援", () => {
+test("商店商品圖使用精簡比例且壞圖有一致備援", () => {
   assert.match(styles, /\.product-image-frame\s*\{[^}]*display:\s*block;[^}]*aspect-ratio:\s*4\s*\/\s*3;/s);
+  assert.match(styles, /\.catalog-grid \.product-image-frame\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9;/s);
+  assert.doesNotMatch(styles, /@media \(max-width:\s*1180px\)[\s\S]*?\.product-image-frame\s*\{[^}]*height:\s*250px;/s);
   assert.match(shared, /onError=\{replaceBrokenAsset\}/);
 });
 
