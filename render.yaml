@@ -39,6 +39,12 @@ services:
         sync: false
       - key: DEMO_NONMEMBER_PASSWORD
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM_EMAIL
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: 十里方圓
 
   - type: web
     name: shilifangyuan-web

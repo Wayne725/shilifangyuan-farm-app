@@ -63,10 +63,13 @@ class ResendAdapter:
         return payload
 
     async def send(self, message: EmailMessage) -> EmailSendResult:
+        headers = {"Authorization": f"Bearer {self.settings.api_key}"}
+        if message.idempotency_key:
+            headers["Idempotency-Key"] = message.idempotency_key
         response = await self.transport(
             self.settings.email_url,
             self.build_payload(message),
-            {"Authorization": f"Bearer {self.settings.api_key}"},
+            headers,
             self.settings.timeout_seconds,
         )
         if not 200 <= response.status_code < 300:

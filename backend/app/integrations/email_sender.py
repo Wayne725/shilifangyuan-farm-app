@@ -19,7 +19,12 @@ from .common import (
 )
 
 
-EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+EMAIL_PATTERN = re.compile(
+    r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+"
+    r"[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?$",
+    re.IGNORECASE,
+)
 JsonTransport = Callable[
     [str, Mapping[str, Any], Optional[Mapping[str, str]], float],
     Awaitable[HTTPResponse],
@@ -33,6 +38,7 @@ class EmailMessage:
     text_content: str
     html_content: Optional[str] = None
     reply_to: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
     def validate(self) -> None:
         if not EMAIL_PATTERN.fullmatch(self.to_email):
@@ -43,6 +49,10 @@ class EmailMessage:
             raise ValueError("Email text content is required")
         if self.reply_to and not EMAIL_PATTERN.fullmatch(self.reply_to):
             raise ValueError("Invalid reply-to email")
+        if self.idempotency_key is not None and not (
+            1 <= len(self.idempotency_key) <= 256
+        ):
+            raise ValueError("Invalid email idempotency key")
 
 
 @dataclass(frozen=True)

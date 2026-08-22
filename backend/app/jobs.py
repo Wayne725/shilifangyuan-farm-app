@@ -956,6 +956,7 @@ async def _process_email_event(
                 if payload.get("html_content")
                 else None
             ),
+            idempotency_key=f"outbox-{event.id}",
         )
     )
 
@@ -981,6 +982,7 @@ async def _process_auth_email_event(
             to_email=str(payload["recipient"]),
             subject=subject,
             text_content=text,
+            idempotency_key=f"outbox-{event.id}",
         )
     )
 

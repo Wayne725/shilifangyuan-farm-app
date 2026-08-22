@@ -8,7 +8,11 @@ from sqlalchemy.orm import selectinload
 
 from app.config import Settings
 from app.integrations.ecpay import build_check_mac_value
-from app.integrations.common import HTTPResponse, IntegrationResponseError
+from app.integrations.common import (
+    HTTPResponse,
+    IntegrationConfigurationError,
+    IntegrationResponseError,
+)
 from app.integrations.email_sender import (
     EmailSendResult,
     FailoverEmailSender,
@@ -246,6 +250,14 @@ def test_invoice_payload_supports_taxable_and_exempt_snapshots() -> None:
     assert [item["ItemTaxType"] for item in payload["Items"]] == ["1", "3"]
 
 
+def test_resend_rejects_url_shaped_sender_email() -> None:
+    with pytest.raises(IntegrationConfigurationError):
+        ResendSettings(
+            api_key="re_test-secret",
+            sender_email="no-reply@mail.https://example.com.com",
+        ).validate()
+
+
 @pytest.mark.asyncio
 async def test_mailersend_adapter_uses_mocked_network() -> None:
     captured = {}
@@ -307,6 +319,7 @@ async def test_resend_adapter_accepts_email_through_public_api() -> None:
             to_email="buyer@example.test",
             subject="付款成功",
             text_content="訂單已付款。",
+            idempotency_key="outbox-event-123",
         )
     )
 
@@ -319,7 +332,10 @@ async def test_resend_adapter_accepts_email_through_public_api() -> None:
             "subject": "付款成功",
             "text": "訂單已付款。",
         },
-        "headers": {"Authorization": "Bearer re_test-secret"},
+        "headers": {
+            "Authorization": "Bearer re_test-secret",
+            "Idempotency-Key": "outbox-event-123",
+        },
     }
 
 

@@ -121,6 +121,10 @@ Web 版會從瀏覽器直接以簽名 URL 上傳測試證件。部署 Web 前，
 - `EMAIL_FROM_EMAIL`
 - `EMAIL_FROM_NAME=十里方圓`
 
+`render.yaml` 已將三個欄位加入 API 服務；`RESEND_API_KEY` 與
+`EMAIL_FROM_EMAIL` 使用 `sync: false`，建立或同步 Blueprint 時必須由
+管理者在 Render 填入，不會進入 Git。
+
 選配的 MailerSend 備援／舊部署相容變數：
 
 - `MAILERSEND_API_TOKEN`

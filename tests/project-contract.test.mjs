@@ -5,6 +5,7 @@ import test from "node:test";
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const deployment = await readFile(new URL("../docs/DEPLOYMENT.md", import.meta.url), "utf8");
+const renderBlueprint = await readFile(new URL("../render.yaml", import.meta.url), "utf8");
 
 test("根專案只以 Vite Web 作為正式前端", () => {
   assert.match(packageJson.scripts.dev, /--dir web dev/);
@@ -32,4 +33,12 @@ test("部署手冊保留私有 R2 與正式上線條件", () => {
   assert.match(deployment, /R2 Bucket CORS/);
   assert.match(deployment, /x-amz-meta-sha256/);
   assert.match(deployment, /正式營運上線條件/);
+});
+
+test("Render API 明確要求 Resend 寄信設定", () => {
+  const apiService = renderBlueprint.match(/  - type: web[\s\S]*?\n  - type: web/)?.[0] ?? "";
+
+  assert.match(apiService, /- key: RESEND_API_KEY\n\s+sync: false/);
+  assert.match(apiService, /- key: EMAIL_FROM_EMAIL\n\s+sync: false/);
+  assert.match(apiService, /- key: EMAIL_FROM_NAME\n\s+value: 十里方圓/);
 });
