@@ -7,6 +7,7 @@ import { SocialNav } from "../components/SocialNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDateTime } from "../lib/api";
+import { proposalStatusLabel } from "../lib/labels";
 import type { Meeting, MembershipSummary, Proposal } from "../lib/types";
 
 const emptyForm = { title: "", body: "", proposal_type: "resolution" as Proposal["proposal_type"], options: "" };
@@ -117,10 +118,6 @@ export function GovernancePage() {
       )}
     </section>
   );
-}
-
-export function proposalStatusLabel(status: string) {
-  return { draft: "草稿", pending_review: "待審核", discussion: "討論中", voting: "表決中", passed: "通過", rejected: "未通過", withdrawn: "已撤回", closed: "已結案" }[status] || status;
 }
 
 function meetingTypeLabel(type: string) {

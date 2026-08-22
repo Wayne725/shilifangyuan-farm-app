@@ -5,7 +5,8 @@ import { Link } from "@tanstack/react-router";
 
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
 import { useCommerce } from "../context/CommerceContext";
-import { apiFetch, formatDate, mealEventStatusLabel, resolveAsset } from "../lib/api";
+import { apiFetch, formatDate, resolveAsset } from "../lib/api";
+import { mealEventStatusLabel } from "../lib/labels";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {

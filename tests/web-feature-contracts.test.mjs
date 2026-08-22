@@ -45,6 +45,7 @@ test("正式 Web 採路由分包且不含 React Native 或行內樣式", () => {
   assert.doesNotMatch(source, /from ["']react-native/);
   assert.doesNotMatch(source, /expo-router/);
   assert.doesNotMatch(source, /style=\{\{/);
+  assert.doesNotMatch(source, /from ["']\.\/[^"']+Page["']/);
 });
 
 test("商店商品圖使用精簡比例且壞圖有一致備援", () => {

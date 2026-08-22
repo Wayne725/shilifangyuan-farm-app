@@ -134,14 +134,3 @@ export function formatDateTime(value?: string | null): string {
     minute: "2-digit",
   }).format(date);
 }
-
-export function mealEventStatusLabel(status: string): string {
-  return {
-    draft: "草稿",
-    published: "開放預訂",
-    ordering_closed: "預訂截止",
-    pickup_open: "開放取餐",
-    cancelled: "已取消",
-    completed: "已完成",
-  }[status] || status;
-}

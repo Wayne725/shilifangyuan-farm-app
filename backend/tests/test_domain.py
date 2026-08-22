@@ -41,6 +41,7 @@ from app.models import (
     MealEvent,
     MealEventStatus,
     Meeting,
+    MemberRosterEntry,
     Order,
     OrderFulfillment,
     OrderKind,
@@ -65,7 +66,12 @@ from app.models import (
     VoteProposal,
     Wish,
 )
-from app.seed import DEMO_PASSWORD, reset_demo_data, seed_demo_data
+from app.seed import (
+    DEMO_PASSWORD,
+    DEMO_ROSTER_NUMBER,
+    reset_demo_data,
+    seed_demo_data,
+)
 from app.routers.orders import request_order_refund
 from app.schemas import BundleCreate, BundleItemInput, CampaignCreate
 
@@ -462,6 +468,11 @@ async def test_preview_seed_syncs_new_fixture_and_demo_passwords(
     )
     rice.image_url = "/assets/products/rice.png"
     await database_session.execute(
+        delete(MemberRosterEntry).where(
+            MemberRosterEntry.member_number == DEMO_ROSTER_NUMBER
+        )
+    )
+    await database_session.execute(
         delete(MealEvent).where(MealEvent.id == "meal-event-preorder-demo")
     )
     await database_session.commit()
@@ -478,6 +489,13 @@ async def test_preview_seed_syncs_new_fixture_and_demo_passwords(
         select(User).where(User.email == "admin@shilifangyuan.tw")
     )
     assert verify_password("preview-admin-password", admin.password_hash)
+    roster = await database_session.scalar(
+        select(MemberRosterEntry).where(
+            MemberRosterEntry.member_number == DEMO_ROSTER_NUMBER
+        )
+    )
+    assert roster is not None
+    assert roster.share_capital_amount == 3000
     rice = await database_session.scalar(
         select(Product).where(Product.slug == "rice")
     )

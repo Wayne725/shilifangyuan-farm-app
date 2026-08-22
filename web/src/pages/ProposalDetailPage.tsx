@@ -7,8 +7,8 @@ import { SocialNav } from "../components/SocialNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDateTime } from "../lib/api";
+import { proposalStatusLabel } from "../lib/labels";
 import type { MembershipSummary, Proposal, ProposalComment, ProposalVote } from "../lib/types";
-import { proposalStatusLabel } from "./GovernancePage";
 
 export function ProposalDetailPage() {
   const { proposalId } = useParams({ from: "/proposals/$proposalId" });

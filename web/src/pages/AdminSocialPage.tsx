@@ -8,8 +8,8 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { AdminNav } from "../components/AdminNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDateTime } from "../lib/api";
+import { proposalStatusLabel } from "../lib/labels";
 import type { Activity, Meeting, MembershipApplication, Proposal, Wish } from "../lib/types";
-import { proposalStatusLabel } from "./GovernancePage";
 
 interface AdminMembership {
   id: string;

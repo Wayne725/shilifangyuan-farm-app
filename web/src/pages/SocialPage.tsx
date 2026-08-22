@@ -12,6 +12,7 @@ import { SocialNav } from "../components/SocialNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate } from "../lib/api";
+import { proposalStatusLabel } from "../lib/labels";
 import type { Activity, Meeting, MembershipSummary, Proposal } from "../lib/types";
 
 export function SocialPage() {
@@ -150,17 +151,4 @@ export function SocialPage() {
       )}
     </>
   );
-}
-
-function proposalStatusLabel(status: string): string {
-  return {
-    draft: "草稿",
-    pending_review: "待審核",
-    discussion: "討論中",
-    voting: "表決中",
-    passed: "通過",
-    rejected: "未通過",
-    withdrawn: "已撤回",
-    closed: "已結案",
-  }[status] || status;
 }

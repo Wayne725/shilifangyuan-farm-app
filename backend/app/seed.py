@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,6 +115,64 @@ from .models import (
 DEMO_PASSWORD = "member123"
 DEMO_ROSTER_ID = "member-roster-existing-demo"
 DEMO_ROSTER_NUMBER = "SLF-2018-0099"
+DEMO_PREORDER_EVENT_ID = "meal-event-preorder-demo"
+DEMO_PREORDER_OFFERING_ID = "meal-offering-preorder-demo"
+
+
+def _build_demo_roster_entry(
+    cipher: VersionedPIICipher,
+) -> MemberRosterEntry:
+    aad = roster_aad(DEMO_ROSTER_ID)
+    return MemberRosterEntry(
+        id=DEMO_ROSTER_ID,
+        member_number=DEMO_ROSTER_NUMBER,
+        legal_name_encrypted=cipher.encrypt_text(
+            "既有社員展示",
+            associated_data=aad,
+        ),
+        email_encrypted=cipher.encrypt_text(
+            "existing@shilifangyuan.tw",
+            associated_data=aad,
+        ),
+        phone_encrypted=cipher.encrypt_text(
+            "0911888777",
+            associated_data=aad,
+        ),
+        encryption_key_version=cipher.current_version,
+        share_certificate_number="DEMO-SHARE-0099",
+        share_capital_amount=3000,
+        share_count=3,
+        share_subscribed_on=date(2018, 5, 10),
+        share_paid_on=date(2018, 5, 12),
+    )
+
+
+def _build_demo_preorder_event(
+    now: datetime,
+    meal_id: str,
+    admin_id: str,
+) -> MealEvent:
+    return MealEvent(
+        id=DEMO_PREORDER_EVENT_ID,
+        title="今日展示便當（虛擬資料）",
+        location="合作社門市展示取餐區",
+        ordering_starts_at=now - timedelta(hours=2),
+        ordering_ends_at=now + timedelta(days=1),
+        pickup_starts_at=now + timedelta(days=2, hours=3),
+        pickup_ends_at=now + timedelta(days=2, hours=5),
+        status=MealEventStatus.PUBLISHED,
+        created_by_id=admin_id,
+        offerings=[
+            MealEventOffering(
+                id=DEMO_PREORDER_OFFERING_ID,
+                meal_id=meal_id,
+                price=120,
+                capacity=20,
+                paid_quantity=0,
+                position=1,
+            )
+        ],
+    )
 
 
 PRODUCTS = [
@@ -345,7 +402,7 @@ PRODUCT_SUPPLIERS = {
 }
 
 
-async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
+async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
     settings = get_settings()
     now = datetime.now(timezone.utc)
     existing = await session.scalar(select(User.id).limit(1))
@@ -362,7 +419,7 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
     admin_password_hash = hash_password(settings.demo_admin_password)
     member_password_hash = hash_password(settings.demo_member_password)
     nonmember_password_hash = hash_password(settings.demo_nonmember_password)
-    users: List[User] = [
+    users: list[User] = [
         User(
             id="user-admin",
             email="admin@shilifangyuan.tw",
@@ -444,31 +501,7 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
     except IntegrationError:
         seed_cipher = VersionedPIICipher({"v1": bytes(32)}, "v1")
 
-    roster_aad_value = roster_aad(DEMO_ROSTER_ID)
-    session.add(
-        MemberRosterEntry(
-            id=DEMO_ROSTER_ID,
-            member_number=DEMO_ROSTER_NUMBER,
-            legal_name_encrypted=seed_cipher.encrypt_text(
-                "既有社員展示",
-                associated_data=roster_aad_value,
-            ),
-            email_encrypted=seed_cipher.encrypt_text(
-                "existing@shilifangyuan.tw",
-                associated_data=roster_aad_value,
-            ),
-            phone_encrypted=seed_cipher.encrypt_text(
-                "0911888777",
-                associated_data=roster_aad_value,
-            ),
-            encryption_key_version=seed_cipher.current_version,
-            share_certificate_number="DEMO-SHARE-0099",
-            share_capital_amount=3000,
-            share_count=3,
-            share_subscribed_on=date(2018, 5, 10),
-            share_paid_on=date(2018, 5, 12),
-        )
-    )
+    session.add(_build_demo_roster_entry(seed_cipher))
 
     pickup_locations = []
     for location_data in PICKUP_LOCATIONS:
@@ -1127,26 +1160,10 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
             ),
         ],
     )
-    preorder_event = MealEvent(
-        id="meal-event-preorder-demo",
-        title="今日展示便當（虛擬資料）",
-        location="合作社門市展示取餐區",
-        ordering_starts_at=now - timedelta(hours=2),
-        ordering_ends_at=now + timedelta(days=1),
-        pickup_starts_at=now + timedelta(days=2, hours=3),
-        pickup_ends_at=now + timedelta(days=2, hours=5),
-        status=MealEventStatus.PUBLISHED,
-        created_by_id=users[0].id,
-        offerings=[
-            MealEventOffering(
-                id="meal-offering-preorder-demo",
-                meal_id=meals[0].id,
-                price=120,
-                capacity=20,
-                paid_quantity=0,
-                position=1,
-            )
-        ],
+    preorder_event = _build_demo_preorder_event(
+        now,
+        meals[0].id,
+        users[0].id,
     )
     session.add_all([meal_event, preorder_event])
     await session.flush()
@@ -1365,43 +1382,20 @@ async def sync_preview_demo_data(
         )
     )
     if existing_roster is None:
-        seed_cipher = pii_cipher_from_settings(settings)
-        roster_aad_value = roster_aad(DEMO_ROSTER_ID)
         session.add(
-            MemberRosterEntry(
-                id=DEMO_ROSTER_ID,
-                member_number=DEMO_ROSTER_NUMBER,
-                legal_name_encrypted=seed_cipher.encrypt_text(
-                    "既有社員展示",
-                    associated_data=roster_aad_value,
-                ),
-                email_encrypted=seed_cipher.encrypt_text(
-                    "existing@shilifangyuan.tw",
-                    associated_data=roster_aad_value,
-                ),
-                phone_encrypted=seed_cipher.encrypt_text(
-                    "0911888777",
-                    associated_data=roster_aad_value,
-                ),
-                encryption_key_version=seed_cipher.current_version,
-                share_certificate_number="DEMO-SHARE-0099",
-                share_capital_amount=3000,
-                share_count=3,
-                share_subscribed_on=date(2018, 5, 10),
-                share_paid_on=date(2018, 5, 12),
-            )
+            _build_demo_roster_entry(pii_cipher_from_settings(settings))
         )
 
     existing_event = await session.scalar(
         select(MealEvent.id).where(
-            MealEvent.id == "meal-event-preorder-demo"
+            MealEvent.id == DEMO_PREORDER_EVENT_ID
         )
     )
     if existing_event is None:
         await session.execute(
             delete(MealEventOffering).where(
                 MealEventOffering.meal_event_id
-                == "meal-event-preorder-demo"
+                == DEMO_PREORDER_EVENT_ID
             )
         )
         meal = await session.scalar(
@@ -1411,33 +1405,11 @@ async def sync_preview_demo_data(
             select(User.id).where(User.user_role == UserRole.ADMIN)
         )
         if meal is not None and admin_id is not None:
-            session.add(
-                MealEvent(
-                    id="meal-event-preorder-demo",
-                    title="今日展示便當（虛擬資料）",
-                    location="合作社門市展示取餐區",
-                    ordering_starts_at=now - timedelta(hours=2),
-                    ordering_ends_at=now + timedelta(days=1),
-                    pickup_starts_at=now + timedelta(days=2, hours=3),
-                    pickup_ends_at=now + timedelta(days=2, hours=5),
-                    status=MealEventStatus.PUBLISHED,
-                    created_by_id=admin_id,
-                    offerings=[
-                        MealEventOffering(
-                            id="meal-offering-preorder-demo",
-                            meal_id=meal.id,
-                            price=120,
-                            capacity=20,
-                            paid_quantity=0,
-                            position=1,
-                        )
-                    ],
-                )
-            )
+            session.add(_build_demo_preorder_event(now, meal.id, admin_id))
     await session.commit()
 
 
-async def reset_demo_data(session: AsyncSession) -> Dict[str, int]:
+async def reset_demo_data(session: AsyncSession) -> dict[str, int]:
     document_keys = list(
         await session.scalars(
             select(MembershipDocument.object_key).where(

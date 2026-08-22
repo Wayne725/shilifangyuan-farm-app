@@ -22,29 +22,8 @@ import {
   shippingChannelLabels,
   temperatureLabels,
 } from "../lib/commerce";
+import { fulfillmentStatusLabel, paymentStatusLabel } from "../lib/labels";
 import type { Order } from "../lib/types";
-
-const paymentLabels: Record<string, string> = {
-  pending: "待付款",
-  paid: "已付款",
-  late_paid_refund_required: "逾期付款待退款",
-  refund_pending: "退款處理中",
-  refunded: "已退款",
-  failed: "付款失敗",
-  expired: "已取消／逾期",
-};
-
-const fulfillmentLabels: Record<string, string> = {
-  pending_confirmation: "待確認",
-  preparing: "備貨中",
-  ready_for_pickup: "可領取",
-  picked_up: "已完成",
-  awaiting_shipment: "待建立物流單",
-  shipped: "配送中",
-  delivered: "已送達",
-  exception: "配送異常",
-  cancelled: "已取消",
-};
 
 const shipmentLabels: Record<string, string> = {
   draft: "待選擇物流",
@@ -153,7 +132,7 @@ export function OrdersPage() {
                 <strong>{order.order_number}</strong>
                 <small>{salesChannelLabel(order.sales_channel)} · {formatMoney(order.amount_total)}</small>
                 <i className={`order-state ${order.payment_status}`}>
-                  {paymentLabels[order.payment_status] || order.payment_status}
+                  {paymentStatusLabel(order.payment_status)}
                 </i>
               </button>
             ))}
@@ -171,8 +150,8 @@ export function OrdersPage() {
               </div>
 
               <div className="order-status-grid">
-                <StatusBlock icon={CreditCard} label="付款" value={paymentLabels[selected.payment_status] || selected.payment_status} />
-                <StatusBlock icon={Package} label="履約" value={fulfillmentLabels[selected.fulfillment?.status || selected.fulfillment_status] || selected.fulfillment_status} />
+                <StatusBlock icon={CreditCard} label="付款" value={paymentStatusLabel(selected.payment_status)} />
+                <StatusBlock icon={Package} label="履約" value={fulfillmentStatusLabel(selected.fulfillment?.status || selected.fulfillment_status)} />
                 <StatusBlock
                   icon={selected.fulfillment_method === "ecpay_logistics" ? Truck : MapPin}
                   label="取貨方式"

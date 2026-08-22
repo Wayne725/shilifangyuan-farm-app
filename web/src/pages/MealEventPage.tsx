@@ -12,8 +12,9 @@ import { useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch, formatDate, formatMoney, mealEventStatusLabel, resolveAsset } from "../lib/api";
+import { apiFetch, formatDate, formatMoney, resolveAsset } from "../lib/api";
 import { beginMealCheckout } from "../lib/commerce";
+import { mealEventStatusLabel } from "../lib/labels";
 import type { MealEvent } from "../lib/types";
 
 interface MealQuote {

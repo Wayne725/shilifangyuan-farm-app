@@ -17,6 +17,7 @@ import { AdminNav } from "../components/AdminNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import { shippingChannelLabels, temperatureLabels } from "../lib/commerce";
+import { adminPaymentStatusLabel, fulfillmentStatusLabel } from "../lib/labels";
 import type { Order, PickupLocation, Product, ShippingRate, Supplier } from "../lib/types";
 
 interface MemberRecord {
@@ -196,8 +197,8 @@ export function AdminPage() {
                   <small>{formatMoney(order.amount_total)}</small>
                 </div>
                 <div className="operation-state">
-                  <span><CreditCard size={16} />{adminPaymentLabel(order.payment_status)}</span>
-                  <span><Package size={16} />{adminFulfillmentLabel(order.fulfillment_status)}</span>
+                  <span><CreditCard size={16} />{adminPaymentStatusLabel(order.payment_status)}</span>
+                  <span><Package size={16} />{fulfillmentStatusLabel(order.fulfillment_status)}</span>
                   {order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {order.shipment.status}</span>}
                 </div>
                 <AdminOrderAction
@@ -284,14 +285,6 @@ function ShippingRateManager({ rates, onDone }: { rates: ShippingRate[]; onDone:
   const deactivate = useMutation({ mutationFn: (rateId: string) => apiFetch<void>(`/v1/admin/shipping-rates/${rateId}`, { method: "DELETE" }), onSuccess: onDone });
   const beginEdit = (rate: ShippingRate) => { setEditingId(rate.id); setFee(rate.fee); setThreshold(rate.free_shipping_threshold); };
   return <><div className="rate-list">{rates.map((rate) => <article className={rate.is_active ? "" : "inactive"} key={rate.id}><div><strong>{shippingChannelLabels[rate.channel]}</strong><small>{temperatureLabels[rate.temperature]} · {rate.is_active ? "啟用" : "停用"}</small></div>{editingId === rate.id ? <div className="rate-inline-edit"><input aria-label="運費" min={0} type="number" value={fee} onChange={(event) => setFee(Number(event.target.value))} /><input aria-label="免運門檻" min={0} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /><button type="button" disabled={update.isPending} onClick={() => update.mutate(rate)}>儲存</button></div> : <><span>{formatMoney(rate.fee)}</span><small>滿 {formatMoney(rate.free_shipping_threshold)} 免運</small><div className="rate-actions"><button type="button" onClick={() => beginEdit(rate)}>編輯</button>{rate.is_active && <button type="button" disabled={deactivate.isPending} onClick={() => deactivate.mutate(rate.id)}>停用</button>}</div></>}</article>)}</div><form className="rate-create" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><strong>新增運費</strong><select value={channel} onChange={(event) => setChannel(event.target.value as typeof channel)}>{Object.entries(shippingChannelLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={temperature} onChange={(event) => setTemperature(event.target.value as typeof temperature)}>{Object.entries(temperatureLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input aria-label="運費" min={0} type="number" value={fee} onChange={(event) => setFee(Number(event.target.value))} /><input aria-label="免運門檻" min={0} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /><input aria-label="生效日期" type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /><button className="button button-system" disabled={create.isPending}>新增費率</button></form>{(create.isError || update.isError || deactivate.isError) && <p className="form-error">{create.error?.message || update.error?.message || deactivate.error?.message}</p>}<p className="rate-note">結帳時依通路、溫層與生效日期套用費率。</p></>;
-}
-
-function adminPaymentLabel(status: string): string {
-  return { pending: "待付款", paid: "已付款", refunded: "已退款", expired: "已取消" }[status] || status;
-}
-
-function adminFulfillmentLabel(status: string): string {
-  return { pending_confirmation: "待確認", preparing: "備貨中", ready_for_pickup: "可領取", picked_up: "已完成", cancelled: "已取消" }[status] || status;
 }
 
 function Metric({
