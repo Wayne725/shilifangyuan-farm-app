@@ -10,6 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
+import { type FormEvent, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
@@ -130,6 +131,11 @@ export function AccountPage() {
       )}
 
       {membership.isPending && <LoadingLines count={2} />}
+      {membership.data?.membership_type === "nonmember" && (
+        <ExistingMemberClaimPanel
+          onDone={() => queryClient.invalidateQueries({ queryKey: ["membership-me", user.id] })}
+        />
+      )}
       <section className="account-metrics">
         <Metric icon={Coins} label="合作點數" value={isActiveMember ? String(points.data?.balance ?? "—") : "未開放"} />
         <Metric icon={Certificate} label="已獲徽章" value={isActiveMember ? String(badges.data?.length ?? "—") : "—"} />
@@ -216,6 +222,47 @@ export function AccountPage() {
         </section>
       </div>
     </section>
+  );
+}
+
+function ExistingMemberClaimPanel({ onDone }: { onDone: () => void }) {
+  const [memberNumber, setMemberNumber] = useState("");
+  const [legalName, setLegalName] = useState("");
+  const [phone, setPhone] = useState("");
+  const claim = useMutation({
+    mutationFn: () => apiFetch("/v1/membership/claim-existing", {
+      method: "POST",
+      body: JSON.stringify({
+        member_number: memberNumber.trim(),
+        legal_name: legalName.trim(),
+        phone: phone.trim(),
+      }),
+    }),
+    onSuccess: onDone,
+  });
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    claim.mutate();
+  }
+
+  return (
+    <form className="social-form existing-member-claim" onSubmit={submit}>
+      <div className="form-heading">
+        <div><p className="eyebrow">EXISTING MEMBER CLAIM</p><h2>已是社員？認領既有資格</h2></div>
+        <span>系統會以此帳號 Email 核對合作社名冊，不會重新走入社流程。</span>
+      </div>
+      <div className="field-grid three-columns">
+        <label className="field"><span>社員編號</span><input required maxLength={32} value={memberNumber} onChange={(event) => setMemberNumber(event.target.value)} /></label>
+        <label className="field"><span>名冊登記姓名</span><input required maxLength={80} value={legalName} onChange={(event) => setLegalName(event.target.value)} /></label>
+        <label className="field"><span>名冊登記手機</span><input required type="tel" minLength={8} maxLength={24} value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+      </div>
+      {claim.isError && <p className="form-error" role="alert">{claim.error.message}</p>}
+      <div className="form-actions">
+        <Link className="button button-quiet" to="/membership">不是既有社員，提出入社申請</Link>
+        <button className="button button-primary" disabled={claim.isPending}>{claim.isPending ? "核對中…" : "認領社員資格"}</button>
+      </div>
+    </form>
   );
 }
 

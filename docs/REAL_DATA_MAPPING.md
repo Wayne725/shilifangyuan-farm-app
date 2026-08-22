@@ -12,10 +12,12 @@
 
 ## 1. 社員資料
 
+現實中已是社員、但尚未建立線上帳號者，先匯入 `member_roster_entries`。姓名、Email、手機以版本化 PII 加密保存；本人以社員編號、姓名、Email、手機核對並完成名冊 Email 驗證後，系統才建立 `users`、啟用 `memberships`，並將名冊標記為已認領。同一名冊紀錄只能認領一次。
+
 | 文件欄位 | 系統位置 | 狀態 |
 | --- | --- | --- |
-| 社員編號 | `memberships.member_number` | 已有；編碼規則待隱私確認 |
-| 姓名 | `member_profiles.legal_name_encrypted` | 已有 |
+| 社員編號 | 認領前 `member_roster_entries.member_number`；認領後 `memberships.member_number` | 已有；編碼規則待隱私確認 |
+| 姓名 | 認領前 `member_roster_entries.legal_name_encrypted`；入社資料 `member_profiles.legal_name_encrypted` | 已有 |
 | 身分證字號 | `member_profiles.identity_number_encrypted` | 新增 |
 | 性別 | `member_profiles.gender_encrypted` | 新增 |
 | 出生年月日 | `member_profiles.birth_date_encrypted` | 已有 |
@@ -24,14 +26,14 @@
 | 戶籍地址 | `member_profiles.registered_address_encrypted` | 新增 |
 | 通訊地址 | `member_profiles.correspondence_address_encrypted` | 新增；舊 `address_encrypted` 保留相容 |
 | 聯絡電話 | `member_profiles.landline_phone_encrypted` | 新增、可選 |
-| 手機號碼 | `member_profiles.phone_encrypted` | 已有 |
-| 電子郵件 | `users.email` | 已有 |
+| 手機號碼 | 認領前 `member_roster_entries.phone_encrypted`；入社資料 `member_profiles.phone_encrypted` | 已有 |
+| 電子郵件 | 認領前 `member_roster_entries.email_encrypted`；認領後 `users.email` | 已有 |
 | LINE 帳號 | `member_profiles.line_id_encrypted` | 新增、可選 |
-| 股票號碼 | `memberships.share_certificate_number` | 新增 |
-| 股金 | `memberships.share_capital_amount` | 新增 |
-| 股數 | `memberships.share_count` | 新增 |
-| 認購社股日期 | `memberships.share_subscribed_on` | 新增 |
-| 社股繳納日期 | `memberships.share_paid_on` | 新增 |
+| 股票號碼 | `member_roster_entries` 認領後複製至 `memberships.share_certificate_number` | 已有 |
+| 股金 | `member_roster_entries` 認領後複製至 `memberships.share_capital_amount` | 已有 |
+| 股數 | `member_roster_entries` 認領後複製至 `memberships.share_count` | 已有 |
+| 認購社股日期 | `member_roster_entries` 認領後複製至 `memberships.share_subscribed_on` | 已有 |
+| 社股繳納日期 | `member_roster_entries` 認領後複製至 `memberships.share_paid_on` | 已有 |
 
 ## 2. 交易資料
 
@@ -44,7 +46,7 @@
 | 訂購日期時間 | `orders.created_at` | 已有 |
 | 領取日期時間地點 | `order_fulfillments`、`pickup_locations` | 地點主檔與訂單關聯已新增；排程操作介面待補 |
 | 付款方式／金額 | `payment_attempts`、`orders.amount_total` | 已有；目前只支援綠界預付 |
-| 訂單號碼 | `orders.order_number` | 已有日期時間與唯一亂數 |
+| 訂單號碼 | `orders.order_number` | 已有日期時間與 UUID 片段 |
 | 應／免稅 | `order_items.tax_type` | 已有 |
 | 稅金金額 | `orders.tax_amount` | 新增下單快照；含稅價捨入規則待會計確認 |
 
@@ -89,5 +91,5 @@
 7. 供應者審認狀態、複審週期、到期與撤銷規則。
 8. 供應商銀行帳號的可見角色、修改覆核與稽核保存期限。
 9. 供應商文件種類、必填文件、有效期限、版本與刪除政策。
-10. 文件指定的訂單號為「日期＋當日流水號」；目前使用日期時間＋亂數以避免併發衝突，正式顯示格式與舊訂單轉換方式待確認。
+10. 文件指定的訂單號為「日期＋當日流水號」；目前使用日期時間＋訂單 UUID 片段以避免同秒併發衝突，正式顯示格式與舊訂單轉換方式待確認。
 11. 一般商品與團購的取貨起訖時間由誰排定，以及可否讓消費者改選時段。

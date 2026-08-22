@@ -25,7 +25,7 @@ interface AccountSearch {
   payment?: string;
 }
 
-type RegisterIntent = "member" | "customer";
+type RegisterIntent = "existing_member" | "nonmember";
 
 interface RegisterSearch {
   intent?: RegisterIntent;
@@ -57,9 +57,11 @@ const registerRoute = createRoute({
   path: "/register",
   validateSearch: (search: Record<string, unknown>): RegisterSearch => ({
     intent:
-      search.intent === "member" || search.intent === "customer"
-        ? search.intent
-        : undefined,
+      search.intent === "existing_member" || search.intent === "member"
+        ? "existing_member"
+        : search.intent === "nonmember" || search.intent === "customer"
+          ? "nonmember"
+          : undefined,
   }),
   component: page("./pages/AuthFlowPages", "RegisterPage"),
 });
@@ -71,9 +73,11 @@ const verifyEmailRoute = createRoute({
     email: typeof search.email === "string" ? search.email : undefined,
     token: typeof search.token === "string" ? search.token : undefined,
     intent:
-      search.intent === "member" || search.intent === "customer"
-        ? search.intent
-        : undefined,
+      search.intent === "existing_member" || search.intent === "member"
+        ? "existing_member"
+        : search.intent === "nonmember" || search.intent === "customer"
+          ? "nonmember"
+          : undefined,
   }),
   component: page("./pages/AuthFlowPages", "VerifyEmailPage"),
 });

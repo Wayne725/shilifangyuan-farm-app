@@ -417,6 +417,53 @@ class PasswordResetToken(Base):
     user: Mapped[User] = relationship(back_populates="password_reset_tokens")
 
 
+class MemberRosterEntry(Base):
+    __tablename__ = "member_roster_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "share_capital_amount >= 0",
+            name="share_capital_nonnegative",
+        ),
+        CheckConstraint("share_count >= 0", name="share_count_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    member_number: Mapped[str] = mapped_column(
+        String(32), unique=True, index=True
+    )
+    legal_name_encrypted: Mapped[str] = mapped_column(Text)
+    email_encrypted: Mapped[str] = mapped_column(Text)
+    phone_encrypted: Mapped[str] = mapped_column(Text)
+    encryption_key_version: Mapped[str] = mapped_column(String(32), default="v1")
+    share_certificate_number: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0)
+    share_count: Mapped[int] = mapped_column(Integer, default=0)
+    share_subscribed_on: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True
+    )
+    share_paid_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    claimed_user_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    claimed_user: Mapped[Optional[User]] = relationship()
+
+
 class MemberProfile(Base):
     __tablename__ = "member_profiles"
 

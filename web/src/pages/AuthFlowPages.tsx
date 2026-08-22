@@ -44,7 +44,7 @@ function AuthLayout({
           <h1>{title}</h1>
           <p>{description}</p>
         </div>
-        <small>兩種註冊共用同一套登入，社員資格另依入社流程確認</small>
+        <small>既有社員需核對合作社名冊；非社員註冊不會自動取得會籍</small>
       </aside>
       <div className="auth-page-body">{children}</div>
     </section>
@@ -82,8 +82,10 @@ function AuthResult({
 export function RegisterPage() {
   const search = useSearch({ from: "/register" });
   const intent = search.intent;
+  const [memberNumber, setMemberNumber] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
@@ -99,13 +101,24 @@ export function RegisterPage() {
     }
     setBusy(true);
     try {
-      const response = await apiFetch<AuthActionResponse>("/v1/auth/register", {
+      const isExistingMember = intent === "existing_member";
+      const response = await apiFetch<AuthActionResponse>(isExistingMember
+        ? "/v1/auth/register-existing-member"
+        : "/v1/auth/register", {
         method: "POST",
-        body: JSON.stringify({
-          display_name: displayName.trim(),
-          email: email.trim(),
-          password,
-        }),
+        body: JSON.stringify(isExistingMember
+          ? {
+              member_number: memberNumber.trim(),
+              legal_name: displayName.trim(),
+              email: email.trim(),
+              phone: phone.trim(),
+              password,
+            }
+          : {
+              display_name: displayName.trim(),
+              email: email.trim(),
+              password,
+            }),
       });
       setResult(response);
     } catch (reason) {
@@ -120,29 +133,29 @@ export function RegisterPage() {
       <AuthLayout
         eyebrow="CHOOSE YOUR PATH"
         title="選擇註冊方式"
-        description="先確認你要一般消費，或希望接續提出入社申請。"
+        description="現實中已是社員可直接認領；其他使用者先建立非社員帳號。"
         icon={<UserPlus size={29} weight="light" />}
       >
         <div className="registration-choice">
           <div className="registration-choice-heading">
             <p className="eyebrow">ACCOUNT TYPE</p>
             <h2>你想如何參與？</h2>
-            <p>兩種方式都會先建立登入帳號，之後仍可申請或調整社員資格。</p>
+            <p>社員資格以合作社既有名冊為準，不能由註冊者自行選擇。</p>
           </div>
           <div className="registration-choice-grid">
-            <Link className="registration-choice-card member" to="/register" search={{ intent: "member" }}>
+            <Link className="registration-choice-card member" to="/register" search={{ intent: "existing_member" }}>
               <HandHeart size={30} weight="light" />
               <span>MEMBERSHIP</span>
-              <h3>社員註冊</h3>
-              <p>建立帳號並接續填寫入社申請；完成審核、繳費及合作社確認後才取得社員資格。</p>
-              <strong>開始社員註冊 <ArrowRight size={18} /></strong>
+              <h3>既有社員註冊</h3>
+              <p>提供社員編號與名冊登記資料，核對並完成 Email 驗證後直接啟用正式社員帳號。</p>
+              <strong>認領社員帳號 <ArrowRight size={18} /></strong>
             </Link>
-            <Link className="registration-choice-card customer" to="/register" search={{ intent: "customer" }}>
+            <Link className="registration-choice-card customer" to="/register" search={{ intent: "nonmember" }}>
               <ShoppingBag size={30} weight="light" />
               <span>GENERAL CUSTOMER</span>
-              <h3>一般消費者註冊</h3>
-              <p>建立一般消費帳號，可購物、結帳、查詢訂單；不會自動取得社員資格。</p>
-              <strong>開始一般註冊 <ArrowRight size={18} /></strong>
+              <h3>非社員註冊</h3>
+              <p>建立一般買家帳號，可購物、結帳及查詢訂單；之後仍可另外提出入社申請。</p>
+              <strong>建立非社員帳號 <ArrowRight size={18} /></strong>
             </Link>
           </div>
           <p className="auth-switch">
@@ -153,16 +166,16 @@ export function RegisterPage() {
     );
   }
 
-  const isMemberIntent = intent === "member";
+  const isExistingMember = intent === "existing_member";
 
   return (
     <AuthLayout
-      eyebrow={isMemberIntent ? "MEMBERSHIP REGISTRATION" : "CUSTOMER REGISTRATION"}
-      title={isMemberIntent ? "社員註冊" : "一般消費者註冊"}
-      description={isMemberIntent
-        ? "先建立並驗證帳號，登入後接續填寫入社申請。"
+      eyebrow={isExistingMember ? "MEMBER ACCOUNT CLAIM" : "NONMEMBER REGISTRATION"}
+      title={isExistingMember ? "既有社員註冊" : "非社員註冊"}
+      description={isExistingMember
+        ? "核對合作社名冊並驗證 Email，完成後直接取得既有正式社員資格。"
         : "完成 Email 驗證後，即可使用購物、結帳與訂單服務。"}
-      icon={isMemberIntent ? <HandHeart size={29} weight="light" /> : <ShoppingBag size={29} weight="light" />}
+      icon={isExistingMember ? <HandHeart size={29} weight="light" /> : <ShoppingBag size={29} weight="light" />}
     >
       {result ? (
         <AuthResult
@@ -184,13 +197,25 @@ export function RegisterPage() {
             重新選擇註冊方式
           </Link>
           <p className="eyebrow">ACCOUNT DETAILS</p>
-          <h2>{isMemberIntent ? "建立入社用帳號" : "建立消費帳號"}</h2>
-          {isMemberIntent && (
-            <p className="registration-notice">這一步只建立登入帳號；Email 驗證完成後，還需要填寫入社資料並交由合作社確認。</p>
+          <h2>{isExistingMember ? "認領社員帳號" : "建立非社員帳號"}</h2>
+          {isExistingMember && (
+            <p className="registration-notice">資料必須與合作社名冊一致；若名冊 Email 或手機已更換，請先聯絡合作社更新。</p>
           )}
           <form className="auth-form" onSubmit={submit}>
+            {isExistingMember && (
+              <label className="field">
+                社員編號
+                <input
+                  value={memberNumber}
+                  onChange={(event) => setMemberNumber(event.target.value)}
+                  autoComplete="off"
+                  maxLength={32}
+                  required
+                />
+              </label>
+            )}
             <label className="field">
-              顯示名稱
+              {isExistingMember ? "名冊登記姓名" : "顯示名稱"}
               <input
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
@@ -199,6 +224,20 @@ export function RegisterPage() {
                 required
               />
             </label>
+            {isExistingMember && (
+              <label className="field">
+                名冊登記手機
+                <input
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  type="tel"
+                  autoComplete="tel"
+                  minLength={8}
+                  maxLength={24}
+                  required
+                />
+              </label>
+            )}
             <label className="field">
               電子信箱
               <input
@@ -314,19 +353,13 @@ export function VerifyEmailPage() {
       {verified ? (
         <AuthResult
           title="Email 驗證完成"
-          message={search.intent === "member"
-            ? "帳號已建立，登入後即可接續填寫入社申請。"
-            : "你的一般消費帳號已可登入使用。"}
+          message={search.intent === "existing_member"
+            ? "社員帳號已啟用，登入後即可使用正式社員功能。"
+            : "你的非社員帳號已可登入使用。"}
         >
-          {search.intent === "member" ? (
-            <Link className="button button-primary" to="/membership">
-              前往入社申請 <ArrowRight size={17} />
-            </Link>
-          ) : (
-            <button className="button button-primary" type="button" onClick={openLogin}>
-              登入開始使用 <ArrowRight size={17} />
-            </button>
-          )}
+          <button className="button button-primary" type="button" onClick={openLogin}>
+            登入開始使用 <ArrowRight size={17} />
+          </button>
         </AuthResult>
       ) : (
         <div className="auth-card">

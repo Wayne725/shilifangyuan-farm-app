@@ -20,6 +20,14 @@ from ..auth import (
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..identity_numbers import next_identity_number
+from ..integrations.common import IntegrationError
+from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..member_claims import (
+    MemberClaimError,
+    attach_roster_membership,
+    normalize_email,
+    verified_roster_entry,
+)
 from ..rate_limit import (
     LOGIN_RULE,
     PASSWORD_RESET_RULE,
@@ -36,6 +44,7 @@ from ..models import (
     User,
 )
 from ..schemas import (
+    ExistingMemberRegistrationRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
@@ -146,6 +155,78 @@ async def register(
     token = await _issue_email_verification(session, user)
     return _development_token_response(
         "註冊完成，驗證信已排入寄送佇列，請稍候",
+        token,
+        settings,
+    )
+
+
+@auth_router.post(
+    "/register-existing-member",
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_existing_member(
+    body: ExistingMemberRegistrationRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    enforce(
+        client_key(
+            request,
+            "register-existing-member",
+            body.member_number,
+        ),
+        REGISTER_RULE,
+    )
+    try:
+        cipher = pii_cipher_from_settings(settings)
+        roster_entry = await verified_roster_entry(
+            session,
+            cipher,
+            member_number=body.member_number,
+            legal_name=body.legal_name,
+            email=str(body.email),
+            phone=body.phone,
+        )
+    except IntegrationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="社員名冊驗證服務尚未完成設定",
+        ) from exc
+    except MemberClaimError as exc:
+        if exc.code == "claimed":
+            raise HTTPException(
+                status_code=409,
+                detail="此社員帳號已啟用，請直接登入或使用忘記密碼",
+            ) from exc
+        raise HTTPException(
+            status_code=400,
+            detail="社員資料無法核對，請確認名冊登記內容",
+        ) from exc
+
+    email = normalize_email(str(body.email))
+    existing = await session.scalar(select(User.id).where(User.email == email))
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="此 Email 已有帳號，請先登入後在帳號中心認領社員資格",
+        )
+    user = User(
+        customer_number=await next_identity_number(
+            session,
+            User.customer_number,
+            "SLF-C",
+        ),
+        email=email,
+        display_name=body.legal_name.strip(),
+        password_hash=hash_password(body.password),
+    )
+    session.add(user)
+    await session.flush()
+    await attach_roster_membership(session, roster_entry, user)
+    token = await _issue_email_verification(session, user)
+    return _development_token_response(
+        "社員資料核對完成，驗證信已排入寄送佇列",
         token,
         settings,
     )

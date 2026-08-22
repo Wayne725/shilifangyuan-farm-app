@@ -34,11 +34,12 @@ flowchart LR
 User                    登入帳號與 customer/admin 權限
 MembershipApplication   入社申請與文件審核
 Membership              一般買家、實習社員、正式社員狀態
+MemberRosterEntry       尚未連結線上帳號的既有正式社員名冊
 MemberProfile           AES-GCM 加密私密資料
 MemberDirectoryEntry    社員自願公開資料
 ```
 
-`memberships.status` 是資格真相。`trainee` 與 `active` 都取得社員價；只有 `active` 可使用正式社員的活動、名錄與治理功能。
+`memberships.status` 是資格真相。`trainee` 與 `active` 都取得社員價；只有 `active` 可使用正式社員的活動、名錄與治理功能。`MemberRosterEntry` 本身不授權任何線上操作，只有名冊資料核對成功並連結至 `User` 後才建立 `active` 會籍。
 
 ## 銷售與履約
 

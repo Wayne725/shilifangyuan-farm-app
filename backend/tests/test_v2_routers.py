@@ -18,6 +18,7 @@ from app.models import (
     MealEvent,
     MealEventOffering,
     MemberProfile,
+    MemberRosterEntry,
     MemberProposal,
     Membership,
     MembershipApplication,
@@ -256,6 +257,158 @@ async def test_auth_register_verify_login_refresh_and_reset(
         },
     )
     assert new_password.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_existing_member_registers_from_roster_and_gets_active_membership(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    roster_payload = {
+        "member_number": "SLF-2019-0042",
+        "legal_name": "王社員",
+        "email": "existing.member@example.com",
+        "phone": "0912-345-678",
+        "share_certificate_number": "SHARE-0042",
+        "share_capital_amount": 3000,
+        "share_count": 3,
+        "share_subscribed_on": "2019-04-10",
+        "share_paid_on": "2019-04-12",
+    }
+    created = await client.post(
+        "/v1/admin/member-roster",
+        json=roster_payload,
+        headers=auth_headers(admin),
+    )
+
+    assert created.status_code == 201
+    assert created.json()["member_number"] == "SLF-2019-0042"
+    assert created.json()["email_masked"].endswith("@example.com")
+    assert created.json()["phone_masked"].endswith("5678")
+    assert created.json()["claimed"] is False
+    stored_roster = await session.scalar(
+        select(MemberRosterEntry).where(
+            MemberRosterEntry.member_number == "SLF-2019-0042"
+        )
+    )
+    assert stored_roster is not None
+    assert "王社員" not in stored_roster.legal_name_encrypted
+    assert "existing.member" not in stored_roster.email_encrypted
+
+    mismatch = await client.post(
+        "/v1/auth/register-existing-member",
+        json={
+            "member_number": "SLF-2019-0042",
+            "legal_name": "王社員",
+            "email": "existing.member@example.com",
+            "phone": "0900000000",
+            "password": "existing-member-pass-123",
+        },
+    )
+    assert mismatch.status_code == 400
+
+    registered = await client.post(
+        "/v1/auth/register-existing-member",
+        json={
+            "member_number": "slf-2019-0042",
+            "legal_name": "王 社員",
+            "email": "Existing.Member@example.com",
+            "phone": "0912345678",
+            "password": "existing-member-pass-123",
+        },
+    )
+    assert registered.status_code == 201
+    verification_token = registered.json()["development_token"]
+    claimed_user = await session.scalar(
+        select(User).where(User.email == "existing.member@example.com")
+    )
+    assert claimed_user is not None
+    claimed_membership = await session.scalar(
+        select(Membership).where(Membership.user_id == claimed_user.id)
+    )
+    assert claimed_membership is not None
+    assert claimed_membership.status == MembershipStatus.ACTIVE
+    assert claimed_membership.member_number == "SLF-2019-0042"
+    assert claimed_membership.share_capital_amount == 3000
+    await session.refresh(stored_roster)
+    assert stored_roster.claimed_user_id == claimed_user.id
+
+    hidden_claim_status = await client.post(
+        "/v1/auth/register-existing-member",
+        json={
+            "member_number": "SLF-2019-0042",
+            "legal_name": "錯誤姓名",
+            "email": "wrong@example.com",
+            "phone": "0900000000",
+            "password": "existing-member-pass-123",
+        },
+    )
+    assert hidden_claim_status.status_code == 400
+
+    before_verification = await client.post(
+        "/v1/auth/login",
+        json={
+            "email": "existing.member@example.com",
+            "password": "existing-member-pass-123",
+        },
+    )
+    assert before_verification.status_code == 403
+    verified = await client.post(
+        "/v1/auth/verify-email",
+        json={"token": verification_token},
+    )
+    assert verified.status_code == 200
+    logged_in = await client.post(
+        "/v1/auth/login",
+        json={
+            "email": "existing.member@example.com",
+            "password": "existing-member-pass-123",
+        },
+    )
+    assert logged_in.status_code == 200
+    assert logged_in.json()["user"]["membership_type"] == "member"
+
+
+@pytest.mark.asyncio
+async def test_existing_customer_account_can_claim_matching_member_roster(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    admin = v2_context["admin"]
+    customer = v2_context["customer_b"]
+    created = await client.post(
+        "/v1/admin/member-roster",
+        json={
+            "member_number": "SLF-2020-0077",
+            "legal_name": "一般顧客乙",
+            "email": customer.email,
+            "phone": "0987654321",
+        },
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 201
+
+    claimed = await client.post(
+        "/v1/membership/claim-existing",
+        json={
+            "member_number": "SLF-2020-0077",
+            "legal_name": "一般顧客乙",
+            "phone": "0987-654-321",
+        },
+        headers=auth_headers(customer),
+    )
+
+    assert claimed.status_code == 200
+    assert claimed.json()["status"] == "active"
+    assert claimed.json()["member_number"] == "SLF-2020-0077"
+    mine = await client.get(
+        "/v1/members/me",
+        headers=auth_headers(customer),
+    )
+    assert mine.status_code == 200
+    assert mine.json()["membership_type"] == "member"
 
 
 @pytest.mark.asyncio

@@ -2112,6 +2112,10 @@ p {
   font-size: 10px;
 }
 
+.account-page > .existing-member-claim {
+  margin: 35px 0 0;
+}
+
 .account-metrics {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -4249,6 +4253,19 @@ p {
   align-items: start;
   padding: 30px 4px;
   border-bottom: 1px solid var(--line);
+}
+
+.roster-entry-card .review-card-actions {
+  align-content: center;
+}
+
+.roster-entry-card .review-card-actions strong,
+.roster-entry-card .review-card-actions small {
+  display: block;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.7;
 }
 
 .review-card-copy h3 {

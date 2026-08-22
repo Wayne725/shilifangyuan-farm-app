@@ -78,6 +78,46 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class ExistingMemberRegistrationRequest(BaseModel):
+    member_number: str = Field(min_length=1, max_length=32)
+    legal_name: str = Field(min_length=1, max_length=80)
+    email: EmailStr
+    phone: str = Field(min_length=8, max_length=24)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class ExistingMemberClaimRequest(BaseModel):
+    member_number: str = Field(min_length=1, max_length=32)
+    legal_name: str = Field(min_length=1, max_length=80)
+    phone: str = Field(min_length=8, max_length=24)
+
+
+class MemberRosterEntryCreate(BaseModel):
+    member_number: str = Field(min_length=1, max_length=32)
+    legal_name: str = Field(min_length=1, max_length=80)
+    email: EmailStr
+    phone: str = Field(min_length=8, max_length=24)
+    share_certificate_number: Optional[str] = Field(default=None, max_length=64)
+    share_capital_amount: int = Field(default=0, ge=0)
+    share_count: int = Field(default=0, ge=0)
+    share_subscribed_on: Optional[date] = None
+    share_paid_on: Optional[date] = None
+
+
+class MemberRosterEntryRead(ApiModel):
+    id: str
+    member_number: str
+    legal_name: str
+    email_masked: str
+    phone_masked: str
+    share_certificate_number: Optional[str] = None
+    share_capital_amount: int
+    share_count: int
+    is_active: bool
+    claimed: bool
+    claimed_at: Optional[datetime] = None
+
+
 class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 

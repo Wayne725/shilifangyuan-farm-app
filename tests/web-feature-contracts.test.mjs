@@ -54,8 +54,12 @@ test("商店商品圖使用精簡比例且壞圖有一致備援", () => {
   assert.match(shared, /onError=\{replaceBrokenAsset\}/);
 });
 
-test("註冊入口先區分社員申請與一般消費者", () => {
-  assert.match(authFlows, /社員註冊/);
-  assert.match(authFlows, /一般消費者註冊/);
-  assert.match(router, /intent:\s*search\.intent === "member" \|\| search\.intent === "customer"/);
+test("註冊入口區分既有社員認領與非社員帳號", () => {
+  assert.match(authFlows, /既有社員註冊/);
+  assert.match(authFlows, /非社員註冊/);
+  assert.match(authFlows, /\/v1\/auth\/register-existing-member/);
+  assert.match(source, /\/v1\/membership\/claim-existing/);
+  assert.match(source, /\/v1\/admin\/member-roster/);
+  assert.match(router, /search\.intent === "existing_member"/);
+  assert.match(router, /search\.intent === "nonmember"/);
 });

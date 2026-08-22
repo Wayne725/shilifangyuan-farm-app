@@ -26,10 +26,20 @@ from ..integrations.notifications import (
     NotificationService,
     SQLAlchemyNotificationRepository,
 )
+from ..member_claims import (
+    MemberClaimError,
+    attach_roster_membership,
+    normalize_email,
+    normalize_member_number,
+    normalize_phone,
+    roster_aad,
+    verified_roster_entry,
+)
 from ..models import (
     AdminAudit,
     MemberDirectoryEntry,
     MemberProfile,
+    MemberRosterEntry,
     Membership,
     MembershipApplication,
     MembershipApplicationStatus,
@@ -45,8 +55,10 @@ from ..models import (
     Refund,
     RefundStatus,
     User,
+    new_id,
 )
 from ..schemas import (
+    ExistingMemberClaimRequest,
     MemberDirectoryRead,
     MemberDirectoryUpdate,
     MembershipApplicationRead,
@@ -61,6 +73,8 @@ from ..schemas import (
     MembershipMeRead,
     MembershipProfileRead,
     MembershipRead,
+    MemberRosterEntryCreate,
+    MemberRosterEntryRead,
 )
 
 
@@ -109,6 +123,52 @@ def _cipher(settings: Settings):
             status_code=503,
             detail="私密資料加密設定尚未完成",
         ) from exc
+
+
+def _mask_email(value: str) -> str:
+    local, separator, domain = value.partition("@")
+    if not separator:
+        return "***"
+    visible = local[:1]
+    return f"{visible}{'*' * max(3, len(local) - 1)}@{domain}"
+
+
+def _mask_phone(value: str) -> str:
+    digits = normalize_phone(value)
+    return f"{'*' * max(0, len(digits) - 4)}{digits[-4:]}"
+
+
+def _roster_response(
+    entry: MemberRosterEntry,
+    cipher,
+) -> MemberRosterEntryRead:
+    aad = roster_aad(entry.id)
+    return MemberRosterEntryRead(
+        id=entry.id,
+        member_number=entry.member_number,
+        legal_name=cipher.decrypt_text(
+            entry.legal_name_encrypted,
+            associated_data=aad,
+        ),
+        email_masked=_mask_email(
+            cipher.decrypt_text(
+                entry.email_encrypted,
+                associated_data=aad,
+            )
+        ),
+        phone_masked=_mask_phone(
+            cipher.decrypt_text(
+                entry.phone_encrypted,
+                associated_data=aad,
+            )
+        ),
+        share_certificate_number=entry.share_certificate_number,
+        share_capital_amount=entry.share_capital_amount,
+        share_count=entry.share_count,
+        is_active=entry.is_active,
+        claimed=entry.claimed_user_id is not None,
+        claimed_at=_aware_optional(entry.claimed_at),
+    )
 
 
 def _storage(settings: Settings):
@@ -891,6 +951,45 @@ async def get_my_membership(
     )
 
 
+@membership_router.post(
+    "/v1/membership/claim-existing",
+    response_model=MembershipRead,
+)
+async def claim_existing_membership(
+    body: ExistingMemberClaimRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MembershipRead:
+    try:
+        entry = await verified_roster_entry(
+            session,
+            _cipher(settings),
+            member_number=body.member_number,
+            legal_name=body.legal_name,
+            email=user.email,
+            phone=body.phone,
+        )
+        membership = await attach_roster_membership(session, entry, user)
+    except MemberClaimError as exc:
+        if exc.code == "claimed":
+            raise HTTPException(
+                status_code=409,
+                detail="此社員名冊紀錄已由其他帳號認領",
+            ) from exc
+        if exc.code == "user_has_membership":
+            raise HTTPException(
+                status_code=409,
+                detail="此帳號已有會籍，不可重複認領",
+            ) from exc
+        raise HTTPException(
+            status_code=400,
+            detail="社員資料無法核對，請確認名冊登記內容",
+        ) from exc
+    await session.commit()
+    return MembershipRead.model_validate(membership)
+
+
 @membership_router.get(
     "/v1/members/directory",
     response_model=list[MemberDirectoryRead],
@@ -1222,6 +1321,99 @@ async def create_document_download_url(
         "download_url": url,
         "expires_in_seconds": expires_in_seconds,
     }
+
+
+@membership_router.get(
+    "/v1/admin/member-roster",
+    response_model=list[MemberRosterEntryRead],
+)
+async def list_member_roster(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> list[MemberRosterEntryRead]:
+    entries = (
+        await session.scalars(
+            select(MemberRosterEntry).order_by(
+                MemberRosterEntry.member_number
+            )
+        )
+    ).all()
+    cipher = _cipher(settings)
+    return [_roster_response(entry, cipher) for entry in entries]
+
+
+@membership_router.post(
+    "/v1/admin/member-roster",
+    response_model=MemberRosterEntryRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_member_roster_entry(
+    body: MemberRosterEntryCreate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MemberRosterEntryRead:
+    member_number = normalize_member_number(body.member_number)
+    if not member_number:
+        raise HTTPException(status_code=422, detail="請填寫社員編號")
+    existing_roster = await session.scalar(
+        select(MemberRosterEntry.id).where(
+            MemberRosterEntry.member_number == member_number
+        )
+    )
+    existing_membership = await session.scalar(
+        select(Membership.id).where(
+            Membership.member_number == member_number
+        )
+    )
+    if existing_roster is not None or existing_membership is not None:
+        raise HTTPException(status_code=409, detail="社員編號已存在")
+    phone = normalize_phone(body.phone)
+    if len(phone) < 8:
+        raise HTTPException(status_code=422, detail="手機格式不正確")
+
+    entry_id = new_id()
+    cipher = _cipher(settings)
+    aad = roster_aad(entry_id)
+    entry = MemberRosterEntry(
+        id=entry_id,
+        member_number=member_number,
+        legal_name_encrypted=cipher.encrypt_text(
+            body.legal_name.strip(),
+            associated_data=aad,
+        ),
+        email_encrypted=cipher.encrypt_text(
+            normalize_email(str(body.email)),
+            associated_data=aad,
+        ),
+        phone_encrypted=cipher.encrypt_text(
+            phone,
+            associated_data=aad,
+        ),
+        encryption_key_version=cipher.current_version,
+        share_certificate_number=(
+            body.share_certificate_number.strip()
+            if body.share_certificate_number
+            else None
+        ),
+        share_capital_amount=body.share_capital_amount,
+        share_count=body.share_count,
+        share_subscribed_on=body.share_subscribed_on,
+        share_paid_on=body.share_paid_on,
+    )
+    session.add(entry)
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="member_roster.created",
+            aggregate_type="member_roster_entry",
+            aggregate_id=entry.id,
+            data={"member_number": entry.member_number},
+        )
+    )
+    await session.commit()
+    return _roster_response(entry, cipher)
 
 
 @membership_router.get(

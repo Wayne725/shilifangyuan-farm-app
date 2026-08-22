@@ -16,6 +16,7 @@ from .integrations.pii_crypto import (
     pii_cipher_from_settings,
 )
 from .integrations.r2_storage import r2_document_storage_from_settings
+from .member_claims import roster_aad
 from .models import (
     Activity,
     ActivityRegistration,
@@ -47,6 +48,7 @@ from .models import (
     MemberDirectoryEntry,
     MemberBadge,
     MemberProfile,
+    MemberRosterEntry,
     MemberProposal,
     MemberProposalComment,
     MemberProposalStatus,
@@ -112,6 +114,8 @@ from .models import (
 
 
 DEMO_PASSWORD = "member123"
+DEMO_ROSTER_ID = "member-roster-existing-demo"
+DEMO_ROSTER_NUMBER = "SLF-2018-0099"
 
 
 PRODUCTS = [
@@ -439,6 +443,32 @@ async def seed_demo_data(session: AsyncSession) -> Dict[str, int]:
         seed_cipher = pii_cipher_from_settings(settings)
     except IntegrationError:
         seed_cipher = VersionedPIICipher({"v1": bytes(32)}, "v1")
+
+    roster_aad_value = roster_aad(DEMO_ROSTER_ID)
+    session.add(
+        MemberRosterEntry(
+            id=DEMO_ROSTER_ID,
+            member_number=DEMO_ROSTER_NUMBER,
+            legal_name_encrypted=seed_cipher.encrypt_text(
+                "既有社員展示",
+                associated_data=roster_aad_value,
+            ),
+            email_encrypted=seed_cipher.encrypt_text(
+                "existing@shilifangyuan.tw",
+                associated_data=roster_aad_value,
+            ),
+            phone_encrypted=seed_cipher.encrypt_text(
+                "0911888777",
+                associated_data=roster_aad_value,
+            ),
+            encryption_key_version=seed_cipher.current_version,
+            share_certificate_number="DEMO-SHARE-0099",
+            share_capital_amount=3000,
+            share_count=3,
+            share_subscribed_on=date(2018, 5, 10),
+            share_paid_on=date(2018, 5, 12),
+        )
+    )
 
     pickup_locations = []
     for location_data in PICKUP_LOCATIONS:
@@ -1329,6 +1359,39 @@ async def sync_preview_demo_data(
     for product in demo_products:
         product.image_url = product_images[product.slug]
 
+    existing_roster = await session.scalar(
+        select(MemberRosterEntry.id).where(
+            MemberRosterEntry.member_number == DEMO_ROSTER_NUMBER
+        )
+    )
+    if existing_roster is None:
+        seed_cipher = pii_cipher_from_settings(settings)
+        roster_aad_value = roster_aad(DEMO_ROSTER_ID)
+        session.add(
+            MemberRosterEntry(
+                id=DEMO_ROSTER_ID,
+                member_number=DEMO_ROSTER_NUMBER,
+                legal_name_encrypted=seed_cipher.encrypt_text(
+                    "既有社員展示",
+                    associated_data=roster_aad_value,
+                ),
+                email_encrypted=seed_cipher.encrypt_text(
+                    "existing@shilifangyuan.tw",
+                    associated_data=roster_aad_value,
+                ),
+                phone_encrypted=seed_cipher.encrypt_text(
+                    "0911888777",
+                    associated_data=roster_aad_value,
+                ),
+                encryption_key_version=seed_cipher.current_version,
+                share_certificate_number="DEMO-SHARE-0099",
+                share_capital_amount=3000,
+                share_count=3,
+                share_subscribed_on=date(2018, 5, 10),
+                share_paid_on=date(2018, 5, 12),
+            )
+        )
+
     existing_event = await session.scalar(
         select(MealEvent.id).where(
             MealEvent.id == "meal-event-preorder-demo"
@@ -1466,6 +1529,7 @@ async def reset_demo_data(session: AsyncSession) -> Dict[str, int]:
         SupplierAccreditation,
         Supplier,
         PickupLocation,
+        MemberRosterEntry,
         MemberDirectoryEntry,
         MembershipCharge,
         MembershipFeeSchedule,

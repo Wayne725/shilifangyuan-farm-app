@@ -22,6 +22,7 @@ from .seed import seed_demo_data
 
 AUTH_EMAIL_PATHS = {
     "/v1/auth/register",
+    "/v1/auth/register-existing-member",
     "/v1/auth/resend-verification",
     "/v1/auth/forgot-password",
 }

@@ -29,17 +29,32 @@ interface AdminActivityRegistration {
   queue_position: number;
 }
 
+interface MemberRosterEntry {
+  id: string;
+  member_number: string;
+  legal_name: string;
+  email_masked: string;
+  phone_masked: string;
+  share_certificate_number?: string | null;
+  share_capital_amount: number;
+  share_count: number;
+  is_active: boolean;
+  claimed: boolean;
+  claimed_at?: string | null;
+}
+
 export function AdminSocialPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
-  const [activities, proposals, applications, wishes, meetings, memberships] = useQueries({ queries: [
+  const [activities, proposals, applications, wishes, meetings, memberships, roster] = useQueries({ queries: [
     { queryKey: ["admin-activities"], queryFn: () => apiFetch<Activity[]>("/v1/admin/activities"), enabled: isAdmin },
     { queryKey: ["admin-member-proposals"], queryFn: () => apiFetch<Proposal[]>("/v1/admin/member-proposals"), enabled: isAdmin },
     { queryKey: ["admin-membership-applications"], queryFn: () => apiFetch<MembershipApplication[]>("/v1/admin/membership-applications"), enabled: isAdmin },
     { queryKey: ["wishes"], queryFn: () => apiFetch<Wish[]>("/v1/wishes"), enabled: isAdmin },
     { queryKey: ["meetings"], queryFn: () => apiFetch<Meeting[]>("/v1/meetings"), enabled: isAdmin },
     { queryKey: ["admin-members"], queryFn: () => apiFetch<AdminMembership[]>("/v1/admin/members"), enabled: isAdmin },
+    { queryKey: ["admin-member-roster"], queryFn: () => apiFetch<MemberRosterEntry[]>("/v1/admin/member-roster"), enabled: isAdmin },
   ] });
 
   if (!isAdmin) {
@@ -64,6 +79,7 @@ export function AdminSocialPage() {
           <Tabs.Trigger value="reviews">審核工作</Tabs.Trigger>
           <Tabs.Trigger value="wishes">願望管理</Tabs.Trigger>
           <Tabs.Trigger value="meetings">會議管理</Tabs.Trigger>
+          <Tabs.Trigger value="roster">社員名冊</Tabs.Trigger>
         </Tabs.List>
 
         <Tabs.Content className="tab-content" value="reviews">
@@ -93,6 +109,13 @@ export function AdminSocialPage() {
             {meetings.data?.map((meeting) => <MeetingAdminCard key={meeting.id} meeting={meeting} memberships={memberships.data || []} proposals={proposals.data || []} onDone={() => queryClient.invalidateQueries({ queryKey: ["meetings"] })} />)}
           </AdminReviewSection>
         </Tabs.Content>
+
+        <Tabs.Content className="tab-content" value="roster">
+          <RosterCreateForm onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-roster"] })} />
+          <AdminReviewSection icon={IdentificationCard} title="既有社員名冊" count={roster.data?.length || 0} pending={roster.isPending} error={roster.error?.message} empty="尚未匯入既有社員">
+            {roster.data?.map((entry) => <RosterEntryCard key={entry.id} entry={entry} />)}
+          </AdminReviewSection>
+        </Tabs.Content>
       </Tabs.Root>
     </section>
   );
@@ -100,6 +123,74 @@ export function AdminSocialPage() {
 
 function AdminReviewSection({ icon: Icon, title, count, pending, error, empty, children }: { icon: typeof CalendarBlank; title: string; count: number; pending: boolean; error?: string; empty: string; children: React.ReactNode }) {
   return <section className="admin-review-section"><div className="section-title-row"><div><p className="eyebrow">WORK QUEUE</p><h2>{title}</h2></div><span><Icon size={20} />{count}</span></div>{pending && <LoadingLines count={2} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && <DataState title={empty} detail="新的項目送出後會出現在這裡。" />}<div className="admin-review-list">{children}</div></section>;
+}
+
+function RosterCreateForm({ onDone }: { onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    member_number: "",
+    legal_name: "",
+    email: "",
+    phone: "",
+    share_certificate_number: "",
+    share_capital_amount: 0,
+    share_count: 0,
+  });
+  const create = useMutation({
+    mutationFn: () => apiFetch("/v1/admin/member-roster", {
+      method: "POST",
+      body: JSON.stringify({
+        ...form,
+        share_certificate_number: form.share_certificate_number || null,
+      }),
+    }),
+    onSuccess: () => {
+      setOpen(false);
+      setForm({ member_number: "", legal_name: "", email: "", phone: "", share_certificate_number: "", share_capital_amount: 0, share_count: 0 });
+      onDone();
+    },
+  });
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    create.mutate();
+  }
+
+  return (
+    <section className="meeting-create-section roster-create-section">
+      <button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />新增既有社員</button>
+      {open && (
+        <form className="social-form" onSubmit={submit}>
+          <div className="form-heading"><div><p className="eyebrow">MEMBER ROSTER</p><h2>建立可認領的社員紀錄</h2></div><span>姓名、Email 與手機會加密保存；註冊者需全部核對成功。</span></div>
+          <div className="field-grid three-columns">
+            <label className="field"><span>社員編號</span><input required maxLength={32} value={form.member_number} onChange={(event) => setForm({ ...form, member_number: event.target.value })} /></label>
+            <label className="field"><span>社員姓名</span><input required maxLength={80} value={form.legal_name} onChange={(event) => setForm({ ...form, legal_name: event.target.value })} /></label>
+            <label className="field"><span>名冊 Email</span><input required type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
+            <label className="field"><span>名冊手機</span><input required type="tel" minLength={8} maxLength={24} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
+            <label className="field"><span>股票號碼</span><input maxLength={64} value={form.share_certificate_number} onChange={(event) => setForm({ ...form, share_certificate_number: event.target.value })} /></label>
+            <label className="field"><span>股金</span><input min={0} type="number" value={form.share_capital_amount} onChange={(event) => setForm({ ...form, share_capital_amount: Number(event.target.value) })} /></label>
+            <label className="field"><span>股數</span><input min={0} type="number" value={form.share_count} onChange={(event) => setForm({ ...form, share_count: Number(event.target.value) })} /></label>
+          </div>
+          {create.isError && <p className="form-error" role="alert">{create.error.message}</p>}
+          <div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={create.isPending}>{create.isPending ? "建立中…" : "建立名冊紀錄"}</button></div>
+        </form>
+      )}
+    </section>
+  );
+}
+
+function RosterEntryCard({ entry }: { entry: MemberRosterEntry }) {
+  return (
+    <article className="admin-review-card roster-entry-card">
+      <div className="review-card-copy">
+        <span className="status-chip">{entry.claimed ? "已認領" : entry.is_active ? "可認領" : "已停用"}</span>
+        <h3>{entry.member_number} · {entry.legal_name}</h3>
+        <p>{entry.email_masked} · {entry.phone_masked}</p>
+        <small>股票號碼 {entry.share_certificate_number || "—"} · 股金 {entry.share_capital_amount} 元 · {entry.share_count} 股</small>
+      </div>
+      <div className="review-card-actions"><strong>{entry.claimed ? "已連結社員帳號" : "等待社員完成名冊核對"}</strong>{entry.claimed_at && <small>{formatDateTime(entry.claimed_at)}</small>}</div>
+    </article>
+  );
 }
 
 function ActivityReviewCard({ activity, onDone }: { activity: Activity; onDone: () => void }) {

@@ -44,6 +44,7 @@ from ..models import (
     SalesChannel,
     TaxType,
     User,
+    new_id,
 )
 from ..schemas import (
     ActivityReview,
@@ -69,6 +70,15 @@ from ..v2_domain import (
 
 
 meals_router = APIRouter(tags=["meals"])
+
+
+def make_meal_order_number(
+    order_id: str,
+    now: datetime | None = None,
+) -> str:
+    current = now or datetime.now(timezone.utc)
+    compact_id = order_id.replace("-", "").upper()
+    return f"M{current:%y%m%d%H%M%S}{compact_id[-12:]}"
 
 
 def _aware(value: datetime) -> datetime:
@@ -528,9 +538,11 @@ async def create_meal_order(
     quote = await quote_meal_order(event_id, body, session)
     by_id = {offering.id: offering for offering in event.offerings}
     now = datetime.now(timezone.utc)
-    order_number = f"M{now:%y%m%d%H%M%S}{secrets.randbelow(1000):03d}"
+    order_id = new_id()
+    order_number = make_meal_order_number(order_id, now)
     pickup_code = await _unique_pickup_code(session)
     order = Order(
+        id=order_id,
         order_number=order_number,
         order_kind=OrderKind.REGULAR,
         sales_channel=SalesChannel.MEAL_PREORDER,
