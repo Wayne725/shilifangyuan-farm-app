@@ -106,6 +106,8 @@ class ProductCategory(str, enum.Enum):
     RICE_AND_GRAINS = "米・雜糧"
     EGGS = "蛋品"
     PROCESSED = "加工品"
+    DRINKS = "飲品"
+    DAILY_GOODS = "生活用品"
 
 
 class TargetType(str, enum.Enum):
@@ -1416,6 +1418,60 @@ class Meal(Base):
     offerings: Mapped[List["MealEventOffering"]] = relationship(
         back_populates="meal"
     )
+    option_groups: Mapped[List["MealOptionGroup"]] = relationship(
+        back_populates="meal",
+        cascade="all, delete-orphan",
+        order_by="MealOptionGroup.position",
+    )
+
+
+class MealOptionGroup(Base):
+    __tablename__ = "meal_option_groups"
+    __table_args__ = (
+        UniqueConstraint("meal_id", "name"),
+        CheckConstraint("min_selections >= 0", name="min_selections_nonnegative"),
+        CheckConstraint("max_selections >= 1", name="max_selections_positive"),
+        CheckConstraint(
+            "max_selections >= min_selections",
+            name="selection_range_valid",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    meal_id: Mapped[str] = mapped_column(
+        ForeignKey("meals.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    min_selections: Mapped[int] = mapped_column(Integer, default=0)
+    max_selections: Mapped[int] = mapped_column(Integer, default=1)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    meal: Mapped[Meal] = relationship(back_populates="option_groups")
+    options: Mapped[List["MealOption"]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+        order_by="MealOption.position",
+    )
+
+
+class MealOption(Base):
+    __tablename__ = "meal_options"
+    __table_args__ = (
+        UniqueConstraint("group_id", "name"),
+        CheckConstraint("price_delta >= 0", name="price_delta_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    group_id: Mapped[str] = mapped_column(
+        ForeignKey("meal_option_groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    price_delta: Mapped[int] = mapped_column(Integer, default=0)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    group: Mapped[MealOptionGroup] = relationship(back_populates="options")
 
 
 class MealEvent(Base):
@@ -1641,6 +1697,34 @@ class OrderItem(Base):
     tax_type: Mapped[TaxType] = mapped_column(enum_type(TaxType, "order_tax_type"))
 
     order: Mapped[Order] = relationship(back_populates="items")
+    selected_options: Mapped[List["OrderItemOption"]] = relationship(
+        back_populates="order_item",
+        cascade="all, delete-orphan",
+        order_by="OrderItemOption.position",
+    )
+
+
+class OrderItemOption(Base):
+    __tablename__ = "order_item_options"
+    __table_args__ = (
+        CheckConstraint("price_delta >= 0", name="price_delta_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    order_item_id: Mapped[str] = mapped_column(
+        ForeignKey("order_items.id", ondelete="CASCADE"), index=True
+    )
+    source_meal_option_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("meal_options.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    group_name: Mapped[str] = mapped_column(String(120))
+    option_name: Mapped[str] = mapped_column(String(120))
+    price_delta: Mapped[int] = mapped_column(Integer, default=0)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+    order_item: Mapped[OrderItem] = relationship(back_populates="selected_options")
 
 
 class OrderFulfillment(Base):

@@ -22,6 +22,7 @@ from ..integrations.notifications import (
     NotificationService,
     SQLAlchemyNotificationRepository,
 )
+from ..meal_pricing import price_meal_line
 from ..models import (
     AdminAudit,
     FulfillmentMethod,
@@ -32,9 +33,12 @@ from ..models import (
     MealEvent,
     MealEventOffering,
     MealEventStatus,
+    MealOption,
+    MealOptionGroup,
     Order,
     OrderFulfillment,
     OrderItem,
+    OrderItemOption,
     OrderKind,
     OutboxEvent,
     PaymentStatus,
@@ -53,6 +57,8 @@ from ..schemas import (
     MealEventCancelRequest,
     MealEventCreate,
     MealEventRead,
+    MealOptionGroupRead,
+    MealOptionRead,
     MealOfferingRead,
     MealOrderCreate,
     MealOrderQuoteRead,
@@ -87,15 +93,38 @@ def _aware(value: datetime) -> datetime:
     return value
 
 
+def _meal_option_groups_read(meal: Meal) -> list[MealOptionGroupRead]:
+    return [
+        MealOptionGroupRead(
+            id=group.id,
+            name=group.name,
+            min_selections=group.min_selections,
+            max_selections=group.max_selections,
+            position=group.position,
+            is_active=group.is_active,
+            options=[
+                MealOptionRead.model_validate(option)
+                for option in sorted(
+                    group.options,
+                    key=lambda item: item.position,
+                )
+                if option.is_active
+            ],
+        )
+        for group in sorted(meal.option_groups, key=lambda item: item.position)
+        if group.is_active
+    ]
+
+
 def _meal_event_read(event: MealEvent) -> MealEventRead:
     return MealEventRead(
         id=event.id,
         title=event.title,
         location=event.location,
-        ordering_starts_at=event.ordering_starts_at,
-        ordering_ends_at=event.ordering_ends_at,
-        pickup_starts_at=event.pickup_starts_at,
-        pickup_ends_at=event.pickup_ends_at,
+        ordering_starts_at=_aware(event.ordering_starts_at),
+        ordering_ends_at=_aware(event.ordering_ends_at),
+        pickup_starts_at=_aware(event.pickup_starts_at),
+        pickup_ends_at=_aware(event.pickup_ends_at),
         status=event.status,
         offerings=[
             MealOfferingRead(
@@ -111,6 +140,7 @@ def _meal_event_read(event: MealEvent) -> MealEventRead:
                 available_quantity=meal_available_quantity(offering),
                 position=offering.position,
                 is_active=offering.is_active,
+                option_groups=_meal_option_groups_read(offering.meal),
             )
             for offering in sorted(
                 event.offerings,
@@ -133,6 +163,8 @@ async def _load_event(
         .options(
             selectinload(MealEvent.offerings).selectinload(
                 MealEventOffering.meal
+            ).selectinload(Meal.option_groups).selectinload(
+                MealOptionGroup.options
             )
         )
     )
@@ -198,8 +230,8 @@ async def _meal_order_read(
         meal_event_id=event.id,
         meal_event_title=event.title,
         venue_name=event.location,
-        pickup_start=event.pickup_starts_at,
-        pickup_end=event.pickup_ends_at,
+        pickup_start=_aware(event.pickup_starts_at),
+        pickup_end=_aware(event.pickup_ends_at),
         pickup_code=(
             fulfillment.pickup_code if credential_available else None
         ),
@@ -210,10 +242,14 @@ async def _meal_order_read(
             fulfillment.status if fulfillment is not None else None,
             "pending",
         ),
-        paid_at=order.paid_at,
-        cancelled_at=order.cancelled_at,
+        paid_at=_aware(order.paid_at) if order.paid_at is not None else None,
+        cancelled_at=(
+            _aware(order.cancelled_at)
+            if order.cancelled_at is not None
+            else None
+        ),
         amount_total=order.amount_total,
-        created_at=order.created_at,
+        created_at=_aware(order.created_at),
         available_actions=order_available_actions(order),
         items=[
             {
@@ -221,8 +257,23 @@ async def _meal_order_read(
                 "meal_id": meal_ids.get(item.source_meal_offering_id or "", ""),
                 "meal_name": item.product_name,
                 "quantity": item.quantity,
+                "base_price": item.unit_price
+                - sum(option.price_delta for option in item.selected_options),
+                "option_price": sum(
+                    option.price_delta for option in item.selected_options
+                ),
                 "unit_price": item.unit_price,
                 "subtotal": item.subtotal,
+                "selections": [
+                    {
+                        "group_id": None,
+                        "group_name": option.group_name,
+                        "option_id": option.source_meal_option_id,
+                        "option_name": option.option_name,
+                        "price_delta": option.price_delta,
+                    }
+                    for option in item.selected_options
+                ],
             }
             for item in order.items
         ],
@@ -333,7 +384,9 @@ def _meal_order_query():
         select(Order)
         .where(Order.sales_channel == SalesChannel.MEAL_PREORDER)
         .options(
-            selectinload(Order.items),
+            selectinload(Order.items).selectinload(
+                OrderItem.selected_options
+            ),
             selectinload(Order.meal_event),
             selectinload(Order.fulfillment),
         )
@@ -440,6 +493,8 @@ async def list_meal_events(
             .options(
                 selectinload(MealEvent.offerings).selectinload(
                     MealEventOffering.meal
+                ).selectinload(Meal.option_groups).selectinload(
+                    MealOptionGroup.options
                 )
             )
             .order_by(MealEvent.pickup_starts_at)
@@ -495,17 +550,36 @@ async def quote_meal_order(
             )
         except DomainError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        subtotal = offering.price * requested.quantity
-        total += subtotal
+        try:
+            priced = price_meal_line(
+                offering,
+                requested.quantity,
+                requested.option_ids,
+            )
+        except DomainError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        total += priced.subtotal
         lines.append(
             {
                 "offering_id": offering.id,
                 "meal_id": offering.meal_id,
                 "meal_name": offering.meal.name,
                 "quantity": requested.quantity,
-                "unit_price": offering.price,
-                "subtotal": subtotal,
+                "base_price": priced.base_price,
+                "option_price": priced.option_price,
+                "unit_price": priced.unit_price,
+                "subtotal": priced.subtotal,
                 "tax_type": offering.meal.tax_type,
+                "selections": [
+                    {
+                        "group_id": option.group_id,
+                        "group_name": option.group_name,
+                        "option_id": option.option_id,
+                        "option_name": option.option_name,
+                        "price_delta": option.price_delta,
+                    }
+                    for option in priced.selections
+                ],
             }
         )
     return MealOrderQuoteRead(
@@ -537,6 +611,7 @@ async def create_meal_order(
         raise HTTPException(status_code=404, detail="找不到便當場次")
     quote = await quote_meal_order(event_id, body, session)
     by_id = {offering.id: offering for offering in event.offerings}
+    quote_by_offering = {item.offering_id: item for item in quote.items}
     now = datetime.now(timezone.utc)
     order_id = new_id()
     order_number = make_meal_order_number(order_id, now)
@@ -553,7 +628,7 @@ async def create_meal_order(
         amount_total=quote.amount_total,
         tax_amount=sum(
             included_tax_amount(
-                by_id[item.offering_id].price * item.quantity,
+                quote_by_offering[item.offering_id].subtotal,
                 by_id[item.offering_id].meal.tax_type,
             )
             for item in body.items
@@ -570,11 +645,23 @@ async def create_meal_order(
                 product_name=by_id[requested.offering_id].meal.name,
                 unit_label="份",
                 quantity=requested.quantity,
-                unit_price=by_id[requested.offering_id].price,
-                subtotal=(
-                    by_id[requested.offering_id].price * requested.quantity
-                ),
+                unit_price=quote_by_offering[requested.offering_id].unit_price,
+                subtotal=quote_by_offering[requested.offering_id].subtotal,
                 tax_type=by_id[requested.offering_id].meal.tax_type,
+                selected_options=[
+                    OrderItemOption(
+                        source_meal_option_id=selection.option_id,
+                        group_name=selection.group_name,
+                        option_name=selection.option_name,
+                        price_delta=selection.price_delta,
+                        position=position,
+                    )
+                    for position, selection in enumerate(
+                        quote_by_offering[
+                            requested.offering_id
+                        ].selections
+                    )
+                ],
             )
             for requested in body.items
         ],
@@ -685,7 +772,15 @@ async def admin_list_meals(
     session: AsyncSession = Depends(get_session),
 ) -> list[MealRead]:
     meals = (
-        await session.scalars(select(Meal).order_by(Meal.name))
+        await session.scalars(
+            select(Meal)
+            .options(
+                selectinload(Meal.option_groups).selectinload(
+                    MealOptionGroup.options
+                )
+            )
+            .order_by(Meal.name)
+        )
     ).all()
     return [MealRead.model_validate(meal) for meal in meals]
 
@@ -701,9 +796,33 @@ async def admin_create_meal(
     session: AsyncSession = Depends(get_session),
 ) -> MealRead:
     slug = f"meal-{secrets.token_hex(6)}"
-    meal = Meal(slug=slug, **body.model_dump())
+    values = body.model_dump(exclude={"option_groups"})
+    meal = Meal(
+        slug=slug,
+        **values,
+        option_groups=[
+            MealOptionGroup(
+                **group.model_dump(exclude={"options"}),
+                options=[
+                    MealOption(**option.model_dump())
+                    for option in group.options
+                ],
+            )
+            for group in body.option_groups
+        ],
+    )
     session.add(meal)
     await session.commit()
+    meal = await session.scalar(
+        select(Meal)
+        .where(Meal.id == meal.id)
+        .options(
+            selectinload(Meal.option_groups).selectinload(
+                MealOptionGroup.options
+            )
+        )
+    )
+    assert meal is not None
     return MealRead.model_validate(meal)
 
 
@@ -721,6 +840,8 @@ async def admin_list_meal_events(
             .options(
                 selectinload(MealEvent.offerings).selectinload(
                     MealEventOffering.meal
+                ).selectinload(Meal.option_groups).selectinload(
+                    MealOptionGroup.options
                 )
             )
             .order_by(MealEvent.created_at.desc())

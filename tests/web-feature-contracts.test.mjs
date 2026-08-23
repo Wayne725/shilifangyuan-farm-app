@@ -55,6 +55,14 @@ test("商店商品圖使用精簡比例且壞圖有一致備援", () => {
   assert.match(shared, /onError=\{replaceBrokenAsset\}/);
 });
 
+test("首頁入口與長訂單編號維持響應式邊界", () => {
+  assert.match(styles, /\.workspace-door\s*\{[^}]*justify-content:\s*flex-start;/s);
+  assert.match(styles, /\.workspace-door strong\s*\{[^}]*min-height:/s);
+  assert.match(styles, /\.order-number\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+  assert.match(styles, /@media \(max-width:\s*1180px\)[\s\S]*?\.workspace-passage\s*\{[^}]*grid-template-columns:\s*1fr 1fr;/s);
+  assert.match(source, /className="order-number/);
+});
+
 test("註冊入口區分既有社員認領與非社員帳號", () => {
   assert.match(authFlows, /既有社員註冊/);
   assert.match(authFlows, /非社員註冊/);

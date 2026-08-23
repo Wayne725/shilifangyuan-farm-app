@@ -56,7 +56,7 @@ fulfillment_method  cooperative_pickup | event_pickup | ecpay_logistics
 
 - 團購提案與正式團購分離；只有付款成功數量計入成團。
 - 達標後由管理員確認成團，才能建立正式物流單。
-- `Meal` 是可重用餐點；`MealEvent` 是單次取餐場次。
+- `Meal` 是可重用餐點；`MealEvent` 是單次取餐場次。餐點選項由群組定義必選數量與加價，訂單會保存選項名稱及價格快照，避免日後改菜單影響既有訂單。
 - 便當建立付款頁時保留容量 15 分鐘；付款後產生六位短碼與 QR token。
 - 核銷具冪等性；取餐結束後未領取標記 `no_show`。
 

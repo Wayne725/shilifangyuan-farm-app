@@ -129,7 +129,7 @@ export function OrdersPage() {
                 onClick={() => setSelectedId(order.id)}
               >
                 <span>{formatDate(order.created_at)}</span>
-                <strong>{order.order_number}</strong>
+                <strong className="order-number">{order.order_number}</strong>
                 <small>{salesChannelLabel(order.sales_channel)} · {formatMoney(order.amount_total)}</small>
                 <i className={`order-state ${order.payment_status}`}>
                   {paymentStatusLabel(order.payment_status)}
@@ -143,7 +143,7 @@ export function OrdersPage() {
               <div className="order-detail-head">
                 <div>
                   <p className="eyebrow">{salesChannelLabel(selected.sales_channel)}</p>
-                  <h2>{selected.order_number}</h2>
+                  <h2 className="order-number order-number-large">{selected.order_number}</h2>
                   <span>{formatDate(selected.created_at)} 建立</span>
                 </div>
                 <strong>{formatMoney(selected.amount_total)}</strong>

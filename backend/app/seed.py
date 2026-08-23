@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .auth import hash_password, verify_password
 from .config import Settings, get_settings
@@ -43,6 +44,8 @@ from .models import (
     MealEvent,
     MealEventOffering,
     MealEventStatus,
+    MealOption,
+    MealOptionGroup,
     MeetingType,
     MemberDirectoryEntry,
     MemberBadge,
@@ -72,6 +75,7 @@ from .models import (
     Order,
     OrderFulfillment,
     OrderItem,
+    OrderItemOption,
     OrderKind,
     OutboxEvent,
     PasswordResetToken,
@@ -110,6 +114,16 @@ from .models import (
     WishStatus,
     ExternalEvent,
 )
+from .official_catalog import (
+    DINNER_MEAL_SLUGS,
+    LUNCH_MEAL_SLUGS,
+    OFFICIAL_MEALS,
+    OFFICIAL_PRODUCTS,
+    MealSpec,
+    build_meal,
+    build_option_groups,
+    product_record,
+)
 
 
 DEMO_PASSWORD = "member123"
@@ -117,6 +131,7 @@ DEMO_ROSTER_ID = "member-roster-existing-demo"
 DEMO_ROSTER_NUMBER = "SLF-2018-0099"
 DEMO_PREORDER_EVENT_ID = "meal-event-preorder-demo"
 DEMO_PREORDER_OFFERING_ID = "meal-offering-preorder-demo"
+DEMO_DINNER_EVENT_ID = "meal-event-dinner-demo"
 
 
 def _build_demo_roster_entry(
@@ -149,28 +164,38 @@ def _build_demo_roster_entry(
 
 def _build_demo_preorder_event(
     now: datetime,
-    meal_id: str,
+    meals: list[Meal],
     admin_id: str,
+    *,
+    dinner: bool = False,
 ) -> MealEvent:
+    event_id = DEMO_DINNER_EVENT_ID if dinner else DEMO_PREORDER_EVENT_ID
+    ordering_ends_at = now + timedelta(hours=24 if dinner else 18)
+    pickup_starts_at = ordering_ends_at + timedelta(hours=3 if dinner else 2)
     return MealEvent(
-        id=DEMO_PREORDER_EVENT_ID,
-        title="今日展示便當（虛擬資料）",
-        location="合作社門市展示取餐區",
+        id=event_id,
+        title="每日晚餐預訂" if dinner else "每日午餐預訂",
+        location="啟碁科技" if dinner else "清華大學",
         ordering_starts_at=now - timedelta(hours=2),
-        ordering_ends_at=now + timedelta(days=1),
-        pickup_starts_at=now + timedelta(days=2, hours=3),
-        pickup_ends_at=now + timedelta(days=2, hours=5),
+        ordering_ends_at=ordering_ends_at,
+        pickup_starts_at=pickup_starts_at,
+        pickup_ends_at=pickup_starts_at + timedelta(hours=2),
         status=MealEventStatus.PUBLISHED,
         created_by_id=admin_id,
         offerings=[
             MealEventOffering(
-                id=DEMO_PREORDER_OFFERING_ID,
-                meal_id=meal_id,
-                price=120,
-                capacity=20,
+                id=(
+                    DEMO_PREORDER_OFFERING_ID
+                    if index == 1 and not dinner
+                    else f"meal-offering-{'dinner' if dinner else 'lunch'}-{index:02d}"
+                ),
+                meal_id=meal.id,
+                price=meal.price,
+                capacity=50,
                 paid_quantity=0,
-                position=1,
+                position=index,
             )
+            for index, meal in enumerate(meals, start=1)
         ],
     )
 
@@ -320,6 +345,7 @@ PRODUCTS = [
         "tax_type": TaxType.TAXABLE,
         "image_url": "/assets/products/pineapple-jam.jpg",
     },
+    *(product_record(spec) for spec in OFFICIAL_PRODUCTS),
 ]
 
 
@@ -400,6 +426,19 @@ PRODUCT_SUPPLIERS = {
     "black-bean-soy-sauce": "supplier-demo-pantry",
     "pineapple-jam": "supplier-demo-pantry",
 }
+
+
+def _product_supplier_id(data: dict[str, object]) -> str:
+    slug = str(data["slug"])
+    category = getattr(data["category"], "value", data["category"])
+    return PRODUCT_SUPPLIERS.get(
+        slug,
+        (
+            "supplier-demo-pantry"
+            if category in {"加工品", "飲品", "生活用品"}
+            else "supplier-demo-produce"
+        ),
+    )
 
 
 async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
@@ -763,10 +802,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
             **data,
             product_number=f"P-{index:04d}",
             sku=data["slug"].upper(),
-            supplier_id=PRODUCT_SUPPLIERS.get(
-                data["slug"],
-                "supplier-demo-produce",
-            ),
+            supplier_id=_product_supplier_id(data),
         )
         for index, data in enumerate(PRODUCTS, start=1)
     ]
@@ -793,7 +829,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         description="小白菜、玉米、地瓜與紅蘿蔔的固定團購套組。",
         member_price=320,
         nonmember_price=370,
-        image_url="/assets/products/bok-choy.png",
+        image_url="/assets/products/bok-choy.jpg",
         items=[
             GroupBundleItem(product_id=by_slug["bok-choy"].id, quantity=2),
             GroupBundleItem(product_id=by_slug["fruit-corn"].id, quantity=2),
@@ -806,7 +842,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         description="白米、黑豆醬油與鳳梨果醬組合。",
         member_price=520,
         nonmember_price=600,
-        image_url="/assets/products/rice.png",
+        image_url="/assets/products/rice.jpg",
         items=[
             GroupBundleItem(product_id=by_slug["rice"].id, quantity=1),
             GroupBundleItem(
@@ -1109,32 +1145,15 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         ]
     )
 
-    meals = [
-        Meal(
-            id="meal-seasonal-demo",
-            slug="seasonal-coop-lunchbox",
-            name="時蔬合作便當",
-            description="白飯、當季時蔬、豆腐與友善契作主菜。",
-            image_url="/assets/meals/taiwanese-lunchbox.png",
-            price=120,
-            tax_type=TaxType.TAXABLE,
-        ),
-        Meal(
-            id="meal-veggie-demo",
-            slug="vegetarian-coop-lunchbox",
-            name="田園蔬食便當",
-            description="五色蔬菜與黑豆時蔬，清爽不含肉類。",
-            image_url="/assets/meals/taiwanese-lunchbox.png",
-            price=110,
-            tax_type=TaxType.TAXABLE,
-        ),
-    ]
+    meals = [build_meal(spec) for spec in OFFICIAL_MEALS]
     session.add_all(meals)
     await session.flush()
+    meals_by_slug = {meal.slug: meal for meal in meals}
+    pickup_meal = meals_by_slug[LUNCH_MEAL_SLUGS[0]]
     meal_event = MealEvent(
         id="meal-event-pickup-demo",
-        title="校園週四便當預購",
-        location="學校圖書館前合作社攤位",
+        title="今日午餐取餐",
+        location="清華大學",
         ordering_starts_at=now - timedelta(days=2),
         ordering_ends_at=now - timedelta(hours=1),
         pickup_starts_at=now - timedelta(minutes=30),
@@ -1143,30 +1162,34 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         created_by_id=users[0].id,
         offerings=[
             MealEventOffering(
-                id="meal-offering-seasonal-demo",
-                meal_id=meals[0].id,
-                price=120,
-                capacity=30,
+                id="meal-offering-pickup-demo",
+                meal_id=pickup_meal.id,
+                price=pickup_meal.price,
+                capacity=50,
                 paid_quantity=2,
                 position=1,
-            ),
-            MealEventOffering(
-                id="meal-offering-veggie-demo",
-                meal_id=meals[1].id,
-                price=110,
-                capacity=20,
-                paid_quantity=0,
-                position=2,
-            ),
+            )
         ],
     )
-    preorder_event = _build_demo_preorder_event(
+    lunch_event = _build_demo_preorder_event(
         now,
-        meals[0].id,
+        [meals_by_slug[slug] for slug in LUNCH_MEAL_SLUGS],
         users[0].id,
     )
-    session.add_all([meal_event, preorder_event])
+    dinner_event = _build_demo_preorder_event(
+        now,
+        [meals_by_slug[slug] for slug in DINNER_MEAL_SLUGS],
+        users[0].id,
+        dinner=True,
+    )
+    session.add_all([meal_event, lunch_event, dinner_event])
     await session.flush()
+    main_group = next(
+        group for group in pickup_meal.option_groups if group.name == "主食選擇"
+    )
+    rice_option = next(
+        option for option in main_group.options if option.name == "紫米飯"
+    )
     meal_order = Order(
         id="order-meal-pickup-demo",
         order_number="DEMO-MEAL-001",
@@ -1184,13 +1207,22 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         paid_at=now - timedelta(hours=3),
         items=[
             OrderItem(
-                source_meal_offering_id="meal-offering-seasonal-demo",
-                product_name=meals[0].name,
+                source_meal_offering_id="meal-offering-pickup-demo",
+                product_name=pickup_meal.name,
                 unit_label="份",
                 quantity=2,
-                unit_price=120,
-                subtotal=240,
+                unit_price=pickup_meal.price,
+                subtotal=pickup_meal.price * 2,
                 tax_type=TaxType.TAXABLE,
+                selected_options=[
+                    OrderItemOption(
+                        source_meal_option_id=rice_option.id,
+                        group_name=main_group.name,
+                        option_name=rice_option.name,
+                        price_delta=rice_option.price_delta,
+                        position=0,
+                    )
+                ],
             )
         ],
         fulfillment=OrderFulfillment(
@@ -1347,7 +1379,7 @@ async def sync_preview_demo_data(
     settings: Settings,
     now: datetime,
 ) -> None:
-    if settings.environment.strip().lower() != "preview":
+    if settings.environment.strip().lower() not in {"development", "preview"}:
         return
 
     demo_passwords = {
@@ -1365,16 +1397,8 @@ async def sync_preview_demo_data(
         if not verify_password(password, user.password_hash):
             user.password_hash = hash_password(password)
 
-    product_images = {
-        product["slug"]: product["image_url"] for product in PRODUCTS
-    }
-    demo_products = list(
-        await session.scalars(
-            select(Product).where(Product.slug.in_(product_images))
-        )
-    )
-    for product in demo_products:
-        product.image_url = product_images[product.slug]
+    await _sync_preview_products(session)
+    meals_by_slug = await _sync_preview_meals(session)
 
     existing_roster = await session.scalar(
         select(MemberRosterEntry.id).where(
@@ -1386,27 +1410,215 @@ async def sync_preview_demo_data(
             _build_demo_roster_entry(pii_cipher_from_settings(settings))
         )
 
-    existing_event = await session.scalar(
-        select(MealEvent.id).where(
-            MealEvent.id == DEMO_PREORDER_EVENT_ID
-        )
+    admin_id = await session.scalar(
+        select(User.id).where(User.user_role == UserRole.ADMIN)
     )
-    if existing_event is None:
-        await session.execute(
-            delete(MealEventOffering).where(
-                MealEventOffering.meal_event_id
-                == DEMO_PREORDER_EVENT_ID
+    if admin_id is not None:
+        await _sync_preview_meal_event(
+            session,
+            now,
+            admin_id,
+            [meals_by_slug[slug] for slug in LUNCH_MEAL_SLUGS],
+        )
+        await _sync_preview_meal_event(
+            session,
+            now,
+            admin_id,
+            [meals_by_slug[slug] for slug in DINNER_MEAL_SLUGS],
+            dinner=True,
+        )
+    await session.commit()
+
+
+async def _sync_preview_products(session: AsyncSession) -> None:
+    existing = {
+        product.slug: product
+        for product in await session.scalars(
+            select(Product).where(
+                Product.slug.in_([item["slug"] for item in PRODUCTS])
             )
         )
-        meal = await session.scalar(
-            select(Meal).where(Meal.slug == "seasonal-coop-lunchbox")
+    }
+    for index, data in enumerate(PRODUCTS, start=1):
+        slug = str(data["slug"])
+        product = existing.get(slug)
+        if product is None:
+            product = Product(
+                **data,
+                product_number=f"P-{index:04d}",
+                sku=slug.upper(),
+                supplier_id=_product_supplier_id(data),
+            )
+            session.add(product)
+            continue
+        for field, value in data.items():
+            if field != "slug":
+                setattr(product, field, value)
+    bundle_images = {
+        "家庭友善蔬果箱": "/assets/products/bok-choy.jpg",
+        "安心常備食材組": "/assets/products/rice.jpg",
+    }
+    bundles = await session.scalars(
+        select(GroupBundle).where(GroupBundle.name.in_(bundle_images))
+    )
+    for bundle in bundles:
+        bundle.image_url = bundle_images[bundle.name]
+
+
+async def _sync_preview_meals(session: AsyncSession) -> dict[str, Meal]:
+    official_slugs = [spec.slug for spec in OFFICIAL_MEALS]
+    existing = {
+        meal.slug: meal
+        for meal in await session.scalars(
+            select(Meal)
+            .where(Meal.slug.in_(official_slugs))
+            .options(
+                selectinload(Meal.option_groups).selectinload(
+                    MealOptionGroup.options
+                )
+            )
         )
-        admin_id = await session.scalar(
-            select(User.id).where(User.user_role == UserRole.ADMIN)
+    }
+    for spec in OFFICIAL_MEALS:
+        meal = existing.get(spec.slug)
+        if meal is None:
+            meal = build_meal(spec)
+            session.add(meal)
+            existing[spec.slug] = meal
+            continue
+        meal.name = spec.name
+        meal.description = spec.description
+        meal.image_url = spec.image_url
+        meal.price = spec.price
+        meal.tax_type = TaxType.TAXABLE
+        meal.is_active = True
+        _sync_meal_options(meal, spec)
+
+    old_meals = await session.scalars(
+        select(Meal).where(
+            Meal.slug.in_(
+                ["seasonal-coop-lunchbox", "vegetarian-coop-lunchbox"]
+            )
         )
-        if meal is not None and admin_id is not None:
-            session.add(_build_demo_preorder_event(now, meal.id, admin_id))
-    await session.commit()
+    )
+    for meal in old_meals:
+        meal.is_active = False
+    legacy_events = await session.scalars(
+        select(MealEvent).where(
+            MealEvent.title.in_(
+                ["今日展示便當（虛擬資料）", "校園週四便當預購"]
+            ),
+            MealEvent.id.notin_(
+                [DEMO_PREORDER_EVENT_ID, DEMO_DINNER_EVENT_ID]
+            ),
+        )
+    )
+    for event in legacy_events:
+        event.status = MealEventStatus.COMPLETED
+    await session.flush()
+    return existing
+
+
+def _sync_meal_options(meal: Meal, spec: MealSpec) -> None:
+    groups_by_name = {group.name: group for group in meal.option_groups}
+    active_group_names = {group.name for group in spec.option_groups}
+    for position, group_spec in enumerate(spec.option_groups):
+        group = groups_by_name.get(group_spec.name)
+        if group is None:
+            group = build_option_groups(spec)[position]
+            meal.option_groups.append(group)
+        group.min_selections = group_spec.min_selections
+        group.max_selections = group_spec.max_selections
+        group.position = position
+        group.is_active = True
+        options_by_name = {option.name: option for option in group.options}
+        active_option_names = {option.name for option in group_spec.options}
+        for option_position, option_spec in enumerate(group_spec.options):
+            option = options_by_name.get(option_spec.name)
+            if option is None:
+                option = MealOption(name=option_spec.name)
+                group.options.append(option)
+            option.price_delta = option_spec.price_delta
+            option.position = option_position
+            option.is_active = True
+        for option in group.options:
+            if option.name not in active_option_names:
+                option.is_active = False
+    for group in meal.option_groups:
+        if group.name not in active_group_names:
+            group.is_active = False
+
+
+async def _sync_preview_meal_event(
+    session: AsyncSession,
+    now: datetime,
+    admin_id: str,
+    meals: list[Meal],
+    *,
+    dinner: bool = False,
+) -> None:
+    event_id = DEMO_DINNER_EVENT_ID if dinner else DEMO_PREORDER_EVENT_ID
+    event = await session.scalar(
+        select(MealEvent)
+        .where(MealEvent.id == event_id)
+        .options(selectinload(MealEvent.offerings))
+    )
+    template = _build_demo_preorder_event(
+        now,
+        meals,
+        admin_id,
+        dinner=dinner,
+    )
+    if event is None:
+        await session.execute(
+            delete(MealEventOffering).where(
+                MealEventOffering.meal_event_id == event_id
+            )
+        )
+        session.add(template)
+        return
+
+    event.title = template.title
+    event.location = template.location
+    event.created_by_id = admin_id
+    pickup_ends_at = event.pickup_ends_at
+    if pickup_ends_at.tzinfo is None:
+        pickup_ends_at = pickup_ends_at.replace(tzinfo=timezone.utc)
+    if pickup_ends_at <= now or event.status in {
+        MealEventStatus.CANCELLED,
+        MealEventStatus.COMPLETED,
+    }:
+        event.ordering_starts_at = template.ordering_starts_at
+        event.ordering_ends_at = template.ordering_ends_at
+        event.pickup_starts_at = template.pickup_starts_at
+        event.pickup_ends_at = template.pickup_ends_at
+        event.status = MealEventStatus.PUBLISHED
+        event.cancelled_at = None
+        event.cancellation_reason = None
+
+    offerings_by_meal = {
+        offering.meal_id: offering for offering in event.offerings
+    }
+    active_meal_ids = {meal.id for meal in meals}
+    for position, meal in enumerate(meals, start=1):
+        offering = offerings_by_meal.get(meal.id)
+        if offering is None:
+            offering = MealEventOffering(
+                meal_id=meal.id,
+                price=meal.price,
+                capacity=50,
+            )
+            event.offerings.append(offering)
+        offering.price = meal.price
+        offering.capacity = max(
+            50,
+            offering.reserved_quantity + offering.paid_quantity,
+        )
+        offering.position = position
+        offering.is_active = True
+    for offering in event.offerings:
+        if offering.meal_id not in active_meal_ids:
+            offering.is_active = False
 
 
 async def reset_demo_data(session: AsyncSession) -> dict[str, int]:
@@ -1480,10 +1692,13 @@ async def reset_demo_data(session: AsyncSession) -> dict[str, int]:
         PaymentAttempt,
         Shipment,
         OrderFulfillment,
+        OrderItemOption,
         OrderItem,
         Order,
         MealEventOffering,
         MealEvent,
+        MealOption,
+        MealOptionGroup,
         Meal,
         ShippingRate,
         ActivityRegistration,

@@ -33,6 +33,8 @@ from app.models import (
     MembershipStatus,
     Notification,
     Order,
+    OrderItem,
+    OrderItemOption,
     OutboxEvent,
     PaymentStatus,
     Product,
@@ -1676,6 +1678,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         "available_quantity": 1,
         "position": 0,
         "is_active": True,
+        "option_groups": [],
     }
 
     order_payload = {
@@ -1696,9 +1699,12 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
             "meal_id": meal.json()["id"],
             "meal_name": "時蔬豆腐便當",
             "quantity": 1,
+            "base_price": 125,
+            "option_price": 0,
             "unit_price": 125,
             "subtotal": 125,
             "tax_type": "taxable",
+            "selections": [],
         }
     ]
 
@@ -2394,6 +2400,134 @@ async def test_membership_document_review_replace_and_delete_are_audited(
     )
     assert listed.status_code == 200
     assert listed.json() == []
+
+
+@pytest.mark.asyncio
+async def test_meal_options_validate_price_and_persist_snapshots(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    applicant = v2_context["applicant"]
+    now = datetime.now(timezone.utc)
+
+    meal = await client.post(
+        "/v1/admin/meals",
+        json={
+            "name": "客製餐盒",
+            "price": 130,
+            "tax_type": "taxable",
+            "option_groups": [
+                {
+                    "name": "主食選擇",
+                    "min_selections": 1,
+                    "max_selections": 1,
+                    "options": [
+                        {"name": "紫米飯"},
+                        {"name": "壽司", "price_delta": 10},
+                    ],
+                },
+                {
+                    "name": "飲品加購",
+                    "min_selections": 0,
+                    "max_selections": 1,
+                    "options": [
+                        {"name": "茂谷汽水", "price_delta": 20},
+                    ],
+                },
+            ],
+        },
+        headers=auth_headers(admin),
+    )
+    assert meal.status_code == 201, meal.text
+    groups = meal.json()["option_groups"]
+    sushi_id = groups[0]["options"][1]["id"]
+    soda_id = groups[1]["options"][0]["id"]
+
+    event = await client.post(
+        "/v1/admin/meal-events",
+        json={
+            "title": "每日客製餐盒",
+            "location": "清華大學",
+            "ordering_starts_at": (now - timedelta(hours=1)).isoformat(),
+            "ordering_ends_at": (now + timedelta(hours=1)).isoformat(),
+            "pickup_starts_at": (now + timedelta(hours=2)).isoformat(),
+            "pickup_ends_at": (now + timedelta(hours=3)).isoformat(),
+            "offerings": [
+                {
+                    "meal_id": meal.json()["id"],
+                    "price": 130,
+                    "capacity": 5,
+                }
+            ],
+        },
+        headers=auth_headers(admin),
+    )
+    assert event.status_code == 201, event.text
+    event_id = event.json()["id"]
+    offering_id = event.json()["offerings"][0]["id"]
+    published = await client.post(
+        f"/v1/admin/meal-events/{event_id}/publish",
+        headers=auth_headers(admin),
+    )
+    assert published.status_code == 200
+
+    missing_required = await client.post(
+        f"/v1/meal-events/{event_id}/quote",
+        json={
+            "items": [{"offering_id": offering_id, "quantity": 1}],
+            "contact_email": applicant.email,
+        },
+    )
+    assert missing_required.status_code == 422
+    assert missing_required.json()["detail"] == "主食選擇必須選擇 1 項"
+
+    payload = {
+        "items": [
+            {
+                "offering_id": offering_id,
+                "quantity": 2,
+                "option_ids": [sushi_id, soda_id],
+            }
+        ],
+        "contact_email": applicant.email,
+    }
+    quote = await client.post(
+        f"/v1/meal-events/{event_id}/quote",
+        json=payload,
+    )
+    assert quote.status_code == 200, quote.text
+    line = quote.json()["items"][0]
+    assert line["base_price"] == 130
+    assert line["option_price"] == 30
+    assert line["unit_price"] == 160
+    assert line["subtotal"] == 320
+    assert [item["option_name"] for item in line["selections"]] == [
+        "壽司",
+        "茂谷汽水",
+    ]
+
+    created = await client.post(
+        f"/v1/meal-events/{event_id}/orders",
+        json=payload,
+        headers=auth_headers(applicant),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["amount_total"] == 320
+    assert created.json()["items"][0]["option_price"] == 30
+    snapshots = list(
+        await session.scalars(
+            select(OrderItemOption)
+            .join(OrderItem)
+            .where(OrderItem.order_id == created.json()["id"])
+            .order_by(OrderItemOption.position)
+        )
+    )
+    assert [snapshot.option_name for snapshot in snapshots] == [
+        "壽司",
+        "茂谷汽水",
+    ]
 
 
 @pytest.mark.asyncio

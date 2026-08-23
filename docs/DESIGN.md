@@ -30,6 +30,6 @@
 
 ## 素材
 
-- `assets/meals/taiwanese-lunchbox.png`：便當場次 4:3 圖片。
+- `assets/meals/taiwanese-lunchbox.webp`：便當場次 4:3 備援圖片。
 - `assets/community/member-hike.png`：社員活動 16:9 圖片。
 - 其他商品與活動圖由 `assets/` 集中提供，Vite 以 public directory 直接載入。

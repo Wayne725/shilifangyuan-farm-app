@@ -264,7 +264,11 @@ export type MealCheckoutOutcome =
 
 export async function beginMealCheckout(input: {
   eventId: string;
-  items: Array<{ offering_id: string; quantity: number }>;
+  items: Array<{
+    offering_id: string;
+    quantity: number;
+    option_ids: string[];
+  }>;
   contactEmail: string;
 }): Promise<MealCheckoutOutcome> {
   const order = await apiFetch<{ id: string }>(

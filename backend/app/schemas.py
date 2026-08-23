@@ -944,6 +944,50 @@ class MemberProposalRead(ApiModel):
     created_at: datetime
 
 
+class MealOptionInput(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    price_delta: int = Field(default=0, ge=0)
+    position: int = Field(default=0, ge=0)
+    is_active: bool = True
+
+
+class MealOptionGroupInput(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    min_selections: int = Field(default=0, ge=0, le=20)
+    max_selections: int = Field(default=1, ge=1, le=20)
+    position: int = Field(default=0, ge=0)
+    is_active: bool = True
+    options: List[MealOptionInput] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_selection_range(self) -> "MealOptionGroupInput":
+        if self.max_selections < self.min_selections:
+            raise ValueError("最多選擇數不可小於必選數")
+        if self.max_selections > len(self.options):
+            raise ValueError("最多選擇數不可大於選項數")
+        if len({option.name for option in self.options}) != len(self.options):
+            raise ValueError("同一選項群組不可有重複名稱")
+        return self
+
+
+class MealOptionRead(ApiModel):
+    id: str
+    name: str
+    price_delta: int
+    position: int
+    is_active: bool
+
+
+class MealOptionGroupRead(ApiModel):
+    id: str
+    name: str
+    min_selections: int
+    max_selections: int
+    position: int
+    is_active: bool
+    options: List[MealOptionRead] = Field(default_factory=list)
+
+
 class MealCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=5000)
@@ -951,6 +995,18 @@ class MealCreate(BaseModel):
     price: int = Field(ge=0)
     tax_type: TaxType = TaxType.TAXABLE
     is_active: bool = True
+    option_groups: List[MealOptionGroupInput] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+
+    @model_validator(mode="after")
+    def validate_option_groups(self) -> "MealCreate":
+        if len({group.name for group in self.option_groups}) != len(
+            self.option_groups
+        ):
+            raise ValueError("同一餐點不可有重複選項群組")
+        return self
 
 
 class MealRead(ApiModel):
@@ -962,6 +1018,7 @@ class MealRead(ApiModel):
     price: int
     tax_type: TaxType
     is_active: bool
+    option_groups: List[MealOptionGroupRead] = Field(default_factory=list)
 
 
 class MealOfferingInput(BaseModel):
@@ -1006,6 +1063,7 @@ class MealOfferingRead(ApiModel):
     available_quantity: int
     position: int
     is_active: bool
+    option_groups: List[MealOptionGroupRead] = Field(default_factory=list)
 
 
 class MealEventSummary(ApiModel):
@@ -1026,6 +1084,7 @@ class MealEventRead(MealEventSummary):
 class MealOrderLineInput(BaseModel):
     offering_id: str
     quantity: int = Field(ge=1, le=99)
+    option_ids: List[str] = Field(default_factory=list, max_length=50)
 
 
 class MealOrderCreate(BaseModel):
@@ -1035,14 +1094,25 @@ class MealOrderCreate(BaseModel):
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
 
 
+class MealOptionSelectionRead(ApiModel):
+    group_id: Optional[str] = None
+    group_name: str
+    option_id: Optional[str] = None
+    option_name: str
+    price_delta: int
+
+
 class MealOrderQuoteItemRead(ApiModel):
     offering_id: str
     meal_id: str
     meal_name: str
     quantity: int
+    base_price: int
+    option_price: int
     unit_price: int
     subtotal: int
     tax_type: TaxType
+    selections: List[MealOptionSelectionRead] = Field(default_factory=list)
 
 
 class MealPickupWindowRead(ApiModel):
@@ -1064,8 +1134,11 @@ class MealOrderItemRead(ApiModel):
     meal_id: str
     meal_name: str
     quantity: int
+    base_price: int
+    option_price: int
     unit_price: int
     subtotal: int
+    selections: List[MealOptionSelectionRead] = Field(default_factory=list)
 
 
 class MealOrderRead(ApiModel):

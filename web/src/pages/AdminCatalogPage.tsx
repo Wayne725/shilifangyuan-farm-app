@@ -28,6 +28,8 @@ const productCategories = [
   ["米・雜糧", "米・雜糧"],
   ["蛋品", "蛋品"],
   ["加工品", "加工品"],
+  ["飲品", "飲品"],
+  ["生活用品", "生活用品"],
 ] as const;
 
 const shippingChannels: ShippingChannel[] = [

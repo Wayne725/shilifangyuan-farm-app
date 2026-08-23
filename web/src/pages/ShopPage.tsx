@@ -118,7 +118,7 @@ export function ShopPage() {
           <div className="meal-grid">
             {meals.data?.map((meal) => (
               <Link key={meal.id} className="meal-card" to="/meals/$eventId" params={{ eventId: meal.id }}>
-                <img src={resolveAsset(meal.offerings[0]?.image_url || "/assets/meals/taiwanese-lunchbox.png")} alt={meal.title} />
+                <img src={resolveAsset(meal.offerings[0]?.image_url || "/assets/meals/taiwanese-lunchbox.webp")} alt={meal.title} />
                 <div>
                   <span>{mealEventStatusLabel(meal.status)}</span>
                   <h3>{meal.title}</h3>

@@ -361,6 +361,32 @@ export interface GroupVoteProposal {
   created_at: string;
 }
 
+export interface MealOption {
+  id: string;
+  name: string;
+  price_delta: number;
+  position: number;
+  is_active: boolean;
+}
+
+export interface MealOptionGroup {
+  id: string;
+  name: string;
+  min_selections: number;
+  max_selections: number;
+  position: number;
+  is_active: boolean;
+  options: MealOption[];
+}
+
+export interface MealOptionSelection {
+  group_id?: string | null;
+  group_name: string;
+  option_id?: string | null;
+  option_name: string;
+  price_delta: number;
+}
+
 export interface MealEvent {
   id: string;
   title: string;
@@ -383,6 +409,7 @@ export interface MealEvent {
     available_quantity: number;
     position: number;
     is_active: boolean;
+    option_groups: MealOptionGroup[];
   }>;
 }
 
@@ -395,6 +422,7 @@ export interface Meal {
   price: number;
   tax_type: "taxable" | "tax_exempt";
   is_active: boolean;
+  option_groups: MealOptionGroup[];
 }
 
 export interface MealOrder {
@@ -422,8 +450,11 @@ export interface MealOrder {
     meal_id: string;
     meal_name: string;
     quantity: number;
+    base_price: number;
+    option_price: number;
     unit_price: number;
     subtotal: number;
+    selections: MealOptionSelection[];
   }>;
 }
 

@@ -38,8 +38,11 @@ from app.models import (
     MembershipFeeSchedule,
     MembershipStatus,
     MembershipType,
+    Meal,
     MealEvent,
     MealEventStatus,
+    MealOption,
+    MealOptionGroup,
     Meeting,
     MemberRosterEntry,
     Order,
@@ -69,11 +72,13 @@ from app.models import (
 from app.seed import (
     DEMO_PASSWORD,
     DEMO_ROSTER_NUMBER,
+    PRODUCTS,
     reset_demo_data,
     seed_demo_data,
 )
 from app.routers.orders import request_order_refund
 from app.schemas import BundleCreate, BundleItemInput, CampaignCreate
+from app.official_catalog import OFFICIAL_MEALS
 
 
 NOW = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
@@ -340,11 +345,11 @@ async def test_seed_is_idempotent_and_resettable(database_session) -> None:
     first = await seed_demo_data(database_session)
     second = await seed_demo_data(database_session)
     product_count = await database_session.scalar(select(func.count(Product.id)))
-    assert first["products"] == 12
+    assert first["products"] == len(PRODUCTS)
     assert first["suppliers"] == 3
     assert first["pickup_locations"] == 5
     assert second["products"] == 0
-    assert product_count == 12
+    assert product_count == len(PRODUCTS)
     assert await database_session.scalar(select(func.count(Supplier.id))) == 3
     assert await database_session.scalar(
         select(func.count(PickupLocation.id))
@@ -362,12 +367,25 @@ async def test_seed_is_idempotent_and_resettable(database_session) -> None:
     ) == 2
     assert await database_session.scalar(select(func.count(Wish.id))) == 1
     assert await database_session.scalar(select(func.count(Meeting.id))) == 1
-    assert await database_session.scalar(select(func.count(MealEvent.id))) == 2
+    assert await database_session.scalar(select(func.count(Meal.id))) == len(
+        OFFICIAL_MEALS
+    )
+    assert await database_session.scalar(
+        select(func.count(MealOptionGroup.id))
+    ) == sum(len(meal.option_groups) for meal in OFFICIAL_MEALS)
+    assert await database_session.scalar(
+        select(func.count(MealOption.id))
+    ) == sum(
+        len(group.options)
+        for meal in OFFICIAL_MEALS
+        for group in meal.option_groups
+    )
+    assert await database_session.scalar(select(func.count(MealEvent.id))) == 3
     assert await database_session.scalar(
         select(func.count(MealEvent.id)).where(
             MealEvent.status == MealEventStatus.PUBLISHED
         )
-    ) == 1
+    ) == 2
     assert await database_session.scalar(
         select(func.count(SurplusDistribution.id))
     ) == 1
@@ -382,10 +400,12 @@ async def test_seed_is_idempotent_and_resettable(database_session) -> None:
     assert seeded_membership.share_capital_amount == 1000
     assert seeded_membership.share_count == 10
     reset = await reset_demo_data(database_session)
-    assert reset["products"] == 12
+    assert reset["products"] == len(PRODUCTS)
     assert reset["suppliers"] == 3
     assert reset["pickup_locations"] == 5
-    assert await database_session.scalar(select(func.count(Product.id))) == 12
+    assert await database_session.scalar(
+        select(func.count(Product.id))
+    ) == len(PRODUCTS)
 
 
 @pytest.mark.asyncio
