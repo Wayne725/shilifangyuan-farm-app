@@ -441,6 +441,59 @@ def _product_supplier_id(data: dict[str, object]) -> str:
     )
 
 
+def _build_demo_supplier(
+    supplier_data: dict[str, object],
+    seed_cipher: VersionedPIICipher,
+    reviewer_id: str,
+    now: datetime,
+) -> Supplier:
+    supplier_id = str(supplier_data["id"])
+    aad = f"supplier:{supplier_id}"
+    reviewed_on = (
+        now - timedelta(days=int(supplier_data["reviewed_days_ago"]))
+    ).date()
+    return Supplier(
+        id=supplier_id,
+        supplier_number=str(supplier_data["supplier_number"]),
+        business_name=str(supplier_data["business_name"]),
+        tax_id=None,
+        responsible_person_encrypted=seed_cipher.encrypt_text(
+            "測試負責人",
+            associated_data=aad,
+        ),
+        contact_person_encrypted=seed_cipher.encrypt_text(
+            str(supplier_data["contact_person"]),
+            associated_data=aad,
+        ),
+        phone_encrypted=seed_cipher.encrypt_text(
+            "0900000000",
+            associated_data=aad,
+        ),
+        email_encrypted=seed_cipher.encrypt_text(
+            str(supplier_data["email"]),
+            associated_data=aad,
+        ),
+        line_id_encrypted=None,
+        settlement_terms="每月彙整一次，實際條件待合作社確認。",
+        bank_account_encrypted=seed_cipher.encrypt_text(
+            "SANDBOX-DEMO",
+            associated_data=aad,
+        ),
+        encryption_key_version=seed_cipher.current_version,
+        accredited_on=reviewed_on,
+        is_active=True,
+        accreditations=[
+            SupplierAccreditation(
+                reviewed_on=reviewed_on,
+                reviewer_id=reviewer_id,
+                process_notes="展示用審認紀錄；正式文件與訪查結果待匯入。",
+                status=SupplierAccreditationStatus.APPROVED,
+                result_notes="展示資料通過。",
+            )
+        ],
+    )
+
+
 async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -553,54 +606,15 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
             pickup_locations.append(PickupLocation(**location_data))
     session.add_all(pickup_locations)
 
-    suppliers = []
-    for supplier_data in SUPPLIER_DEMOS:
-        supplier_id = supplier_data["id"]
-        aad = f"supplier:{supplier_id}"
-        reviewed_on = (now - timedelta(
-            days=supplier_data["reviewed_days_ago"]
-        )).date()
-        supplier = Supplier(
-            id=supplier_id,
-            supplier_number=supplier_data["supplier_number"],
-            business_name=supplier_data["business_name"],
-            tax_id=None,
-            responsible_person_encrypted=seed_cipher.encrypt_text(
-                "測試負責人",
-                associated_data=aad,
-            ),
-            contact_person_encrypted=seed_cipher.encrypt_text(
-                supplier_data["contact_person"],
-                associated_data=aad,
-            ),
-            phone_encrypted=seed_cipher.encrypt_text(
-                "0900000000",
-                associated_data=aad,
-            ),
-            email_encrypted=seed_cipher.encrypt_text(
-                supplier_data["email"],
-                associated_data=aad,
-            ),
-            line_id_encrypted=None,
-            settlement_terms="每月彙整一次，實際條件待合作社確認。",
-            bank_account_encrypted=seed_cipher.encrypt_text(
-                "SANDBOX-DEMO",
-                associated_data=aad,
-            ),
-            encryption_key_version=seed_cipher.current_version,
-            accredited_on=reviewed_on,
-            is_active=True,
-            accreditations=[
-                SupplierAccreditation(
-                    reviewed_on=reviewed_on,
-                    reviewer_id=users[0].id,
-                    process_notes="展示用審認紀錄；正式文件與訪查結果待匯入。",
-                    status=SupplierAccreditationStatus.APPROVED,
-                    result_notes="展示資料通過。",
-                )
-            ],
+    suppliers = [
+        _build_demo_supplier(
+            supplier_data,
+            seed_cipher,
+            users[0].id,
+            now,
         )
-        suppliers.append(supplier)
+        for supplier_data in SUPPLIER_DEMOS
+    ]
     session.add_all(suppliers)
     await session.flush()
 
@@ -1397,6 +1411,7 @@ async def sync_preview_demo_data(
         if not verify_password(password, user.password_hash):
             user.password_hash = hash_password(password)
 
+    await _sync_preview_suppliers(session, settings, now)
     await _sync_preview_products(session)
     meals_by_slug = await _sync_preview_meals(session)
 
@@ -1428,6 +1443,39 @@ async def sync_preview_demo_data(
             dinner=True,
         )
     await session.commit()
+
+
+async def _sync_preview_suppliers(
+    session: AsyncSession,
+    settings: Settings,
+    now: datetime,
+) -> None:
+    supplier_ids = [str(item["id"]) for item in SUPPLIER_DEMOS]
+    existing_ids = set(
+        await session.scalars(
+            select(Supplier.id).where(Supplier.id.in_(supplier_ids))
+        )
+    )
+    missing = [
+        item for item in SUPPLIER_DEMOS if str(item["id"]) not in existing_ids
+    ]
+    if not missing:
+        return
+
+    reviewer_id = await session.scalar(
+        select(User.id).where(User.user_role == UserRole.ADMIN).limit(1)
+    )
+    if reviewer_id is None:
+        reviewer_id = await session.scalar(select(User.id).limit(1))
+    if reviewer_id is None:
+        return
+
+    seed_cipher = pii_cipher_from_settings(settings)
+    session.add_all(
+        _build_demo_supplier(item, seed_cipher, reviewer_id, now)
+        for item in missing
+    )
+    await session.flush()
 
 
 async def _sync_preview_products(session: AsyncSession) -> None:

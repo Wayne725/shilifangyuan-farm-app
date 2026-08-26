@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
 from app.auth import (
     decode_token,
@@ -73,6 +73,7 @@ from app.seed import (
     DEMO_PASSWORD,
     DEMO_ROSTER_NUMBER,
     PRODUCTS,
+    SUPPLIER_DEMOS,
     reset_demo_data,
     seed_demo_data,
 )
@@ -520,6 +521,32 @@ async def test_preview_seed_syncs_new_fixture_and_demo_passwords(
         select(Product).where(Product.slug == "rice")
     )
     assert rice.image_url == "/assets/products/rice.jpg"
+
+
+@pytest.mark.asyncio
+async def test_preview_seed_backfills_suppliers_before_new_products(
+    database_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database_session.execute(text("PRAGMA foreign_keys=ON"))
+    database_session.add(make_user())
+    await database_session.commit()
+    preview_settings = Settings(
+        _env_file=None,
+        environment="preview",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+    )
+    monkeypatch.setattr("app.seed.get_settings", lambda: preview_settings)
+
+    await seed_demo_data(database_session)
+
+    assert await database_session.scalar(
+        select(func.count(Supplier.id))
+    ) == len(SUPPLIER_DEMOS)
+    assert await database_session.scalar(
+        select(func.count(Product.id))
+    ) == len(PRODUCTS)
 
 
 @pytest.mark.asyncio
