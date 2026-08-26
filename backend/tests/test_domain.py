@@ -40,6 +40,7 @@ from app.models import (
     MembershipType,
     Meal,
     MealEvent,
+    MealEventOffering,
     MealEventStatus,
     MealOption,
     MealOptionGroup,
@@ -71,6 +72,7 @@ from app.models import (
 )
 from app.seed import (
     DEMO_PASSWORD,
+    DEMO_PREORDER_EVENT_ID,
     DEMO_ROSTER_NUMBER,
     PRODUCTS,
     SUPPLIER_DEMOS,
@@ -79,7 +81,7 @@ from app.seed import (
 )
 from app.routers.orders import request_order_refund
 from app.schemas import BundleCreate, BundleItemInput, CampaignCreate
-from app.official_catalog import OFFICIAL_MEALS
+from app.official_catalog import LUNCH_MEAL_SLUGS, OFFICIAL_MEALS
 
 
 NOW = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
@@ -547,6 +549,46 @@ async def test_preview_seed_backfills_suppliers_before_new_products(
     assert await database_session.scalar(
         select(func.count(Product.id))
     ) == len(PRODUCTS)
+
+
+@pytest.mark.asyncio
+async def test_preview_seed_restores_a_missing_meal_offering(
+    database_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await seed_demo_data(database_session)
+    offering_id = await database_session.scalar(
+        select(MealEventOffering.id)
+        .where(
+            MealEventOffering.meal_event_id == DEMO_PREORDER_EVENT_ID
+        )
+        .limit(1)
+    )
+    await database_session.execute(
+        delete(MealEventOffering).where(MealEventOffering.id == offering_id)
+    )
+    await database_session.commit()
+    database_session.expunge_all()
+    preview_settings = Settings(
+        _env_file=None,
+        environment="preview",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+    )
+    monkeypatch.setattr("app.seed.get_settings", lambda: preview_settings)
+
+    await seed_demo_data(database_session)
+
+    offerings = list(
+        await database_session.scalars(
+            select(MealEventOffering).where(
+                MealEventOffering.meal_event_id == DEMO_PREORDER_EVENT_ID
+            )
+        )
+    )
+    assert len(offerings) == len(LUNCH_MEAL_SLUGS)
+    assert all(offering.reserved_quantity == 0 for offering in offerings)
+    assert all(offering.paid_quantity == 0 for offering in offerings)
 
 
 @pytest.mark.asyncio

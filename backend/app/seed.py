@@ -1658,6 +1658,8 @@ async def _sync_preview_meal_event(
             )
             event.offerings.append(offering)
         offering.price = meal.price
+        offering.reserved_quantity = offering.reserved_quantity or 0
+        offering.paid_quantity = offering.paid_quantity or 0
         offering.capacity = max(
             50,
             offering.reserved_quantity + offering.paid_quantity,
