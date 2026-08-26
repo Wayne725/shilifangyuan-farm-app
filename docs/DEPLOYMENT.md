@@ -148,7 +148,7 @@ Repository Settings → Secrets and variables → Actions 新增：
 1. 確認 PostgreSQL 尚未超過 30 天期限。
 2. 確認 Alembic 已升級至最新 migration，既有 customer 已取得 `SLF-C` 且管理員沒有一般買家編號；若資料庫已重建，也確認 seed 執行成功。
 3. 在社務管理的「社員名冊」確認正式既有社員已匯入，並以一筆測試名冊完成帳號認領與 Email 驗證。
-4. 開啟 `/health` 暖機，避免教授等待 Render 冷啟動。
+4. 開啟 `/health` 暖機，並確認 `/ready` 回傳 200；`/ready` 會實際檢查資料庫連線。
 5. 登入正式社員、一般買家與管理員帳號各一次，並驗證兩款入社款項完成後會先成為實習社員。
 6. 使用綠界測試卡完成一筆付款，確認 Web 回到正確訂單且顯示付款結果。
 7. 確認 GitHub Actions 最近一次 reconciliation 成功。

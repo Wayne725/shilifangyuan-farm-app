@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 from urllib.parse import urlsplit
@@ -7,6 +8,8 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import get_settings
 from .database import SessionLocal
@@ -26,6 +29,7 @@ AUTH_EMAIL_PATHS = {
     "/v1/auth/resend-verification",
     "/v1/auth/forgot-password",
 }
+DATABASE_READINESS_TIMEOUT_SECONDS = 5.0
 
 
 @asynccontextmanager
@@ -101,6 +105,30 @@ def create_app() -> FastAPI:
             "status": "ok",
             "service": settings.app_name,
             "environment": settings.environment,
+        }
+
+    @application.get("/ready", tags=["system"])
+    async def ready():
+        async def check_database() -> None:
+            async with SessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+
+        try:
+            await asyncio.wait_for(
+                check_database(),
+                timeout=DATABASE_READINESS_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, OSError, SQLAlchemyError):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "database": "unavailable",
+                },
+            )
+        return {
+            "status": "ready",
+            "database": "available",
         }
 
     return application

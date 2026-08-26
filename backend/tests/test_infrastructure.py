@@ -8,6 +8,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -265,6 +266,66 @@ def test_auth_email_requests_are_marked_for_immediate_delivery() -> None:
         "/v1/auth/resend-verification",
         "/v1/auth/forgot-password",
     }
+
+
+@pytest.mark.asyncio
+async def test_ready_reports_database_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(
+        database_engine,
+        expire_on_commit=False,
+    )
+    monkeypatch.setattr(main, "SessionLocal", session_factory)
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: settings(environment="test"),
+    )
+    application = main.create_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "database": "available",
+    }
+    await database_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ready_returns_503_without_leaking_database_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_session_factory():
+        raise OSError("database-password-should-not-leak")
+
+    monkeypatch.setattr(main, "SessionLocal", unavailable_session_factory)
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: settings(environment="test"),
+    )
+    application = main.create_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "database": "unavailable",
+    }
+    assert "database-password-should-not-leak" not in response.text
 
 
 def test_fixed_migrations_do_not_depend_on_runtime_metadata() -> None:

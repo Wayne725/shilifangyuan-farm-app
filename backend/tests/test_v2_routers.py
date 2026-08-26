@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.models import (
     ActivityRegistration,
@@ -1735,7 +1736,12 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     )
     assert pending_credential.status_code == 409
 
-    stored_order = await session.get(Order, created_order.json()["id"])
+    stored_order = await session.scalar(
+        select(Order)
+        .where(Order.id == created_order.json()["id"])
+        .options(selectinload(Order.items))
+        .execution_options(populate_existing=True)
+    )
     assert stored_order is not None
     assert stored_order.meal_event_id == event_id
     assert stored_order.items[0].source_meal_offering_id == offering_id
