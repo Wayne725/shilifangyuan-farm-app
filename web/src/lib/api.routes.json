@@ -5,6 +5,7 @@
   "GET /health",
   "GET /logistics/{token}/select",
   "GET /payments/{attempt_id}/checkout",
+  "GET /ready",
   "GET /v1/activities",
   "GET /v1/activities/{activity_id}",
   "GET /v1/admin/activities",
