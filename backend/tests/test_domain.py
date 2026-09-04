@@ -55,6 +55,7 @@ from app.models import (
     PickupLocation,
     PointTransaction,
     Product,
+    ProductCategory,
     ProposalStatus,
     Refund,
     ShippingChannel,
@@ -87,6 +88,14 @@ from app.official_catalog import LUNCH_MEAL_SLUGS, OFFICIAL_MEALS
 
 
 NOW = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
+
+
+def test_preview_product_categories_match_public_api_contract() -> None:
+    allowed_categories = {category.value for category in ProductCategory}
+
+    assert all(
+        product["category"] in allowed_categories for product in PRODUCTS
+    )
 
 
 def make_user() -> User:

@@ -349,7 +349,7 @@ PRODUCTS = [
         "slug": "remote-payment-10",
         "name": "遠端付款驗收品（測試）",
         "description": "僅供雷門金流與電子發票流程驗收，每次限購一件。",
-        "category": "系統測試",
+        "category": "生活用品",
         "unit": "份",
         "member_price": 10,
         "nonmember_price": 10,
