@@ -80,6 +80,24 @@ services:
         value: "24"
       - key: RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID
         sync: false
+      - key: INVOICE_PROVIDER
+        value: fanyu
+      - key: FANYU_INVOICE_COMPANY_ID
+        sync: false
+      - key: FANYU_INVOICE_USER_ID
+        sync: false
+      - key: FANYU_INVOICE_AUTH_PASSWORD
+        sync: false
+      - key: FANYU_INVOICE_API_KEY
+        sync: false
+      - key: FANYU_INVOICE_SELLER_ID
+        sync: false
+      - key: FANYU_INVOICE_STAGE
+        value: "true"
+      - key: FANYU_INVOICE_BASE_URL
+        value: https://webtest.einvoice.com.tw/einv
+      - key: FANYU_INVOICE_SIGNATURE_VERIFIED
+        value: "true"
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM_EMAIL
