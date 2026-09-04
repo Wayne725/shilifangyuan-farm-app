@@ -1501,13 +1501,34 @@ async def _sync_preview_products(session: AsyncSession) -> None:
             )
         )
     }
+    used_product_numbers = set(
+        await session.scalars(
+            select(Product.product_number).where(
+                Product.product_number.is_not(None)
+            )
+        )
+    )
+
+    def allocate_product_number(preferred_index: int) -> str:
+        preferred = f"P-{preferred_index:04d}"
+        if preferred not in used_product_numbers:
+            used_product_numbers.add(preferred)
+            return preferred
+
+        available_index = 1
+        while f"P-{available_index:04d}" in used_product_numbers:
+            available_index += 1
+        available = f"P-{available_index:04d}"
+        used_product_numbers.add(available)
+        return available
+
     for index, data in enumerate(PRODUCTS, start=1):
         slug = str(data["slug"])
         product = existing.get(slug)
         if product is None:
             product = Product(
                 **data,
-                product_number=f"P-{index:04d}",
+                product_number=allocate_product_number(index),
                 sku=slug.upper(),
                 supplier_id=_product_supplier_id(data),
             )

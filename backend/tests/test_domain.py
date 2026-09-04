@@ -434,6 +434,30 @@ async def test_seed_is_idempotent_and_resettable(database_session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_preview_seed_allocates_unused_product_number_for_new_catalog_items(
+    database_session,
+) -> None:
+    await seed_demo_data(database_session)
+    occupied = await database_session.scalar(
+        select(Product).where(Product.slug == "remote-payment-10")
+    )
+    assert occupied is not None
+
+    occupied.slug = "manually-created-product"
+    occupied.sku = "MANUALLY-CREATED-PRODUCT"
+    occupied_number = occupied.product_number
+    await database_session.commit()
+
+    await seed_demo_data(database_session)
+
+    synced = await database_session.scalar(
+        select(Product).where(Product.slug == "remote-payment-10")
+    )
+    assert synced is not None
+    assert synced.product_number != occupied_number
+
+
+@pytest.mark.asyncio
 async def test_seed_reuses_reference_data_created_by_migration(
     database_session,
 ) -> None:
