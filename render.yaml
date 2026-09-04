@@ -1,6 +1,5 @@
 databases:
   - name: shilifangyuan-db
-    plan: free
     region: singapore
     databaseName: shilifangyuan
     user: shilifangyuan
