@@ -9,7 +9,6 @@ export interface User {
 
 export interface AuthResponse {
   access_token: string;
-  refresh_token: string;
   user: User;
 }
 
@@ -86,6 +85,44 @@ export interface OrderFulfillment {
   fulfilled_at?: string | null;
 }
 
+export type InvoiceStatus =
+  | "not_eligible"
+  | "pending"
+  | "issued"
+  | "failed"
+  | "void_pending"
+  | "voided";
+
+export interface InvoiceRecord {
+  id: string;
+  provider: string;
+  relate_number: string;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  status: InvoiceStatus;
+  provider_status?: string | null;
+  buyer_type: "personal" | "company";
+  buyer_tax_id?: string | null;
+  buyer_name?: string | null;
+  buyer_email?: string | null;
+  sales_amount: number;
+  tax_amount: number;
+  total_amount: number;
+  issued_at?: string | null;
+  voided_at?: string | null;
+  void_reason?: string | null;
+}
+
+export interface AdminInvoiceQueryResult {
+  order_id: string;
+  found: boolean;
+  provider: string;
+  status: InvoiceStatus;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  message: string;
+}
+
 export interface Order {
   id: string;
   order_number: string;
@@ -98,10 +135,14 @@ export interface Order {
   amount_total: number;
   tax_amount: number;
   contact_email: string;
-  invoice_carrier_type: "ecpay" | "mobile_barcode";
+  invoice_buyer_type: "personal" | "company";
+  invoice_buyer_tax_id?: string | null;
+  invoice_buyer_name?: string | null;
+  invoice_buyer_email?: string | null;
+  invoice_carrier_type: "ecpay" | "cloud" | "mobile_barcode";
   fulfillment_status: string;
   payment_status: string;
-  invoice_status: string;
+  invoice_status: InvoiceStatus;
   paid_at?: string | null;
   cancelled_at?: string | null;
   created_at: string;
@@ -118,6 +159,7 @@ export interface Order {
   }>;
   fulfillment?: OrderFulfillment | null;
   shipment?: Shipment | null;
+  invoice?: InvoiceRecord | null;
 }
 
 export interface LogisticsSelection {
@@ -135,6 +177,14 @@ export interface PaymentAttempt {
   payment_url: string;
   status: string;
   expires_at: string;
+}
+
+export interface PaymentAttemptStatus {
+  id: string;
+  status: string;
+  expires_at: string;
+  order_id?: string | null;
+  membership_charge_id?: string | null;
 }
 
 export interface PickupLocation {

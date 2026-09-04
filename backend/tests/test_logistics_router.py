@@ -732,7 +732,7 @@ async def test_formal_query_print_callback_and_sandbox_audit(
     )
     invoice_jobs = await session.scalar(
         select(func.count(OutboxEvent.id)).where(
-            OutboxEvent.event_type == "invoice.issue",
+            OutboxEvent.event_type == "invoice.issue_requested",
             OutboxEvent.aggregate_id == order.id,
         )
     )
@@ -991,10 +991,18 @@ async def test_selection_token_is_single_use_and_expires(
         minutes=1
     )
     await session.commit()
-    expired = await client.get(
-        urlparse(fresh.json()["selection_url"]).path
-    )
+    fresh_path = urlparse(fresh.json()["selection_url"]).path
+    expired = await client.get(fresh_path)
     assert expired.status_code == 410
+    expired_callback = await client.post(
+        "/logistics/selection-result",
+        params={
+            "order_id": order.id,
+            "token": fresh_path.split("/")[2],
+        },
+        json={"provider": "mocked"},
+    )
+    assert expired_callback.status_code == 410
 
 
 @pytest.mark.asyncio

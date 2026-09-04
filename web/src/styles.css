@@ -1569,6 +1569,157 @@ p {
   border-color: var(--harbor);
 }
 
+.invoice-preference {
+  margin-top: 58px;
+}
+
+.invoice-preference-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 10px;
+  padding: 20px;
+  background: var(--paper-light);
+  border: 1px solid var(--line);
+}
+
+.invoice-type-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.invoice-type-switch button {
+  min-height: 84px;
+  padding: 17px 18px;
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  text-align: left;
+}
+
+.invoice-type-switch button.selected {
+  background: rgba(220, 228, 224, 0.38);
+  border-color: var(--harbor);
+}
+
+.invoice-type-switch strong,
+.invoice-type-switch small,
+.invoice-carrier-options strong,
+.invoice-carrier-options small {
+  display: block;
+}
+
+.invoice-type-switch strong,
+.invoice-carrier-options strong {
+  margin-bottom: 5px;
+  font-family: "Noto Serif TC", serif;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.invoice-type-switch small,
+.invoice-carrier-options small,
+.invoice-carrier-options > p,
+.invoice-company-form > p,
+.invoice-delivery-form > p {
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.invoice-carrier-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.invoice-company-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.invoice-delivery-form {
+  display: grid;
+  gap: 7px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.invoice-carrier-options > label:not(.invoice-barcode-field) {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 62px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.invoice-carrier-options > label.selected {
+  border-color: var(--moss);
+}
+
+.invoice-carrier-options input[type="radio"] {
+  accent-color: var(--moss-dark);
+}
+
+.invoice-barcode-field,
+.invoice-company-form label,
+.invoice-delivery-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 9px;
+}
+
+.invoice-barcode-field,
+.invoice-carrier-options > p,
+.invoice-company-form > p,
+.invoice-delivery-form > p {
+  grid-column: 1 / -1;
+}
+
+.invoice-barcode-field input,
+.invoice-company-form input,
+.invoice-delivery-form input {
+  width: 100%;
+  min-height: 43px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  font: inherit;
+}
+
+.invoice-email-field {
+  grid-column: 1 / -1;
+}
+
+.invoice-carrier-options > p,
+.invoice-company-form > p {
+  margin: 5px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.invoice-delivery-form > p {
+  margin: 0;
+}
+
+.invoice-delivery-form .invoice-field-error {
+  color: #8c4435;
+}
+
+.invoice-delivery-form input[aria-invalid="true"] {
+  border-color: rgba(140, 68, 53, 0.72);
+}
+
 .shipping-blockers {
   display: flex;
   align-items: center;
@@ -1677,6 +1828,14 @@ p {
 
 .summary-lines .summary-shipping {
   color: #c4d5d0;
+}
+
+.summary-lines .invoice-summary-line dd,
+.offer-summary .invoice-summary-line dd {
+  min-width: 0;
+  text-align: right;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .button-system {
@@ -1921,7 +2080,7 @@ p {
 
 .order-status-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-bottom: 1px solid var(--line);
 }
 
@@ -1963,6 +2122,58 @@ p {
   color: var(--harbor-dark);
   background: rgba(220, 228, 224, 0.58);
   border: 1px solid rgba(111, 129, 125, 0.35);
+}
+
+.invoice-summary-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(210px, auto);
+  gap: 16px;
+  align-items: center;
+  margin: 24px 0;
+  padding: 20px;
+  color: var(--moss-dark);
+  background: rgba(215, 221, 206, 0.5);
+  border: 1px solid rgba(86, 103, 75, 0.3);
+}
+
+.invoice-summary-card small,
+.invoice-summary-card strong,
+.invoice-summary-card span {
+  display: block;
+}
+
+.invoice-summary-card small {
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.invoice-summary-card strong {
+  margin: 4px 0;
+  font-family: "Noto Serif TC", serif;
+  font-size: 14px;
+}
+
+.invoice-summary-card span,
+.invoice-summary-card dl {
+  font-size: 9px;
+}
+
+.invoice-summary-card dl {
+  margin: 0;
+}
+
+.invoice-summary-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 3px 0;
+}
+
+.invoice-summary-card dd {
+  max-width: 180px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .shipment-card small,
@@ -3176,6 +3387,20 @@ p {
   line-height: 1.6;
 }
 
+.data-state-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 11px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  font-size: 11px;
+  cursor: pointer;
+}
+
 .loading-lines {
   display: grid;
   gap: 10px;
@@ -3566,6 +3791,38 @@ p {
   font-size: 9px;
   line-height: 1.6;
   text-align: right;
+}
+
+.document-safety-notice {
+  display: flex;
+  gap: 14px;
+  margin: 22px 0 28px;
+  padding: 16px 18px;
+  color: var(--ink-soft);
+  background: var(--harbor-pale);
+  border-left: 3px solid var(--harbor);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.document-safety-notice > svg {
+  flex: 0 0 auto;
+  color: var(--harbor-dark);
+}
+
+.document-safety-notice strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.document-safety-notice p {
+  margin: 3px 0 8px;
+}
+
+.document-safety-notice label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .field-grid {
@@ -5112,6 +5369,7 @@ p {
 
 .operation-actions > button,
 .operation-refund button,
+.operation-invoice-query button,
 .rate-actions button,
 .rate-inline-edit button {
   min-height: 34px;
@@ -5135,7 +5393,23 @@ p {
   border: 1px solid var(--line);
 }
 
+.operation-invoice-query {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(220, 228, 224, 0.38);
+  border: 1px solid rgba(111, 129, 125, 0.35);
+}
+
+.operation-invoice-query label {
+  display: grid;
+  gap: 5px;
+  color: var(--ink-soft);
+  font-size: 8px;
+}
+
 .operation-refund input,
+.operation-invoice-query input,
 .rate-inline-edit input,
 .rate-create input,
 .rate-create select {
@@ -6626,9 +6900,19 @@ p {
   }
 
   .fulfillment-switch,
+  .invoice-type-switch,
+  .invoice-carrier-options,
+  .invoice-company-form,
   .shipping-channels,
   .recipient-grid {
     grid-template-columns: 1fr;
+  }
+
+  .invoice-email-field,
+  .invoice-barcode-field,
+  .invoice-carrier-options > p,
+  .invoice-company-form > p {
+    grid-column: auto;
   }
 
   .recipient-grid .recipient-address {
@@ -6721,11 +7005,13 @@ p {
     border-bottom: 1px solid var(--line);
   }
 
-  .shipment-card {
+  .shipment-card,
+  .invoice-summary-card {
     grid-template-columns: auto 1fr;
   }
 
-  .shipment-card dl {
+  .shipment-card dl,
+  .invoice-summary-card dl {
     grid-column: 1 / -1;
   }
 

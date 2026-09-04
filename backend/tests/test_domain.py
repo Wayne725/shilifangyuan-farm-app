@@ -23,6 +23,7 @@ from app.domain import (
     live_proposal_status,
     order_available_actions,
     price_for_membership,
+    remove_paid_quantity,
     validate_group_join,
 )
 from app.models import (
@@ -55,6 +56,7 @@ from app.models import (
     PointTransaction,
     Product,
     ProposalStatus,
+    Refund,
     ShippingChannel,
     ShippingRate,
     ShippingTemperature,
@@ -253,6 +255,25 @@ def test_paid_threshold_pauses_until_admin_confirmation() -> None:
     assert campaign.intake_status == GroupIntakeStatus.OPEN
 
 
+def test_post_deadline_refund_returns_campaign_to_settling() -> None:
+    campaign = make_campaign(
+        deadline=NOW - timedelta(minutes=1),
+        min_paid_quantity=10,
+        paid_quantity=10,
+        reserved_quantity=0,
+        decision_status=GroupDecisionStatus.PENDING_CONFIRMATION,
+        intake_status=GroupIntakeStatus.PAUSED,
+        confirmation_deadline=NOW + timedelta(hours=1),
+    )
+
+    remove_paid_quantity(campaign, quantity=1, now=NOW)
+
+    assert campaign.paid_quantity == 9
+    assert campaign.decision_status == GroupDecisionStatus.RECRUITING
+    assert campaign.intake_status == GroupIntakeStatus.SETTLING
+    assert campaign.confirmation_deadline is None
+
+
 def test_regular_paid_order_can_cancel_only_before_preparing() -> None:
     order = Order(
         id="order-1",
@@ -306,6 +327,7 @@ def test_admin_fulfillment_actions_match_route_guards() -> None:
     assert "create_shipment" in order_available_actions(order, True, NOW)
     order.fulfillment.shipment.status = ShipmentStatus.CREATED
     assert "advance_shipment" in order_available_actions(order, True, NOW)
+    assert "refund" not in order_available_actions(order, True, NOW)
 
     order.fulfillment_method = FulfillmentMethod.EVENT_PICKUP
     order.fulfillment_status = "pending_confirmation"
@@ -327,7 +349,7 @@ def test_admin_fulfillment_actions_match_route_guards() -> None:
 
 def test_password_hash_and_jwt_round_trip() -> None:
     user = make_user()
-    assert user.password_hash.startswith("pbkdf2_sha256$210000$")
+    assert user.password_hash.startswith("$argon2id$")
     assert verify_password("password123", user.password_hash)
     assert not verify_password("wrong-password", user.password_hash)
     tokens = make_token_pair(user)
@@ -616,6 +638,16 @@ async def test_refund_releases_consumed_reservation_only_once(
         contact_email=user.email,
         payment_status=PaymentStatus.PAID,
         fulfillment_status="pending_confirmation",
+        payment_attempts=[
+            PaymentAttempt(
+                provider="ecpay",
+                merchant_trade_no="REFUND001PAYMENT",
+                amount=200,
+                status=PaymentStatus.PAID,
+                expires_at=NOW,
+                paid_at=NOW,
+            )
+        ],
         reservations=[
             InventoryReservation(
                 source_product_id=product.id,
@@ -631,6 +663,11 @@ async def test_refund_releases_consumed_reservation_only_once(
     await request_order_refund(database_session, order, user, "測試退款")
     assert product.stock_quantity == 10
     assert order.reservations[0].status == ReservationStatus.RELEASED
+    refund = await database_session.scalar(
+        select(Refund).where(Refund.order_id == order.id)
+    )
+    assert refund.payment_attempt_id == order.payment_attempts[0].id
+    assert order.payment_attempts[0].status == PaymentStatus.REFUND_PENDING
     with pytest.raises(HTTPException, match="只有已付款"):
         await request_order_refund(database_session, order, user, "重複退款")
     assert product.stock_quantity == 10

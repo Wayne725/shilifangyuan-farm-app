@@ -218,3 +218,41 @@ def pii_cipher_from_settings(settings: Settings) -> VersionedPIICipher:
         settings.pii_encryption_keys_json,
         settings.pii_encryption_current_version,
     )
+
+
+def auth_outbox_aad(event_type: str, user_id: str) -> str:
+    return f"auth-outbox:{event_type}:{user_id}"
+
+
+def auth_outbox_cipher_from_settings(settings: Settings) -> VersionedPIICipher:
+    environment = settings.environment.strip().lower()
+    if settings.pii_encryption_keys_json.strip() or environment == "preview":
+        return pii_cipher_from_settings(settings)
+    derived_key = hashlib.sha256(
+        f"shilifangyuan-auth-outbox:{settings.jwt_secret}".encode("utf-8")
+    ).digest()
+    return VersionedPIICipher({"runtime": derived_key}, "runtime")
+
+
+def encrypt_auth_outbox_credential(
+    settings: Settings,
+    event_type: str,
+    user_id: str,
+    credential: str,
+) -> str:
+    return auth_outbox_cipher_from_settings(settings).encrypt_text(
+        credential,
+        associated_data=auth_outbox_aad(event_type, user_id),
+    )
+
+
+def decrypt_auth_outbox_credential(
+    settings: Settings,
+    event_type: str,
+    user_id: str,
+    envelope: str,
+) -> str:
+    return auth_outbox_cipher_from_settings(settings).decrypt_text(
+        envelope,
+        associated_data=auth_outbox_aad(event_type, user_id),
+    )

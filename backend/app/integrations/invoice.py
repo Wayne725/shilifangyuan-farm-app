@@ -3,7 +3,18 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence
+from decimal import Decimal
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+)
 from urllib.parse import quote, unquote
 
 from .common import (
@@ -88,7 +99,10 @@ class InvoiceIssueRequest:
     relate_number: str
     customer_email: str
     items: Sequence[InvoiceLine]
-    carrier_type: str = "1"
+    buyer_type: str = "personal"
+    buyer_tax_id: str = ""
+    buyer_name: str = ""
+    carrier_type: str = "cloud"
     carrier_number: str = ""
     customer_id: str = ""
     customer_phone: str = ""
@@ -101,9 +115,16 @@ class InvoiceIssueRequest:
             )
         if not self.customer_email and not self.customer_phone:
             raise ValueError("Invoice requires a customer email or phone")
-        if self.carrier_type not in {"1", "3"}:
-            raise ValueError("Sandbox supports ECPay or mobile barcode carriers")
-        if self.carrier_type == "3" and not is_mobile_barcode_format(
+        if self.buyer_type not in {"personal", "company"}:
+            raise ValueError("Invoice buyer type must be personal or company")
+        if self.buyer_type == "company":
+            if not re.fullmatch(r"[0-9]{8}", self.buyer_tax_id):
+                raise ValueError("Company invoice requires an 8-digit tax ID")
+            if not self.buyer_name.strip():
+                raise ValueError("Company invoice requires a buyer name")
+        if self.carrier_type not in {"cloud", "mobile_barcode"}:
+            raise ValueError("Invoice carrier must be cloud or mobile barcode")
+        if self.carrier_type == "mobile_barcode" and not is_mobile_barcode_format(
             self.carrier_number
         ):
             raise ValueError("Invalid mobile barcode format")
@@ -111,6 +132,30 @@ class InvoiceIssueRequest:
             raise ValueError("Invoice requires at least one item")
         for item in self.items:
             item.validate()
+
+
+@dataclass(frozen=True)
+class PreparedInvoiceLine:
+    name: str
+    quantity: int
+    unit: str
+    unit_price: Decimal
+    amount: Decimal
+    tax_type: str
+    sequence_number: int
+    remark: str = ""
+
+
+@dataclass(frozen=True)
+class PreparedInvoice:
+    provider: str
+    relate_number: str
+    buyer_type: str
+    provider_request: Mapping[str, Any]
+    sales_amount: Decimal
+    tax_amount: Decimal
+    total_amount: Decimal
+    items: Sequence[PreparedInvoiceLine]
 
 
 @dataclass(frozen=True)
@@ -128,6 +173,27 @@ class InvoiceIssueResult:
     invoice_date: str
     random_number: str
     raw: Mapping[str, Any]
+
+
+class InvoiceProvider(Protocol):
+    provider_name: str
+
+    def prepare_invoice(self, request: InvoiceIssueRequest) -> PreparedInvoice:
+        ...
+
+    async def issue_prepared_invoice(
+        self,
+        prepared: PreparedInvoice,
+    ) -> InvoiceIssueResult:
+        ...
+
+    async def query_invoice(
+        self,
+        relate_number: str,
+        *,
+        buyer_type: str = "personal",
+    ) -> Dict[str, Any]:
+        ...
 
 
 def normalize_mobile_barcode(barcode: str) -> str:
@@ -234,6 +300,8 @@ def decrypt_ecpay_invoice_data(
 
 
 class ECPayInvoiceAdapter:
+    provider_name = "ecpay"
+
     def __init__(
         self,
         settings: ECPayInvoiceSettings,
@@ -283,10 +351,12 @@ class ECPayInvoiceAdapter:
             "Print": "0",
             "Donation": "0",
             "LoveCode": "",
-            "CarrierType": request.carrier_type,
+            "CarrierType": (
+                "3" if request.carrier_type == "mobile_barcode" else "1"
+            ),
             "CarrierNum": (
                 normalize_mobile_barcode(request.carrier_number)
-                if request.carrier_type == "3"
+                if request.carrier_type == "mobile_barcode"
                 else ""
             ),
             "TaxType": invoice_tax_type,
@@ -299,11 +369,41 @@ class ECPayInvoiceAdapter:
         }
         return result
 
-    async def issue_invoice(
-        self, request: InvoiceIssueRequest
-    ) -> InvoiceIssueResult:
+    def prepare_invoice(self, request: InvoiceIssueRequest) -> PreparedInvoice:
         data = self.build_issue_data(request)
-        response = await self._request(self.settings.issue_url, data)
+        return PreparedInvoice(
+            provider=self.provider_name,
+            relate_number=request.relate_number,
+            buyer_type=request.buyer_type,
+            provider_request=data,
+            sales_amount=Decimal(str(data["SalesAmount"])),
+            tax_amount=Decimal("0"),
+            total_amount=Decimal(str(data["SalesAmount"])),
+            items=tuple(
+                PreparedInvoiceLine(
+                    name=item.name,
+                    quantity=item.quantity,
+                    unit=item.unit,
+                    unit_price=Decimal(item.unit_price),
+                    amount=Decimal(item.amount),
+                    tax_type=item.tax_type,
+                    sequence_number=index,
+                    remark=item.remark,
+                )
+                for index, item in enumerate(request.items, start=1)
+            ),
+        )
+
+    async def issue_prepared_invoice(
+        self,
+        prepared: PreparedInvoice,
+    ) -> InvoiceIssueResult:
+        if prepared.provider != self.provider_name:
+            raise ValueError("Prepared invoice provider does not match ECPay")
+        response = await self._request(
+            self.settings.issue_url,
+            prepared.provider_request,
+        )
         if int(response.get("RtnCode", 0)) != 1:
             raise IntegrationResponseError(
                 "ECPay invoice issue failed: {} {}".format(
@@ -312,14 +412,26 @@ class ECPayInvoiceAdapter:
                 ).strip()
             )
         return InvoiceIssueResult(
-            relate_number=request.relate_number,
+            relate_number=prepared.relate_number,
             invoice_number=str(response.get("InvoiceNo", "")),
             invoice_date=str(response.get("InvoiceDate", "")),
             random_number=str(response.get("RandomNumber", "")),
             raw=response,
         )
 
-    async def query_invoice(self, relate_number: str) -> Dict[str, Any]:
+    async def issue_invoice(
+        self, request: InvoiceIssueRequest
+    ) -> InvoiceIssueResult:
+        return await self.issue_prepared_invoice(
+            self.prepare_invoice(request)
+        )
+
+    async def query_invoice(
+        self,
+        relate_number: str,
+        *,
+        buyer_type: str = "personal",
+    ) -> Dict[str, Any]:
         if not re.fullmatch(r"[A-Za-z0-9]{1,30}", relate_number):
             raise ValueError("Invalid invoice RelateNumber")
         return await self._request(

@@ -1,5 +1,7 @@
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -29,12 +31,23 @@ from app.integrations.invoice import (
     is_mobile_barcode_format,
     normalize_mobile_barcode,
 )
-from app.integrations.invoice_service import issue_picked_up_order_invoice
+from app.integrations.fanyu_invoice import (
+    FanyuInvoiceAdapter,
+    FanyuInvoiceSettings,
+)
+from app.integrations.invoice_service import (
+    InvoiceApplicationError,
+    enqueue_invoice_adjustment_after_refund,
+    invoice_request_from_order,
+    issue_paid_order_invoice,
+    reconcile_order_invoice,
+)
 from app.integrations.notifications import (
     NotificationCommand,
     NotificationService,
 )
 from app.integrations.payment_service import (
+    PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
     create_payment_attempt,
     payment_adapter_from_settings,
@@ -56,6 +69,8 @@ from app.models import (
     GroupDecisionStatus,
     GroupIntakeStatus,
     Invoice,
+    InvoiceBuyerType,
+    InvoiceCarrierType,
     InvoiceStatus,
     MembershipType,
     Order,
@@ -66,6 +81,7 @@ from app.models import (
     PaymentStatus,
     Product,
     Refund,
+    RefundStatus,
     ReservationStatus,
     Shipment,
     ShipmentStatus,
@@ -75,7 +91,7 @@ from app.models import (
     TargetType,
     User,
 )
-from tests.support import make_test_settings
+from tests.support import make_test_settings, prepare_test_invoice
 
 
 INVOICE_MERCHANT_ID = "2000132"
@@ -235,7 +251,7 @@ def test_invoice_payload_supports_taxable_and_exempt_snapshots() -> None:
         InvoiceIssueRequest(
             relate_number="INV20260729001",
             customer_email="sandbox@example.test",
-            carrier_type="3",
+            carrier_type="mobile_barcode",
             carrier_number="/AB12+-.",
             items=[
                 InvoiceLine("白米", 2, 100, tax_type="1"),
@@ -527,6 +543,27 @@ async def test_regular_payment_reserves_and_consumes_product_stock(
 
 
 @pytest.mark.asyncio
+async def test_preview_cannot_create_a_payment_attempt(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    settings = payment_settings().model_copy(update={"environment": "preview"})
+
+    with pytest.raises(PaymentApplicationError, match="Preview"):
+        await create_payment_attempt(
+            database_session,
+            order.id,
+            user,
+            settings,
+        )
+
+    attempts = list(await database_session.scalars(select(PaymentAttempt)))
+    await database_session.refresh(product)
+    assert attempts == []
+    assert product.stock_quantity == 3
+
+
+@pytest.mark.asyncio
 async def test_simulated_payment_is_rejected_and_releases_stock(
     database_session,
 ) -> None:
@@ -644,25 +681,30 @@ async def test_reset_tombstone_acknowledges_late_callback_without_order(
 
 
 @pytest.mark.asyncio
-async def test_picked_up_order_invoice_is_queried_then_issued_once(
+async def test_paid_order_invoice_is_queried_then_issued_once(
     database_session,
 ) -> None:
     _user, _product, order = await make_regular_order(database_session)
     order.payment_status = PaymentStatus.PAID
-    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.fulfillment_status = FulfillmentStatus.PENDING_CONFIRMATION
     order.invoice_status = InvoiceStatus.PENDING
     await database_session.commit()
 
     class InvoiceAdapter:
+        provider_name = "ecpay"
+
         def __init__(self):
             self.query_count = 0
             self.issue_count = 0
 
-        async def query_invoice(self, relate_number):
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request)
+
+        async def query_invoice(self, relate_number, *, buyer_type="personal"):
             self.query_count += 1
             return {"RtnCode": 0, "RtnMsg": "not found"}
 
-        async def issue_invoice(self, request):
+        async def issue_prepared_invoice(self, request):
             self.issue_count += 1
             assert request.items[0].tax_type == "1"
             return InvoiceIssueResult(
@@ -674,7 +716,7 @@ async def test_picked_up_order_invoice_is_queried_then_issued_once(
             )
 
     adapter = InvoiceAdapter()
-    result = await issue_picked_up_order_invoice(
+    result = await issue_paid_order_invoice(
         database_session, order.id, adapter
     )
     invoice = await database_session.scalar(
@@ -686,6 +728,281 @@ async def test_picked_up_order_invoice_is_queried_then_issued_once(
     assert adapter.issue_count == 1
     assert invoice.status == InvoiceStatus.ISSUED
     assert invoice.random_number == "1234"
+
+
+@pytest.mark.asyncio
+async def test_fanyu_no_data_query_is_followed_by_one_issue(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.invoice_status = InvoiceStatus.PENDING
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+        def __init__(self):
+            self.issue_count = 0
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request, provider="fanyu")
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            assert buyer_type == "personal"
+            return {
+                "RtnCode": 0,
+                "RtnMsg": "查無電子發票",
+                "InvoiceNo": "",
+            }
+
+        async def issue_prepared_invoice(self, request):
+            self.issue_count += 1
+            return InvoiceIssueResult(
+                relate_number=request.relate_number,
+                invoice_number="AB12345670",
+                invoice_date="2026-07-29 123000",
+                random_number="9012",
+                raw={"invNo": "AB12345670"},
+            )
+
+    adapter = InvoiceAdapter()
+    await issue_paid_order_invoice(database_session, order.id, adapter)
+    invoice = await database_session.scalar(
+        select(Invoice).where(Invoice.order_id == order.id)
+    )
+
+    assert adapter.issue_count == 1
+    assert invoice.provider == "fanyu"
+    assert invoice.invoice_date is not None
+    assert invoice.status == InvoiceStatus.ISSUED
+
+
+@pytest.mark.asyncio
+async def test_fanyu_invoice_persists_exact_provider_request_snapshot(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.PENDING
+    order.invoice_buyer_type = InvoiceBuyerType.COMPANY
+    order.invoice_buyer_tax_id = "12345675"
+    order.invoice_buyer_name = "測試股份有限公司"
+    order.invoice_buyer_email = "accounting@example.test"
+    order.invoice_carrier_type = InvoiceCarrierType.MOBILE_BARCODE
+    order.invoice_carrier_value = "/AB12+-."
+    await database_session.commit()
+    provider_requests = []
+
+    async def transport(url, payload, headers, timeout):
+        provider_requests.append(payload["reqData"])
+        if url.endswith("/queryInvoice"):
+            body = '{"statusCode":"3","statusDesc":"查無資料","respData":{}}'
+        else:
+            body = (
+                '{"statusCode":"0","statusDesc":"","respData":'
+                '{"invNo":"AB12345674","invDate":"20260902",'
+                '"invTime":"10:00:00","randomNumber":"2468"}}'
+            )
+        return HTTPResponse(status_code=200, body=body, headers={})
+
+    adapter = FanyuInvoiceAdapter(
+        FanyuInvoiceSettings(
+            company_id="15989995",
+            user_id="15989995ADMIN",
+            auth_password="A15989995",
+            api_key="test-api-key",
+            seller_id="15989995",
+            signature_verified=True,
+        ),
+        transport=transport,
+    )
+
+    await issue_paid_order_invoice(database_session, order.id, adapter)
+    invoice = await database_session.scalar(
+        select(Invoice)
+        .where(Invoice.order_id == order.id)
+        .options(selectinload(Invoice.items))
+    )
+
+    assert invoice is not None
+    assert invoice.provider_request == provider_requests[1]
+    assert invoice.provider_request["carrierType"] == "3J0002"
+    assert invoice.provider_request["notifyEmail"] == "accounting@example.test"
+    assert invoice.provider_request["Details"][0]["amount"] == "190.47619"
+    assert invoice.sales_amount == 190
+    assert invoice.tax_amount == 10
+    assert invoice.total_amount == 200
+    assert invoice.items[0].unit_price == Decimal("95.238095")
+    assert invoice.items[0].amount == Decimal("190.476190")
+
+
+@pytest.mark.asyncio
+async def test_fanyu_personal_cloud_order_uses_contact_email_as_member_carrier(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order = await database_session.scalar(
+        select(Order)
+        .where(Order.id == order.id)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
+        )
+    )
+    assert order is not None
+
+    request = invoice_request_from_order(order, "INVSLFTEST0001")
+    data = FanyuInvoiceAdapter(
+        FanyuInvoiceSettings(
+            company_id="15989995",
+            user_id="15989995ADMIN",
+            auth_password="A15989995",
+            api_key="test-api-key",
+            seller_id="15989995",
+            signature_verified=True,
+        )
+    ).build_issue_data(request)
+
+    assert data["carrierType"] == "EG0478"
+    assert data["carrierID1"] == order.contact_email
+    assert data["carrierID2"] == order.contact_email
+    assert data["notifyEmail"] == order.contact_email
+
+
+@pytest.mark.asyncio
+async def test_invoice_query_recovers_provider_result_without_reissuing(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.invoice_status = InvoiceStatus.FAILED
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request, provider="fanyu")
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            return {
+                "RtnCode": 1,
+                "InvoiceNo": "AB12345671",
+                "InvoiceDate": "2026-07-29 124500",
+                "RandomNumber": "3456",
+                "ProviderStatus": "0",
+            }
+
+        async def issue_prepared_invoice(self, request):
+            raise AssertionError("查到既有發票後不可重複開立")
+
+    result = await reconcile_order_invoice(
+        database_session,
+        order.id,
+        InvoiceAdapter(),
+    )
+    invoice = await database_session.scalar(
+        select(Invoice).where(Invoice.order_id == order.id)
+    )
+
+    assert result is not None
+    assert result.invoice_number == "AB12345671"
+    assert invoice.status == InvoiceStatus.ISSUED
+    assert order.invoice_status == InvoiceStatus.ISSUED
+
+
+@pytest.mark.asyncio
+async def test_invoice_provider_cannot_change_after_snapshot(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    database_session.add(
+        Invoice(
+            order=order,
+            relate_number="INVSLFTEST0001",
+            provider="ecpay",
+            status=InvoiceStatus.FAILED,
+        )
+    )
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+    with pytest.raises(InvoiceApplicationError, match="不能改由 fanyu"):
+        await reconcile_order_invoice(
+            database_session,
+            order.id,
+            InvoiceAdapter(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_invoice_intent_survives_process_interruption_before_writeback(
+    database_session,
+) -> None:
+    user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.PENDING
+    await database_session.commit()
+    order_id = order.id
+    user_id = user.id
+    order_amount = order.amount_total
+
+    class InterruptedInvoiceAdapter:
+        provider_name = "ecpay"
+        external_issue_started = False
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request)
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            return {"RtnCode": 0, "RtnMsg": "查無資料"}
+
+        async def issue_prepared_invoice(self, request):
+            self.external_issue_started = True
+            raise asyncio.CancelledError
+
+    adapter = InterruptedInvoiceAdapter()
+    with pytest.raises(asyncio.CancelledError):
+        await issue_paid_order_invoice(database_session, order_id, adapter)
+    assert adapter.external_issue_started is True
+    await database_session.rollback()
+    database_session.expunge_all()
+
+    saved_order = await database_session.scalar(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(selectinload(Order.invoice))
+    )
+    invoice = saved_order.invoice
+    assert invoice is not None
+    assert invoice.status == InvoiceStatus.PENDING
+    assert invoice.provider_request
+
+    saved_order.payment_status = PaymentStatus.REFUNDED
+    refund = Refund(
+        order=saved_order,
+        amount=order_amount,
+        status=RefundStatus.COMPLETED,
+        reason="付款已退款",
+        requested_by_id=user_id,
+    )
+    database_session.add(refund)
+    await database_session.flush()
+    assert enqueue_invoice_adjustment_after_refund(
+        database_session,
+        saved_order,
+        refund,
+    ) is True
+    assert invoice.status == InvoiceStatus.VOID_PENDING
 
 
 @pytest.mark.asyncio
@@ -711,12 +1028,16 @@ async def test_delivered_logistics_invoice_includes_shipping_fee(
     await database_session.commit()
 
     class InvoiceAdapter:
+        provider_name = "ecpay"
         issued_request = None
 
-        async def query_invoice(self, relate_number):
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request)
+
+        async def query_invoice(self, relate_number, *, buyer_type="personal"):
             return {"RtnCode": 0, "RtnMsg": "not found"}
 
-        async def issue_invoice(self, request):
+        async def issue_prepared_invoice(self, request):
             self.issued_request = request
             return InvoiceIssueResult(
                 relate_number=request.relate_number,
@@ -727,7 +1048,7 @@ async def test_delivered_logistics_invoice_includes_shipping_fee(
             )
 
     adapter = InvoiceAdapter()
-    await issue_picked_up_order_invoice(database_session, order.id, adapter)
+    await issue_paid_order_invoice(database_session, order.id, adapter)
 
     assert adapter.issued_request is not None
     actual_lines = [

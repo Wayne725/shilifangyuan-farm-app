@@ -83,6 +83,7 @@ export function RegisterPage() {
   const search = useSearch({ from: "/register" });
   const intent = search.intent;
   const [memberNumber, setMemberNumber] = useState("");
+  const [legalName, setLegalName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -109,7 +110,8 @@ export function RegisterPage() {
         body: JSON.stringify(isExistingMember
           ? {
               member_number: memberNumber.trim(),
-              legal_name: displayName.trim(),
+              legal_name: legalName.trim(),
+              display_name: displayName.trim(),
               email: email.trim(),
               phone: phone.trim(),
               password,
@@ -214,16 +216,33 @@ export function RegisterPage() {
                 />
               </label>
             )}
+            {isExistingMember && (
+              <label className="field">
+                名冊登記姓名
+                <input
+                  value={legalName}
+                  onChange={(event) => setLegalName(event.target.value)}
+                  autoComplete="name"
+                  maxLength={80}
+                  required
+                />
+              </label>
+            )}
             <label className="field">
-              {isExistingMember ? "名冊登記姓名" : "顯示名稱"}
+              顯示名稱
               <input
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                autoComplete="name"
+                autoComplete={isExistingMember ? "nickname" : "name"}
                 maxLength={80}
                 required
               />
             </label>
+            {isExistingMember && (
+              <small className="field-hint">
+                顯示名稱可使用暱稱；名冊姓名只用於社員身分核對。
+              </small>
+            )}
             {isExistingMember && (
               <label className="field">
                 名冊登記手機
@@ -308,7 +327,7 @@ export function VerifyEmailPage() {
     try {
       await apiFetch<AuthActionResponse>("/v1/auth/verify-email", {
         method: "POST",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ email: email.trim(), token }),
       });
       setVerified(true);
     } catch (reason) {
@@ -367,6 +386,16 @@ export function VerifyEmailPage() {
           <h2>輸入驗證碼</h2>
           <form className="auth-form" onSubmit={verify}>
             <label className="field">
+              註冊電子信箱
+              <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                type="email"
+                autoComplete="email"
+                required
+              />
+            </label>
+            <label className="field">
               六位數驗證碼
               <input
                 className="verification-code"
@@ -388,15 +417,7 @@ export function VerifyEmailPage() {
             </button>
           </form>
           <div className="auth-resend">
-            <label className="field">
-              沒收到信？輸入註冊信箱
-              <input
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                type="email"
-                autoComplete="email"
-              />
-            </label>
+            <p>沒收到信？可重新寄送到上方註冊信箱。</p>
             <button type="button" onClick={resend} disabled={resending}>
               {resending ? "寄送中…" : "重新寄送驗證碼"}
             </button>

@@ -1024,6 +1024,15 @@ async def reject_member_proposal(
     proposal.reviewed_by_id = admin.id
     proposal.reviewed_at = datetime.now(timezone.utc)
     proposal.closed_at = datetime.now(timezone.utc)
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="member_proposal.reject",
+            aggregate_type="member_proposal",
+            aggregate_id=proposal.id,
+            reason=body.reason,
+        )
+    )
     await session.commit()
     return _proposal_read(proposal, admin.id)
 

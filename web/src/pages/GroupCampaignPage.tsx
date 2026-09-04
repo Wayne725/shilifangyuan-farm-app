@@ -13,6 +13,12 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import {
+  defaultInvoicePreference,
+  InvoicePreferenceFields,
+  InvoicePreferenceSummary,
+  invoicePreferenceIsValid,
+} from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import {
@@ -41,6 +47,9 @@ export function GroupCampaignPage() {
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
+  const [invoicePreference, setInvoicePreference] = useState(
+    () => defaultInvoicePreference(user?.email || ""),
+  );
   const campaign = useQuery({
     queryKey: ["group-campaign", campaignId],
     queryFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaignId}`),
@@ -70,7 +79,7 @@ export function GroupCampaignPage() {
           campaignId,
           quantity,
           contactEmail: user.email,
-          invoiceCarrierType: "ecpay",
+          invoicePreference,
           fulfillment: {
             kind: "shipping",
             channel: shippingChannel,
@@ -85,7 +94,7 @@ export function GroupCampaignPage() {
         campaignId,
         quantity,
         contactEmail: user.email,
-        invoiceCarrierType: "ecpay",
+        invoicePreference,
         fulfillment: { kind: "pickup", pickupLocationId },
       });
     },
@@ -108,6 +117,13 @@ export function GroupCampaignPage() {
     setQuantity((value) => Math.max(1, Math.min(value, campaign.data.per_user_cap, campaign.data.available_quantity)));
   }, [campaign.data, shippingChannel]);
 
+  useEffect(() => {
+    if (!user?.email) return;
+    setInvoicePreference((current) =>
+      current.buyerEmail ? current : { ...current, buyerEmail: user.email },
+    );
+  }, [user?.email]);
+
   if (campaign.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (campaign.isError || !campaign.data) {
     return <section className="offer-page"><DataState kind="error" title="團購資料無法讀取" detail={campaign.error?.message || "找不到這筆團購"} /></section>;
@@ -115,7 +131,11 @@ export function GroupCampaignPage() {
 
   const item = campaign.data;
   const shippingReady = Boolean(shippingChannel && recipientName.trim() && recipientPhone.trim() && shippingAddress.trim());
-  const submitReady = Boolean(quote.data && (method === "pickup" ? pickupLocationId : shippingReady));
+  const submitReady = Boolean(
+    quote.data &&
+      invoicePreferenceIsValid(invoicePreference) &&
+      (method === "pickup" ? pickupLocationId : shippingReady),
+  );
 
   return (
     <section className="offer-page">
@@ -180,6 +200,11 @@ export function GroupCampaignPage() {
               </div>
             </div>
           )}
+
+          <InvoicePreferenceFields
+            onChange={setInvoicePreference}
+            value={invoicePreference}
+          />
         </div>
 
         <aside className="offer-summary">
@@ -196,6 +221,7 @@ export function GroupCampaignPage() {
                 <div><dt>社員單價</dt><dd>{formatMoney(quote.data?.unit_price || item.member_price)}</dd></div>
                 <div><dt>商品小計</dt><dd>{formatMoney(quote.data?.product_subtotal || 0)}</dd></div>
                 <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>
+                <InvoicePreferenceSummary value={invoicePreference} />
                 <div className="offer-total"><dt>合計</dt><dd>{formatMoney(quote.data?.amount_total || 0)}</dd></div>
               </dl>
               {checkout.isError && <p className="form-error">{checkout.error.message}</p>}

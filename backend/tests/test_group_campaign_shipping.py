@@ -3,21 +3,28 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
 
 from app.domain import apply_paid_quantity
 from app.models import (
     GroupCampaign,
     FulfillmentMethod,
+    FulfillmentState,
+    FulfillmentStatus,
     InventoryReservation,
     MembershipType,
     Order,
+    OrderFulfillment,
     OrderKind,
     Product,
     ProductCategory,
     ProposalStatus,
     ReservationStatus,
+    Refund,
     SalesChannel,
     ShippingChannel,
+    Shipment,
+    ShipmentStatus,
     ShippingRate,
     ShippingTemperature,
     TargetType,
@@ -26,6 +33,7 @@ from app.models import (
     UserRole,
     Vote,
     VoteProposal,
+    PaymentStatus,
 )
 from app.routers.groups import groups_router
 from app.routers.proposals import proposals_router
@@ -382,3 +390,59 @@ async def test_active_payment_reservation_temporarily_blocks_shipping_changes(
     )
     assert after_expiry.status_code == 200
     assert after_expiry.json()["shipping_temperature"] == "ambient"
+
+
+@pytest.mark.asyncio
+async def test_group_cancel_rejects_paid_order_with_created_shipment(
+    campaign_context,
+) -> None:
+    client = campaign_context["client"]
+    session = campaign_context["session"]
+    admin = campaign_context["admin"]
+    proposer = campaign_context["proposer"]
+    product = campaign_context["product"]
+    created = await client.post(
+        "/v1/group-campaigns",
+        json=campaign_payload(product.id),
+        headers=auth_headers(admin),
+    )
+    campaign_id = created.json()["id"]
+    order = Order(
+        order_number="SLF-GROUP-SHIPPED-001",
+        order_kind=OrderKind.GROUP,
+        sales_channel=SalesChannel.GROUP,
+        fulfillment_method=FulfillmentMethod.ECPAY_LOGISTICS,
+        user_id=proposer.id,
+        group_campaign_id=campaign_id,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=520,
+        contact_email=proposer.email,
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status=FulfillmentStatus.PREPARING,
+        fulfillment=OrderFulfillment(
+            method=FulfillmentMethod.ECPAY_LOGISTICS,
+            status=FulfillmentState.AWAITING_SHIPMENT,
+            shipment=Shipment(
+                channel=ShippingChannel.HOME_DELIVERY,
+                temperature=ShippingTemperature.CHILLED,
+                status=ShipmentStatus.CREATED,
+                shipping_fee=160,
+            ),
+        ),
+    )
+    session.add(order)
+    await session.commit()
+    order_id = order.id
+
+    response = await client.post(
+        f"/v1/group-campaigns/{campaign_id}/admin/cancel",
+        json={"reason": "管理員取消"},
+        headers=auth_headers(admin),
+    )
+
+    assert response.status_code == 409
+    assert "建立物流" in response.json()["detail"]
+    await session.rollback()
+    assert await session.scalar(
+        select(Refund).where(Refund.order_id == order_id)
+    ) is None

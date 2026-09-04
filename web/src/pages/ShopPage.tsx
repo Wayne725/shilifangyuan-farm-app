@@ -5,7 +5,7 @@ import { Link } from "@tanstack/react-router";
 
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
 import { useCommerce } from "../context/CommerceContext";
-import { apiFetch, formatDate, resolveAsset } from "../lib/api";
+import { apiFetch, formatDate, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import { mealEventStatusLabel } from "../lib/labels";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
@@ -63,7 +63,12 @@ export function ShopPage() {
           />
           {products.isPending && <LoadingLines count={4} />}
           {products.isError && (
-            <DataState kind="error" title="商品服務暫時無法使用" detail="請稍後重新整理。" />
+            <DataState
+              kind="error"
+              title="商品服務暫時無法使用"
+              detail={products.error.message}
+              onAction={() => products.refetch()}
+            />
           )}
           {products.data?.length === 0 && (
             <DataState title="商品整理中" detail="完成正式商品與 SKU 建檔後，選品會出現在這裡。" />
@@ -84,7 +89,12 @@ export function ShopPage() {
           <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的團購需求 <ArrowRight size={17} /></Link></div>
           {campaigns.isPending && <LoadingLines count={3} />}
           {campaigns.isError && (
-            <DataState kind="error" title="團購資料暫時不可用" detail="登入社員帳號後可查看符合權限的團購。" />
+            <DataState
+              kind="error"
+              title="團購資料暫時不可用"
+              detail={campaigns.error.message}
+              onAction={() => campaigns.refetch()}
+            />
           )}
           <div className="editorial-list">
             {campaigns.data?.map((campaign, index) => (
@@ -113,12 +123,17 @@ export function ShopPage() {
           <div className="market-subnav"><Link className="button button-quiet" to="/meal-orders"><BowlFood size={17} />我的取餐憑證</Link></div>
           {meals.isPending && <LoadingLines count={2} />}
           {meals.isError && (
-            <DataState kind="error" title="餐期資料暫時不可用" detail="請稍後再試。" />
+            <DataState
+              kind="error"
+              title="餐期資料暫時不可用"
+              detail={meals.error.message}
+              onAction={() => meals.refetch()}
+            />
           )}
           <div className="meal-grid">
             {meals.data?.map((meal) => (
               <Link key={meal.id} className="meal-card" to="/meals/$eventId" params={{ eventId: meal.id }}>
-                <img src={resolveAsset(meal.offerings[0]?.image_url || "/assets/meals/taiwanese-lunchbox.webp")} alt={meal.title} />
+                <img src={resolveAsset(meal.offerings[0]?.image_url || "/assets/meals/taiwanese-lunchbox.webp")} alt={meal.title} onError={replaceBrokenAsset} />
                 <div>
                   <span>{mealEventStatusLabel(meal.status)}</span>
                   <h3>{meal.title}</h3>

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 
 import app.jobs as jobs_module
 from app.integrations.email_sender import EmailSendResult
 from app.integrations.common import IntegrationResponseError
 from app.jobs import jobs_router
+from app.models import OutboxEvent
 from app.rate_limit import reset_all
 from app.routers.auth import auth_router
 from tests.support import api_test_context, make_test_settings
@@ -75,11 +77,11 @@ async def test_provider_accepted_replacement_keeps_previous_code_valid(
 
     verified_with_previous = await client.post(
         "/v1/auth/verify-email",
-        json={"token": previous_code},
+        json={"email": "delivery@example.com", "token": previous_code},
     )
     replacement_after_verification = await client.post(
         "/v1/auth/verify-email",
-        json={"token": replacement_code},
+        json={"email": "delivery@example.com", "token": replacement_code},
     )
 
     assert verified_with_previous.status_code == 200
@@ -125,11 +127,52 @@ async def test_failed_replacement_delivery_keeps_previous_code_valid(
     )
     verified = await client.post(
         "/v1/auth/verify-email",
-        json={"token": previous_code},
+        json={
+            "email": "failed-delivery@example.com",
+            "token": previous_code,
+        },
     )
 
     assert failed_delivery.json()["outbox_failed"] == 1
     assert verified.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_completed_auth_email_outbox_redacts_verification_code(
+    email_app,
+    database_session,
+) -> None:
+    client, settings = email_app
+    registered = await client.post(
+        "/v1/auth/register",
+        json={
+            "email": "redaction@example.com",
+            "display_name": "憑證清除測試",
+            "password": "initial-pass-123",
+        },
+    )
+    raw_code = registered.json()["development_token"]
+    event = await database_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.event_type == "auth.email_verification_requested",
+            OutboxEvent.aggregate_type == "user",
+        )
+    )
+    assert event is not None
+    assert raw_code not in str(event.payload)
+    assert str(event.payload["credential_encrypted"]).startswith("pii:1:")
+
+    delivered = await client.post(
+        "/internal/reconcile",
+        headers={"X-Reconcile-Secret": settings.internal_reconcile_secret},
+    )
+
+    assert delivered.json()["outbox_completed"] == 1
+    await database_session.refresh(event)
+    assert raw_code not in str(event.payload)
+    assert "verification_token" not in event.payload
+    assert "credential_encrypted" not in event.payload
+    assert event.payload["credential_redacted"] is True
 
 
 @pytest.mark.asyncio
@@ -141,13 +184,13 @@ async def test_verify_email_is_rate_limited_after_five_failed_codes(
     for _ in range(5):
         response = await client.post(
             "/v1/auth/verify-email",
-            json={"token": "999999"},
+            json={"email": "unknown@example.com", "token": "999999"},
         )
         assert response.status_code == 400
 
     limited = await client.post(
         "/v1/auth/verify-email",
-        json={"token": "999999"},
+        json={"email": "unknown@example.com", "token": "999999"},
     )
 
     assert limited.status_code == 429
@@ -172,25 +215,37 @@ async def test_successful_email_verification_resets_rate_limit(
     for _ in range(4):
         failed = await client.post(
             "/v1/auth/verify-email",
-            json={"token": invalid_code},
+            json={
+                "email": "rate-limit-reset@example.com",
+                "token": invalid_code,
+            },
         )
         assert failed.status_code == 400
 
     verified = await client.post(
         "/v1/auth/verify-email",
-        json={"token": valid_code},
+        json={
+            "email": "rate-limit-reset@example.com",
+            "token": valid_code,
+        },
     )
     assert verified.status_code == 200
 
     for _ in range(5):
         failed_after_success = await client.post(
             "/v1/auth/verify-email",
-            json={"token": invalid_code},
+            json={
+                "email": "rate-limit-reset@example.com",
+                "token": invalid_code,
+            },
         )
         assert failed_after_success.status_code == 400
 
     limited = await client.post(
         "/v1/auth/verify-email",
-        json={"token": invalid_code},
+        json={
+            "email": "rate-limit-reset@example.com",
+            "token": invalid_code,
+        },
     )
     assert limited.status_code == 429

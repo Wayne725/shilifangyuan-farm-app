@@ -21,6 +21,7 @@ from ..domain import (
     campaign_available_quantity,
     confirm_campaign,
     included_tax_amount,
+    order_fulfillment_is_irreversible,
     price_for_membership,
     validate_campaign_schedule,
     validate_group_join,
@@ -46,6 +47,7 @@ from ..models import (
     Product,
     ReservationStatus,
     SalesChannel,
+    Shipment,
     ShippingRate,
     ShippingChannel,
     TaxType,
@@ -512,8 +514,28 @@ async def join_campaign(
         amount_total=unit_price * body.quantity,
         tax_amount=included_tax_amount(unit_price * body.quantity, tax_type),
         contact_email=body.contact_email.lower(),
+        invoice_buyer_type=body.invoice_buyer_type,
+        invoice_buyer_tax_id=(
+            body.invoice_buyer_tax_id.strip()
+            if body.invoice_buyer_tax_id
+            else None
+        ),
+        invoice_buyer_name=(
+            body.invoice_buyer_name.strip()
+            if body.invoice_buyer_name
+            else None
+        ),
+        invoice_buyer_email=(
+            str(body.invoice_buyer_email).lower()
+            if body.invoice_buyer_email
+            else None
+        ),
         invoice_carrier_type=body.invoice_carrier_type,
-        invoice_carrier_value=body.invoice_carrier_value,
+        invoice_carrier_value=(
+            body.invoice_carrier_value.strip().upper()
+            if body.invoice_carrier_value
+            else None
+        ),
         items=[
             OrderItem(
                 source_product_id=product_id,
@@ -545,6 +567,7 @@ async def join_campaign(
         .options(
             selectinload(Order.items),
             selectinload(Order.group_campaign),
+            selectinload(Order.invoice),
             selectinload(Order.fulfillment).selectinload(
                 OrderFulfillment.shipment
             ),
@@ -623,15 +646,32 @@ async def close_campaign_with_refunds(
                 selectinload(Order.items),
                 selectinload(Order.reservations),
                 selectinload(Order.group_campaign),
+                selectinload(Order.fulfillment).selectinload(
+                    OrderFulfillment.shipment
+                ),
             )
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
     )
-    if any(
-        order.fulfillment_status == FulfillmentStatus.PICKED_UP
-        for order in orders
-    ):
+    for order in orders:
+        fulfillment = order.__dict__.get("fulfillment")
+        shipment = (
+            fulfillment.__dict__.get("shipment")
+            if fulfillment is not None
+            else None
+        )
+        if shipment is not None:
+            await session.scalar(
+                select(Shipment)
+                .where(Shipment.id == shipment.id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+    if any(order_fulfillment_is_irreversible(order) for order in orders):
         raise HTTPException(
-            status_code=409, detail="已有訂單完成取貨，不能取消整團"
+            status_code=409,
+            detail="已有訂單建立物流或完成交付，不能取消整團",
         )
     campaign.decision_status = decision_status
     campaign.intake_status = GroupIntakeStatus.CLOSED

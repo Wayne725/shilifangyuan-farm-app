@@ -15,6 +15,12 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import {
+  defaultInvoicePreference,
+  InvoicePreferenceFields,
+  InvoicePreferenceSummary,
+  invoicePreferenceIsValid,
+} from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
 import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
@@ -46,6 +52,9 @@ export function CheckoutPage() {
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
+  const [invoicePreference, setInvoicePreference] = useState(
+    () => defaultInvoicePreference(user?.email || ""),
+  );
   const items = useMemo(
     () =>
       cart.map((item) => ({
@@ -97,7 +106,7 @@ export function CheckoutPage() {
         return beginCheckout({
           items,
           contactEmail: user.email,
-          invoiceCarrierType: "ecpay",
+          invoicePreference,
           fulfillment: {
             kind: "shipping",
             channel: shippingChannel,
@@ -111,7 +120,7 @@ export function CheckoutPage() {
       return beginCheckout({
         items,
         contactEmail: user.email,
-        invoiceCarrierType: "ecpay",
+        invoicePreference,
         fulfillment: { kind: "pickup", pickupLocationId },
       });
     },
@@ -145,6 +154,13 @@ export function CheckoutPage() {
     }
   }, [eligibility.availableChannels, shippingChannel]);
 
+  useEffect(() => {
+    if (!user?.email) return;
+    setInvoicePreference((current) =>
+      current.buyerEmail ? current : { ...current, buyerEmail: user.email },
+    );
+  }, [user?.email]);
+
   const shippingReady = Boolean(
     shippingChannel &&
       eligibility.temperature &&
@@ -155,6 +171,7 @@ export function CheckoutPage() {
   );
   const canSubmit = Boolean(
     quote.data &&
+      invoicePreferenceIsValid(invoicePreference) &&
       (checkoutMethod === "shipping" ? shippingReady : pickupLocationId),
   );
 
@@ -313,6 +330,11 @@ export function CheckoutPage() {
                 <p className="shipping-help">建立訂單後會前往綠界選擇門市或確認宅配，再回到訂單中心付款。</p>
               </div>
             )}
+
+            <InvoicePreferenceFields
+              onChange={setInvoicePreference}
+              value={invoicePreference}
+            />
           </div>
 
           <aside className="order-summary">
@@ -340,6 +362,7 @@ export function CheckoutPage() {
                       <dt>取貨方式</dt>
                       <dd>{checkoutMethod === "shipping" ? "綠界物流" : "合作社取貨"}</dd>
                     </div>
+                    <InvoicePreferenceSummary value={invoicePreference} />
                     {checkoutMethod === "shipping" && (
                       <div className="summary-shipping">
                         <dt>預估運費</dt>
@@ -371,7 +394,7 @@ export function CheckoutPage() {
                       ? "準備結帳中…"
                       : checkoutMethod === "shipping"
                         ? "前往選擇物流"
-                        : "前往綠界付款"}
+                        : "前往線上付款"}
                   </button>
                 </>
               )}

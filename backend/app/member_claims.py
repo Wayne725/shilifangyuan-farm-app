@@ -105,7 +105,27 @@ async def verified_roster_entry(
         raise MemberClaimError("mismatch")
     if entry.claimed_user_id is not None:
         raise MemberClaimError("claimed")
+    if entry.pending_claim_user_id is not None:
+        now = datetime.now(timezone.utc)
+        expires_at = entry.pending_claim_expires_at
+        if expires_at is None or expires_at.replace(
+            tzinfo=expires_at.tzinfo or timezone.utc
+        ) > now:
+            raise MemberClaimError("pending")
+        entry.pending_claim_user_id = None
+        entry.pending_claim_expires_at = None
     return entry
+
+
+async def reserve_roster_claim(
+    session: AsyncSession,
+    entry: MemberRosterEntry,
+    user: User,
+    expires_at: datetime,
+) -> None:
+    entry.pending_claim_user_id = user.id
+    entry.pending_claim_expires_at = expires_at
+    await session.flush()
 
 
 async def attach_roster_membership(
@@ -134,8 +154,11 @@ async def attach_roster_membership(
     )
     user.membership = membership
     user.membership_type = MembershipType.MEMBER
+    user.pending_member_claim = False
     entry.claimed_user_id = user.id
     entry.claimed_at = now
+    entry.pending_claim_user_id = None
+    entry.pending_claim_expires_at = None
     session.add(membership)
     await session.flush()
     return membership

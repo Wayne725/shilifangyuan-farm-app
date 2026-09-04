@@ -13,6 +13,7 @@ const page = (path: string, name: string) =>
   lazyRouteComponent(pageModules[`${path}.tsx`], name);
 
 interface OrdersSearch {
+  attempt_id?: string;
   order_id?: string;
   result?: string;
   message?: string;
@@ -21,6 +22,7 @@ interface OrdersSearch {
 }
 
 interface AccountSearch {
+  attempt_id?: string;
   membership_charge_id?: string;
   payment?: string;
 }
@@ -161,6 +163,8 @@ const ordersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/orders",
   validateSearch: (search: Record<string, unknown>): OrdersSearch => ({
+    attempt_id:
+      typeof search.attempt_id === "string" ? search.attempt_id : undefined,
     order_id: typeof search.order_id === "string" ? search.order_id : undefined,
     result: typeof search.result === "string" ? search.result : undefined,
     message: typeof search.message === "string" ? search.message : undefined,
@@ -198,6 +202,8 @@ const accountRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/account",
   validateSearch: (search: Record<string, unknown>): AccountSearch => ({
+    attempt_id:
+      typeof search.attempt_id === "string" ? search.attempt_id : undefined,
     membership_charge_id:
       typeof search.membership_charge_id === "string"
         ? search.membership_charge_id

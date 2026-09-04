@@ -617,6 +617,16 @@ async def create_meeting(
 ) -> dict[str, Any]:
     meeting = Meeting(created_by_id=admin.id, **body.model_dump())
     session.add(meeting)
+    await session.flush()
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="meeting.create",
+            aggregate_type="meeting",
+            aggregate_id=meeting.id,
+            data={"title": meeting.title},
+        )
+    )
     await session.commit()
     return {"id": meeting.id, **body.model_dump()}
 
@@ -655,13 +665,23 @@ class ResolutionCreate(BaseModel):
 async def create_meeting_resolution(
     meeting_id: str,
     body: ResolutionCreate,
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     if await session.get(Meeting, meeting_id) is None:
         raise HTTPException(status_code=404, detail="找不到會議")
     resolution = MeetingResolution(meeting_id=meeting_id, **body.model_dump())
     session.add(resolution)
+    await session.flush()
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="meeting_resolution.create",
+            aggregate_type="meeting_resolution",
+            aggregate_id=resolution.id,
+            data={"meeting_id": meeting_id, "title": resolution.title},
+        )
+    )
     await session.commit()
     return {"id": resolution.id, "meeting_id": meeting_id, **body.model_dump()}
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import re
 import uuid
 from dataclasses import dataclass
@@ -17,6 +19,8 @@ ALLOWED_MEMBERSHIP_DOCUMENT_TYPES = (
     "application/pdf",
 )
 DOCUMENT_KEY_PREFIX = "membership-documents/"
+PENDING_DOCUMENT_KEY_PREFIX = f"{DOCUMENT_KEY_PREFIX}pending/"
+VERIFIED_DOCUMENT_KEY_PREFIX = f"{DOCUMENT_KEY_PREFIX}verified/"
 SHA256_HEX_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 CONTENT_TYPE_EXTENSIONS = {
     "image/jpeg": ".jpg",
@@ -35,6 +39,10 @@ class S3CompatibleClient(Protocol):
     ) -> str: ...
 
     def head_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
+
+    def get_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
+
+    def copy_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
 
     def delete_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
 
@@ -64,11 +72,11 @@ class R2StorageSettings:
             raise IntegrationConfigurationError(
                 "Cloudflare R2 bucket is required"
             )
-        if not 1 <= self.put_expiry_seconds <= 604800:
+        if not 60 <= self.put_expiry_seconds <= 300:
             raise IntegrationConfigurationError(
                 "R2 PUT presigned URL expiry is invalid"
             )
-        if not 1 <= self.get_expiry_seconds <= 604800:
+        if not 30 <= self.get_expiry_seconds <= 120:
             raise IntegrationConfigurationError(
                 "R2 GET presigned URL expiry is invalid"
             )
@@ -124,12 +132,14 @@ class R2DocumentStorage:
         random_id = uuid.uuid4().hex
         extension = CONTENT_TYPE_EXTENSIONS[normalized_type]
         object_key = (
-            f"{DOCUMENT_KEY_PREFIX}{random_id[:2]}/{random_id}{extension}"
+            f"{PENDING_DOCUMENT_KEY_PREFIX}"
+            f"{random_id[:2]}/{random_id}{extension}"
         )
         params: Dict[str, Any] = {
             "Bucket": self.settings.bucket,
             "Key": object_key,
             "ContentType": normalized_type,
+            "ContentLength": content_length,
         }
         required_headers: Dict[str, str] = {
             "Content-Type": normalized_type,
@@ -159,6 +169,7 @@ class R2DocumentStorage:
             Params={
                 "Bucket": self.settings.bucket,
                 "Key": object_key,
+                "ResponseContentDisposition": "attachment",
             },
             ExpiresIn=self.settings.get_expiry_seconds,
             HttpMethod="GET",
@@ -212,12 +223,58 @@ class R2DocumentStorage:
             raise IntegrationResponseError(
                 "Uploaded membership document checksum did not match"
             )
-        etag = str(response.get("ETag", "")).strip('"') or None
+        try:
+            content = await asyncio.to_thread(
+                self._read_object,
+                object_key,
+            )
+        except IntegrationResponseError:
+            raise
+        except Exception as exc:
+            raise IntegrationResponseError(
+                "Membership document content could not be verified"
+            ) from exc
+        if len(content) != expected_content_length:
+            raise IntegrationResponseError(
+                "Uploaded membership document body size did not match"
+            )
+        if self._detected_content_type(content) != normalized_type:
+            raise IntegrationResponseError(
+                "Uploaded membership document file signature did not match"
+            )
+        computed_sha256 = hashlib.sha256(content).hexdigest()
+        if normalized_sha256 and not hmac.compare_digest(
+            computed_sha256,
+            normalized_sha256,
+        ):
+            raise IntegrationResponseError(
+                "Uploaded membership document body checksum did not match"
+            )
+        raw_etag = str(response.get("ETag", "")).strip()
+        etag = raw_etag.strip('"') or None
+        if etag is None:
+            raise IntegrationResponseError(
+                "Uploaded membership document did not include an ETag"
+            )
+        verified_object_key = self._verified_object_key(object_key)
+        try:
+            await asyncio.to_thread(
+                self._promote_verified_object,
+                object_key,
+                verified_object_key,
+                raw_etag,
+            )
+        except IntegrationResponseError:
+            raise
+        except Exception as exc:
+            raise IntegrationResponseError(
+                "Membership document could not be finalized"
+            ) from exc
         return DocumentHead(
-            object_key=object_key,
+            object_key=verified_object_key,
             content_type=actual_type,
             content_length=actual_length,
-            sha256=actual_sha256 or None,
+            sha256=computed_sha256,
             etag=etag,
         )
 
@@ -282,6 +339,81 @@ class R2DocumentStorage:
             raise ValueError(
                 "Membership document SHA-256 must be 64 hexadecimal characters"
             )
+
+    def _read_object(self, object_key: str) -> bytes:
+        response = self.client.get_object(
+            Bucket=self.settings.bucket,
+            Key=object_key,
+        )
+        body = response.get("Body")
+        if body is None or not hasattr(body, "read"):
+            raise IntegrationResponseError(
+                "Membership document response did not contain a body"
+            )
+        try:
+            content = body.read(self.settings.max_document_bytes + 1)
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+        if not isinstance(content, bytes):
+            raise IntegrationResponseError(
+                "Membership document body was not binary"
+            )
+        if len(content) > self.settings.max_document_bytes:
+            raise IntegrationResponseError(
+                "Membership document exceeded the configured size limit"
+            )
+        return content
+
+    def _promote_verified_object(
+        self,
+        source_key: str,
+        verified_key: str,
+        etag: str,
+    ) -> None:
+        self.client.copy_object(
+            Bucket=self.settings.bucket,
+            Key=verified_key,
+            CopySource={"Bucket": self.settings.bucket, "Key": source_key},
+            CopySourceIfMatch=etag,
+            MetadataDirective="COPY",
+        )
+        try:
+            self.client.delete_object(
+                Bucket=self.settings.bucket,
+                Key=source_key,
+            )
+        except Exception:
+            try:
+                self.client.delete_object(
+                    Bucket=self.settings.bucket,
+                    Key=verified_key,
+                )
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def _verified_object_key(object_key: str) -> str:
+        suffix = object_key.removeprefix(DOCUMENT_KEY_PREFIX)
+        if suffix.startswith("verified/"):
+            raise IntegrationResponseError(
+                "Membership document was already finalized"
+            )
+        if suffix.startswith("pending/"):
+            suffix = suffix.removeprefix("pending/")
+        return f"{VERIFIED_DOCUMENT_KEY_PREFIX}{suffix}"
+
+    @staticmethod
+    def _detected_content_type(content: bytes) -> Optional[str]:
+        if content.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if content.startswith(b"%PDF-"):
+            return "application/pdf"
+        return None
 
     @staticmethod
     def _validate_object_key(object_key: str) -> None:

@@ -13,8 +13,13 @@ from app.models import (
     ActivityRegistration,
     ActivityRegistrationStatus,
     AdminAudit,
+    EmailVerificationToken,
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     InventoryReservation,
+    Invoice,
+    InvoiceCarrierType,
     InvoiceStatus,
     MealEvent,
     MealEventOffering,
@@ -32,30 +37,42 @@ from app.models import (
     MembershipDocumentType,
     MembershipFeeSchedule,
     MembershipStatus,
+    MembershipType,
     Notification,
     Order,
+    OrderFulfillment,
     OrderItem,
     OrderItemOption,
+    OrderKind,
     OutboxEvent,
     PaymentStatus,
     Product,
     ProductCategory,
     Refund,
+    RefreshSession,
     ReservationStatus,
+    SalesChannel,
+    Shipment,
+    ShipmentStatus,
+    ShippingChannel,
+    ShippingTemperature,
     TaxType,
     User,
     UserRole,
 )
 from app.routers.auth import auth_router
 from app.routers.community import community_router
+from app.routers.invoices import invoices_router
 from app.routers.meals import meals_router
 from app.routers.membership import membership_router
 from app.routers.orders import orders_router
+from app.schemas import InvoicePreferenceInput
 from tests.support import (
     api_test_context,
     auth_headers,
     fast_password_hash,
     make_test_settings,
+    prepare_test_invoice,
 )
 
 
@@ -70,6 +87,50 @@ def settings():
     )
 
 
+def test_company_invoice_accepts_mobile_barcode_carrier() -> None:
+    preference = InvoicePreferenceInput(
+        invoice_buyer_type="company",
+        invoice_buyer_tax_id="12345675",
+        invoice_buyer_name="測試股份有限公司",
+        invoice_buyer_email="accounting@example.com",
+        invoice_carrier_type="mobile_barcode",
+        invoice_carrier_value="/AB12+-.",
+    )
+
+    assert preference.invoice_carrier_type == InvoiceCarrierType.MOBILE_BARCODE
+    assert preference.invoice_carrier_value == "/AB12+-."
+
+
+def test_personal_invoice_accepts_member_carrier_email() -> None:
+    preference = InvoicePreferenceInput(
+        invoice_buyer_type="personal",
+        invoice_buyer_email="buyer@example.com",
+        invoice_carrier_type="cloud",
+    )
+
+    assert str(preference.invoice_buyer_email) == "buyer@example.com"
+
+
+def test_personal_member_carrier_rejects_email_over_64_characters() -> None:
+    with pytest.raises(ValueError, match="64"):
+        InvoicePreferenceInput(
+            invoice_buyer_type="personal",
+            invoice_buyer_email=f"{'a' * 53}@example.com",
+            invoice_carrier_type="cloud",
+        )
+
+
+def test_company_member_carrier_rejects_email_over_64_characters() -> None:
+    with pytest.raises(ValueError, match="64"):
+        InvoicePreferenceInput(
+            invoice_buyer_type="company",
+            invoice_buyer_tax_id="12345675",
+            invoice_buyer_name="測試股份有限公司",
+            invoice_buyer_email=f"{'a' * 53}@example.com",
+            invoice_carrier_type="cloud",
+        )
+
+
 @pytest.fixture
 async def v2_context(database_session):
     async with api_test_context(
@@ -80,6 +141,7 @@ async def v2_context(database_session):
             community_router,
             meals_router,
             orders_router,
+            invoices_router,
         ],
         settings=settings(),
     ) as client:
@@ -143,6 +205,99 @@ async def v2_context(database_session):
 
 
 @pytest.mark.asyncio
+async def test_admin_invoice_query_requires_reason_and_records_audit(
+    v2_context,
+    monkeypatch,
+) -> None:
+    import app.routers.invoices as invoice_router_module
+
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    customer = v2_context["customer_b"]
+    order = Order(
+        order_number="SLFINVOICEQUERY01",
+        order_kind=OrderKind.REGULAR,
+        user_id=customer.id,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=120,
+        contact_email=customer.email,
+        invoice_carrier_type=InvoiceCarrierType.CLOUD,
+        payment_status=PaymentStatus.PAID,
+        invoice_status=InvoiceStatus.FAILED,
+        items=[
+            OrderItem(
+                product_name="測試蔬菜箱",
+                unit_label="箱",
+                quantity=1,
+                unit_price=120,
+                subtotal=120,
+                tax_type=TaxType.TAXABLE,
+            )
+        ],
+    )
+    session.add(order)
+    await session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request, provider="fanyu")
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            assert buyer_type == "personal"
+            return {
+                "RtnCode": 1,
+                "InvoiceNo": "AB12345672",
+                "InvoiceDate": "2026-08-26 214500",
+                "RandomNumber": "7788",
+                "ProviderStatus": "0",
+            }
+
+    monkeypatch.setattr(
+        invoice_router_module,
+        "invoice_adapter_from_settings",
+        lambda _settings: InvoiceAdapter(),
+    )
+
+    missing_reason = await client.post(
+        f"/v1/admin/orders/{order.id}/invoice/query",
+        json={"reason": "   "},
+        headers=auth_headers(admin),
+    )
+    queried = await client.post(
+        f"/v1/admin/orders/{order.id}/invoice/query",
+        json={"reason": "客服確認逾時訂單"},
+        headers=auth_headers(admin),
+    )
+
+    assert missing_reason.status_code == 422
+    assert queried.status_code == 200, queried.text
+    assert queried.json()["found"] is True
+    assert queried.json()["invoice_number"] == "AB12345672"
+    invoice = await session.scalar(
+        select(Invoice).where(Invoice.order_id == order.id)
+    )
+    audit = await session.scalar(
+        select(AdminAudit).where(
+            AdminAudit.action == "invoice.provider_queried",
+            AdminAudit.aggregate_id == order.id,
+        )
+    )
+    assert invoice is not None
+    assert invoice.status == InvoiceStatus.ISSUED
+    assert audit is not None
+    assert audit.actor_id == admin.id
+    assert audit.reason == "客服確認逾時訂單"
+    assert audit.data == {
+        "found": True,
+        "provider": "fanyu",
+        "invoice_status": "issued",
+    }
+
+
+@pytest.mark.asyncio
 async def test_auth_register_verify_login_refresh_and_reset(
     v2_context,
 ) -> None:
@@ -169,6 +324,15 @@ async def test_auth_register_verify_login_refresh_and_reset(
     verification_token = registered.json()["development_token"]
     assert verification_token.isdigit()
     assert len(verification_token) == 6
+    stored_verification = await v2_context["session"].scalar(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.user_id == registered_user.id
+        )
+    )
+    assert stored_verification is not None
+    assert stored_verification.token_hash != hashlib.sha256(
+        verification_token.encode("utf-8")
+    ).hexdigest()
     unverified_login = await client.post(
         "/v1/auth/login",
         json={
@@ -191,18 +355,24 @@ async def test_auth_register_verify_login_refresh_and_reset(
     assert resent_token != verification_token
     previous_code_before_delivery = await client.post(
         "/v1/auth/verify-email",
-        json={"token": verification_token},
+        json={
+            "email": "new.user@example.com",
+            "token": verification_token,
+        },
     )
     assert previous_code_before_delivery.status_code == 200
 
     replacement_after_verification = await client.post(
         "/v1/auth/verify-email",
-        json={"token": resent_token},
+        json={"email": "new.user@example.com", "token": resent_token},
     )
     assert replacement_after_verification.status_code == 400
     reused_token = await client.post(
         "/v1/auth/verify-email",
-        json={"token": verification_token},
+        json={
+            "email": "new.user@example.com",
+            "token": verification_token,
+        },
     )
     assert reused_token.status_code == 400
 
@@ -215,8 +385,13 @@ async def test_auth_register_verify_login_refresh_and_reset(
     )
     assert logged_in.status_code == 200
     tokens = logged_in.json()
+    assert "refresh_token" not in tokens
+    assert "slf_refresh=" in logged_in.headers["set-cookie"]
+    assert "HttpOnly" in logged_in.headers["set-cookie"]
     assert tokens["user"]["membership_type"] == "nonmember"
     assert tokens["user"]["customer_number"] == registered_user.customer_number
+    original_refresh_token = client.cookies.get("slf_refresh")
+    assert original_refresh_token
     me = await client.get(
         "/v1/auth/me",
         headers={"Authorization": f"Bearer {tokens['access_token']}"},
@@ -226,10 +401,23 @@ async def test_auth_register_verify_login_refresh_and_reset(
 
     refreshed = await client.post(
         "/v1/auth/refresh",
-        json={"refresh_token": tokens["refresh_token"]},
     )
     assert refreshed.status_code == 200
     assert refreshed.json()["access_token"] != tokens["access_token"]
+    replayed_refresh = await client.post(
+        "/v1/auth/refresh",
+        headers={"Cookie": f"slf_refresh={original_refresh_token}"},
+    )
+    assert replayed_refresh.status_code == 401
+    refresh_sessions = list(
+        await v2_context["session"].scalars(
+            select(RefreshSession).where(
+                RefreshSession.user_id == registered_user.id
+            )
+        )
+    )
+    assert len(refresh_sessions) == 2
+    assert sum(item.revoked_at is None for item in refresh_sessions) == 1
 
     forgot = await client.post(
         "/v1/auth/forgot-password",
@@ -239,11 +427,31 @@ async def test_auth_register_verify_login_refresh_and_reset(
     assert forgot.json()["delivery_status"] == "queued"
     assert "已受理" in forgot.json()["message"]
     reset_token = forgot.json()["development_token"]
+    second_forgot = await client.post(
+        "/v1/auth/forgot-password",
+        json={"email": "new.user@example.com"},
+    )
+    second_reset_token = second_forgot.json()["development_token"]
     reset = await client.post(
         "/v1/auth/reset-password",
         json={"token": reset_token, "password": "replacement-pass-123"},
     )
     assert reset.status_code == 200
+    stale_reset = await client.post(
+        "/v1/auth/reset-password",
+        json={
+            "token": second_reset_token,
+            "password": "attacker-pass-123",
+        },
+    )
+    assert stale_reset.status_code == 400
+    revoked_access = await client.get(
+        "/v1/auth/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    revoked_refresh = await client.post("/v1/auth/refresh")
+    assert revoked_access.status_code == 401
+    assert revoked_refresh.status_code == 401
     old_password = await client.post(
         "/v1/auth/login",
         json={
@@ -260,6 +468,60 @@ async def test_auth_register_verify_login_refresh_and_reset(
         },
     )
     assert new_password.status_code == 200
+    logged_out = await client.post(
+        "/v1/auth/logout",
+        headers={
+            "Authorization": (
+                f"Bearer {new_password.json()['access_token']}"
+            )
+        },
+    )
+    assert logged_out.status_code == 204
+    assert "slf_refresh=" in logged_out.headers["set-cookie"]
+    assert "Max-Age=0" in logged_out.headers["set-cookie"]
+    after_logout = await client.get(
+        "/v1/auth/me",
+        headers={
+            "Authorization": (
+                f"Bearer {new_password.json()['access_token']}"
+            )
+        },
+    )
+    assert after_logout.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_login_upgrades_legacy_password_hash(v2_context) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    customer = v2_context["customer_b"]
+    assert customer.password_hash.startswith("pbkdf2_sha256$")
+
+    logged_in = await client.post(
+        "/v1/auth/login",
+        json={
+            "email": customer.email,
+            "password": "customer-b-pass-123",
+        },
+    )
+
+    assert logged_in.status_code == 200
+    await session.refresh(customer)
+    assert customer.password_hash.startswith("$argon2id$")
+
+
+@pytest.mark.asyncio
+async def test_login_cookie_rejects_untrusted_browser_origin(v2_context) -> None:
+    response = await v2_context["client"].post(
+        "/v1/auth/login",
+        json={
+            "email": "customer-b@example.com",
+            "password": "customer-b-pass-123",
+        },
+        headers={"Origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -305,6 +567,7 @@ async def test_existing_member_registers_from_roster_and_gets_active_membership(
         json={
             "member_number": "SLF-2019-0042",
             "legal_name": "王社員",
+            "display_name": "社員小王",
             "email": "existing.member@example.com",
             "phone": "0900000000",
             "password": "existing-member-pass-123",
@@ -317,6 +580,7 @@ async def test_existing_member_registers_from_roster_and_gets_active_membership(
         json={
             "member_number": "slf-2019-0042",
             "legal_name": "王 社員",
+            "display_name": "社員小王",
             "email": "Existing.Member@example.com",
             "phone": "0912345678",
             "password": "existing-member-pass-123",
@@ -328,21 +592,36 @@ async def test_existing_member_registers_from_roster_and_gets_active_membership(
         select(User).where(User.email == "existing.member@example.com")
     )
     assert claimed_user is not None
-    claimed_membership = await session.scalar(
+    claimed_membership_before_verification = await session.scalar(
         select(Membership).where(Membership.user_id == claimed_user.id)
     )
-    assert claimed_membership is not None
-    assert claimed_membership.status == MembershipStatus.ACTIVE
-    assert claimed_membership.member_number == "SLF-2019-0042"
-    assert claimed_membership.share_capital_amount == 3000
+    assert claimed_user.display_name == "社員小王"
+    assert claimed_user.pending_member_claim is True
+    assert claimed_membership_before_verification is None
     await session.refresh(stored_roster)
-    assert stored_roster.claimed_user_id == claimed_user.id
+    assert stored_roster.claimed_user_id is None
+    assert stored_roster.pending_claim_user_id == claimed_user.id
+
+    duplicate_pending_claim = await client.post(
+        "/v1/auth/register-existing-member",
+        json={
+            "member_number": "SLF-2019-0042",
+            "legal_name": "王社員",
+            "display_name": "另一個顯示名稱",
+            "email": "existing.member@example.com",
+            "phone": "0912345678",
+            "password": "existing-member-pass-123",
+        },
+    )
+    assert duplicate_pending_claim.status_code == 409
+    assert "等待 Email 驗證" in duplicate_pending_claim.json()["detail"]
 
     hidden_claim_status = await client.post(
         "/v1/auth/register-existing-member",
         json={
             "member_number": "SLF-2019-0042",
             "legal_name": "錯誤姓名",
+            "display_name": "錯誤帳號",
             "email": "wrong@example.com",
             "phone": "0900000000",
             "password": "existing-member-pass-123",
@@ -360,9 +639,22 @@ async def test_existing_member_registers_from_roster_and_gets_active_membership(
     assert before_verification.status_code == 403
     verified = await client.post(
         "/v1/auth/verify-email",
-        json={"token": verification_token},
+        json={
+            "email": "existing.member@example.com",
+            "token": verification_token,
+        },
     )
     assert verified.status_code == 200
+    claimed_membership = await session.scalar(
+        select(Membership).where(Membership.user_id == claimed_user.id)
+    )
+    assert claimed_membership is not None
+    assert claimed_membership.status == MembershipStatus.ACTIVE
+    assert claimed_membership.member_number == "SLF-2019-0042"
+    assert claimed_membership.share_capital_amount == 3000
+    await session.refresh(stored_roster)
+    assert stored_roster.claimed_user_id == claimed_user.id
+    assert stored_roster.pending_claim_user_id is None
     logged_in = await client.post(
         "/v1/auth/login",
         json={
@@ -519,6 +811,95 @@ async def test_trainee_order_uses_member_price_and_trainee_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_admin_cannot_refund_after_logistics_shipment_is_created(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    admin = v2_context["admin"]
+    buyer = v2_context["applicant"]
+    now = datetime.now(timezone.utc)
+    product = Product(
+        id="created-shipment-refund-guard-product",
+        slug="created-shipment-refund-guard",
+        name="已建立物流退款防護商品",
+        description="",
+        category=ProductCategory.PROCESSED,
+        unit="份",
+        member_price=450,
+        nonmember_price=450,
+        stock_quantity=4,
+        tax_type=TaxType.TAXABLE,
+    )
+    order = Order(
+        order_number="CREATED-SHIPMENT-REFUND-GUARD",
+        order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.REGULAR,
+        fulfillment_method=FulfillmentMethod.ECPAY_LOGISTICS,
+        user=buyer,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=450,
+        contact_email=buyer.email,
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status=FulfillmentStatus.PREPARING,
+        paid_at=now,
+        items=[
+            OrderItem(
+                product_name="已建立物流退款防護商品",
+                unit_label="份",
+                quantity=1,
+                unit_price=450,
+                subtotal=450,
+                tax_type=TaxType.TAXABLE,
+                source_product_id=product.id,
+            )
+        ],
+    )
+    fulfillment = OrderFulfillment(
+        order=order,
+        method=FulfillmentMethod.ECPAY_LOGISTICS,
+        status=FulfillmentState.AWAITING_SHIPMENT,
+        shipment=Shipment(
+            channel=ShippingChannel.HOME_DELIVERY,
+            temperature=ShippingTemperature.AMBIENT,
+            status=ShipmentStatus.CREATED,
+            shipping_fee=160,
+        ),
+    )
+    reservation = InventoryReservation(
+        order=order,
+        source_product_id=product.id,
+        quantity=1,
+        status=ReservationStatus.CONSUMED,
+        expires_at=now + timedelta(minutes=15),
+    )
+    session.add_all([product, order, fulfillment, reservation])
+    await session.commit()
+
+    response = await client.post(
+        f"/v1/orders/{order.id}/admin/refund",
+        json={"reason": "測試物流建立後退款"},
+        headers=auth_headers(admin),
+    )
+
+    await session.refresh(order)
+    await session.refresh(product)
+    await session.refresh(reservation)
+    refunds = list(
+        await session.scalars(select(Refund).where(Refund.order_id == order.id))
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "物流已建立或商品已交付，請先完成人工攔截／退回再退款"
+    )
+    assert order.payment_status == PaymentStatus.PAID
+    assert order.fulfillment_status == FulfillmentStatus.PREPARING
+    assert reservation.status == ReservationStatus.CONSUMED
+    assert product.stock_quantity == 4
+    assert refunds == []
+
+
+@pytest.mark.asyncio
 async def test_membership_application_read_includes_private_profile_and_documents(
     v2_context,
 ) -> None:
@@ -576,6 +957,27 @@ async def test_membership_application_read_includes_private_profile_and_document
     assert admin_detail.json()["id"] == saved_body["id"]
     assert admin_detail.json()["profile"] == saved_body["profile"]
     assert admin_detail.json()["documents"] == []
+
+
+@pytest.mark.asyncio
+async def test_active_member_cannot_open_duplicate_membership_application(
+    v2_context,
+) -> None:
+    response = await v2_context["client"].put(
+        "/v1/membership/application",
+        json={
+            "legal_name": "社員甲",
+            "phone": "0912345678",
+            "birth_date": "1995-05-16",
+            "address": "臺北市測試路一號",
+            "emergency_contact": "測試聯絡人 0987654321",
+            "consent_version": "sandbox-v1",
+        },
+        headers=auth_headers(v2_context["member_a"]),
+    )
+
+    assert response.status_code == 409
+    assert "無法重複" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -2147,7 +2549,9 @@ class RecordingDocumentStorage:
     ):
         from app.integrations.r2_storage import DocumentUploadTicket
 
-        object_key = f"membership-documents/ab/{len(self.tickets)}.png"
+        object_key = (
+            f"membership-documents/pending/ab/{len(self.tickets)}.png"
+        )
         required_headers = {
             "Content-Type": content_type,
         }
@@ -2194,8 +2598,14 @@ class RecordingDocumentStorage:
             raise IntegrationResponseError("length mismatch")
         if expected_sha256 and actual["sha256"] != expected_sha256.lower():
             raise IntegrationResponseError("checksum mismatch")
+        verified_key = object_key.replace(
+            "membership-documents/pending/",
+            "membership-documents/verified/",
+            1,
+        )
+        self.stored[verified_key] = self.stored.pop(object_key)
         return DocumentHead(
-            object_key=object_key,
+            object_key=verified_key,
             content_type=actual["content_type"],
             content_length=actual["content_length"],
             sha256=actual["sha256"] or None,
@@ -2295,6 +2705,11 @@ async def test_membership_document_review_replace_and_delete_are_audited(
     assert first_upload.status_code == 201, first_upload.text
     first_body = first_upload.json()
     first_key = first_body["object_key"]
+    verified_first_key = first_key.replace(
+        "membership-documents/pending/",
+        "membership-documents/verified/",
+        1,
+    )
     confirmed = await client.post(
         f"/v1/membership/documents/{first_body['document_id']}/confirm",
         json={"checksum_sha256": checksum_a},
@@ -2315,7 +2730,7 @@ async def test_membership_document_review_replace_and_delete_are_audited(
     assert download.status_code == 200, download.text
     assert download.json() == {
         "download_url": (
-            f"https://r2.example.test/{first_key}?download-signed=1"
+            f"https://r2.example.test/{verified_first_key}?download-signed=1"
         ),
         "expires_in_seconds": 120,
     }

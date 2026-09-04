@@ -12,7 +12,7 @@
 - 前端：Vite、React 19、TypeScript、TanStack Router／Query、Radix UI
 - 後端：Python 3.12、FastAPI、SQLAlchemy、Alembic
 - 資料庫：PostgreSQL；本機測試可使用 SQLite
-- 金流／發票／物流：綠界 Stage
+- 金流：雷門（設定範本預設）／綠界可切換 adapter；物流：綠界 Stage；發票：汎宇／綠界可切換 adapter
 - Email：Resend，MailerSend 備援
 - 私密證件：Cloudflare R2 私有 Bucket與短效簽名 URL
 - 部署：Render Static Site、Web Service、PostgreSQL
@@ -71,7 +71,7 @@ API 文件位於 `http://127.0.0.1:8000/docs`，健康檢查位於 `/health`。
 - 便當菜單、場次、容量、預購、六位取餐碼、QR 與工作人員核銷
 - 入社、會籍、社員名錄、活動、治理提案、積點、願望、會議與結餘
 - 管理總覽、三類身分銷售比例、訂單履約、退款與財務報表匯出
-- 綠界付款／發票／物流 Stage、Email Outbox 與 reconciliation
+- 雷門／綠界付款、後端查單確認、全額退款工作、綠界物流 Stage、汎宇雲端發票 adapter、Email Outbox 與 reconciliation
 
 ## 專案結構
 
@@ -105,6 +105,6 @@ cd backend
 
 ## 正式上線前
 
-目前是 Sandbox：不動真實款項、退款尚未呼叫正式金流、物流 Stage 不會自動推送後續貨態，且禁止上傳真實證件。正式營運仍需完成綠界正式合約、Email 網域驗證、R2 與個資政策、資料庫備份、監控及真實低額端到端驗收。
+設定範本支援雷門，但未內建任何商店憑證或服務網址；填妥資料並完成協定確認前，線上付款會維持停用。雷門已確認沒有主動付款通知，因此正式流程採回跳立即查單、前端短暫補查與背景 reconciliation。正式營運仍需驗收狀態／退款語意、排程監控、Email 網域、R2 與個資政策、資料庫備份及真實低額端到端流程。
 
-詳見 [部署手冊](docs/DEPLOYMENT.md)、[系統架構](docs/ARCHITECTURE.md)、[真實資料對照](docs/REAL_DATA_MAPPING.md) 與 [待確認事項](docs/UNRESOLVED.md)。
+詳見 [雷門金流流程](docs/PAYMENT_FLOW.md)、[雷門 Sandbox 驗收清單](docs/RAYGATE_SANDBOX_ACCEPTANCE.md)、[部署手冊](docs/DEPLOYMENT.md)、[系統架構](docs/ARCHITECTURE.md)、[汎宇發票流程](docs/INVOICE_FLOW.md)、[真實資料對照](docs/REAL_DATA_MAPPING.md) 與 [待確認事項](docs/UNRESOLVED.md)。

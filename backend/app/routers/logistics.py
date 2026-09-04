@@ -35,6 +35,7 @@ from ..integrations.ecpay_logistics import (
     UpdateTempLogisticsRequest,
     ecpay_logistics_adapter_from_settings,
 )
+from ..integrations.invoice_service import enqueue_invoice_issue
 from ..integrations.pii_crypto import (
     VersionedPIICipher,
     pii_cipher_from_settings,
@@ -46,11 +47,9 @@ from ..models import (
     FulfillmentState,
     FulfillmentStatus,
     GroupDecisionStatus,
-    InvoiceStatus,
     Order,
     OrderFulfillment,
     OrderKind,
-    OutboxEvent,
     PaymentAttempt,
     PaymentStatus,
     Product,
@@ -373,6 +372,11 @@ def _verify_selection_token(shipment: Shipment, token: str) -> None:
     expected = shipment.selection_token_hash or ""
     if not expected or not hmac.compare_digest(expected, _token_digest(token)):
         raise HTTPException(status_code=400, detail="物流選擇結果驗證失敗")
+    expires_at = shipment.selection_token_expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at is None or expires_at <= _now():
+        raise HTTPException(status_code=410, detail="物流選擇連結已失效")
 
 
 async def _shipment_for_token(
@@ -397,6 +401,36 @@ async def _shipment_for_token(
     if expires_at is None or expires_at <= _now():
         raise HTTPException(status_code=410, detail="物流選擇連結已失效")
     return shipment
+
+
+async def _shipment_for_provider_callback(
+    session: AsyncSession,
+    logistics_id: str,
+) -> Optional[Shipment]:
+    identity = (
+        await session.execute(
+            select(Shipment.id, OrderFulfillment.order_id)
+            .join(OrderFulfillment)
+            .where(Shipment.ecpay_logistics_id == logistics_id)
+        )
+    ).one_or_none()
+    if identity is None:
+        return None
+    shipment_id, order_id = identity
+    await session.execute(
+        select(Order.id).where(Order.id == order_id).with_for_update()
+    )
+    return await session.scalar(
+        select(Shipment)
+        .where(Shipment.id == shipment_id)
+        .options(
+            selectinload(Shipment.fulfillment).selectinload(
+                OrderFulfillment.order
+            )
+        )
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
 
 
 async def _request_json_envelope(request: Request) -> Mapping[str, Any]:
@@ -502,19 +536,11 @@ async def _apply_shipment_status(
         fulfillment.status = FulfillmentState.DELIVERED
         fulfillment.fulfilled_at = _now()
         order.fulfillment_status = FulfillmentStatus.PICKED_UP
-        if order.invoice_status not in {
-            InvoiceStatus.PENDING,
-            InvoiceStatus.ISSUED,
-        }:
-            order.invoice_status = InvoiceStatus.PENDING
-            session.add(
-                OutboxEvent(
-                    event_type="invoice.issue",
-                    aggregate_type="order",
-                    aggregate_id=order.id,
-                    payload={"order_id": order.id},
-                )
-            )
+        enqueue_invoice_issue(
+            session,
+            order,
+            trigger="legacy_delivery_completed",
+        )
 
 
 def _update_shipment_provider_data(
@@ -1102,18 +1128,9 @@ async def logistics_status_callback(
     )
     if existing is not None:
         return JSONResponse(adapter.callback_acknowledgement())
-    shipment = await session.scalar(
-        select(Shipment)
-        .where(
-            Shipment.ecpay_logistics_id
-            == str(data.get("LogisticsID", ""))
-        )
-        .options(
-            selectinload(Shipment.fulfillment).selectinload(
-                OrderFulfillment.order
-            )
-        )
-        .with_for_update()
+    shipment = await _shipment_for_provider_callback(
+        session,
+        str(data.get("LogisticsID", "")),
     )
     if shipment is None:
         await session.rollback()

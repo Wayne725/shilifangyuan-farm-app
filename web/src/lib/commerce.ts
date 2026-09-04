@@ -4,6 +4,7 @@ import type {
   LogisticsSelection,
   Order,
   PaymentAttempt,
+  PaymentAttemptStatus,
   ShippingChannel,
   ShippingRate,
   ShippingTemperature,
@@ -105,11 +106,44 @@ const httpCommerceGateway: CommerceGateway = {
     }),
 };
 
+export type InvoicePreference = {
+  carrierType: "cloud" | "mobile_barcode";
+  carrierValue?: string;
+  buyerEmail: string;
+} & (
+  | {
+      buyerType: "personal";
+    }
+  | {
+      buyerType: "company";
+      buyerTaxId: string;
+      buyerName: string;
+    }
+);
+
+export function invoicePreferencePayload(
+  preference: InvoicePreference,
+): Record<string, string> {
+  return {
+    invoice_buyer_type: preference.buyerType,
+    invoice_buyer_email: preference.buyerEmail.trim().toLowerCase(),
+    invoice_carrier_type: preference.carrierType,
+    ...(preference.buyerType === "company"
+      ? {
+          invoice_buyer_tax_id: preference.buyerTaxId.trim(),
+          invoice_buyer_name: preference.buyerName.trim(),
+        }
+      : {}),
+    ...(preference.carrierType === "mobile_barcode" && preference.carrierValue
+      ? { invoice_carrier_value: preference.carrierValue.trim().toUpperCase() }
+      : {}),
+  };
+}
+
 export type CheckoutInput = {
   items: Array<{ product_id: string; quantity: number }>;
   contactEmail: string;
-  invoiceCarrierType: "ecpay" | "mobile_barcode";
-  invoiceCarrierValue?: string;
+  invoicePreference: InvoicePreference;
   fulfillment:
     | { kind: "pickup"; pickupLocationId: string }
     | {
@@ -133,10 +167,7 @@ export async function beginCheckout(
   const order = await gateway.createOrder({
     items: input.items,
     contact_email: input.contactEmail,
-    invoice_carrier_type: input.invoiceCarrierType,
-    ...(input.invoiceCarrierValue
-      ? { invoice_carrier_value: input.invoiceCarrierValue }
-      : {}),
+    ...invoicePreferencePayload(input.invoicePreference),
     fulfillment_method:
       input.fulfillment.kind === "shipping"
         ? "ecpay_logistics"
@@ -204,6 +235,15 @@ export async function createMembershipPayment(chargeId: string): Promise<string>
   return attempt.payment_url;
 }
 
+export async function refreshPaymentAttempt(
+  attemptId: string,
+): Promise<PaymentAttemptStatus> {
+  return apiFetch<PaymentAttemptStatus>(
+    `/v1/payment-attempts/${attemptId}/refresh`,
+    { method: "POST" },
+  );
+}
+
 export type GroupCheckoutInput = Omit<CheckoutInput, "items"> & {
   campaignId: string;
   quantity: number;
@@ -219,10 +259,7 @@ export async function beginGroupCheckout(
       body: JSON.stringify({
         quantity: input.quantity,
         contact_email: input.contactEmail,
-        invoice_carrier_type: input.invoiceCarrierType,
-        ...(input.invoiceCarrierValue
-          ? { invoice_carrier_value: input.invoiceCarrierValue }
-          : {}),
+        ...invoicePreferencePayload(input.invoicePreference),
         fulfillment_method:
           input.fulfillment.kind === "shipping"
             ? "ecpay_logistics"
@@ -270,6 +307,7 @@ export async function beginMealCheckout(input: {
     option_ids: string[];
   }>;
   contactEmail: string;
+  invoicePreference: InvoicePreference;
 }): Promise<MealCheckoutOutcome> {
   const order = await apiFetch<{ id: string }>(
     `/v1/meal-events/${input.eventId}/orders`,
@@ -278,7 +316,7 @@ export async function beginMealCheckout(input: {
       body: JSON.stringify({
         items: input.items,
         contact_email: input.contactEmail,
-        invoice_carrier_type: "ecpay",
+        ...invoicePreferencePayload(input.invoicePreference),
       }),
     },
   );

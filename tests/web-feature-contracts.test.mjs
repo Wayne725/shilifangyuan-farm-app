@@ -18,6 +18,7 @@ const commerce = await readFile(new URL("../web/src/lib/commerce.ts", import.met
 const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 const shared = await readFile(new URL("../web/src/components/Shared.tsx", import.meta.url), "utf8");
 const authFlows = await readFile(new URL("../web/src/pages/AuthFlowPages.tsx", import.meta.url), "utf8");
+const invoiceFields = await readFile(new URL("../web/src/components/InvoicePreferenceFields.tsx", import.meta.url), "utf8");
 
 test("生活消費保留商品、團購、便當、付款與物流", () => {
   for (const marker of ["/v1/products", "/v1/group-campaigns", "/v1/meal-events", "beginCheckout", "beginGroupCheckout", "beginMealCheckout", "shippingEligibility", "selection-link"]) assert.match(source + commerce, new RegExp(marker.replaceAll("/", "\\/")));
@@ -71,4 +72,13 @@ test("註冊入口區分既有社員認領與非社員帳號", () => {
   assert.match(source, /\/v1\/admin\/member-roster/);
   assert.match(router, /search\.intent === "existing_member"/);
   assert.match(router, /search\.intent === "nonmember"/);
+});
+
+test("個人與公司發票共用 Email 會員載具並在三種結帳顯示確認資料", () => {
+  assert.match(invoiceFields, /Email 會員載具/);
+  assert.match(invoiceFields, /發票通知 Email/);
+  assert.match(invoiceFields, /value\.carrierType === "cloud"\s*\? 64 : 80/);
+  assert.doesNotMatch(invoiceFields, /<strong>不使用載具<\/strong>/);
+  assert.match(commerce, /invoice_buyer_email:\s*preference\.buyerEmail/);
+  assert.equal((source.match(/<InvoicePreferenceSummary/g) || []).length, 3);
 });

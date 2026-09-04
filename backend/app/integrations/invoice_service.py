@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -11,14 +12,15 @@ from sqlalchemy.orm import selectinload
 
 from ..config import Settings
 from ..models import (
-    FulfillmentState,
-    FulfillmentStatus,
     Invoice,
     InvoiceCarrierType,
+    InvoiceItem,
     InvoiceStatus,
     Order,
     OrderFulfillment,
+    OutboxEvent,
     PaymentStatus,
+    Refund,
     TaxType,
 )
 from .invoice import (
@@ -27,14 +29,33 @@ from .invoice import (
     InvoiceIssueRequest,
     InvoiceIssueResult,
     InvoiceLine,
+    InvoiceProvider,
+    PreparedInvoice,
+    PreparedInvoiceLine,
 )
+from .fanyu_invoice import FanyuInvoiceAdapter, FanyuInvoiceSettings
 
 
 class InvoiceApplicationError(ValueError):
     pass
 
 
-def invoice_adapter_from_settings(settings: Settings) -> ECPayInvoiceAdapter:
+def invoice_adapter_from_settings(
+    settings: Settings,
+) -> ECPayInvoiceAdapter | FanyuInvoiceAdapter:
+    if settings.invoice_provider == "fanyu":
+        return FanyuInvoiceAdapter(
+            FanyuInvoiceSettings(
+                company_id=settings.fanyu_invoice_company_id,
+                user_id=settings.fanyu_invoice_user_id,
+                auth_password=settings.fanyu_invoice_auth_password,
+                api_key=settings.fanyu_invoice_api_key,
+                seller_id=settings.fanyu_invoice_seller_id,
+                base_url=settings.fanyu_invoice_base_url,
+                signature_verified=settings.fanyu_invoice_signature_verified,
+                timeout_seconds=settings.integration_timeout_seconds,
+            )
+        )
     return ECPayInvoiceAdapter(
         ECPayInvoiceSettings(
             merchant_id=settings.ecpay_invoice_merchant_id,
@@ -59,9 +80,9 @@ def invoice_request_from_order(
     order: Order, relate_number: str
 ) -> InvoiceIssueRequest:
     carrier_type = (
-        "3"
+        "mobile_barcode"
         if order.invoice_carrier_type == InvoiceCarrierType.MOBILE_BARCODE
-        else "1"
+        else "cloud"
     )
     lines = [
         InvoiceLine(
@@ -92,13 +113,80 @@ def invoice_request_from_order(
         raise InvoiceApplicationError("發票明細總額與訂單總額不一致")
     return InvoiceIssueRequest(
         relate_number=relate_number,
-        customer_email=order.contact_email,
+        customer_email=order.invoice_buyer_email or order.contact_email,
         items=lines,
+        buyer_type=order.invoice_buyer_type.value,
+        buyer_tax_id=order.invoice_buyer_tax_id or "",
+        buyer_name=order.invoice_buyer_name or "",
         carrier_type=carrier_type,
         carrier_number=order.invoice_carrier_value or "",
         customer_id=order.user_id.replace("-", "")[:20],
         remark="十里方圓訂單 {}".format(order.order_number),
     )
+
+
+def enqueue_invoice_issue(
+    session: AsyncSession,
+    order: Order,
+    *,
+    trigger: str,
+) -> bool:
+    if order.payment_status != PaymentStatus.PAID:
+        return False
+    if order.invoice_status in {
+        InvoiceStatus.PENDING,
+        InvoiceStatus.ISSUED,
+        InvoiceStatus.VOID_PENDING,
+        InvoiceStatus.VOIDED,
+    }:
+        return False
+    order.invoice_status = InvoiceStatus.PENDING
+    session.add(
+        OutboxEvent(
+            event_type="invoice.issue_requested",
+            aggregate_type="order",
+            aggregate_id=order.id,
+            payload={"order_id": order.id, "trigger": trigger},
+        )
+    )
+    return True
+
+
+def enqueue_invoice_adjustment_after_refund(
+    session: AsyncSession,
+    order: Order,
+    refund: Refund,
+) -> bool:
+    invoice = order.__dict__.get("invoice")
+    if invoice is None or invoice.status not in {
+        InvoiceStatus.PENDING,
+        InvoiceStatus.FAILED,
+        InvoiceStatus.ISSUED,
+    }:
+        return False
+    full_refund = refund.amount >= order.amount_total
+    if full_refund:
+        invoice.status = InvoiceStatus.VOID_PENDING
+        invoice.void_reason = refund.reason
+        invoice.void_source = "refund"
+        order.invoice_status = InvoiceStatus.VOID_PENDING
+    session.add(
+        OutboxEvent(
+            event_type="invoice.adjustment_required",
+            aggregate_type="invoice",
+            aggregate_id=invoice.id,
+            payload={
+                "invoice_id": invoice.id,
+                "order_id": order.id,
+                "refund_id": refund.id,
+                "adjustment": "void" if full_refund else "allowance",
+                "amount": refund.amount,
+                "reason": refund.reason,
+                "provider_status_uncertain": not bool(invoice.invoice_number),
+            },
+        )
+    )
+    return True
 
 
 def _query_invoice_number(response: dict) -> str:
@@ -114,7 +202,17 @@ def _parse_invoice_date(value: object) -> Optional[datetime]:
     if not value:
         return None
     raw = str(value)
-    for pattern in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+    for pattern in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H%M%S",
+        "%Y/%m/%d %H%M%S",
+        "%Y%m%d %H%M%S",
+        "%Y%m%d%H%M%S",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y%m%d",
+    ):
         try:
             return (
                 datetime.strptime(raw, pattern)
@@ -126,17 +224,210 @@ def _parse_invoice_date(value: object) -> Optional[datetime]:
     return None
 
 
-async def issue_picked_up_order_invoice(
+def _paid_attempt(order: Order):
+    paid_attempts = [
+        attempt
+        for attempt in order.payment_attempts
+        if attempt.status == PaymentStatus.PAID
+    ]
+    return max(
+        paid_attempts,
+        key=lambda attempt: attempt.paid_at or attempt.created_at,
+        default=None,
+    )
+
+
+def _ensure_provider_binding(order: Order, adapter: InvoiceProvider) -> None:
+    if order.invoice is None or order.invoice.provider == adapter.provider_name:
+        return
+    raise InvoiceApplicationError(
+        "此訂單原本使用 {} 發票，不能改由 {} 重送".format(
+            order.invoice.provider,
+            adapter.provider_name,
+        )
+    )
+
+
+async def _ensure_invoice_record(
+    session: AsyncSession,
+    order: Order,
+    adapter: InvoiceProvider,
+    prepared: PreparedInvoice,
+) -> tuple[Invoice, PreparedInvoice]:
+    invoice = order.invoice
+    provider = adapter.provider_name
+    if invoice is not None:
+        if invoice.provider != provider:
+            raise InvoiceApplicationError(
+                "此訂單原本使用 {} 發票，不能改由 {} 重送".format(
+                    invoice.provider,
+                    provider,
+                )
+            )
+        if not invoice.provider_request:
+            invoice.provider_request = dict(prepared.provider_request)
+            invoice.sales_amount = int(prepared.sales_amount)
+            invoice.tax_amount = int(prepared.tax_amount)
+            invoice.total_amount = int(prepared.total_amount)
+            if not invoice.items:
+                invoice.items = [
+                    InvoiceItem(
+                        item_name=line.name,
+                        quantity=line.quantity,
+                        unit=line.unit,
+                        unit_price=line.unit_price,
+                        amount=line.amount,
+                        tax_type=line.tax_type,
+                        sequence_number=line.sequence_number,
+                    )
+                    for line in prepared.items
+                ]
+        stored_items = tuple(
+            PreparedInvoiceLine(
+                name=item.item_name,
+                quantity=item.quantity,
+                unit=item.unit,
+                unit_price=Decimal(item.unit_price),
+                amount=Decimal(item.amount),
+                tax_type=item.tax_type,
+                sequence_number=item.sequence_number,
+            )
+            for item in invoice.items
+        )
+        return invoice, PreparedInvoice(
+            provider=invoice.provider,
+            relate_number=invoice.relate_number,
+            buyer_type=invoice.buyer_type.value,
+            provider_request=(
+                dict(invoice.provider_request)
+                if invoice.provider_request
+                else dict(prepared.provider_request)
+            ),
+            sales_amount=Decimal(invoice.sales_amount),
+            tax_amount=Decimal(invoice.tax_amount),
+            total_amount=Decimal(invoice.total_amount),
+            items=stored_items or prepared.items,
+        )
+
+    paid_attempt = _paid_attempt(order)
+    invoice = Invoice(
+        order=order,
+        relate_number=prepared.relate_number,
+        provider=provider,
+        payment_attempt_id=(paid_attempt.id if paid_attempt else None),
+        buyer_type=order.invoice_buyer_type,
+        buyer_tax_id=order.invoice_buyer_tax_id,
+        buyer_name=order.invoice_buyer_name,
+        buyer_email=order.invoice_buyer_email or order.contact_email,
+        carrier_type=order.invoice_carrier_type.value,
+        carrier_id=order.invoice_carrier_value,
+        sales_amount=int(prepared.sales_amount),
+        tax_amount=int(prepared.tax_amount),
+        total_amount=int(prepared.total_amount),
+        status=InvoiceStatus.PENDING,
+        provider_request=dict(prepared.provider_request),
+        items=[
+            InvoiceItem(
+                item_name=line.name,
+                quantity=line.quantity,
+                unit=line.unit,
+                unit_price=line.unit_price,
+                amount=line.amount,
+                tax_type=line.tax_type,
+                sequence_number=line.sequence_number,
+            )
+            for line in prepared.items
+        ],
+    )
+    session.add(invoice)
+    await session.flush()
+    return invoice, prepared
+
+
+async def _query_provider_invoice(
+    adapter: InvoiceProvider,
+    order: Order,
+    relate_number: str,
+) -> dict:
+    return await adapter.query_invoice(
+        relate_number,
+        buyer_type=order.invoice_buyer_type.value,
+    )
+
+
+def _apply_provider_query_result(
+    invoice: Invoice,
+    order: Order,
+    query_result: dict,
+) -> Optional[InvoiceIssueResult]:
+    existing_number = (
+        _query_invoice_number(query_result)
+        if int(query_result.get("RtnCode", 0)) == 1
+        else ""
+    )
+    if not existing_number:
+        invoice.provider_response = dict(query_result)
+        return None
+
+    provider_status = str(query_result.get("ProviderStatus", ""))
+    invoice.invoice_number = existing_number
+    invoice.invoice_date = _parse_invoice_date(
+        query_result.get("InvoiceDate")
+        or query_result.get("IIS_Create_Date")
+    )
+    invoice.random_number = str(
+        query_result.get("RandomNumber")
+        or query_result.get("IIS_Random_Number")
+        or ""
+    ) or None
+    invoice.provider_status = provider_status or None
+    invoice.status = (
+        InvoiceStatus.VOIDED
+        if provider_status == "1"
+        else InvoiceStatus.FAILED
+        if provider_status == "3"
+        else InvoiceStatus.ISSUED
+    )
+    invoice.provider_response = dict(query_result)
+    invoice.error_message = (
+        "汎宇回報發票已退回" if provider_status == "3" else None
+    )
+    if invoice.status == InvoiceStatus.ISSUED:
+        invoice.issued_at = invoice.invoice_date or datetime.now(timezone.utc)
+    if invoice.status == InvoiceStatus.VOIDED:
+        invoice.voided_at = datetime.now(timezone.utc)
+    order.invoice_status = invoice.status
+    return InvoiceIssueResult(
+        relate_number=invoice.relate_number,
+        invoice_number=existing_number,
+        invoice_date=str(
+            query_result.get("InvoiceDate")
+            or query_result.get("IIS_Create_Date")
+            or ""
+        ),
+        random_number=str(
+            query_result.get("RandomNumber")
+            or query_result.get("IIS_Random_Number")
+            or ""
+        ),
+        raw=query_result,
+    )
+
+
+async def reconcile_order_invoice(
     session: AsyncSession,
     order_id: str,
-    adapter: ECPayInvoiceAdapter,
-) -> InvoiceIssueResult:
+    adapter: InvoiceProvider,
+    *,
+    commit: bool = True,
+) -> Optional[InvoiceIssueResult]:
     order = await session.scalar(
         select(Order)
         .where(Order.id == order_id)
         .options(
             selectinload(Order.items),
-            selectinload(Order.invoice),
+            selectinload(Order.invoice).selectinload(Invoice.items),
+            selectinload(Order.payment_attempts),
             selectinload(Order.fulfillment).selectinload(
                 OrderFulfillment.shipment
             ),
@@ -145,24 +436,73 @@ async def issue_picked_up_order_invoice(
     )
     if order is None:
         raise InvoiceApplicationError("找不到發票訂單")
-    nested_status = (
-        order.fulfillment.status if order.fulfillment is not None else None
+    if order.payment_status != PaymentStatus.PAID:
+        raise InvoiceApplicationError("只有已付款訂單可以查詢發票")
+    _ensure_provider_binding(order, adapter)
+    request = invoice_request_from_order(
+        order,
+        order.invoice.relate_number
+        if order.invoice is not None
+        else invoice_relate_number(order.order_number),
     )
-    if (
-        order.fulfillment_status != FulfillmentStatus.PICKED_UP
-        and nested_status
-        not in {
-            FulfillmentState.PICKED_UP,
-            FulfillmentState.DELIVERED,
-            FulfillmentState.NO_SHOW,
-        }
-    ):
-        raise InvoiceApplicationError("只有履約完成的訂單可以開立發票")
+    prepared = adapter.prepare_invoice(request)
+    invoice, _ = await _ensure_invoice_record(
+        session,
+        order,
+        adapter,
+        prepared,
+    )
+    query_result = await _query_provider_invoice(
+        adapter,
+        order,
+        invoice.relate_number,
+    )
+    result = _apply_provider_query_result(invoice, order, query_result)
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    return result
+
+
+async def issue_paid_order_invoice(
+    session: AsyncSession,
+    order_id: str,
+    adapter: InvoiceProvider,
+) -> InvoiceIssueResult:
+    order = await session.scalar(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.invoice).selectinload(Invoice.items),
+            selectinload(Order.payment_attempts),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
+        )
+        .with_for_update()
+    )
+    if order is None:
+        raise InvoiceApplicationError("找不到發票訂單")
     if order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以開立發票")
 
-    invoice = order.invoice
-    if invoice is not None and invoice.status == InvoiceStatus.ISSUED:
+    _ensure_provider_binding(order, adapter)
+    request = invoice_request_from_order(
+        order,
+        order.invoice.relate_number
+        if order.invoice is not None
+        else invoice_relate_number(order.order_number),
+    )
+    prepared = adapter.prepare_invoice(request)
+    invoice, prepared = await _ensure_invoice_record(
+        session,
+        order,
+        adapter,
+        prepared,
+    )
+    if invoice.status == InvoiceStatus.ISSUED:
         return InvoiceIssueResult(
             relate_number=invoice.relate_number,
             invoice_number=invoice.invoice_number or "",
@@ -170,61 +510,62 @@ async def issue_picked_up_order_invoice(
             random_number="",
             raw=invoice.provider_response,
         )
-    if invoice is None:
-        invoice = Invoice(
-            order=order,
-            relate_number=invoice_relate_number(order.order_number),
-            status=InvoiceStatus.PENDING,
-        )
-        session.add(invoice)
-        await session.flush()
     order.invoice_status = InvoiceStatus.PENDING
 
-    try:
-        query_result = await adapter.query_invoice(invoice.relate_number)
-        existing_number = (
-            _query_invoice_number(query_result)
-            if int(query_result.get("RtnCode", 0)) == 1
-            else ""
+    # Persist the deterministic provider reference before any external side effect.
+    await session.commit()
+    order = await session.scalar(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.invoice).selectinload(Invoice.items),
+            selectinload(Order.payment_attempts),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
         )
-        if existing_number:
-            invoice.invoice_number = existing_number
-            invoice.invoice_date = _parse_invoice_date(
-                query_result.get("InvoiceDate")
-                or query_result.get("IIS_Create_Date")
-            )
-            invoice.random_number = str(
-                query_result.get("RandomNumber")
-                or query_result.get("IIS_Random_Number")
-                or ""
-            ) or None
-            invoice.status = InvoiceStatus.ISSUED
-            invoice.provider_response = query_result
-            invoice.error_message = None
-            invoice.issued_at = datetime.now(timezone.utc)
-            order.invoice_status = InvoiceStatus.ISSUED
-            await session.commit()
-            return InvoiceIssueResult(
-                relate_number=invoice.relate_number,
-                invoice_number=existing_number,
-                invoice_date=str(
-                    query_result.get("InvoiceDate")
-                    or query_result.get("IIS_Create_Date")
-                    or ""
-                ),
-                random_number=str(
-                    query_result.get("RandomNumber")
-                    or query_result.get("IIS_Random_Number")
-                    or ""
-                ),
-                raw=query_result,
-            )
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+    if order is None or order.invoice is None:
+        raise InvoiceApplicationError("找不到發票開立意圖")
+    if order.payment_status != PaymentStatus.PAID:
+        raise InvoiceApplicationError("只有已付款訂單可以開立發票")
+    _ensure_provider_binding(order, adapter)
+    invoice, prepared = await _ensure_invoice_record(
+        session,
+        order,
+        adapter,
+        prepared,
+    )
+    if invoice.status == InvoiceStatus.ISSUED:
+        return InvoiceIssueResult(
+            relate_number=invoice.relate_number,
+            invoice_number=invoice.invoice_number or "",
+            invoice_date="",
+            random_number="",
+            raw=invoice.provider_response,
+        )
 
-        request = invoice_request_from_order(order, invoice.relate_number)
-        result = await adapter.issue_invoice(request)
+    try:
+        query_result = await _query_provider_invoice(
+            adapter,
+            order,
+            invoice.relate_number,
+        )
+        existing = _apply_provider_query_result(invoice, order, query_result)
+        if existing is not None:
+            await session.commit()
+            return existing
+
+        result = await adapter.issue_prepared_invoice(prepared)
+        if not result.invoice_number.strip():
+            raise InvoiceApplicationError("發票服務成功回應缺少發票號碼")
         invoice.invoice_number = result.invoice_number or None
         invoice.invoice_date = _parse_invoice_date(result.invoice_date)
         invoice.random_number = result.random_number or None
+        invoice.provider_status = "0"
         invoice.status = InvoiceStatus.ISSUED
         invoice.provider_response = dict(result.raw)
         invoice.error_message = None
@@ -238,3 +579,6 @@ async def issue_picked_up_order_invoice(
         order.invoice_status = InvoiceStatus.FAILED
         await session.commit()
         raise
+
+
+issue_picked_up_order_invoice = issue_paid_order_invoice

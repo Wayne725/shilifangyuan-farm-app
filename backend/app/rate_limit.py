@@ -36,6 +36,9 @@ LOGIN_RULE = RateLimitRule(max_attempts=10, window_seconds=300)
 REGISTER_RULE = RateLimitRule(max_attempts=5, window_seconds=3600)
 PASSWORD_RESET_RULE = RateLimitRule(max_attempts=5, window_seconds=3600)
 VERIFICATION_RULE = RateLimitRule(max_attempts=5, window_seconds=3600)
+DOCUMENT_UPLOAD_RULE = RateLimitRule(max_attempts=12, window_seconds=3600)
+INVOICE_QUERY_RULE = RateLimitRule(max_attempts=20, window_seconds=300)
+PAYMENT_REFRESH_RULE = RateLimitRule(max_attempts=30, window_seconds=300)
 
 _hits: Dict[str, Deque[float]] = {}
 _bucket_windows: Dict[str, float] = {}
@@ -48,10 +51,6 @@ def client_key(
     identifier: str = "",
 ) -> RateLimitKeys:
     client = request.client.host if request.client else "unknown"
-    # X-Forwarded-For is set by Render's proxy; take the original client.
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        client = forwarded.split(",")[0].strip() or client
     values = [f"{scope}:ip:{client}"]
     normalized_identifier = identifier.strip().lower()
     if normalized_identifier:

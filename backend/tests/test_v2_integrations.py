@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -302,6 +304,8 @@ class FakeR2Client:
     def __init__(self) -> None:
         self.presigned_calls = []
         self.head_response = {}
+        self.object_content = b""
+        self.copied = []
         self.deleted = []
 
     def generate_presigned_url(
@@ -318,6 +322,13 @@ class FakeR2Client:
 
     def head_object(self, **kwargs):
         return self.head_response
+
+    def get_object(self, **kwargs):
+        return {"Body": io.BytesIO(self.object_content)}
+
+    def copy_object(self, **kwargs):
+        self.copied.append(kwargs)
+        return {}
 
     def delete_object(self, **kwargs):
         self.deleted.append(kwargs["Key"])
@@ -346,15 +357,17 @@ def r2_storage(client: FakeR2Client) -> R2DocumentStorage:
 async def test_r2_presigns_random_private_key_and_confirms_head() -> None:
     client = FakeR2Client()
     storage = r2_storage(client)
-    checksum = "a" * 64
+    content = b"\xff\xd8\xff" + (b"a" * 1231)
+    checksum = hashlib.sha256(content).hexdigest()
     ticket = storage.create_upload_ticket(
         content_type="image/jpeg",
-        content_length=1234,
+        content_length=len(content),
         sha256=checksum,
     )
+    client.object_content = content
     client.head_response = {
         "ContentType": "image/jpeg",
-        "ContentLength": 1234,
+        "ContentLength": len(content),
         "Metadata": {"sha256": checksum},
         "ETag": '"etag-123"',
     }
@@ -362,22 +375,83 @@ async def test_r2_presigns_random_private_key_and_confirms_head() -> None:
     confirmed = await storage.confirm_upload(
         object_key=ticket.object_key,
         expected_content_type="image/jpeg",
-        expected_content_length=1234,
+        expected_content_length=len(content),
         expected_sha256=checksum,
     )
-    download_url = storage.create_download_url(ticket.object_key)
+    download_url = storage.create_download_url(confirmed.object_key)
 
     assert ticket.object_key.startswith("membership-documents/")
     assert ticket.object_key.endswith(".jpg")
     assert ticket.expires_in_seconds == 300
     assert ticket.required_headers["x-amz-meta-sha256"] == checksum
     assert "Content-Length" not in ticket.required_headers
-    assert "ContentLength" not in client.presigned_calls[0][1]
     assert "signed=1" in ticket.upload_url
     assert confirmed.etag == "etag-123"
+    assert confirmed.object_key.startswith("membership-documents/verified/")
+    assert client.copied[0]["CopySourceIfMatch"] == '"etag-123"'
+    assert ticket.object_key in client.deleted
+    assert client.presigned_calls[0][1]["ContentLength"] == len(content)
     assert client.presigned_calls[0][2:] == (300, "PUT")
     assert client.presigned_calls[1][2:] == (120, "GET")
+    assert (
+        client.presigned_calls[1][1]["ResponseContentDisposition"]
+        == "attachment"
+    )
     assert "signed=1" in download_url
+
+
+@pytest.mark.asyncio
+async def test_r2_rejects_spoofed_content_type_and_metadata() -> None:
+    client = FakeR2Client()
+    storage = r2_storage(client)
+    content = b"<script>not an image</script>"
+    checksum = hashlib.sha256(content).hexdigest()
+    ticket = storage.create_upload_ticket(
+        content_type="image/jpeg",
+        content_length=len(content),
+        sha256=checksum,
+    )
+    client.object_content = content
+    client.head_response = {
+        "ContentType": "image/jpeg",
+        "ContentLength": len(content),
+        "Metadata": {"sha256": checksum},
+    }
+
+    with pytest.raises(IntegrationResponseError, match="signature"):
+        await storage.confirm_upload(
+            object_key=ticket.object_key,
+            expected_content_type="image/jpeg",
+            expected_content_length=len(content),
+            expected_sha256=checksum,
+        )
+
+
+@pytest.mark.asyncio
+async def test_r2_rejects_pdf_header_hidden_after_active_content() -> None:
+    client = FakeR2Client()
+    storage = r2_storage(client)
+    content = b"<script>alert(1)</script>%PDF-1.7"
+    checksum = hashlib.sha256(content).hexdigest()
+    ticket = storage.create_upload_ticket(
+        content_type="application/pdf",
+        content_length=len(content),
+        sha256=checksum,
+    )
+    client.object_content = content
+    client.head_response = {
+        "ContentType": "application/pdf",
+        "ContentLength": len(content),
+        "Metadata": {"sha256": checksum},
+    }
+
+    with pytest.raises(IntegrationResponseError, match="signature"):
+        await storage.confirm_upload(
+            object_key=ticket.object_key,
+            expected_content_type="application/pdf",
+            expected_content_length=len(content),
+            expected_sha256=checksum,
+        )
 
 
 @pytest.mark.asyncio
@@ -421,6 +495,9 @@ def sandbox_settings(**overrides) -> Settings:
         "jwt_secret": "j" * 32,
         "internal_reconcile_secret": "r" * 32,
         "demo_reset_confirmation": "reset-code-strong",
+        "demo_admin_password": "preview-admin-strong",
+        "demo_member_password": "preview-member-strong",
+        "demo_nonmember_password": "preview-customer-strong",
         "ecpay_payment_merchant_id": "3002607",
         "ecpay_payment_hash_key": "pwFHCqoQZGmho4w6",
         "ecpay_payment_hash_iv": "EkRm7iFT261dpevs",

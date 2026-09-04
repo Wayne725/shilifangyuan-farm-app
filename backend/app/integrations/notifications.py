@@ -14,6 +14,8 @@ EMAIL_EVENT_TYPES = {
     "group_opened",
     "payment_succeeded",
     "refund_completed",
+    "refund_fulfillment_intervention",
+    "refund_manual_review_required",
     "group_confirmed",
     "group_rejected",
     "group_failed",

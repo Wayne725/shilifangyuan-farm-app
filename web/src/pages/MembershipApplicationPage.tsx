@@ -1,4 +1,4 @@
-import { CheckCircle, FileArrowUp, IdentificationCard, Trash, UserCircle } from "@phosphor-icons/react";
+import { CheckCircle, FileArrowUp, IdentificationCard, ShieldWarning, Trash, UserCircle } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
@@ -36,6 +36,7 @@ const documentSlots: Array<{ type: DocumentType; label: string }> = [
   { type: "id_back", label: "身分證反面" },
   { type: "secondary", label: "第二證件" },
 ];
+const isDemoEnvironment = import.meta.env.VITE_APP_ENV !== "production";
 
 export function MembershipApplicationPage() {
   const { user, openLogin } = useAuth();
@@ -44,6 +45,7 @@ export function MembershipApplicationPage() {
   const [consented, setConsented] = useState(false);
   const [uploading, setUploading] = useState<DocumentType | null>(null);
   const [uploadError, setUploadError] = useState("");
+  const [testDocumentConfirmed, setTestDocumentConfirmed] = useState(false);
   const membership = useQuery({
     queryKey: ["membership-me", user?.id],
     queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
@@ -198,6 +200,23 @@ export function MembershipApplicationPage() {
 
       <section className="document-section">
         <div className="form-heading"><div><p className="eyebrow">DOCUMENTS</p><h2>身分證件</h2></div><span>JPEG、PNG 或 PDF，單檔 8MB 以內</span></div>
+        {isDemoEnvironment && (
+          <div className="document-safety-notice" role="note">
+            <ShieldWarning size={24} weight="light" />
+            <div>
+              <strong>展示環境禁止上傳真實身分證件</strong>
+              <p>請只使用自行製作、沒有真實姓名與證號的測試檔案。</p>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={testDocumentConfirmed}
+                  onChange={(event) => setTestDocumentConfirmed(event.target.checked)}
+                />
+                我確認本次只會上傳測試檔案
+              </label>
+            </div>
+          </div>
+        )}
         <div className="document-grid">
           {documentSlots.map((slot) => {
             const document = application.data?.documents.find((item) => item.document_type === slot.type);
@@ -206,7 +225,7 @@ export function MembershipApplicationPage() {
                 {document?.status === "confirmed" ? <CheckCircle size={28} weight="light" /> : <FileArrowUp size={28} weight="light" />}
                 <h3>{slot.label}</h3>
                 <span>{document?.status === "confirmed" ? "已確認" : uploading === slot.type ? "上傳中" : "尚未上傳"}</span>
-                {editable && <label className="button button-quiet"><input type="file" accept="image/jpeg,image/png,application/pdf" disabled={uploading !== null} onChange={(event) => uploadDocument(slot.type, event)} />{document ? "重新上傳" : "選擇檔案"}</label>}
+                {editable && <label className="button button-quiet"><input type="file" accept="image/jpeg,image/png,application/pdf" disabled={uploading !== null || (isDemoEnvironment && !testDocumentConfirmed)} onChange={(event) => uploadDocument(slot.type, event)} />{document ? "重新上傳" : "選擇檔案"}</label>}
                 {document && editable && <button className="document-delete" type="button" aria-label={`刪除${slot.label}`} disabled={deleteDocument.isPending} onClick={() => deleteDocument.mutate(document.id)}><Trash size={16} /></button>}
               </article>
             );

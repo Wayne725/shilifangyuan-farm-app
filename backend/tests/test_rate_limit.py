@@ -12,16 +12,32 @@ from app.rate_limit import (
 )
 
 
-def make_request(ip_address: str) -> Request:
+def make_request(
+    ip_address: str,
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> Request:
     return Request(
         {
             "type": "http",
             "method": "POST",
             "path": "/v1/auth/login",
-            "headers": [],
+            "headers": headers or [],
             "client": (ip_address, 1234),
         }
     )
+
+
+def test_client_key_ignores_spoofed_forwarded_header() -> None:
+    plain = client_key(make_request("192.0.2.30"), "register")
+    spoofed = client_key(
+        make_request(
+            "192.0.2.30",
+            [(b"x-forwarded-for", b"203.0.113.99")],
+        ),
+        "register",
+    )
+
+    assert spoofed == plain
 
 
 @pytest.fixture(autouse=True)

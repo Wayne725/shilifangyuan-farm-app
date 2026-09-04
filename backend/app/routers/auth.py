@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select, update
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,17 +16,21 @@ from ..auth import (
     hash_password,
     make_token_pair,
     membership_type_for_user,
-    verify_password,
+    verify_and_update_password,
 )
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationError
-from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..integrations.pii_crypto import (
+    encrypt_auth_outbox_credential,
+    pii_cipher_from_settings,
+)
 from ..member_claims import (
     MemberClaimError,
     attach_roster_membership,
     normalize_email,
+    reserve_roster_claim,
     verified_roster_entry,
 )
 from ..rate_limit import (
@@ -39,15 +44,16 @@ from ..rate_limit import (
 )
 from ..models import (
     EmailVerificationToken,
+    MemberRosterEntry,
     OutboxEvent,
     PasswordResetToken,
+    RefreshSession,
     User,
 )
 from ..schemas import (
     ExistingMemberRegistrationRequest,
     ForgotPasswordRequest,
     LoginRequest,
-    RefreshRequest,
     RegisterRequest,
     ResendVerificationRequest,
     ResetPasswordRequest,
@@ -74,11 +80,72 @@ def user_read(user: User) -> UserRead:
     )
 
 
-def token_response(user: User) -> TokenResponse:
-    pair = make_token_pair(user)
+def _set_refresh_cookie(
+    response: Response,
+    refresh_token: str,
+    settings: Settings,
+) -> None:
+    response.set_cookie(
+        key=settings.refresh_cookie_name,
+        value=refresh_token,
+        max_age=settings.refresh_token_days * 24 * 60 * 60,
+        path="/v1/auth",
+        secure=settings.refresh_cookie_secure,
+        httponly=True,
+        samesite=settings.refresh_cookie_samesite,
+    )
+
+
+def _clear_refresh_cookie(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        key=settings.refresh_cookie_name,
+        path="/v1/auth",
+        secure=settings.refresh_cookie_secure,
+        httponly=True,
+        samesite=settings.refresh_cookie_samesite,
+    )
+
+
+def _validate_cookie_origin(request: Request, settings: Settings) -> None:
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    allowed_origins = {
+        value.rstrip("/")
+        for value in [*settings.cors_origins, settings.web_base_url]
+        if value
+    }
+    if origin.rstrip("/") not in allowed_origins:
+        raise HTTPException(status_code=403, detail="不允許的登入來源")
+
+
+def token_response(
+    user: User,
+    response: Response,
+    settings: Settings,
+    pair: dict[str, str],
+) -> TokenResponse:
+    _set_refresh_cookie(response, pair["refresh_token"], settings)
     return TokenResponse(
-        **pair,
+        access_token=pair["access_token"],
+        token_type=pair["token_type"],
         user=user_read(user),
+    )
+
+
+def _new_token_pair_and_session(
+    user: User,
+    settings: Settings,
+) -> tuple[dict[str, str], RefreshSession]:
+    pair = make_token_pair(user, settings)
+    payload = decode_token(pair["refresh_token"], "refresh", settings)
+    return pair, RefreshSession(
+        id=str(payload["jti"]),
+        user_id=user.id,
+        expires_at=datetime.fromtimestamp(
+            int(payload["exp"]),
+            tz=timezone.utc,
+        ),
     )
 
 
@@ -86,16 +153,31 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _email_token_hash(
+    user_id: str,
+    token: str,
+    settings: Settings,
+) -> str:
+    message = f"email-verification:{user_id}:{token}".encode("utf-8")
+    return hmac.new(
+        settings.jwt_secret.encode("utf-8"),
+        message,
+        hashlib.sha256,
+    ).hexdigest()
+
+
 async def _issue_email_verification(
     session: AsyncSession,
     user: User,
+    settings: Settings,
 ) -> str:
     now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=10)
     raw_token = f"{secrets.randbelow(1_000_000):06d}"
     token = EmailVerificationToken(
         user_id=user.id,
-        token_hash=_token_hash(raw_token),
-        expires_at=now + timedelta(minutes=10),
+        token_hash=_email_token_hash(user.id, raw_token, settings),
+        expires_at=expires_at,
         created_at=now,
     )
     session.add(token)
@@ -108,11 +190,23 @@ async def _issue_email_verification(
             payload={
                 "recipient": user.email,
                 "display_name": user.display_name,
-                "verification_token": raw_token,
+                "credential_encrypted": encrypt_auth_outbox_credential(
+                    settings,
+                    "auth.email_verification_requested",
+                    user.id,
+                    raw_token,
+                ),
                 "verification_token_id": token.id,
             },
         )
     )
+    pending_entry = await session.scalar(
+        select(MemberRosterEntry)
+        .where(MemberRosterEntry.pending_claim_user_id == user.id)
+        .with_for_update()
+    )
+    if pending_entry is not None:
+        pending_entry.pending_claim_expires_at = expires_at
     await session.commit()
     return raw_token
 
@@ -152,7 +246,7 @@ async def register(
     )
     session.add(user)
     await session.flush()
-    token = await _issue_email_verification(session, user)
+    token = await _issue_email_verification(session, user, settings)
     return _development_token_response(
         "註冊完成，驗證信已排入寄送佇列，請稍候",
         token,
@@ -199,6 +293,11 @@ async def register_existing_member(
                 status_code=409,
                 detail="此社員帳號已啟用，請直接登入或使用忘記密碼",
             ) from exc
+        if exc.code == "pending":
+            raise HTTPException(
+                status_code=409,
+                detail="此社員資料正在等待 Email 驗證，請使用原註冊信箱完成驗證",
+            ) from exc
         raise HTTPException(
             status_code=400,
             detail="社員資料無法核對，請確認名冊登記內容",
@@ -218,13 +317,19 @@ async def register_existing_member(
             "SLF-C",
         ),
         email=email,
-        display_name=body.legal_name.strip(),
+        display_name=body.display_name.strip(),
         password_hash=hash_password(body.password),
+        pending_member_claim=True,
     )
     session.add(user)
     await session.flush()
-    await attach_roster_membership(session, roster_entry, user)
-    token = await _issue_email_verification(session, user)
+    await reserve_roster_claim(
+        session,
+        roster_entry,
+        user,
+        datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+    token = await _issue_email_verification(session, user, settings)
     return _development_token_response(
         "社員資料核對完成，驗證信已排入寄送佇列",
         token,
@@ -237,14 +342,23 @@ async def verify_email(
     body: VerifyEmailRequest,
     request: Request,
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    verification_key = client_key(request, "verify-email")
+    email = normalize_email(str(body.email))
+    verification_key = client_key(request, "verify-email", email)
     enforce(verification_key, VERIFICATION_RULE)
     now = datetime.now(timezone.utc)
+    user = await session.scalar(
+        select(User).where(User.email == email).with_for_update()
+    )
+    if user is None:
+        raise HTTPException(status_code=400, detail="驗證碼無效或已過期")
     record = await session.scalar(
         select(EmailVerificationToken)
         .where(
-            EmailVerificationToken.token_hash == _token_hash(body.token),
+            EmailVerificationToken.user_id == user.id,
+            EmailVerificationToken.token_hash
+            == _email_token_hash(user.id, body.token, settings),
             EmailVerificationToken.used_at.is_(None),
         )
         .with_for_update()
@@ -253,9 +367,32 @@ async def verify_email(
         tzinfo=record.expires_at.tzinfo or timezone.utc
     ) <= now:
         raise HTTPException(status_code=400, detail="驗證碼無效或已過期")
-    user = await session.get(User, record.user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="找不到此使用者")
+    if user.pending_member_claim:
+        roster_entry = await session.scalar(
+            select(MemberRosterEntry)
+            .where(MemberRosterEntry.pending_claim_user_id == user.id)
+            .with_for_update()
+        )
+        pending_expires_at = (
+            roster_entry.pending_claim_expires_at
+            if roster_entry is not None
+            else None
+        )
+        if (
+            roster_entry is None
+            or not roster_entry.is_active
+            or roster_entry.claimed_user_id is not None
+            or pending_expires_at is None
+            or pending_expires_at.replace(
+                tzinfo=pending_expires_at.tzinfo or timezone.utc
+            )
+            <= now
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="社員認領保留已失效，請聯絡合作社協助重新核對",
+            )
+        await attach_roster_membership(session, roster_entry, user)
     await session.execute(
         update(EmailVerificationToken)
         .where(
@@ -289,7 +426,7 @@ async def resend_verification(
     )
     token = ""
     if user is not None and user.email_verified_at is None:
-        token = await _issue_email_verification(session, user)
+        token = await _issue_email_verification(session, user, settings)
     response = {
         "message": (
             "若帳號尚未驗證，重新寄送要求已排入寄送佇列；"
@@ -341,7 +478,12 @@ async def forgot_password(
                 payload={
                     "recipient": user.email,
                     "display_name": user.display_name,
-                    "reset_token": raw_token,
+                    "credential_encrypted": encrypt_auth_outbox_credential(
+                        settings,
+                        "auth.password_reset_requested",
+                        user.id,
+                        raw_token,
+                    ),
                 },
             )
         )
@@ -380,7 +522,23 @@ async def reset_password(
     if user is None or not user.is_active:
         raise HTTPException(status_code=404, detail="找不到此使用者")
     user.password_hash = hash_password(body.password)
-    record.used_at = now
+    user.token_version = int(user.token_version or 0) + 1
+    await session.execute(
+        update(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
+    await session.execute(
+        update(RefreshSession)
+        .where(
+            RefreshSession.user_id == user.id,
+            RefreshSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
     await session.commit()
     return {"message": "密碼已更新"}
 
@@ -389,22 +547,30 @@ async def reset_password(
 async def login(
     body: LoginRequest,
     request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> TokenResponse:
     # Keyed per account as well as per client, so one IP cannot spray an inbox
     # list and one victim account cannot be hammered from a pool of clients.
     account_key = client_key(request, "login", body.email)
     enforce(account_key, LOGIN_RULE)
+    _validate_cookie_origin(request, settings)
     user = await session.scalar(
         select(User)
         .where(User.email == body.email.lower())
         .options(selectinload(User.membership))
     )
-    if (
-        user is None
-        or not user.is_active
-        or not verify_password(body.password, user.password_hash)
-    ):
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Email 或密碼錯誤",
+        )
+    verified, updated_hash = verify_and_update_password(
+        body.password,
+        user.password_hash,
+    )
+    if not verified:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email 或密碼錯誤",
@@ -414,16 +580,64 @@ async def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="請先完成 Email 驗證",
         )
+    if updated_hash is not None:
+        user.password_hash = updated_hash
+    await session.execute(
+        delete(RefreshSession)
+        .where(
+            RefreshSession.user_id == user.id,
+            RefreshSession.expires_at <= datetime.now(timezone.utc),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    pair, refresh_session = _new_token_pair_and_session(user, settings)
+    session.add(refresh_session)
+    await session.commit()
     reset(account_key)
-    return token_response(user)
+    return token_response(user, response, settings, pair)
 
 
 @auth_router.post("/refresh", response_model=TokenResponse)
 async def refresh(
-    body: RefreshRequest,
+    request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> TokenResponse:
-    payload = decode_token(body.refresh_token, "refresh")
+    _validate_cookie_origin(request, settings)
+    refresh_token = request.cookies.get(settings.refresh_cookie_name)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="找不到登入工作階段",
+        )
+    payload = decode_token(refresh_token, "refresh", settings)
+    now = datetime.now(timezone.utc)
+    stored_session = await session.scalar(
+        select(RefreshSession)
+        .where(
+            RefreshSession.id == payload["jti"],
+            RefreshSession.user_id == payload["sub"],
+        )
+        .with_for_update()
+    )
+    stored_expires_at = (
+        stored_session.expires_at.replace(
+            tzinfo=stored_session.expires_at.tzinfo or timezone.utc
+        )
+        if stored_session is not None
+        else None
+    )
+    if (
+        stored_session is None
+        or stored_session.revoked_at is not None
+        or stored_expires_at is None
+        or stored_expires_at <= now
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登入工作階段已失效，請重新登入",
+        )
     user = await session.scalar(
         select(User)
         .where(User.id == payload["sub"], User.is_active.is_(True))
@@ -434,7 +648,40 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="找不到此使用者",
         )
-    return token_response(user)
+    if int(payload.get("ver", -1)) != int(user.token_version or 0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登入工作階段已失效，請重新登入",
+        )
+    pair, replacement = _new_token_pair_and_session(user, settings)
+    stored_session.revoked_at = now
+    stored_session.replaced_by_id = replacement.id
+    session.add(replacement)
+    await session.commit()
+    return token_response(user, response, settings, pair)
+
+
+@auth_router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    request: Request,
+    response: Response,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    _validate_cookie_origin(request, settings)
+    now = datetime.now(timezone.utc)
+    user.token_version = int(user.token_version or 0) + 1
+    await session.execute(
+        update(RefreshSession)
+        .where(
+            RefreshSession.user_id == user.id,
+            RefreshSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    await session.commit()
+    _clear_refresh_cookie(response, settings)
 
 
 @auth_router.get("/me", response_model=UserRead)

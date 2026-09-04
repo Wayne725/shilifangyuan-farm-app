@@ -13,6 +13,7 @@
 | 綠界正式物流合約與子類型 | 待簽約／測標 | 合作社 | 正式宅配、超商寄件及託運單 | 使用綠界 Stage 與後台 Sandbox 貨態推進 |
 | 正式寄件人與倉儲資料 | 待確認 | 合作社 | 物流正式建單 | 由環境變數提供測試寄件資料 |
 | 正式運費與免運門檻 | 待確認 | 合作社 | 正式結帳金額 | 超商 70 元、宅配 160 元、滿 1,500 元免運 |
+| 退款後發票處理規則 | 待會計確認 | 合作社會計 | 全額／部分退款、跨期退款應作廢或折讓及稅額拆分 | 退款完成後建立持久化發票調整待辦；全額標成 `void_pending`、部分建立折讓待辦，但不自動呼叫供應商 API |
 | 每日取餐地點、時段與截單規則 | 待會議確認 | 合作社／學校 | 正式便當場次 | 已匯入核准菜單；每日午餐、晚餐場次先使用可由管理端調整的展示地點與時間 |
 | 正式既有社員名冊 | 待合作社提供實際資料檔 | 合作社 | 既有社員直接認領正式帳號 | 已完成加密名冊、一次性認領與 Email 驗證流程；目前僅有虛擬名冊紀錄，管理員可逐筆建立 |
 
@@ -23,15 +24,15 @@
 
 | 項目 | 風險 | 現況 | 位置 |
 |---|---|---|---|
-| **退款沒有真的退錢** | **最高。系統會通知使用者「退款完成」，但沒有任何金流動作** | `LocalSandboxRefundAdapter` 只寫入資料庫狀態，`provider_refund_performed=False` | `integrations/ecpay.py:312`、`jobs.py:838` |
+| **雷門交易狀態、補查期限與退款契約尚未完整確認** | **最高。沒有主動通知，排程失效或狀態語意錯誤可能漏單；退款重試不明可能造成重複操作** | 正式 URL、憑證與無副作用查單已驗證；已完成回跳立即查單、前端有限補查、背景補查、provider 快照及全額退款保護。雷門已確認無主動 Callback，仍缺各非終態的最晚收斂時間、建議查單頻率、退款限制／冪等與正式對帳方式。逾期補查預設 24 小時，期限後目前尚未自動建立管理員對帳待辦；正式環境由 `RAYGATE_PAYMENT_CONTRACT_VERIFIED` 阻擋誤啟用 | `integrations/raygate.py`、`routers/payments.py`、`jobs.py`、`docs/PAYMENT_FLOW.md` |
+| **綠界付款 fallback 沒有正式退款 API** | **高。若切回綠界收取真實款項，本機退款完成不代表金流已退** | `LocalSandboxRefundAdapter` 只供 Development／Sandbox；正式使用綠界付款前必須另接正式退款與查詢驗收 | `integrations/ecpay.py`、`jobs.py` |
+| **汎宇正式環境憑證與端到端驗收尚未完成** | **高。Sandbox 成功不代表已獲授權開立正式發票** | B2C 與 B2B Sandbox 已完成 `EG0478` Email 會員載具、`3J0002` 手機條碼、票號查回及通知信驗收。正式上線仍需汎宇提供 Production 專屬憑證並重做低額開票、查回與通知驗收 | `integrations/fanyu_invoice.py`、`docs/INVOICE_FLOW.md` |
 | 正式社員名冊尚未匯入 | 高。沒有權威名冊就無法安全判斷註冊者是否已是社員 | 認領流程、管理介面與資料表已完成，但只有虛擬資料，尚無合作社實際名單 | `member_claims.py`、`member_roster_entries` |
-| 發票作廢與折讓未實作 | 高。退款後發票仍為已開立狀態，帳務不符 | 只有開立，沒有作廢／折讓 | `integrations/invoice_service.py` |
-| 展示帳號會自動建立 | 高。空資料庫啟動時會建出 `admin@shilifangyuan.tw` 等已知帳號 | `seed_demo_data` 於 lifespan 無條件執行（僅在已有使用者時跳過） | `main.py:22`、`seed.py:241` |
-| 一鍵清空資料的端點仍存在 | 高 | `/v1/admin/demo/reset`，目前靠 `environment` 與確認碼阻擋 | `routers/catalog.py:250` |
+| 發票作廢與折讓未啟用 | 高。退款後發票若未同步處理會帳務不符 | 作廢 adapter 與作廢／折讓資料結構已建立；尚缺會計規則、管理流程及 Sandbox 驗收 | `integrations/fanyu_invoice.py`、`models.py`、`docs/INVOICE_FLOW.md` |
+| 真實證件惡意檔掃描與 R2 lifecycle | 高。檔頭與 SHA-256 驗證不能取代病毒／惡意 PDF 掃描，放棄的 pending 物件也需定期清除 | 已限制大小、類型、短效 PUT，驗證後搬到不可覆寫 verified key；尚未接掃毒服務，R2 lifecycle 需在 Cloudflare 後台設定 | `integrations/r2_storage.py`、`docs/DEPLOYMENT.md` |
 | Rate limiting 為單機記憶體 | 中。多實例部署即失效 | 刻意的 Sandbox 取捨，已於檔案內註明 | `rate_limit.py` |
 | PII 金鑰無輪替與備份機制 | 中。金鑰遺失等於所有社員個資永久無法解密 | 支援版本化金鑰，但沒有輪替流程與保管規範 | `integrations/pii_crypto.py` |
 | 供應者審認文件尚無上傳／調閱 API | 中。可保存供應者與審認紀錄，但無法從管理介面附加 PDF／JPG 證明文件 | 已有 `supplier_documents` 資料表與讀取欄位，仍需泛化目前只服務入社證件的 R2 流程 | `models.py`、`routers/operations.py` |
-| 綠界仍全部指向 Stage | 中。正式環境需簽約，且 `validate_runtime_secrets` 目前強制 stage 旗標為 true | 所有預設 URL 為 `-stage` | `config.py:51-91`、`config.py:181` |
 | Render 免費方案 | 中。免費 PostgreSQL 30 天後刪除且無自動備份；服務閒置會休眠 | 展示用設定 | `render.yaml` |
 | 無錯誤監控 | 中。線上發生例外不會有人知道 | 未接任何 APM／Sentry | — |
 

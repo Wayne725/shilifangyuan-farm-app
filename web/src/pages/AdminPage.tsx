@@ -2,6 +2,7 @@ import {
   ArrowRight,
   Buildings,
   CreditCard,
+  FileText,
   MapPin,
   Package,
   SealCheck,
@@ -10,15 +11,26 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminNav } from "../components/AdminNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import { shippingChannelLabels, temperatureLabels } from "../lib/commerce";
-import { adminPaymentStatusLabel, fulfillmentStatusLabel } from "../lib/labels";
-import type { Order, PickupLocation, Product, ShippingRate, Supplier } from "../lib/types";
+import {
+  adminPaymentStatusLabel,
+  fulfillmentStatusLabel,
+  invoiceStatusLabel,
+} from "../lib/labels";
+import type {
+  AdminInvoiceQueryResult,
+  Order,
+  PickupLocation,
+  Product,
+  ShippingRate,
+  Supplier,
+} from "../lib/types";
 
 interface MemberRecord {
   id: string;
@@ -86,6 +98,14 @@ export function AdminPage() {
   });
   const refundOrder = useMutation({
     mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) => apiFetch<Order>(`/v1/orders/${orderId}/admin/refund`, { method: "POST", body: JSON.stringify({ reason }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
+  });
+  const queryInvoice = useMutation({
+    mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) =>
+      apiFetch<AdminInvoiceQueryResult>(`/v1/admin/orders/${orderId}/invoice/query`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
 
@@ -199,22 +219,25 @@ export function AdminPage() {
                 <div className="operation-state">
                   <span><CreditCard size={16} />{adminPaymentStatusLabel(order.payment_status)}</span>
                   <span><Package size={16} />{fulfillmentStatusLabel(order.fulfillment_status)}</span>
+                  <span><FileText size={16} />{invoiceStatusLabel(order.invoice_status)}</span>
                   {order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {order.shipment.status}</span>}
                 </div>
                 <AdminOrderAction
                   order={order}
-                  busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending || refundOrder.isPending}
+                  busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending || refundOrder.isPending || queryInvoice.isPending}
                   onFulfillment={(status) => updateFulfillment.mutate({ orderId: order.id, status })}
                   onCreateLogistics={() => createLogistics.mutate(order.id)}
                   onShipment={(status) => advanceShipment.mutate({ orderId: order.id, status })}
                   onRefund={(reason) => refundOrder.mutate({ orderId: order.id, reason })}
+                  onInvoiceQuery={(reason) => queryInvoice.mutate({ orderId: order.id, reason })}
                 />
               </article>
             ))}
           </div>
-          {(updateFulfillment.isError || createLogistics.isError || advanceShipment.isError || refundOrder.isError) && (
+          {queryInvoice.isSuccess && <p className="form-success">{queryInvoice.data.message}</p>}
+          {(updateFulfillment.isError || createLogistics.isError || advanceShipment.isError || refundOrder.isError || queryInvoice.isError) && (
             <p className="form-error">
-              {(updateFulfillment.error || createLogistics.error || advanceShipment.error || refundOrder.error)?.message}
+              {(updateFulfillment.error || createLogistics.error || advanceShipment.error || refundOrder.error || queryInvoice.error)?.message}
             </p>
           )}
         </div>
@@ -237,6 +260,7 @@ function AdminOrderAction({
   onCreateLogistics,
   onShipment,
   onRefund,
+  onInvoiceQuery,
 }: {
   order: Order;
   busy: boolean;
@@ -244,33 +268,56 @@ function AdminOrderAction({
   onCreateLogistics: () => void;
   onShipment: (status: string) => void;
   onRefund: (reason: string) => void;
+  onInvoiceQuery: (reason: string) => void;
 }) {
   const [refundOpen, setRefundOpen] = useState(false);
   const [refundReason, setRefundReason] = useState("買家申請退款");
+  const [invoiceReason, setInvoiceReason] = useState("");
   const refundControl = order.available_actions.includes("refund") && (refundOpen ? <div className="operation-refund"><input aria-label="退款原因" value={refundReason} onChange={(event) => setRefundReason(event.target.value)} /><button type="button" disabled={busy || !refundReason.trim()} onClick={() => onRefund(refundReason)}>確認退款</button><button type="button" onClick={() => setRefundOpen(false)}>取消</button></div> : <button type="button" disabled={busy} onClick={() => setRefundOpen(true)}>建立退款</button>);
   if (order.payment_status !== "paid") return <small className="no-action">等待買家付款</small>;
+  const invoiceControl = (
+    <div className="operation-invoice-query">
+      <label>
+        發票查詢原因
+        <input
+          aria-label="發票查詢原因"
+          onChange={(event) => setInvoiceReason(event.target.value)}
+          placeholder="例如：客服核對逾時訂單"
+          value={invoiceReason}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={busy || !invoiceReason.trim()}
+        onClick={() => onInvoiceQuery(invoiceReason.trim())}
+      >
+        重新查詢電子發票
+      </button>
+    </div>
+  );
+  let fulfillmentControl: ReactNode = null;
   if (order.fulfillment_status === "pending_confirmation") {
-    return <div className="operation-actions"><button type="button" disabled={busy} onClick={() => onFulfillment("preparing")}>進入備貨</button>{refundControl}</div>;
-  }
-  if (order.fulfillment_method === "ecpay_logistics") {
+    fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("preparing")}>進入備貨</button>;
+  } else if (order.fulfillment_method === "ecpay_logistics") {
     if (order.shipment?.status === "ready_to_create") {
-      return <div className="operation-actions"><button type="button" disabled={busy} onClick={onCreateLogistics}>建立綠界物流單</button>{refundControl}</div>;
+      fulfillmentControl = <button type="button" disabled={busy} onClick={onCreateLogistics}>建立綠界物流單</button>;
+    } else if (order.shipment?.status === "created") {
+      fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("in_transit")}>模擬配送中</button>;
+    } else if (order.shipment?.status === "in_transit") {
+      fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("delivered")}>模擬已送達</button>;
     }
-    if (order.shipment?.status === "created") {
-      return <div className="operation-actions"><button type="button" disabled={busy} onClick={() => onShipment("in_transit")}>模擬配送中</button>{refundControl}</div>;
-    }
-    if (order.shipment?.status === "in_transit") {
-      return <div className="operation-actions"><button type="button" disabled={busy} onClick={() => onShipment("delivered")}>模擬已送達</button>{refundControl}</div>;
-    }
-    return <small className="no-action">物流狀態由綠界或 webhook 推進</small>;
+  } else if (order.fulfillment_status === "preparing") {
+    fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("ready_for_pickup")}>標記可領取</button>;
+  } else if (order.fulfillment_status === "ready_for_pickup") {
+    fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("picked_up")}>完成取貨</button>;
   }
-  if (order.fulfillment_status === "preparing") {
-    return <div className="operation-actions"><button type="button" disabled={busy} onClick={() => onFulfillment("ready_for_pickup")}>標記可領取</button>{refundControl}</div>;
-  }
-  if (order.fulfillment_status === "ready_for_pickup") {
-    return <div className="operation-actions"><button type="button" disabled={busy} onClick={() => onFulfillment("picked_up")}>完成取貨</button>{refundControl}</div>;
-  }
-  return refundControl || <small className="no-action">本筆已完成</small>;
+  return (
+    <div className="operation-actions">
+      {fulfillmentControl}
+      {refundControl}
+      {invoiceControl}
+    </div>
+  );
 }
 
 function ShippingRateManager({ rates, onDone }: { rates: ShippingRate[]; onDone: () => void }) {

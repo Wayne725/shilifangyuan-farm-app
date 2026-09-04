@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
@@ -15,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -260,6 +262,7 @@ class MeetingType(str, enum.Enum):
 
 class PointSourceType(str, enum.Enum):
     PURCHASE = "purchase"
+    REFUND = "refund"
     WISH_LAUNCHED = "wish_launched"
     ACTIVITY = "activity"
     VOTE = "vote"
@@ -288,11 +291,26 @@ class InvoiceStatus(str, enum.Enum):
     PENDING = "pending"
     ISSUED = "issued"
     FAILED = "failed"
+    VOID_PENDING = "void_pending"
+    VOIDED = "voided"
+
+
+class InvoiceBuyerType(str, enum.Enum):
+    PERSONAL = "personal"
+    COMPANY = "company"
 
 
 class InvoiceCarrierType(str, enum.Enum):
     ECPAY = "ecpay"
+    CLOUD = "cloud"
     MOBILE_BARCODE = "mobile_barcode"
+
+
+class InvoiceAllowanceStatus(str, enum.Enum):
+    PENDING = "pending"
+    ISSUED = "issued"
+    FAILED = "failed"
+    VOIDED = "voided"
 
 
 class ReservationStatus(str, enum.Enum):
@@ -331,6 +349,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
+    pending_member_claim: Mapped[bool] = mapped_column(Boolean, default=False)
     user_role: Mapped[UserRole] = mapped_column(
         enum_type(UserRole, "user_role"), default=UserRole.CUSTOMER
     )
@@ -362,6 +382,9 @@ class User(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     password_reset_tokens: Mapped[List["PasswordResetToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    refresh_sessions: Mapped[List["RefreshSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
     member_profile: Mapped[Optional["MemberProfile"]] = relationship(
@@ -419,6 +442,27 @@ class PasswordResetToken(Base):
     user: Mapped[User] = relationship(back_populates="password_reset_tokens")
 
 
+class RefreshSession(Base):
+    __tablename__ = "refresh_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    replaced_by_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("refresh_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="refresh_sessions")
+
+
 class MemberRosterEntry(Base):
     __tablename__ = "member_roster_entries"
     __table_args__ = (
@@ -456,6 +500,15 @@ class MemberRosterEntry(Base):
     claimed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    pending_claim_user_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    pending_claim_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
@@ -463,7 +516,12 @@ class MemberRosterEntry(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
-    claimed_user: Mapped[Optional[User]] = relationship()
+    claimed_user: Mapped[Optional[User]] = relationship(
+        foreign_keys=[claimed_user_id]
+    )
+    pending_claim_user: Mapped[Optional[User]] = relationship(
+        foreign_keys=[pending_claim_user_id]
+    )
 
 
 class MemberProfile(Base):
@@ -1604,9 +1662,22 @@ class Order(Base):
     amount_total: Mapped[int] = mapped_column(Integer)
     tax_amount: Mapped[int] = mapped_column(Integer, default=0)
     contact_email: Mapped[str] = mapped_column(String(320))
+    invoice_buyer_type: Mapped[InvoiceBuyerType] = mapped_column(
+        enum_type(InvoiceBuyerType, "invoice_buyer_type"),
+        default=InvoiceBuyerType.PERSONAL,
+    )
+    invoice_buyer_tax_id: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True
+    )
+    invoice_buyer_name: Mapped[Optional[str]] = mapped_column(
+        String(60), nullable=True
+    )
+    invoice_buyer_email: Mapped[Optional[str]] = mapped_column(
+        String(320), nullable=True
+    )
     invoice_carrier_type: Mapped[InvoiceCarrierType] = mapped_column(
         enum_type(InvoiceCarrierType, "invoice_carrier_type"),
-        default=InvoiceCarrierType.ECPAY,
+        default=InvoiceCarrierType.CLOUD,
     )
     invoice_carrier_value: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
@@ -1949,6 +2020,11 @@ class InventoryReservation(Base):
 class PaymentAttempt(Base):
     __tablename__ = "payment_attempts"
     __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_trade_no",
+            name="uq_payment_attempts_provider_trade_no",
+        ),
         CheckConstraint("amount >= 0", name="amount_nonnegative"),
         CheckConstraint(
             "(order_id IS NOT NULL AND membership_charge_id IS NULL) OR "
@@ -1966,8 +2042,11 @@ class PaymentAttempt(Base):
         nullable=True,
         index=True,
     )
+    provider: Mapped[str] = mapped_column(
+        String(20), default="ecpay", index=True
+    )
     merchant_trade_no: Mapped[str] = mapped_column(
-        String(20), unique=True, index=True
+        String(50), unique=True, index=True
     )
     provider_trade_no: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, index=True
@@ -2005,6 +2084,15 @@ class PaymentAttempt(Base):
 class Refund(Base):
     __tablename__ = "refunds"
     __table_args__ = (
+        UniqueConstraint(
+            "payment_attempt_id",
+            name="uq_refunds_payment_attempt_id",
+        ),
+        UniqueConstraint(
+            "provider",
+            "provider_refund_id",
+            name="uq_refunds_provider_refund_id",
+        ),
         CheckConstraint("amount >= 0", name="amount_nonnegative"),
         CheckConstraint(
             "(order_id IS NOT NULL AND membership_charge_id IS NULL) OR "
@@ -2022,6 +2110,18 @@ class Refund(Base):
         nullable=True,
         index=True,
     )
+    payment_attempt_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("payment_attempts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    provider: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, index=True
+    )
+    provider_refund_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    provider_response: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     amount: Mapped[int] = mapped_column(Integer)
     status: Mapped[RefundStatus] = mapped_column(
         enum_type(RefundStatus, "refund_status"),
@@ -2043,6 +2143,7 @@ class Refund(Base):
     membership_charge: Mapped[Optional[MembershipCharge]] = relationship(
         back_populates="refunds"
     )
+    payment_attempt: Mapped[Optional[PaymentAttempt]] = relationship()
     requested_by: Mapped[User] = relationship()
 
 
@@ -2054,6 +2155,12 @@ class Invoice(Base):
         ForeignKey("orders.id", ondelete="CASCADE"), unique=True, index=True
     )
     relate_number: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="ecpay", index=True)
+    payment_attempt_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("payment_attempts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     invoice_number: Mapped[Optional[str]] = mapped_column(
         String(24), nullable=True, unique=True
     )
@@ -2061,14 +2168,113 @@ class Invoice(Base):
         DateTime(timezone=True), nullable=True
     )
     random_number: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    provider_status: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, index=True
+    )
+    buyer_type: Mapped[InvoiceBuyerType] = mapped_column(
+        enum_type(InvoiceBuyerType, "invoice_record_buyer_type"),
+        default=InvoiceBuyerType.PERSONAL,
+    )
+    buyer_tax_id: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    buyer_name: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    buyer_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    carrier_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    carrier_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    sales_amount: Mapped[int] = mapped_column(Integer, default=0)
+    tax_amount: Mapped[int] = mapped_column(Integer, default=0)
+    total_amount: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[InvoiceStatus] = mapped_column(
         enum_type(InvoiceStatus, "invoice_record_status"),
         default=InvoiceStatus.PENDING,
         index=True,
     )
+    provider_request: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     provider_response: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     issued_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    voided_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    void_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    void_source: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    order: Mapped[Order] = relationship(back_populates="invoice")
+    payment_attempt: Mapped[Optional[PaymentAttempt]] = relationship()
+    items: Mapped[List["InvoiceItem"]] = relationship(
+        back_populates="invoice", cascade="all, delete-orphan"
+    )
+    allowances: Mapped[List["InvoiceAllowance"]] = relationship(
+        back_populates="invoice", cascade="all, delete-orphan"
+    )
+
+
+class InvoiceItem(Base):
+    __tablename__ = "invoice_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("unit_price >= 0", name="unit_price_nonnegative"),
+        CheckConstraint("amount >= 0", name="amount_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    invoice_id: Mapped[str] = mapped_column(
+        ForeignKey("invoices.id", ondelete="CASCADE"), index=True
+    )
+    item_name: Mapped[str] = mapped_column(String(500))
+    quantity: Mapped[int] = mapped_column(Integer)
+    unit: Mapped[str] = mapped_column(String(6), default="件")
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    tax_type: Mapped[str] = mapped_column(String(1))
+    sequence_number: Mapped[int] = mapped_column(Integer)
+
+    invoice: Mapped[Invoice] = relationship(back_populates="items")
+
+
+class InvoiceAllowance(Base):
+    __tablename__ = "invoice_allowances"
+    __table_args__ = (
+        CheckConstraint("sales_amount >= 0", name="sales_amount_nonnegative"),
+        CheckConstraint("tax_amount >= 0", name="tax_amount_nonnegative"),
+        CheckConstraint("total_amount >= 0", name="total_amount_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    invoice_id: Mapped[str] = mapped_column(
+        ForeignKey("invoices.id", ondelete="CASCADE"), index=True
+    )
+    sales_return_number: Mapped[str] = mapped_column(
+        String(50), unique=True, index=True
+    )
+    allowance_number: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, unique=True
+    )
+    allowance_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[InvoiceAllowanceStatus] = mapped_column(
+        enum_type(InvoiceAllowanceStatus, "invoice_allowance_status"),
+        default=InvoiceAllowanceStatus.PENDING,
+        index=True,
+    )
+    sales_amount: Mapped[int] = mapped_column(Integer)
+    tax_amount: Mapped[int] = mapped_column(Integer, default=0)
+    total_amount: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(Text)
+    provider_response: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    issued_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    voided_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -2078,7 +2284,37 @@ class Invoice(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
 
-    order: Mapped[Order] = relationship(back_populates="invoice")
+    invoice: Mapped[Invoice] = relationship(back_populates="allowances")
+    items: Mapped[List["InvoiceAllowanceItem"]] = relationship(
+        back_populates="allowance", cascade="all, delete-orphan"
+    )
+
+
+class InvoiceAllowanceItem(Base):
+    __tablename__ = "invoice_allowance_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint("unit_price >= 0", name="unit_price_nonnegative"),
+        CheckConstraint("amount >= 0", name="amount_nonnegative"),
+        CheckConstraint("tax_amount >= 0", name="tax_amount_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    allowance_id: Mapped[str] = mapped_column(
+        ForeignKey("invoice_allowances.id", ondelete="CASCADE"), index=True
+    )
+    invoice_item_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("invoice_items.id", ondelete="SET NULL"), nullable=True
+    )
+    item_name: Mapped[str] = mapped_column(String(500))
+    quantity: Mapped[int] = mapped_column(Integer)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    tax_amount: Mapped[int] = mapped_column(Integer, default=0)
+    tax_type: Mapped[str] = mapped_column(String(1))
+    sequence_number: Mapped[int] = mapped_column(Integer)
+
+    allowance: Mapped[InvoiceAllowance] = relationship(back_populates="items")
 
 
 class Notification(Base):

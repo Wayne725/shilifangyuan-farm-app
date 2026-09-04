@@ -10,17 +10,18 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
-import { createMembershipPayment } from "../lib/commerce";
+import { createMembershipPayment, refreshPaymentAttempt } from "../lib/commerce";
 import type {
   MemberBadge,
   MembershipCharge,
   MembershipSummary,
   Notification,
+  PaymentAttemptStatus,
   PointSummary,
   SurplusDistribution,
 } from "../lib/types";
@@ -41,6 +42,23 @@ export function AccountPage() {
   const { user, openLogin, logout } = useAuth();
   const search = useSearch({ from: "/account" });
   const queryClient = useQueryClient();
+  const confirmationStartedAt = useRef(Date.now());
+  const paymentConfirmation = useQuery({
+    queryKey: ["payment-attempt-refresh", search.attempt_id],
+    queryFn: () => refreshPaymentAttempt(search.attempt_id || ""),
+    enabled: Boolean(
+      user && search.payment === "confirming" && search.attempt_id,
+    ),
+    refetchInterval: (query) => {
+      const status = (query.state.data as PaymentAttemptStatus | undefined)
+        ?.status;
+      const elapsed = Date.now() - confirmationStartedAt.current;
+      if (status && status !== "pending" && status !== "confirming") return false;
+      if (elapsed >= 120_000) return false;
+      return elapsed < 30_000 ? 5000 : 15_000;
+    },
+    refetchIntervalInBackground: false,
+  });
   const membership = useQuery({
     queryKey: ["membership-me", user?.id],
     queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
@@ -53,6 +71,7 @@ export function AccountPage() {
         queryKey: ["membership-charges", user?.id],
         queryFn: () => apiFetch<MembershipCharge[]>("/v1/membership/charges"),
         enabled: Boolean(user),
+        refetchInterval: search.payment === "confirming" ? 15_000 : false,
       },
       {
         queryKey: ["notifications", user?.id],
@@ -84,6 +103,31 @@ export function AccountPage() {
     mutationFn: () => apiFetch("/v1/notifications/read-all", { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
   });
+  const refreshedPaymentStatus = paymentConfirmation.data?.status;
+  const storedChargeStatus = charges.data?.find(
+    (charge) => charge.id === search.membership_charge_id,
+  )?.status;
+  const displayedPaymentStatus =
+    refreshedPaymentStatus
+      && !["pending", "confirming"].includes(refreshedPaymentStatus)
+      ? refreshedPaymentStatus
+      : storedChargeStatus && storedChargeStatus !== "pending"
+        ? storedChargeStatus
+        : search.payment;
+
+  useEffect(() => {
+    confirmationStartedAt.current = Date.now();
+  }, [search.attempt_id]);
+
+  useEffect(() => {
+    if (
+      refreshedPaymentStatus
+      && !["pending", "confirming"].includes(refreshedPaymentStatus)
+    ) {
+      queryClient.invalidateQueries({ queryKey: ["membership-charges"] });
+      queryClient.invalidateQueries({ queryKey: ["membership-me"] });
+    }
+  }, [queryClient, refreshedPaymentStatus]);
 
   if (!user) {
     return (
@@ -120,12 +164,12 @@ export function AccountPage() {
         {user.user_role === "admin" && <Link to="/admin"><Sparkle size={19} />管理工作台</Link>}
       </nav>
 
-      {search.payment && (
-        <div className={`return-banner ${search.payment}`}>
+      {displayedPaymentStatus && (
+        <div className={`return-banner ${displayedPaymentStatus}`}>
           <CreditCard size={22} />
           <div>
-            <strong>{search.payment === "confirming" ? "款項確認中" : "綠界款項已返回"}</strong>
-            <span>系統正在同步社員款項狀態，稍後重新整理即可看到結果。</span>
+            <strong>{membershipPaymentTitle(displayedPaymentStatus)}</strong>
+            <span>{membershipPaymentMessage(displayedPaymentStatus)}</span>
           </div>
         </div>
       )}
@@ -160,16 +204,23 @@ export function AccountPage() {
                   <strong>{formatMoney(charge.amount)}</strong>
                 </div>
                 <span className={`order-state ${charge.status}`}>{chargeStatusLabel(charge.status)}</span>
-                {charge.status === "pending" && (
+                {charge.status === "pending" && !(
+                  displayedPaymentStatus === "confirming"
+                  && charge.id === search.membership_charge_id
+                ) && (
                   <button
                     className="button button-system"
                     type="button"
                     onClick={() => payCharge.mutate(charge.id)}
                     disabled={payCharge.isPending}
                   >
-                    綠界繳款
+                    線上繳款
                   </button>
                 )}
+                {charge.status === "pending"
+                  && displayedPaymentStatus === "confirming"
+                  && charge.id === search.membership_charge_id
+                  && <small>正在確認款項，請勿重複付款</small>}
                 {charge.status === "paid" && <small>收據 {charge.receipt_number || "產生中"}</small>}
               </article>
             ))}
@@ -223,6 +274,22 @@ export function AccountPage() {
       </div>
     </section>
   );
+}
+
+function membershipPaymentTitle(status: string): string {
+  if (status === "paid") return "款項已確認";
+  if (status === "confirming" || status === "pending") return "款項確認中";
+  if (status === "expired") return "付款時間已結束";
+  return "線上付款狀態已更新";
+}
+
+function membershipPaymentMessage(status: string): string {
+  if (status === "paid") return "款項已由金流查詢確認。";
+  if (status === "confirming" || status === "pending") {
+    return "系統正在向金流查詢，請勿重複付款；離開頁面後仍會在背景補查。";
+  }
+  if (status === "expired") return "若已扣款，系統仍會繼續補查。";
+  return "請查看下方社員款項狀態。";
 }
 
 function ExistingMemberClaimPanel({ onDone }: { onDone: () => void }) {

@@ -15,12 +15,23 @@ from ..auth import (
     membership_type_for_user,
     require_admin,
 )
+from ..config import Settings, get_settings
 from ..database import get_session
 from ..domain import DomainError, included_tax_amount, order_available_actions
 from ..integrations.notifications import (
     NotificationCommand,
     NotificationService,
     SQLAlchemyNotificationRepository,
+)
+from ..integrations.invoice_service import (
+    enqueue_invoice_adjustment_after_refund,
+    enqueue_invoice_issue,
+)
+from ..integrations.payment_service import (
+    PaymentApplicationError,
+    allow_local_refund_without_payment_attempt,
+    create_provider_aware_refund,
+    reverse_order_purchase_points,
 )
 from ..meal_pricing import price_meal_line
 from ..models import (
@@ -40,10 +51,7 @@ from ..models import (
     OrderItem,
     OrderItemOption,
     OrderKind,
-    OutboxEvent,
     PaymentStatus,
-    Refund,
-    RefundStatus,
     ReservationStatus,
     SalesChannel,
     TaxType,
@@ -364,12 +372,13 @@ async def _publish_meal_refund_notification(
     body: str,
     data: dict[str, str],
     dedupe_key: str,
+    event_type: str = "refund_completed",
 ) -> None:
     service = NotificationService(SQLAlchemyNotificationRepository(session))
     await service.publish(
         NotificationCommand(
             user_id=order.user_id,
-            event_type="refund_completed",
+            event_type=event_type,
             title=title,
             body=body,
             data=data,
@@ -634,8 +643,28 @@ async def create_meal_order(
             for item in body.items
         ),
         contact_email=body.contact_email.lower(),
+        invoice_buyer_type=body.invoice_buyer_type,
+        invoice_buyer_tax_id=(
+            body.invoice_buyer_tax_id.strip()
+            if body.invoice_buyer_tax_id
+            else None
+        ),
+        invoice_buyer_name=(
+            body.invoice_buyer_name.strip()
+            if body.invoice_buyer_name
+            else None
+        ),
+        invoice_buyer_email=(
+            str(body.invoice_buyer_email).lower()
+            if body.invoice_buyer_email
+            else None
+        ),
         invoice_carrier_type=body.invoice_carrier_type,
-        invoice_carrier_value=body.invoice_carrier_value,
+        invoice_carrier_value=(
+            body.invoice_carrier_value.strip().upper()
+            if body.invoice_carrier_value
+            else None
+        ),
         payment_status=PaymentStatus.PENDING,
         invoice_status=InvoiceStatus.NOT_ELIGIBLE,
         fulfillment_status=FulfillmentStatus.PENDING_CONFIRMATION,
@@ -694,6 +723,7 @@ async def cancel_meal_order(
     body: ActivityReview,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     order = await session.scalar(
         select(Order)
@@ -707,6 +737,7 @@ async def cancel_meal_order(
             selectinload(Order.items),
             selectinload(Order.fulfillment),
             selectinload(Order.reservations),
+            selectinload(Order.invoice),
         )
         .with_for_update()
     )
@@ -722,31 +753,54 @@ async def cancel_meal_order(
     now = datetime.now(timezone.utc)
     await _release_active_meal_reservations(session, order, now)
     if order.payment_status == PaymentStatus.PAID:
-        order.payment_status = PaymentStatus.REFUNDED
-        session.add(
-            Refund(
-                order_id=order.id,
+        try:
+            refund, refund_queued = await create_provider_aware_refund(
+                session,
+                order=order,
                 amount=order.amount_total,
-                status=RefundStatus.COMPLETED,
                 reason=body.reason or "買家於期限內取消便當預購",
                 requested_by_id=user.id,
-                completed_at=now,
+                allow_unbound_local_completion=(
+                    allow_local_refund_without_payment_attempt(settings)
+                ),
+                now=now,
             )
+        except PaymentApplicationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        order.payment_status = (
+            PaymentStatus.REFUND_PENDING
+            if refund_queued
+            else PaymentStatus.REFUNDED
         )
         await _release_paid_meal_capacity(session, order, now)
+        if not refund_queued:
+            await reverse_order_purchase_points(session, order, refund.id)
+            enqueue_invoice_adjustment_after_refund(session, order, refund)
         await _publish_meal_refund_notification(
             session,
             order,
-            title="便當退款紀錄已建立",
+            title=(
+                "便當退款申請已送出"
+                if refund_queued
+                else "便當退款紀錄已建立"
+            ),
             body=(
-                f"訂單 {order.order_number} 已建立 NT${order.amount_total} "
-                "的 Sandbox 退款紀錄；綠界 Stage 未執行真實退刷。"
+                f"訂單 {order.order_number} 已送出 NT${order.amount_total} "
+                "退款申請，待金流確認完成後會再通知。"
+                if refund_queued
+                else (
+                    f"訂單 {order.order_number} 已建立 NT${order.amount_total} "
+                    "的 Sandbox 退款紀錄。"
+                )
             ),
             data={
                 "meal_event_id": order.meal_event.id,
                 "order_id": order.id,
             },
             dedupe_key=f"meal-order-refund:{order.id}",
+            event_type=(
+                "refund_requested" if refund_queued else "refund_completed"
+            ),
         )
     else:
         order.payment_status = PaymentStatus.EXPIRED
@@ -792,7 +846,7 @@ async def admin_list_meals(
 )
 async def admin_create_meal(
     body: MealCreate,
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MealRead:
     slug = f"meal-{secrets.token_hex(6)}"
@@ -812,6 +866,16 @@ async def admin_create_meal(
         ],
     )
     session.add(meal)
+    await session.flush()
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="meal.create",
+            aggregate_type="meal",
+            aggregate_id=meal.id,
+            data={"name": meal.name},
+        )
+    )
     await session.commit()
     meal = await session.scalar(
         select(Meal)
@@ -886,6 +950,19 @@ async def admin_create_meal_event(
         ],
     )
     session.add(event)
+    await session.flush()
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="meal_event.create",
+            aggregate_type="meal_event",
+            aggregate_id=event.id,
+            data={
+                "title": event.title,
+                "offering_count": len(body.offerings),
+            },
+        )
+    )
     await session.commit()
     event = await _load_event(session, event.id)
     assert event is not None
@@ -1001,6 +1078,7 @@ async def cancel_meal_event(
     body: MealEventCancelRequest,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> MealEventRead:
     event = await _load_event(session, event_id, for_update=True)
     if event is None or event.status in {
@@ -1016,6 +1094,7 @@ async def cancel_meal_event(
                 selectinload(Order.items),
                 selectinload(Order.fulfillment),
                 selectinload(Order.reservations),
+                selectinload(Order.invoice),
             )
             .with_for_update()
         )
@@ -1043,7 +1122,6 @@ async def cancel_meal_event(
         await _release_active_meal_reservations(session, order, now)
         was_paid = order.payment_status == PaymentStatus.PAID
         if was_paid:
-            order.payment_status = PaymentStatus.REFUNDED
             await _release_paid_meal_capacity(session, order, now)
         elif order.payment_status == PaymentStatus.PENDING:
             order.payment_status = PaymentStatus.EXPIRED
@@ -1053,27 +1131,51 @@ async def cancel_meal_event(
         if order.fulfillment is not None:
             order.fulfillment.status = FulfillmentState.CANCELLED
         if was_paid:
-            session.add(
-                Refund(
-                    order_id=order.id,
+            try:
+                refund, refund_queued = await create_provider_aware_refund(
+                    session,
+                    order=order,
                     amount=order.amount_total,
-                    status=RefundStatus.COMPLETED,
                     reason=f"便當場次取消：{body.reason}",
                     requested_by_id=admin.id,
-                    completed_at=now,
+                    allow_unbound_local_completion=(
+                        allow_local_refund_without_payment_attempt(settings)
+                    ),
+                    now=now,
                 )
+            except PaymentApplicationError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            order.payment_status = (
+                PaymentStatus.REFUND_PENDING
+                if refund_queued
+                else PaymentStatus.REFUNDED
             )
+            if not refund_queued:
+                await reverse_order_purchase_points(session, order, refund.id)
+                enqueue_invoice_adjustment_after_refund(session, order, refund)
             await _publish_meal_refund_notification(
                 session,
                 order,
-                title="便當場次取消退款紀錄已建立",
+                title=(
+                    "便當場次取消退款已送出"
+                    if refund_queued
+                    else "便當場次取消退款紀錄已建立"
+                ),
                 body=(
                     f"「{event.title}」已取消，訂單 {order.order_number} "
-                    f"已建立 NT${order.amount_total} 的 Sandbox 退款紀錄；"
-                    "綠界 Stage 未執行真實退刷。"
+                    f"已送出 NT${order.amount_total} 退款申請，"
+                    "待金流確認完成後會再通知。"
+                    if refund_queued
+                    else (
+                        f"「{event.title}」已取消，訂單 {order.order_number} "
+                        f"已建立 NT${order.amount_total} 的 Sandbox 退款紀錄。"
+                    )
                 ),
                 data={"meal_event_id": event.id, "order_id": order.id},
                 dedupe_key=f"meal-event-refund:{event.id}:{order.id}",
+                event_type=(
+                    "refund_requested" if refund_queued else "refund_completed"
+                ),
             )
     session.add(
         AdminAudit(
@@ -1125,15 +1227,10 @@ async def complete_meal_event(
         order.fulfillment.status = FulfillmentState.NO_SHOW
         order.fulfillment.fulfilled_at = now
         order.fulfillment_status = FulfillmentStatus.PICKED_UP
-        if order.invoice_status != InvoiceStatus.ISSUED:
-            order.invoice_status = InvoiceStatus.PENDING
-        session.add(
-            OutboxEvent(
-                event_type="invoice.issue_requested",
-                aggregate_type="order",
-                aggregate_id=order.id,
-                payload={"order_id": order.id},
-            )
+        enqueue_invoice_issue(
+            session,
+            order,
+            trigger="legacy_meal_no_show",
         )
     event.status = MealEventStatus.COMPLETED
     session.add(
@@ -1187,22 +1284,18 @@ async def redeem_meal_pickup(
     order.fulfillment.status = FulfillmentState.PICKED_UP
     order.fulfillment.fulfilled_at = now
     order.fulfillment_status = FulfillmentStatus.PICKED_UP
-    order.invoice_status = InvoiceStatus.PENDING
-    session.add_all(
-        [
-            OutboxEvent(
-                event_type="invoice.issue_requested",
-                aggregate_type="order",
-                aggregate_id=order.id,
-                payload={"order_id": order.id},
-            ),
-            AdminAudit(
-                actor_id=admin.id,
-                action="meal_order.redeem",
-                aggregate_type="order",
-                aggregate_id=order.id,
-            ),
-        ]
+    enqueue_invoice_issue(
+        session,
+        order,
+        trigger="legacy_meal_redeemed",
+    )
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="meal_order.redeem",
+            aggregate_type="order",
+            aggregate_id=order.id,
+        )
     )
     await session.commit()
     return MealPickupRedemptionRead(

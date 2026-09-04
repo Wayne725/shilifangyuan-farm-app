@@ -4,6 +4,7 @@ import {
   CheckCircle,
   Clock,
   CreditCard,
+  FileText,
   MapPin,
   Package,
   Truck,
@@ -11,19 +12,24 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import {
   createOrderPayment,
+  refreshPaymentAttempt,
   reissueLogisticsSelection,
   shippingChannelLabels,
   temperatureLabels,
 } from "../lib/commerce";
-import { fulfillmentStatusLabel, paymentStatusLabel } from "../lib/labels";
-import type { Order } from "../lib/types";
+import {
+  fulfillmentStatusLabel,
+  invoiceStatusLabel,
+  paymentStatusLabel,
+} from "../lib/labels";
+import type { Order, PaymentAttemptStatus } from "../lib/types";
 
 const shipmentLabels: Record<string, string> = {
   draft: "待選擇物流",
@@ -39,8 +45,8 @@ const shipmentLabels: Record<string, string> = {
 export function OrdersPage() {
   const { user, openLogin } = useAuth();
   const search = useSearch({ from: "/orders" });
-  const returnResult = search.result || search.payment || search.logistics;
   const queryClient = useQueryClient();
+  const confirmationStartedAt = useRef(Date.now());
   const [selectedId, setSelectedId] = useState(search.order_id || "");
   const [cancelId, setCancelId] = useState("");
   const [cancelReason, setCancelReason] = useState("行程變更");
@@ -50,6 +56,23 @@ export function OrdersPage() {
     enabled: Boolean(user),
     refetchInterval: 5000,
   });
+  const paymentConfirmation = useQuery({
+    queryKey: ["payment-attempt-refresh", search.attempt_id],
+    queryFn: () => refreshPaymentAttempt(search.attempt_id || ""),
+    enabled: Boolean(
+      user && search.payment === "confirming" && search.attempt_id,
+    ),
+    refetchInterval: (query) => {
+      const status = (query.state.data as PaymentAttemptStatus | undefined)
+        ?.status;
+      const elapsed = Date.now() - confirmationStartedAt.current;
+      if (status && status !== "pending" && status !== "confirming") return false;
+      if (elapsed >= 120_000) return false;
+      return elapsed < 30_000 ? 5000 : 15_000;
+    },
+    refetchIntervalInBackground: false,
+  });
+  const refreshedPaymentStatus = paymentConfirmation.data?.status;
   const openPayment = useMutation({
     mutationFn: createOrderPayment,
     onSuccess: (url) => window.location.assign(url),
@@ -71,10 +94,41 @@ export function OrdersPage() {
   });
 
   useEffect(() => {
+    confirmationStartedAt.current = Date.now();
+  }, [search.attempt_id]);
+
+  useEffect(() => {
     if (!selectedId && orders.data?.[0]) setSelectedId(orders.data[0].id);
   }, [orders.data, selectedId]);
 
+  useEffect(() => {
+    if (
+      refreshedPaymentStatus
+      && !["pending", "confirming"].includes(refreshedPaymentStatus)
+    ) {
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    }
+  }, [queryClient, refreshedPaymentStatus]);
+
   const selected = orders.data?.find((order) => order.id === selectedId);
+  const storedPaymentStatus =
+    selected && selected.id === search.order_id
+      ? selected.payment_status
+      : undefined;
+  const returnResult =
+    refreshedPaymentStatus
+      && !["pending", "confirming"].includes(refreshedPaymentStatus)
+      ? refreshedPaymentStatus
+      : search.payment === "confirming"
+        && storedPaymentStatus
+        && storedPaymentStatus !== "pending"
+        ? storedPaymentStatus
+        : search.result || search.payment || search.logistics;
+  const selectedPaymentIsConfirming = Boolean(
+    selected
+      && selected.id === search.order_id
+      && returnResult === "confirming",
+  );
   const actionError =
     openPayment.error || reopenLogistics.error || cancelOrder.error;
 
@@ -84,7 +138,7 @@ export function OrdersPage() {
         <Basket size={45} weight="light" />
         <p className="eyebrow">ORDER HISTORY</p>
         <h1>登入後查看訂單進度。</h1>
-        <p>物流選店、綠界付款或配送中斷時，都能從這裡安全地繼續。</p>
+        <p>物流選店、線上付款或配送中斷時，都能從這裡安全地繼續。</p>
         <button className="button button-primary" type="button" onClick={openLogin}>帳號登入</button>
       </section>
     );
@@ -152,12 +206,34 @@ export function OrdersPage() {
               <div className="order-status-grid">
                 <StatusBlock icon={CreditCard} label="付款" value={paymentStatusLabel(selected.payment_status)} />
                 <StatusBlock icon={Package} label="履約" value={fulfillmentStatusLabel(selected.fulfillment?.status || selected.fulfillment_status)} />
+                <StatusBlock icon={FileText} label="發票" value={invoiceStatusLabel(selected.invoice_status)} />
                 <StatusBlock
                   icon={selected.fulfillment_method === "ecpay_logistics" ? Truck : MapPin}
                   label="取貨方式"
                   value={selected.fulfillment_method === "ecpay_logistics" ? "綠界物流" : selected.fulfillment?.pickup_location || "合作社取貨"}
                 />
               </div>
+
+              {selected.invoice_status !== "not_eligible" && (
+                <div className="invoice-summary-card">
+                  <FileText size={25} weight="light" />
+                  <div>
+                    <small>CLOUD INVOICE</small>
+                    <strong>{selected.invoice?.invoice_number || invoiceStatusLabel(selected.invoice_status)}</strong>
+                    <span>雲端交付，不寄送紙本發票</span>
+                  </div>
+                  <dl>
+                    <div>
+                      <dt>開立日期</dt>
+                      <dd>{selected.invoice?.invoice_date ? formatDate(selected.invoice.invoice_date) : "尚未開立"}</dd>
+                    </div>
+                    <div>
+                      <dt>交付方式</dt>
+                      <dd>{invoiceDeliveryLabel(selected)}</dd>
+                    </div>
+                  </dl>
+                </div>
+              )}
 
               {selected.shipment && (
                 <div className="shipment-card">
@@ -187,6 +263,11 @@ export function OrdersPage() {
 
               {actionError && <p className="form-error">{actionError.message}</p>}
               <div className="order-actions">
+                {selectedPaymentIsConfirming && (
+                  <small className="no-action">
+                    正在向金流確認，請勿重複付款或取消訂單。
+                  </small>
+                )}
                 {selected.shipment?.status === "selection_pending" && (
                   <button
                     className="button button-system"
@@ -198,7 +279,7 @@ export function OrdersPage() {
                     {reopenLogistics.isPending ? "準備物流頁…" : "繼續選擇物流"}
                   </button>
                 )}
-                {selected.available_actions.includes("pay") && (
+                {!selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
                   <button
                     className="button button-primary"
                     type="button"
@@ -206,10 +287,10 @@ export function OrdersPage() {
                     disabled={openPayment.isPending}
                   >
                     <CreditCard size={18} />
-                    {openPayment.isPending ? "準備付款頁…" : "前往綠界付款"}
+                    {openPayment.isPending ? "準備付款頁…" : "前往線上付款"}
                   </button>
                 )}
-                {selected.available_actions.includes("cancel") && cancelId !== selected.id && (
+                {!selectedPaymentIsConfirming && selected.available_actions.includes("cancel") && cancelId !== selected.id && (
                   <button className="button button-quiet" type="button" onClick={() => setCancelId(selected.id)}>
                     取消訂單
                   </button>
@@ -272,12 +353,21 @@ function salesChannelLabel(channel: Order["sales_channel"]): string {
   }[channel];
 }
 
+function invoiceDeliveryLabel(order: Order): string {
+  if (order.invoice_buyer_type === "company") {
+    return order.invoice_buyer_email || order.contact_email;
+  }
+  if (order.invoice_carrier_type === "mobile_barcode") return "手機條碼載具";
+  return "Email 通知";
+}
+
 function returnTitle(result: string): string {
   return {
     resume: "訂單已保存，請從這裡繼續",
-    paid: "綠界付款已完成",
-    succeeded: "綠界付款已完成",
+    paid: "線上付款已完成",
+    succeeded: "線上付款已完成",
     confirming: "付款結果確認中",
+    expired: "付款時間已結束",
     selected: "物流資料已確認",
     failed: "這次操作尚未完成",
   }[result] || "訂單狀態已更新";
@@ -286,9 +376,10 @@ function returnTitle(result: string): string {
 function returnMessage(result: string): string {
   return {
     resume: "付款或物流服務暫時未開啟，訂單不會重複建立。",
-    paid: "正在核對付款通知，狀態會自動更新。",
-    succeeded: "正在核對付款通知，狀態會自動更新。",
-    confirming: "請稍候，訂單中心會自動更新付款結果。",
+    paid: "付款已由金流查詢確認，發票將接續處理。",
+    succeeded: "付款已由金流查詢確認，發票將接續處理。",
+    confirming: "系統正在向金流查詢，請勿重複付款或取消訂單；離開頁面後仍會在背景補查。",
+    expired: "尚未確認付款；若已扣款，系統仍會繼續補查。",
     selected: "現在可以建立付款頁，完成這筆交易。",
     failed: "請查看下方狀態並重新操作。",
   }[result] || "訂單狀態已更新。";

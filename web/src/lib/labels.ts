@@ -50,3 +50,12 @@ export const fulfillmentStatusLabel = createLabeler({
   exception: "配送異常",
   cancelled: "已取消",
 });
+
+export const invoiceStatusLabel = createLabeler({
+  not_eligible: "尚未符合開立條件",
+  pending: "等待開立",
+  issued: "已開立",
+  failed: "開立失敗",
+  void_pending: "等待作廢",
+  voided: "已作廢",
+});

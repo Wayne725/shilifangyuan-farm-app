@@ -200,8 +200,9 @@ def remove_paid_quantity(
             campaign.intake_status = GroupIntakeStatus.OPEN
             campaign.confirmation_deadline = None
         else:
-            campaign.decision_status = GroupDecisionStatus.FAILED_UNMET
-            campaign.intake_status = GroupIntakeStatus.CLOSED
+            campaign.decision_status = GroupDecisionStatus.RECRUITING
+            campaign.intake_status = GroupIntakeStatus.SETTLING
+            campaign.confirmation_deadline = None
 
 
 def confirm_campaign(
@@ -293,7 +294,7 @@ def order_available_actions(
     if viewer_is_admin:
         if (
             order.payment_status == PaymentStatus.PAID
-            and order.fulfillment_status != FulfillmentStatus.PICKED_UP
+            and not order_fulfillment_is_irreversible(order)
         ):
             actions.append("refund")
         campaign_ready = (
@@ -357,6 +358,37 @@ def order_available_actions(
         ):
             actions.append("advance_shipment")
     return list(dict.fromkeys(actions))
+
+
+def order_fulfillment_is_irreversible(order: Order) -> bool:
+    fulfillment = order.__dict__.get("fulfillment")
+    shipment = (
+        fulfillment.__dict__.get("shipment")
+        if fulfillment is not None
+        else None
+    )
+    return (
+        order.fulfillment_status == FulfillmentStatus.PICKED_UP
+        or (
+            fulfillment is not None
+            and fulfillment.status
+            in {
+                FulfillmentState.PICKED_UP,
+                FulfillmentState.SHIPPED,
+                FulfillmentState.DELIVERED,
+            }
+        )
+        or (
+            shipment is not None
+            and shipment.status
+            in {
+                ShipmentStatus.CREATED,
+                ShipmentStatus.IN_TRANSIT,
+                ShipmentStatus.DELIVERED,
+                ShipmentStatus.EXCEPTION,
+            }
+        )
+    )
 
 
 def ensure_self_cancel_allowed(

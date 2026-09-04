@@ -15,7 +15,15 @@ from sqlalchemy.orm import selectinload
 from ..auth import get_optional_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
-from ..models import GroupBundle, GroupBundleItem, Product, Supplier, User, UserRole
+from ..models import (
+    AdminAudit,
+    GroupBundle,
+    GroupBundleItem,
+    Product,
+    Supplier,
+    User,
+    UserRole,
+)
 from ..schemas import (
     BundleCreate,
     BundleItemRead,
@@ -108,7 +116,7 @@ async def get_product(
 )
 async def create_product(
     body: ProductCreate,
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> Product:
     values = body.model_dump(mode="json")
@@ -121,10 +129,21 @@ async def create_product(
         )
         if supplier is None:
             raise HTTPException(status_code=422, detail="找不到已啟用的供應者")
+    admin_id = admin.id
     for _attempt in range(3):
         product = Product(slug=make_product_slug(body.name), **values)
         session.add(product)
         try:
+            await session.flush()
+            session.add(
+                AdminAudit(
+                    actor_id=admin_id,
+                    action="product.create",
+                    aggregate_type="product",
+                    aggregate_id=product.id,
+                    data={"name": product.name},
+                )
+            )
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()
@@ -149,7 +168,7 @@ async def create_product(
 async def update_product(
     product_id: str,
     body: ProductUpdate,
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> Product:
     product = await session.scalar(
@@ -178,6 +197,15 @@ async def update_product(
         )
     for field, value in updates.items():
         setattr(product, field, value)
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="product.update",
+            aggregate_type="product",
+            aggregate_id=product.id,
+            data={"changed_fields": sorted(updates)},
+        )
+    )
     try:
         await session.commit()
     except IntegrityError as exc:
@@ -240,7 +268,7 @@ async def get_bundle(
 )
 async def create_bundle(
     body: BundleCreate,
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> BundleRead:
     product_ids = list(dict.fromkeys(item.product_id for item in body.items))
@@ -265,6 +293,16 @@ async def create_bundle(
         ],
     )
     session.add(bundle)
+    await session.flush()
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="group_bundle.create",
+            aggregate_type="group_bundle",
+            aggregate_id=bundle.id,
+            data={"name": bundle.name, "item_count": len(body.items)},
+        )
+    )
     await session.commit()
     bundle = await session.scalar(
         select(GroupBundle)
@@ -284,7 +322,7 @@ router = catalog_router
 @catalog_router.post("/v1/admin/demo/reset", response_model=Message)
 async def reset_demo(
     body: DemoResetRequest,
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> Message:
@@ -298,7 +336,33 @@ async def reset_demo(
         body.confirmation, settings.demo_reset_confirmation
     ):
         raise HTTPException(status_code=403, detail="重設確認碼不正確")
+    requested_by = {"id": admin.id, "email": admin.email}
     counts = await reset_demo_data(session)
+    audit_actor_id = await session.scalar(
+        select(User.id)
+        .where(User.id == admin.id)
+        .limit(1)
+    )
+    if audit_actor_id is None:
+        audit_actor_id = await session.scalar(
+            select(User.id)
+            .where(User.user_role == UserRole.ADMIN)
+            .order_by(User.created_at)
+            .limit(1)
+        )
+    if audit_actor_id is None:
+        raise HTTPException(status_code=500, detail="展示資料缺少管理員帳號")
+    session.add(
+        AdminAudit(
+            actor_id=audit_actor_id,
+            action="demo.reset",
+            aggregate_type="system",
+            aggregate_id="demo-data",
+            reason="管理員輸入重設確認碼",
+            data={**counts, "requested_by": requested_by},
+        )
+    )
+    await session.commit()
     return Message(
         message=(
             f"展示資料已重設：{counts['products']} 項商品、"

@@ -10,10 +10,10 @@ from sqlalchemy.orm import selectinload
 import app.integrations.payment_service as payment_module
 import app.jobs as jobs_module
 from app.config import Settings
-from app.domain import order_available_actions
+from app.domain import order_available_actions, remove_paid_quantity
 from app.integrations.ecpay import CheckoutForm
 from app.integrations.invoice import InvoiceIssueResult
-from app.integrations.invoice_service import issue_picked_up_order_invoice
+from app.integrations.invoice_service import issue_paid_order_invoice
 from app.integrations.payment_service import (
     SQLAlchemyPaymentCallbackRepository,
     create_membership_payment_attempt,
@@ -23,6 +23,7 @@ from app.integrations.payment_service import (
 from app.jobs import (
     _reconcile_activities,
     _reconcile_expired_payments,
+    _reconcile_campaigns,
     _reconcile_meal_events,
     _reconcile_member_proposals,
     schedule_background_reconcile,
@@ -36,6 +37,9 @@ from app.models import (
     FulfillmentMethod,
     FulfillmentState,
     FulfillmentStatus,
+    GroupCampaign,
+    GroupDecisionStatus,
+    GroupIntakeStatus,
     InventoryReservation,
     Invoice,
     InvoiceStatus,
@@ -65,13 +69,21 @@ from app.models import (
     PaymentAttempt,
     PaymentStatus,
     Refund,
+    RefundStatus,
     ReservationStatus,
     SalesChannel,
     TaxType,
+    TargetType,
     User,
+    UserRole,
 )
 from app.routers.membership import membership_router
-from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.support import (
+    api_test_context,
+    auth_headers,
+    make_test_settings,
+    prepare_test_invoice,
+)
 
 
 class FakePaymentAdapter:
@@ -323,6 +335,118 @@ async def make_meal_order(
     database_session.add(order)
     await database_session.commit()
     return user, event, offering, order
+
+
+@pytest.mark.asyncio
+async def test_post_deadline_threshold_drop_refunds_remaining_group_orders(
+    database_session,
+) -> None:
+    now = datetime(2026, 7, 31, 8, 0, tzinfo=timezone.utc)
+    admin = User(
+        email="group-refund-admin@example.test",
+        display_name="團購管理員",
+        password_hash="test",
+        user_role=UserRole.ADMIN,
+    )
+    refunded_buyer = User(
+        email="group-refunded-buyer@example.test",
+        display_name="已退款買家",
+        password_hash="test",
+    )
+    remaining_buyer = User(
+        email="group-remaining-buyer@example.test",
+        display_name="其餘買家",
+        password_hash="test",
+    )
+    campaign = GroupCampaign(
+        target_type=TargetType.PRODUCT,
+        target_id="group-refund-product",
+        title="退款後跌破門檻團購",
+        member_price=100,
+        nonmember_price=100,
+        min_paid_quantity=2,
+        supply_cap=10,
+        per_user_cap=2,
+        paid_quantity=2,
+        reserved_quantity=0,
+        deadline=now - timedelta(minutes=1),
+        estimated_pickup_start=now + timedelta(days=1),
+        estimated_pickup_end=now + timedelta(days=2),
+        decision_status=GroupDecisionStatus.PENDING_CONFIRMATION,
+        intake_status=GroupIntakeStatus.PAUSED,
+        confirmation_deadline=now + timedelta(hours=1),
+        created_by=admin,
+    )
+    refunded_order = Order(
+        order_number="GROUP-THRESHOLD-REFUNDED",
+        order_kind=OrderKind.GROUP,
+        sales_channel=SalesChannel.GROUP,
+        group_campaign=campaign,
+        user=refunded_buyer,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=100,
+        contact_email=refunded_buyer.email,
+        payment_status=PaymentStatus.REFUNDED,
+    )
+    remaining_order = Order(
+        order_number="GROUP-THRESHOLD-REMAINING",
+        order_kind=OrderKind.GROUP,
+        sales_channel=SalesChannel.GROUP,
+        group_campaign=campaign,
+        user=remaining_buyer,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=100,
+        contact_email=remaining_buyer.email,
+        payment_status=PaymentStatus.PAID,
+    )
+    database_session.add_all([campaign, refunded_order, remaining_order])
+    await database_session.flush()
+    refunded_reservation = InventoryReservation(
+        order=refunded_order,
+        group_campaign_id=campaign.id,
+        quantity=1,
+        status=ReservationStatus.RELEASED,
+        expires_at=now,
+        released_at=now,
+    )
+    remaining_reservation = InventoryReservation(
+        order=remaining_order,
+        group_campaign_id=campaign.id,
+        quantity=1,
+        status=ReservationStatus.CONSUMED,
+        expires_at=now,
+    )
+    database_session.add_all([refunded_reservation, remaining_reservation])
+    await database_session.flush()
+    remove_paid_quantity(campaign, 1, now)
+    await database_session.commit()
+
+    changed = await _reconcile_campaigns(
+        database_session,
+        payment_settings(),
+        now,
+        100,
+    )
+
+    await database_session.refresh(campaign)
+    await database_session.refresh(remaining_order)
+    await database_session.refresh(remaining_reservation)
+    refund = await database_session.scalar(
+        select(Refund).where(Refund.order_id == remaining_order.id)
+    )
+    assert refund is not None
+    refund_event = await database_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.event_type == "refund.requested",
+            OutboxEvent.aggregate_id == refund.id,
+        )
+    )
+    assert changed == 1
+    assert campaign.decision_status == GroupDecisionStatus.FAILED_UNMET
+    assert campaign.intake_status == GroupIntakeStatus.CLOSED
+    assert remaining_order.payment_status == PaymentStatus.REFUND_PENDING
+    assert remaining_reservation.status == ReservationStatus.RELEASED
+    assert refund_event is not None
 
 
 @pytest.mark.asyncio
@@ -715,6 +839,13 @@ async def test_meal_payment_reserves_expires_releases_and_success_consumes(
     assert offering.reserved_quantity == 0
     assert offering.paid_quantity == 1
     assert order.payment_status == PaymentStatus.PAID
+    assert order.invoice_status == InvoiceStatus.PENDING
+    assert await database_session.scalar(
+        select(func.count(OutboxEvent.id)).where(
+            OutboxEvent.event_type == "invoice.issue_requested",
+            OutboxEvent.aggregate_id == order.id,
+        )
+    ) == 1
 
 
 @pytest.mark.asyncio
@@ -837,6 +968,80 @@ async def test_meal_payment_arriving_after_event_cancel_is_refunded(
     assert refund_event is not None
 
 
+@pytest.mark.parametrize(
+    ("initial_status", "invoice_number", "provider_status_uncertain"),
+    [
+        (InvoiceStatus.ISSUED, "AB12345673", False),
+        (InvoiceStatus.PENDING, None, True),
+        (InvoiceStatus.FAILED, None, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_completed_refund_queues_invoice_adjustment_even_when_issue_is_uncertain(
+    database_session,
+    initial_status,
+    invoice_number,
+    provider_status_uncertain,
+) -> None:
+    now = datetime(2026, 7, 31, 8, 0, tzinfo=timezone.utc)
+    user, _event, _offering, order = await make_meal_order(
+        database_session,
+        now=now,
+        ordering_ends_at=now + timedelta(hours=2),
+        order_number=f"MEAL-REFUND-INVOICE-{initial_status.value.upper()}",
+    )
+    order.payment_status = PaymentStatus.REFUND_PENDING
+    order.invoice_status = initial_status
+    invoice = Invoice(
+        order=order,
+        relate_number=f"INVREFUND{initial_status.value.upper()}",
+        provider="fanyu",
+        invoice_number=invoice_number,
+        status=initial_status,
+        sales_amount=119,
+        tax_amount=6,
+        total_amount=125,
+    )
+    refund = Refund(
+        order=order,
+        amount=125,
+        status=RefundStatus.PENDING,
+        reason="取消訂單",
+        requested_by_id=user.id,
+    )
+    database_session.add_all([invoice, refund])
+    await database_session.flush()
+    event = OutboxEvent(
+        event_type="refund.requested",
+        aggregate_type="refund",
+        aggregate_id=refund.id,
+        payload={"refund_id": refund.id, "order_id": order.id},
+    )
+    database_session.add(event)
+    await database_session.commit()
+
+    await jobs_module._process_refund_event(database_session, event)
+    await database_session.refresh(order)
+    await database_session.refresh(invoice)
+    adjustment = await database_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.event_type == "invoice.adjustment_required",
+            OutboxEvent.aggregate_id == invoice.id,
+        )
+    )
+
+    assert refund.status == RefundStatus.COMPLETED
+    assert order.invoice_status == InvoiceStatus.VOID_PENDING
+    assert invoice.status == InvoiceStatus.VOID_PENDING
+    assert invoice.void_source == "refund"
+    assert adjustment is not None
+    assert adjustment.payload["adjustment"] == "void"
+    assert (
+        adjustment.payload["provider_status_uncertain"]
+        is provider_status_uncertain
+    )
+
+
 @pytest.mark.asyncio
 async def test_meal_no_show_reconcile_issues_invoice(
     database_session,
@@ -889,10 +1094,15 @@ async def test_meal_no_show_reconcile_issues_invoice(
     assert invoice_event is not None
 
     class FakeInvoiceAdapter:
-        async def query_invoice(self, relate_number):
+        provider_name = "ecpay"
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request)
+
+        async def query_invoice(self, relate_number, *, buyer_type="personal"):
             return {"RtnCode": 0, "RtnMsg": "not found"}
 
-        async def issue_invoice(self, request):
+        async def issue_prepared_invoice(self, request):
             assert request.items[0].name == "時蔬豆腐便當"
             return InvoiceIssueResult(
                 relate_number=request.relate_number,
@@ -902,7 +1112,7 @@ async def test_meal_no_show_reconcile_issues_invoice(
                 raw={"RtnCode": 1, "InvoiceNo": "AB87654321"},
             )
 
-    result = await issue_picked_up_order_invoice(
+    result = await issue_paid_order_invoice(
         database_session,
         order.id,
         FakeInvoiceAdapter(),

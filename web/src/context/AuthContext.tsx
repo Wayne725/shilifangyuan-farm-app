@@ -6,13 +6,14 @@ import {
   type FormEvent,
   type ReactNode,
   useContext,
+  useEffect,
   useState,
 } from "react";
 
 import {
   apiFetch,
   clearSession,
-  readStoredUser,
+  restoreSession,
   saveSession,
 } from "../lib/api";
 import type { AuthResponse, User } from "../lib/types";
@@ -20,17 +21,27 @@ import type { AuthResponse, User } from "../lib/types";
 interface AuthContextValue {
   user: User | null;
   openLogin: () => void;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const [user, setUser] = useState<User | null>(readStoredUser);
+  const [user, setUser] = useState<User | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void restoreSession().then((session) => {
+      if (active && session) setUser(session.user);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -56,10 +67,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const logout = () => {
-    clearSession();
-    queryClient.clear();
-    setUser(null);
+  const logout = async () => {
+    try {
+      await apiFetch<void>("/v1/auth/logout", { method: "POST" });
+    } finally {
+      clearSession();
+      queryClient.clear();
+      setUser(null);
+    }
   };
 
   return (

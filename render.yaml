@@ -4,17 +4,19 @@ databases:
     region: singapore
     databaseName: shilifangyuan
     user: shilifangyuan
+    ipAllowList: []
 
 services:
   - type: web
     name: shilifangyuan-api
     branch: codex/v2-social-commerce
+    autoDeployTrigger: checksPass
     runtime: python
     plan: free
     region: singapore
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m app.startup prepare && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     envVars:
       - key: PYTHON_VERSION
@@ -25,6 +27,22 @@ services:
           property: connectionString
       - key: APP_ENV
         value: preview
+      - key: DATABASE_POOL_SIZE
+        value: "5"
+      - key: DATABASE_MAX_OVERFLOW
+        value: "5"
+      - key: DATABASE_POOL_TIMEOUT_SECONDS
+        value: "10"
+      - key: DATABASE_POOL_RECYCLE_SECONDS
+        value: "300"
+      - key: DATABASE_CONNECT_TIMEOUT_SECONDS
+        value: "10"
+      - key: DATABASE_READINESS_TIMEOUT_SECONDS
+        value: "3"
+      - key: STARTUP_MIGRATION_ATTEMPTS
+        value: "5"
+      - key: STARTUP_MIGRATION_RETRY_SECONDS
+        value: "2"
       - key: APP_BASE_URL
         value: https://shilifangyuan-api.onrender.com
       - key: WEB_BASE_URL
@@ -39,6 +57,28 @@ services:
         sync: false
       - key: DEMO_NONMEMBER_PASSWORD
         sync: false
+      - key: PAYMENT_PROVIDER
+        value: ecpay
+      - key: RAYGATE_PAYMENT_STORE_IDENTIFIER
+        sync: false
+      - key: RAYGATE_PAYMENT_KEY_HEX
+        sync: false
+      - key: RAYGATE_PAYMENT_IV_HEX
+        sync: false
+      - key: RAYGATE_PAYMENT_MERCHANT_ID
+        sync: false
+      - key: RAYGATE_PAYMENT_TERMINAL_ID
+        sync: false
+      - key: RAYGATE_PAYMENT_BASE_URL
+        sync: false
+      - key: RAYGATE_PAYMENT_ALLOWED_HOSTNAME
+        sync: false
+      - key: RAYGATE_PAYMENT_STAGE
+        value: "true"
+      - key: RAYGATE_PAYMENT_CONTRACT_VERIFIED
+        value: "false"
+      - key: RAYGATE_PAYMENT_RECONCILE_HOURS
+        value: "24"
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM_EMAIL
@@ -49,13 +89,38 @@ services:
   - type: web
     name: shilifangyuan-web
     branch: codex/v2-social-commerce
+    autoDeployTrigger: checksPass
     runtime: static
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
     staticPublishPath: ./web/dist
     envVars:
       - key: VITE_API_BASE_URL
         value: https://shilifangyuan-api.onrender.com
+      - key: VITE_APP_ENV
+        value: preview
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=(), payment=(self)
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - path: /*
+        name: X-Permitted-Cross-Domain-Policies
+        value: none
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://shilifangyuan-api.onrender.com https://*.r2.cloudflarestorage.com"

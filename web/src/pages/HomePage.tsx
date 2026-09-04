@@ -103,7 +103,8 @@ export function HomePage() {
           <DataState
             kind="error"
             title="目前無法讀取商品"
-            detail="商品服務暫時無法使用，請稍後再試。"
+            detail={products.error.message}
+            onAction={() => products.refetch()}
           />
         )}
         {products.data && products.data.length === 0 && (
@@ -154,6 +155,14 @@ export function HomePage() {
             </article>
           ))}
           {activities.isPending && user && <LoadingLines count={2} />}
+          {activities.isError && user && (
+            <DataState
+              kind="error"
+              title="活動資料暫時無法讀取"
+              detail={activities.error.message}
+              onAction={() => activities.refetch()}
+            />
+          )}
           {!user && (
             <button className="quiet-placeholder quiet-placeholder-button" type="button" onClick={openLogin}>
               <CirclesThreePlus size={26} weight="light" />

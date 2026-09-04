@@ -5,12 +5,14 @@
 ```mermaid
 flowchart LR
     web["Vite React Web"] --> api["FastAPI API"]
-    api --> auth["JWT・Email 驗證・有效會籍"]
+    api --> auth["JWT・單次 Refresh Session・Email 驗證・有效會籍"]
     api --> commerce["商品・團購・便當・訂單"]
     api --> community["入社・活動・治理"]
     api --> db[("PostgreSQL")]
     api --> r2[("Cloudflare R2")]
-    api --> ecpay["綠界金流・發票・物流"]
+    api --> payment["雷門／綠界金流 adapter"]
+    api --> logistics["綠界物流"]
+    api --> invoice["汎宇／綠界電子發票 adapter"]
     api --> outbox[("Outbox")]
     outbox --> email["Resend・MailerSend"]
     cron["GitHub Actions"] --> jobs["Reconciliation"]
@@ -50,7 +52,11 @@ fulfillment_method  cooperative_pickup | event_pickup | ecpay_logistics
 
 訂單保存商品名稱、價格、稅別與下單身分快照。物流保存於 `Shipment`，同張訂單限制單一溫層、地址及包裹。金流與物流託管頁完成後，一律由 FastAPI 重新導向 Web 的 `/orders` 或 `/account`。
 
+每筆 `PaymentAttempt` 都保存建立當下的 provider，切換全域設定後，舊交易仍由原 provider 查單與退款。雷門目前沒有主動付款通知；瀏覽器 `return_url` 只觸發 server-to-server 查單，本身不具付款效力。使用者未回站時由排程補查，並比對商店訂單號、平台交易號、金額、付款方式與商店代碼。完整狀態與安全邊界見 `docs/PAYMENT_FLOW.md`。
+
 管理財務依身分快照分成一般買家、實習社員及正式社員，僅加總已付款、未退款的商品小計，不含運費。
+
+電子發票在後端驗證付款成功後，以同一資料庫交易排入 Outbox；另保存成功付款、買方資料、實際供應商 `reqData` 與小數品項快照。Worker 開票前先以銷貨單號查詢供應商，查無資料才開立；管理端也可填原因重查並留下稽核紀錄。汎宇正式切換條件與 Email 分工見 `docs/INVOICE_FLOW.md`。
 
 ## 團購與便當
 
@@ -67,7 +73,7 @@ fulfillment_method  cooperative_pickup | event_pickup | ecpay_logistics
 ## 私密資料與外部服務
 
 - 姓名、電話、地址以版本化 AES-256-GCM 儲存。
-- R2 Bucket 不公開，PUT 簽名 URL 5 分鐘、GET 2 分鐘。
-- Payment callback 與物流 callback 驗證簽章並以 `ExternalEvent` 去重。
-- Email 先寫入 Outbox；Resend 失敗時由 MailerSend 備援。
-- `POST /internal/reconcile` 處理逾期保留、團購、活動、便當、Sandbox 退款、發票與通知。
+- R2 Bucket 不公開，PUT 簽名 URL 5 分鐘、GET 2 分鐘；通過檔頭、大小與 SHA-256 驗證後才從 pending key 搬到 verified key。
+- Payment 與物流外部事件以 `ExternalEvent` 去重；雷門付款以回跳立即查單、前端短暫補查與背景 reconciliation 收斂狀態。
+- Email 先寫入 Outbox，驗證碼與重設憑證加密保存；Resend 失敗時可由 MailerSend 備援。
+- `POST /internal/reconcile` 處理逾期保留、付款查單、團購、活動、便當、provider 退款、發票與通知。

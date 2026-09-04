@@ -1,9 +1,15 @@
 import type { AuthResponse } from "./types";
+import { fetchWithTimeout, RequestTimeoutError } from "./http";
 
-const accessTokenKey = "slf_access_token";
-const refreshTokenKey = "slf_refresh_token";
-const userKey = "slf_user";
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+let accessToken: string | null = null;
+let refreshPromise: Promise<AuthResponse | null> | null = null;
+
+if (typeof window !== "undefined") {
+  localStorage.removeItem("slf_access_token");
+  localStorage.removeItem("slf_refresh_token");
+  localStorage.removeItem("slf_user");
+}
 
 export class ApiError extends Error {
   status: number;
@@ -15,30 +21,77 @@ export class ApiError extends Error {
 }
 
 export function getAccessToken(): string | null {
-  return localStorage.getItem(accessTokenKey);
+  return accessToken;
 }
 
 export function saveSession(session: AuthResponse): void {
-  localStorage.setItem(accessTokenKey, session.access_token);
-  localStorage.setItem(refreshTokenKey, session.refresh_token);
-  localStorage.setItem(userKey, JSON.stringify(session.user));
+  accessToken = session.access_token;
 }
 
 export function clearSession(): void {
-  localStorage.removeItem(accessTokenKey);
-  localStorage.removeItem(refreshTokenKey);
-  localStorage.removeItem(userKey);
+  accessToken = null;
 }
 
-export function readStoredUser(): AuthResponse["user"] | null {
-  const value = localStorage.getItem(userKey);
-  if (!value) return null;
+function apiUrl(path: string): string {
+  return apiBaseUrl && path.startsWith("/") ? `${apiBaseUrl}${path}` : path;
+}
+
+async function requestApi(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
   try {
-    return JSON.parse(value) as AuthResponse["user"];
-  } catch {
-    clearSession();
-    return null;
+    return await fetchWithTimeout(apiUrl(path), {
+      ...init,
+      credentials: "include",
+    });
+  } catch (error) {
+    if (init.signal?.aborted) throw error;
+    const message = error instanceof RequestTimeoutError
+      ? "後端服務回應逾時，可能正在重新啟動，請稍後重試。"
+      : "目前無法連上後端服務，請稍後重試。";
+    throw new ApiError(503, message);
   }
+}
+
+async function errorFromResponse(response: Response): Promise<ApiError> {
+  let message = "連線失敗，請稍後再試";
+  try {
+    const body = (await response.json()) as {
+      detail?: string | Array<{ msg?: string }>;
+    };
+    if (typeof body.detail === "string") message = body.detail;
+    if (Array.isArray(body.detail)) {
+      message = body.detail.map((item) => item.msg).filter(Boolean).join("、");
+    }
+  } catch {
+    // Response is not JSON.
+  }
+  return new ApiError(response.status, message);
+}
+
+export async function restoreSession(): Promise<AuthResponse | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const response = await requestApi("/v1/auth/refresh", {
+        method: "POST",
+      });
+      if (!response.ok) {
+        clearSession();
+        return null;
+      }
+      const session = (await response.json()) as AuthResponse;
+      saveSession(session);
+      return session;
+    } catch {
+      clearSession();
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
 }
 
 export async function apiFetch<T>(
@@ -52,34 +105,45 @@ export async function apiFetch<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const url = apiBaseUrl && path.startsWith("/") ? `${apiBaseUrl}${path}` : path;
-  const response = await fetch(url, { ...init, headers });
-  if (!response.ok) {
-    let message = "連線失敗，請稍後再試";
-    try {
-      const body = (await response.json()) as {
-        detail?: string | Array<{ msg?: string }>;
-      };
-      if (typeof body.detail === "string") message = body.detail;
-      if (Array.isArray(body.detail)) {
-        message = body.detail.map((item) => item.msg).filter(Boolean).join("、");
-      }
-    } catch {
-      // Response is not JSON.
+  const request = () => requestApi(path, {
+    ...init,
+    headers,
+  });
+  let response = await request();
+  const cannotRefresh = new Set([
+    "/v1/auth/login",
+    "/v1/auth/refresh",
+    "/v1/auth/register",
+    "/v1/auth/register-existing-member",
+    "/v1/auth/verify-email",
+    "/v1/auth/resend-verification",
+    "/v1/auth/forgot-password",
+    "/v1/auth/reset-password",
+  ]);
+  if (response.status === 401 && !cannotRefresh.has(path)) {
+    const restored = await restoreSession();
+    if (restored) {
+      headers.set("Authorization", `Bearer ${restored.access_token}`);
+      response = await request();
     }
+  }
+  if (!response.ok) {
     if (response.status === 401) clearSession();
-    throw new ApiError(response.status, message);
+    throw await errorFromResponse(response);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
 export async function downloadApiFile(path: string, filename: string): Promise<void> {
-  const headers = new Headers();
-  const token = getAccessToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const url = apiBaseUrl && path.startsWith("/") ? `${apiBaseUrl}${path}` : path;
-  const response = await fetch(url, { headers });
+  const request = () => {
+    const headers = new Headers();
+    const token = getAccessToken();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    return requestApi(path, { headers });
+  };
+  let response = await request();
+  if (response.status === 401 && await restoreSession()) response = await request();
   if (!response.ok) throw new ApiError(response.status, "報表下載失敗");
   const objectUrl = URL.createObjectURL(await response.blob());
   const anchor = document.createElement("a");

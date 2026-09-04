@@ -4,7 +4,7 @@ import hmac
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -25,6 +25,11 @@ from ..integrations.notifications import (
     NotificationCommand,
     NotificationService,
     SQLAlchemyNotificationRepository,
+)
+from ..integrations.payment_service import (
+    PaymentApplicationError,
+    allow_local_refund_without_payment_attempt,
+    create_provider_aware_refund,
 )
 from ..member_claims import (
     MemberClaimError,
@@ -52,11 +57,10 @@ from ..models import (
     MembershipStatus,
     MembershipType,
     OutboxEvent,
-    Refund,
-    RefundStatus,
     User,
     new_id,
 )
+from ..rate_limit import DOCUMENT_UPLOAD_RULE, client_key, enforce
 from ..schemas import (
     ExistingMemberClaimRequest,
     MemberDirectoryRead,
@@ -89,6 +93,19 @@ def _aware(value: datetime) -> datetime:
 
 def _aware_optional(value: Optional[datetime]) -> Optional[datetime]:
     return _aware(value) if value is not None else None
+
+
+def _ensure_user_can_apply(user: User) -> None:
+    membership = user.__dict__.get("membership")
+    if membership is not None and membership.status in {
+        MembershipStatus.TRAINEE,
+        MembershipStatus.ACTIVE,
+        MembershipStatus.SUSPENDED,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="此帳號已有會籍，無法重複提出入社申請",
+        )
 
 
 def _document_response(
@@ -302,6 +319,7 @@ async def _save_profile_and_application(
     body: MembershipApplicationSubmit,
     settings: Settings,
 ) -> MembershipApplication:
+    _ensure_user_can_apply(user)
     application = await _application_for_user(
         session,
         user.id,
@@ -401,6 +419,15 @@ async def _ensure_membership_charges(
         )
         session.add(membership)
         await session.flush()
+    elif membership.status in {
+        MembershipStatus.TRAINEE,
+        MembershipStatus.ACTIVE,
+        MembershipStatus.SUSPENDED,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="此帳號已有會籍，無法重複建立入社費用",
+        )
     elif membership.application_id is None:
         membership.application_id = application.id
     today = date.today()
@@ -611,22 +638,32 @@ async def withdraw_application(
         raise HTTPException(status_code=409, detail="會籍啟用後不可撤回申請")
     now = datetime.now(timezone.utc)
     refunded_amount = 0
+    pending_refund_amount = 0
     if membership is not None:
         for charge in membership.charges:
             if charge.status == MembershipChargeStatus.PAID:
                 refunded_amount += charge.amount
-                charge.status = MembershipChargeStatus.REFUNDED
-                charge.refunded_at = now
-                session.add(
-                    Refund(
-                        membership_charge_id=charge.id,
+                try:
+                    _, refund_queued = await create_provider_aware_refund(
+                        session,
+                        membership_charge=charge,
                         amount=charge.amount,
-                        status=RefundStatus.COMPLETED,
                         reason=body.reason or "入社申請啟用前撤回",
                         requested_by_id=user.id,
-                        completed_at=now,
+                        allow_unbound_local_completion=(
+                            allow_local_refund_without_payment_attempt(settings)
+                        ),
+                        now=now,
                     )
-                )
+                except PaymentApplicationError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                if refund_queued:
+                    pending_refund_amount += charge.amount
+                    charge.status = MembershipChargeStatus.REFUND_PENDING
+                    charge.refunded_at = None
+                else:
+                    charge.status = MembershipChargeStatus.REFUNDED
+                    charge.refunded_at = now
             elif charge.status == MembershipChargeStatus.PENDING:
                 charge.status = MembershipChargeStatus.WAIVED
         if membership.status == MembershipStatus.PENDING_PAYMENT:
@@ -636,17 +673,28 @@ async def withdraw_application(
     application.status = MembershipApplicationStatus.WITHDRAWN
     application.review_reason = body.reason
     if refunded_amount:
+        refund_pending = pending_refund_amount > 0
         service = NotificationService(
             SQLAlchemyNotificationRepository(session)
         )
         await service.publish(
             NotificationCommand(
                 user_id=user.id,
-                event_type="membership_refund_completed",
-                title="入社申請退款紀錄已建立",
+                event_type=(
+                    "membership_refund_requested"
+                    if refund_pending
+                    else "membership_refund_completed"
+                ),
+                title=(
+                    "入社申請退款已送出"
+                    if refund_pending
+                    else "入社申請退款紀錄已建立"
+                ),
                 body=(
-                    f"已建立 NT${refunded_amount} 的 Sandbox 退款紀錄；"
-                    "綠界 Stage 未執行真實退刷。"
+                    f"已送出 NT${pending_refund_amount} 的退款申請，"
+                    "待金流確認完成後會再通知。"
+                    if refund_pending
+                    else f"已建立 NT${refunded_amount} 的 Sandbox 退款紀錄。"
                 ),
                 data={"membership_application_id": application.id},
                 email=user.email,
@@ -686,10 +734,16 @@ async def list_my_documents(
 )
 async def create_document_upload_url(
     body: MembershipDocumentUploadRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     storage=Depends(get_document_storage),
 ) -> MembershipDocumentUploadRead:
+    _ensure_user_can_apply(user)
+    enforce(
+        client_key(request, "membership-document-upload", user.id),
+        DOCUMENT_UPLOAD_RULE,
+    )
     application = await _application_for_user(
         session,
         user.id,
@@ -858,6 +912,8 @@ async def confirm_document_upload(
         MembershipApplicationStatus.NEEDS_SUPPLEMENT,
     }:
         raise HTTPException(status_code=409, detail="此申請目前不可確認證件")
+    if document.status != MembershipDocumentStatus.PENDING_UPLOAD:
+        raise HTTPException(status_code=409, detail="此證件不在待確認狀態")
     if document.checksum_sha256 and not hmac.compare_digest(
         document.checksum_sha256.lower(),
         body.checksum_sha256.lower(),
@@ -876,6 +932,7 @@ async def confirm_document_upload(
     except IntegrationError as exc:
         raise HTTPException(status_code=409, detail="證件上傳驗證失敗") from exc
     document.status = MembershipDocumentStatus.CONFIRMED
+    document.object_key = head.object_key
     document.checksum_sha256 = head.sha256
     document.confirmed_at = datetime.now(timezone.utc)
     await session.commit()
@@ -976,6 +1033,11 @@ async def claim_existing_membership(
             raise HTTPException(
                 status_code=409,
                 detail="此社員名冊紀錄已由其他帳號認領",
+            ) from exc
+        if exc.code == "pending":
+            raise HTTPException(
+                status_code=409,
+                detail="此社員名冊紀錄正等待另一個帳號完成 Email 驗證",
             ) from exc
         if exc.code == "user_has_membership":
             raise HTTPException(
@@ -1629,6 +1691,7 @@ async def return_share_capital(
     body: MembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     if not body.reason:
         raise HTTPException(status_code=422, detail="請填寫返還原因")
@@ -1651,26 +1714,39 @@ async def return_share_capital(
     if charge is None:
         raise HTTPException(status_code=409, detail="沒有可返還的已繳股金")
     now = datetime.now(timezone.utc)
-    charge.status = MembershipChargeStatus.REFUNDED
-    charge.refunded_at = now
-    refund = Refund(
-        membership_charge_id=charge.id,
-        amount=charge.amount,
-        status=RefundStatus.COMPLETED,
-        reason=body.reason,
-        requested_by_id=admin.id,
-        completed_at=now,
+    try:
+        refund, refund_queued = await create_provider_aware_refund(
+            session,
+            membership_charge=charge,
+            amount=charge.amount,
+            reason=body.reason,
+            requested_by_id=admin.id,
+            allow_unbound_local_completion=(
+                allow_local_refund_without_payment_attempt(settings)
+            ),
+            now=now,
+        )
+    except PaymentApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    charge.status = (
+        MembershipChargeStatus.REFUND_PENDING
+        if refund_queued
+        else MembershipChargeStatus.REFUNDED
     )
+    charge.refunded_at = None if refund_queued else now
     session.add_all(
         [
-            refund,
             AdminAudit(
                 actor_id=admin.id,
                 action="membership.share_capital_return",
                 aggregate_type="membership",
                 aggregate_id=membership.id,
                 reason=body.reason,
-                data={"amount": charge.amount},
+                data={
+                    "amount": charge.amount,
+                    "provider": refund.provider,
+                    "refund_status": refund.status.value,
+                },
             ),
         ]
     )

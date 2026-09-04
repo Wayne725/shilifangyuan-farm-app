@@ -496,6 +496,8 @@ def _build_demo_supplier(
 
 async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
     settings = get_settings()
+    if settings.environment.strip().lower() == "production":
+        raise RuntimeError("production 環境禁止建立或同步 Demo 資料")
     now = datetime.now(timezone.utc)
     existing = await session.scalar(select(User.id).limit(1))
     if existing is not None:
@@ -1691,29 +1693,41 @@ async def reset_demo_data(session: AsyncSession) -> dict[str, int]:
                 "production",
             }:
                 raise
-    merchant_trade_numbers = list(
-        await session.scalars(select(PaymentAttempt.merchant_trade_no))
-    )
-    existing_tombstones = set(
-        await session.scalars(
-            select(ExternalEvent.external_event_key).where(
-                ExternalEvent.provider == "ecpay_reset",
-                ExternalEvent.external_event_key.in_(merchant_trade_numbers),
+    payment_references = [
+        (provider, merchant_trade_no)
+        for provider, merchant_trade_no in (
+            await session.execute(
+                select(
+                    PaymentAttempt.provider,
+                    PaymentAttempt.merchant_trade_no,
+                )
             )
-        )
-    )
+        ).all()
+    ]
+    reset_providers = {f"{provider}_reset" for provider, _ in payment_references}
+    existing_tombstones = {
+        (provider, external_event_key)
+        for provider, external_event_key in (
+            await session.execute(
+                select(
+                    ExternalEvent.provider,
+                    ExternalEvent.external_event_key,
+                ).where(ExternalEvent.provider.in_(reset_providers))
+            )
+        ).all()
+    }
     tombstone_time = datetime.now(timezone.utc)
     session.add_all(
         ExternalEvent(
-            provider="ecpay_reset",
+            provider=f"{provider}_reset",
             external_event_key=merchant_trade_no,
             event_type="payment_tombstone",
             payload={"merchant_trade_no": merchant_trade_no},
             processed=True,
             processed_at=tombstone_time,
         )
-        for merchant_trade_no in merchant_trade_numbers
-        if merchant_trade_no not in existing_tombstones
+        for provider, merchant_trade_no in payment_references
+        if (f"{provider}_reset", merchant_trade_no) not in existing_tombstones
     )
     await session.flush()
     tables = [

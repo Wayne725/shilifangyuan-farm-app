@@ -8,12 +8,18 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import {
+  defaultInvoicePreference,
+  InvoicePreferenceFields,
+  InvoicePreferenceSummary,
+  invoicePreferenceIsValid,
+} from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney, resolveAsset } from "../lib/api";
-import { beginMealCheckout } from "../lib/commerce";
+import { beginMealCheckout, invoicePreferencePayload } from "../lib/commerce";
 import { mealEventStatusLabel } from "../lib/labels";
 import type {
   MealEvent,
@@ -43,6 +49,9 @@ export function MealEventPage() {
   const { user, openLogin } = useAuth();
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [selections, setSelections] = useState<SelectionState>({});
+  const [invoicePreference, setInvoicePreference] = useState(
+    () => defaultInvoicePreference(user?.email || ""),
+  );
   const event = useQuery({
     queryKey: ["meal-event", eventId],
     queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
@@ -71,17 +80,29 @@ export function MealEventPage() {
     .map((item) => `${item.offering_id}:${item.quantity}:${[...item.option_ids].sort().join(",")}`)
     .join("|");
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey],
+    queryKey: ["meal-quote", eventId, itemKey, invoicePreference],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
-      body: JSON.stringify({ items, contact_email: user?.email || "preview@example.com", invoice_carrier_type: "ecpay" }),
+      body: JSON.stringify({
+        items,
+        contact_email: user?.email || "preview@example.com",
+        ...invoicePreferencePayload(invoicePreference),
+      }),
     }),
-    enabled: items.length > 0 && selectionsReady,
+    enabled:
+      items.length > 0 &&
+      selectionsReady &&
+      invoicePreferenceIsValid(invoicePreference),
   });
   const checkout = useMutation({
     mutationFn: () => {
       if (!user) throw new Error("請先登入");
-      return beginMealCheckout({ eventId, items, contactEmail: user.email });
+      return beginMealCheckout({
+        eventId,
+        items,
+        contactEmail: user.email,
+        invoicePreference,
+      });
     },
     onSuccess: (outcome) => {
       if (outcome.kind === "redirect") return window.location.assign(outcome.url);
@@ -90,6 +111,13 @@ export function MealEventPage() {
     },
   });
 
+  useEffect(() => {
+    if (!user?.email) return;
+    setInvoicePreference((current) =>
+      current.buyerEmail ? current : { ...current, buyerEmail: user.email },
+    );
+  }, [user?.email]);
+
   if (event.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (event.isError || !event.data) {
     return <section className="offer-page"><DataState kind="error" title="餐期資料無法讀取" detail={event.error?.message || "找不到這個餐期"} /></section>;
@@ -97,7 +125,11 @@ export function MealEventPage() {
 
   const mealEvent = event.data;
   const firstImage = activeOfferings.find((offering) => offering.image_url)?.image_url;
-  const canOrder = mealEvent.status === "published" && items.length > 0 && selectionsReady;
+  const canOrder =
+    mealEvent.status === "published" &&
+    items.length > 0 &&
+    selectionsReady &&
+    invoicePreferenceIsValid(invoicePreference);
 
   const changeQuantity = (offeringId: string, next: number, maximum: number) => {
     setQuantities((current) => ({ ...current, [offeringId]: Math.max(0, Math.min(next, maximum, 99)) }));
@@ -186,6 +218,11 @@ export function MealEventPage() {
               );
             })}
           </div>
+          <InvoicePreferenceFields
+            onChange={setInvoicePreference}
+            sectionNumber="02"
+            value={invoicePreference}
+          />
         </div>
 
         <aside className="offer-summary meal-summary">
@@ -203,13 +240,14 @@ export function MealEventPage() {
                 <dd>{formatMoney(item.subtotal)}</dd>
               </div>
             ))}
+            <InvoicePreferenceSummary value={invoicePreference} />
             <div className="offer-total"><dt>合計</dt><dd>{formatMoney(quote.data?.amount_total || 0)}</dd></div>
           </dl>
           {!user ? (
             <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後預訂</button>
           ) : (
             <button className="button button-system full-width" type="button" disabled={!canOrder || !quote.data || checkout.isPending} onClick={() => checkout.mutate()}>
-              {checkout.isPending ? "建立餐點訂單中…" : "預訂並前往綠界付款"}
+              {checkout.isPending ? "建立餐點訂單中…" : "預訂並前往線上付款"}
             </button>
           )}
           {checkout.isError && <p className="form-error">{checkout.error.message}</p>}

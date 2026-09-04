@@ -1,4 +1,4 @@
-import { ArrowRight, Basket, Plus } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowRight, Basket, Plus } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 
 import { formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
@@ -76,10 +76,14 @@ export function DataState({
   title,
   detail,
   kind = "empty",
+  actionLabel = "重新連線",
+  onAction,
 }: {
   title: string;
   detail: string;
   kind?: "empty" | "error";
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
   return (
     <div className={`data-state ${kind}`}>
@@ -87,6 +91,12 @@ export function DataState({
       <div>
         <h3>{title}</h3>
         <p>{detail}</p>
+        {onAction && (
+          <button className="data-state-action" type="button" onClick={onAction}>
+            <ArrowClockwise size={15} />
+            {actionLabel}
+          </button>
+        )}
       </div>
     </div>
   );

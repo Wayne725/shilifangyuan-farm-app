@@ -21,6 +21,8 @@ from .models import (
     FulfillmentState,
     GroupDecisionStatus,
     GroupIntakeStatus,
+    InvoiceAllowanceStatus,
+    InvoiceBuyerType,
     InvoiceCarrierType,
     InvoiceStatus,
     MealEventStatus,
@@ -81,6 +83,7 @@ class RegisterRequest(BaseModel):
 class ExistingMemberRegistrationRequest(BaseModel):
     member_number: str = Field(min_length=1, max_length=32)
     legal_name: str = Field(min_length=1, max_length=80)
+    display_name: str = Field(min_length=1, max_length=80)
     email: EmailStr
     phone: str = Field(min_length=8, max_length=24)
     password: str = Field(min_length=8, max_length=128)
@@ -119,6 +122,7 @@ class MemberRosterEntryRead(ApiModel):
 
 
 class VerifyEmailRequest(BaseModel):
+    email: EmailStr
     token: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
@@ -140,13 +144,8 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
 class TokenResponse(ApiModel):
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
     user: UserRead
 
@@ -479,6 +478,64 @@ class OrderLineInput(BaseModel):
     quantity: int = Field(ge=1, le=999)
 
 
+def is_taiwan_tax_id(value: str) -> bool:
+    if not re.fullmatch(r"[0-9]{8}", value):
+        return False
+    weights = (1, 2, 1, 2, 1, 2, 4, 1)
+    checksum = sum(
+        sum(divmod(int(digit) * weight, 10))
+        for digit, weight in zip(value, weights)
+    )
+    return checksum % 10 == 0 or (
+        value[6] == "7" and (checksum + 1) % 10 == 0
+    )
+
+
+class InvoicePreferenceInput(BaseModel):
+    invoice_buyer_type: InvoiceBuyerType = InvoiceBuyerType.PERSONAL
+    invoice_buyer_tax_id: Optional[str] = Field(default=None, max_length=10)
+    invoice_buyer_name: Optional[str] = Field(default=None, max_length=60)
+    invoice_buyer_email: Optional[EmailStr] = Field(default=None, max_length=80)
+    invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.CLOUD
+    invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_invoice_preference(self) -> "InvoicePreferenceInput":
+        if self.invoice_buyer_type == InvoiceBuyerType.COMPANY:
+            if not is_taiwan_tax_id((self.invoice_buyer_tax_id or "").strip()):
+                raise ValueError("公司發票統一編號格式不正確")
+            if not (self.invoice_buyer_name or "").strip():
+                raise ValueError("公司發票必須填寫公司名稱")
+            if self.invoice_buyer_email is None:
+                raise ValueError("公司發票必須填寫買方 Email")
+        elif any(
+            value is not None and str(value).strip()
+            for value in (
+                self.invoice_buyer_tax_id,
+                self.invoice_buyer_name,
+            )
+        ):
+            raise ValueError("個人發票不可帶入公司統編資料")
+
+        notification_email = str(
+            self.invoice_buyer_email or getattr(self, "contact_email", "")
+        ).strip()
+        if len(notification_email) > 80:
+            raise ValueError("發票通知 Email 不可超過 80 字元")
+        if (
+            self.invoice_carrier_type == InvoiceCarrierType.CLOUD
+            and len(notification_email) > 64
+        ):
+            raise ValueError("Email 會員載具不可超過 64 字元")
+        if self.invoice_carrier_type == InvoiceCarrierType.MOBILE_BARCODE:
+            barcode = (self.invoice_carrier_value or "").strip().upper()
+            if not re.fullmatch(r"/[0-9A-Z+\-.]{7}", barcode):
+                raise ValueError("手機條碼格式不正確")
+        elif self.invoice_carrier_value:
+            raise ValueError("雲端發票不需要載具號碼")
+        return self
+
+
 class OrderQuoteRequest(BaseModel):
     items: List[OrderLineInput] = Field(min_length=1, max_length=100)
 
@@ -499,20 +556,16 @@ class OrderQuoteRead(ApiModel):
     items: List[OrderQuoteLine]
 
 
-class OrderCreate(BaseModel):
+class OrderCreate(InvoicePreferenceInput):
     items: List[OrderLineInput] = Field(min_length=1, max_length=100)
     contact_email: EmailStr
-    invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
-    invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
     pickup_location_id: Optional[str] = None
 
 
-class GroupJoinRequest(BaseModel):
+class GroupJoinRequest(InvoicePreferenceInput):
     quantity: int = Field(ge=1, le=999)
     contact_email: EmailStr
-    invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
-    invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
     pickup_location_id: Optional[str] = None
     shipping_channel: Optional[ShippingChannel] = None
@@ -575,6 +628,26 @@ class OrderItemRead(ApiModel):
     tax_type: TaxType
 
 
+class InvoiceRead(ApiModel):
+    id: str
+    provider: str
+    relate_number: str
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[datetime] = None
+    status: InvoiceStatus
+    provider_status: Optional[str] = None
+    buyer_type: InvoiceBuyerType
+    buyer_tax_id: Optional[str] = None
+    buyer_name: Optional[str] = None
+    buyer_email: Optional[EmailStr] = None
+    sales_amount: int
+    tax_amount: int
+    total_amount: int
+    issued_at: Optional[datetime] = None
+    voided_at: Optional[datetime] = None
+    void_reason: Optional[str] = None
+
+
 class OrderRead(ApiModel):
     id: str
     order_number: str
@@ -587,6 +660,10 @@ class OrderRead(ApiModel):
     amount_total: int
     tax_amount: int = 0
     contact_email: EmailStr
+    invoice_buyer_type: InvoiceBuyerType
+    invoice_buyer_tax_id: Optional[str] = None
+    invoice_buyer_name: Optional[str] = None
+    invoice_buyer_email: Optional[EmailStr] = None
     invoice_carrier_type: InvoiceCarrierType
     fulfillment_status: FulfillmentStatus
     payment_status: PaymentStatus
@@ -599,6 +676,7 @@ class OrderRead(ApiModel):
     fulfillment: Optional["OrderFulfillmentRead"] = None
     shipment: Optional["ShipmentRead"] = None
     meal_event: Optional["MealEventSummary"] = None
+    invoice: Optional[InvoiceRead] = None
 
 
 class CancelRequest(BaseModel):
@@ -1087,11 +1165,9 @@ class MealOrderLineInput(BaseModel):
     option_ids: List[str] = Field(default_factory=list, max_length=50)
 
 
-class MealOrderCreate(BaseModel):
+class MealOrderCreate(InvoicePreferenceInput):
     items: List[MealOrderLineInput] = Field(min_length=1, max_length=20)
     contact_email: EmailStr
-    invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.ECPAY
-    invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
 
 
 class MealOptionSelectionRead(ApiModel):
