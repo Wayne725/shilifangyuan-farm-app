@@ -1376,11 +1376,7 @@ async def _process_invoice_event(
                 "order_id": order.id,
                 "invoice_number": result.invoice_number,
             },
-            email=(
-                None
-                if getattr(adapter, "provider_name", "ecpay") == "fanyu"
-                else order.contact_email
-            ),
+            email=order.invoice_buyer_email or order.contact_email,
             dedupe_key="invoice:{}".format(result.relate_number),
         )
     )

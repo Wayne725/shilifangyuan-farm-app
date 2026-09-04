@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+import app.jobs as jobs_module
 from app.config import Settings
 from app.integrations.ecpay import build_check_mac_value
 from app.integrations.common import (
@@ -77,6 +78,7 @@ from app.models import (
     OrderFulfillment,
     OrderItem,
     OrderKind,
+    OutboxEvent,
     PaymentAttempt,
     PaymentStatus,
     Product,
@@ -170,6 +172,64 @@ async def make_regular_order(database_session):
     database_session.add(order)
     await database_session.commit()
     return user, product, order
+
+
+@pytest.mark.asyncio
+async def test_fanyu_invoice_queues_platform_email_fallback(
+    database_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.PENDING
+    event = OutboxEvent(
+        event_type="invoice.issue_requested",
+        aggregate_type="order",
+        aggregate_id=order.id,
+        payload={"order_id": order.id},
+    )
+    database_session.add(event)
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request, provider="fanyu")
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            return {"RtnCode": 0, "RtnMsg": "not found"}
+
+        async def issue_prepared_invoice(self, request):
+            return InvoiceIssueResult(
+                relate_number=request.relate_number,
+                invoice_number="AB12345679",
+                invoice_date="2026-09-04 22:23:50",
+                random_number="2162",
+                raw={"invNo": "AB12345679"},
+            )
+
+    monkeypatch.setattr(
+        jobs_module,
+        "invoice_adapter_from_settings",
+        lambda _settings: InvoiceAdapter(),
+    )
+
+    await jobs_module._process_invoice_event(
+        database_session,
+        make_test_settings(),
+        event,
+    )
+
+    email_event = await database_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.event_type == "send_email",
+            OutboxEvent.aggregate_id == user.id,
+        )
+    )
+    assert email_event is not None
+    assert email_event.payload["to_email"] == order.contact_email
+    assert email_event.payload["event_type"] == "invoice_issued"
 
 
 def signed_payment_callback(attempt, payment_date, simulate_paid="0"):
