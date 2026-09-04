@@ -23,7 +23,7 @@ const navItems = [
 
 export function AppShell() {
   const { itemCount } = useCommerce();
-  const { user, openLogin, logout } = useAuth();
+  const { user, isAuthReady, openLogin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
@@ -75,9 +75,14 @@ export function AppShell() {
               <span>{user.display_name}</span>
             </Link>
           ) : (
-            <button className="account-button" type="button" onClick={openLogin}>
+            <button
+              className="account-button"
+              type="button"
+              onClick={openLogin}
+              disabled={!isAuthReady}
+            >
               <SignIn size={20} weight="light" />
-              <span>帳號登入</span>
+              <span>{isAuthReady ? "帳號登入" : "確認登入中…"}</span>
             </button>
           )}
           <button
@@ -129,12 +134,13 @@ export function AppShell() {
           ) : (
             <button
               type="button"
+              disabled={!isAuthReady}
               onClick={() => {
                 openLogin();
                 setMobileOpen(false);
               }}
             >
-              帳號登入
+              {isAuthReady ? "帳號登入" : "確認登入中…"}
             </button>
           )}
         </nav>

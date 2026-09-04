@@ -19,6 +19,9 @@ const styles = await readFile(new URL("../web/src/styles.css", import.meta.url),
 const shared = await readFile(new URL("../web/src/components/Shared.tsx", import.meta.url), "utf8");
 const authFlows = await readFile(new URL("../web/src/pages/AuthFlowPages.tsx", import.meta.url), "utf8");
 const invoiceFields = await readFile(new URL("../web/src/components/InvoicePreferenceFields.tsx", import.meta.url), "utf8");
+const authContext = await readFile(new URL("../web/src/context/AuthContext.tsx", import.meta.url), "utf8");
+const ordersPage = await readFile(new URL("../web/src/pages/OrdersPage.tsx", import.meta.url), "utf8");
+const accountPage = await readFile(new URL("../web/src/pages/AccountPage.tsx", import.meta.url), "utf8");
 
 test("生活消費保留商品、團購、便當、付款與物流", () => {
   for (const marker of ["/v1/products", "/v1/group-campaigns", "/v1/meal-events", "beginCheckout", "beginGroupCheckout", "beginMealCheckout", "shippingEligibility", "selection-link"]) assert.match(source + commerce, new RegExp(marker.replaceAll("/", "\\/")));
@@ -81,4 +84,15 @@ test("個人與公司發票共用 Email 會員載具並在三種結帳顯示確�
   assert.doesNotMatch(invoiceFields, /<strong>不使用載具<\/strong>/);
   assert.match(commerce, /invoice_buyer_email:\s*preference\.buyerEmail/);
   assert.equal((source.match(/<InvoicePreferenceSummary/g) || []).length, 3);
+});
+
+test("付款返回頁會先恢復登入工作階段，再決定是否顯示登入入口", () => {
+  assert.match(authContext, /isAuthReady: boolean/);
+  assert.match(authContext, /setIsAuthReady\(true\)/);
+  for (const paymentReturnPage of [ordersPage, accountPage]) {
+    assert.ok(
+      paymentReturnPage.indexOf("if (!isAuthReady)")
+        < paymentReturnPage.indexOf("if (!user)"),
+    );
+  }
 });

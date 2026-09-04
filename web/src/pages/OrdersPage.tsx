@@ -43,7 +43,7 @@ const shipmentLabels: Record<string, string> = {
 };
 
 export function OrdersPage() {
-  const { user, openLogin } = useAuth();
+  const { user, isAuthReady, openLogin } = useAuth();
   const search = useSearch({ from: "/orders" });
   const queryClient = useQueryClient();
   const confirmationStartedAt = useRef(Date.now());
@@ -131,6 +131,15 @@ export function OrdersPage() {
   );
   const actionError =
     openPayment.error || reopenLogistics.error || cancelOrder.error;
+
+  if (!isAuthReady) {
+    return (
+      <section className="account-gate" aria-live="polite">
+        <LoadingLines count={3} />
+        <p>正在恢復登入狀態與付款結果…</p>
+      </section>
+    );
+  }
 
   if (!user) {
     return (

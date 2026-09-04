@@ -20,6 +20,7 @@ import type { AuthResponse, User } from "../lib/types";
 
 interface AuthContextValue {
   user: User | null;
+  isAuthReady: boolean;
   openLogin: () => void;
   logout: () => Promise<void>;
 }
@@ -29,15 +30,20 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
-    void restoreSession().then((session) => {
-      if (active && session) setUser(session.user);
-    });
+    void restoreSession()
+      .then((session) => {
+        if (active) setUser(session?.user ?? null);
+      })
+      .finally(() => {
+        if (active) setIsAuthReady(true);
+      });
     return () => {
       active = false;
     };
@@ -78,7 +84,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, openLogin: () => setOpen(true), logout }}>
+    <AuthContext.Provider
+      value={{ user, isAuthReady, openLogin: () => setOpen(true), logout }}
+    >
       {children}
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>

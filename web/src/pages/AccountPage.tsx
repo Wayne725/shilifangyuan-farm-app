@@ -39,7 +39,7 @@ const chargeLabels: Record<string, string> = {
 };
 
 export function AccountPage() {
-  const { user, openLogin, logout } = useAuth();
+  const { user, isAuthReady, openLogin, logout } = useAuth();
   const search = useSearch({ from: "/account" });
   const queryClient = useQueryClient();
   const confirmationStartedAt = useRef(Date.now());
@@ -128,6 +128,15 @@ export function AccountPage() {
       queryClient.invalidateQueries({ queryKey: ["membership-me"] });
     }
   }, [queryClient, refreshedPaymentStatus]);
+
+  if (!isAuthReady) {
+    return (
+      <section className="account-gate" aria-live="polite">
+        <LoadingLines count={3} />
+        <p>正在恢復登入狀態與付款結果…</p>
+      </section>
+    );
+  }
 
   if (!user) {
     return (
