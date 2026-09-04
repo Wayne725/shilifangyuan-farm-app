@@ -99,6 +99,7 @@ class Settings(BaseSettings):
     raygate_payment_contract_verified: bool = False
     raygate_payment_reconcile_hours: int = Field(default=24, ge=1, le=168)
     raygate_payment_acceptance_order_id: str = ""
+    raygate_payment_acceptance_sku: str = Field(default="", max_length=80)
     ecpay_invoice_merchant_id: str = ""
     ecpay_invoice_hash_key: str = ""
     ecpay_invoice_hash_iv: str = ""
@@ -329,21 +330,34 @@ class Settings(BaseSettings):
                 if not is_public_https_origin(value):
                     invalid_secrets.append(f"{name}（必須為公開 HTTPS 網址）")
         acceptance_order_id = self.raygate_payment_acceptance_order_id.strip()
-        if acceptance_order_id:
+        acceptance_sku = self.raygate_payment_acceptance_sku.strip()
+        if acceptance_order_id and acceptance_sku:
+            invalid_secrets.append(
+                "RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID/"
+                "RAYGATE_PAYMENT_ACCEPTANCE_SKU（只能擇一）"
+            )
+        if acceptance_sku and not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", acceptance_sku
+        ):
+            invalid_secrets.append(
+                "RAYGATE_PAYMENT_ACCEPTANCE_SKU（格式不正確）"
+            )
+        if acceptance_order_id or acceptance_sku:
             if environment != "preview":
                 invalid_secrets.append(
-                    "RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID"
-                    "（單筆驗收只允許用於 Preview）"
+                    "RAYGATE_PAYMENT_ACCEPTANCE_*"
+                    "（小額驗收只允許用於 Preview）"
                 )
-            try:
-                UUID(acceptance_order_id)
-            except ValueError:
-                invalid_secrets.append(
-                    "RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID（必須是訂單 UUID）"
-                )
+            if acceptance_order_id:
+                try:
+                    UUID(acceptance_order_id)
+                except ValueError:
+                    invalid_secrets.append(
+                        "RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID（必須是訂單 UUID）"
+                    )
             if self.payment_provider != "raygate":
                 invalid_secrets.append(
-                    "PAYMENT_PROVIDER（單筆驗收必須使用 raygate）"
+                    "PAYMENT_PROVIDER（小額驗收必須使用 raygate）"
                 )
             if self.raygate_payment_stage:
                 invalid_secrets.append(

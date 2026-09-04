@@ -136,6 +136,16 @@ Sandbox 全部通過並取得契約書面確認後：
 
 這個例外不放行其他金額、其他訂單、宅配訂單或社員款項。不得把既有 NT$600 訂單填入 allowlist。
 
+### Preview 遠端 NT$10 商品白名單
+
+需要讓不同帳號各自測試時，改用專用商品 SKU，避免每張新訂單都重新部署：
+
+1. Preview seed 會建立會員價與非會員價皆為 NT$10、僅限合作社取貨的「遠端付款驗收品（測試）」，SKU 為 `REMOTE-PAYMENT-10`。
+2. 清空 `RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID`，再把該 SKU 填入 `RAYGATE_PAYMENT_ACCEPTANCE_SKU`；兩者不可同時設定。
+3. 測試者的購物車只能有此商品一項且數量必須為 1。後端會再次核對 SKU、一般訂單類型、單價、小計、總額與取貨方式。
+4. 每位測試者仍會真的支付 NT$10；完成後逐筆核對付款、訂單、測試發票與退款。
+5. 測試結束立即清空 `RAYGATE_PAYMENT_ACCEPTANCE_SKU` 並下架測試商品。
+
 ## 五、簽核
 
 | 項目 | 負責人 | 日期 | 結果／證據位置 |

@@ -46,6 +46,32 @@ def settings(**overrides) -> Settings:
     return Settings(**values)
 
 
+def preview_raygate_settings(**overrides) -> Settings:
+    values = {
+        "environment": "preview",
+        "app_base_url": "https://api.example.test",
+        "web_base_url": "https://app.example.test",
+        "jwt_secret": "j" * 32,
+        "internal_reconcile_secret": "r" * 32,
+        "demo_admin_password": "preview-admin-strong",
+        "demo_member_password": "preview-member-strong",
+        "demo_nonmember_password": "preview-customer-strong",
+        "resend_api_key": "re_test-secret",
+        "email_from_email": "noreply@example.com",
+        "payment_provider": "raygate",
+        "raygate_payment_store_identifier": "acceptance-store",
+        "raygate_payment_key_hex": "11" * 32,
+        "raygate_payment_iv_hex": "22" * 16,
+        "raygate_payment_merchant_id": "merchant",
+        "raygate_payment_terminal_id": "terminal",
+        "raygate_payment_base_url": "https://pay.example.test",
+        "raygate_payment_allowed_hostname": "pay.example.test",
+        "raygate_payment_stage": False,
+        **overrides,
+    }
+    return settings(**values)
+
+
 @pytest.mark.parametrize("environment", ["preview", "sandbox", "production"])
 def test_secure_environments_reject_default_secrets(environment: str) -> None:
     runtime_settings = settings(environment=environment)
@@ -137,30 +163,38 @@ def test_preview_accepts_resend_without_commerce_or_storage_integrations() -> No
 
 
 def test_preview_accepts_a_scoped_production_raygate_order() -> None:
-    settings(
-        environment="preview",
-        app_base_url="https://api.example.test",
-        web_base_url="https://app.example.test",
-        jwt_secret="j" * 32,
-        internal_reconcile_secret="r" * 32,
-        demo_admin_password="preview-admin-strong",
-        demo_member_password="preview-member-strong",
-        demo_nonmember_password="preview-customer-strong",
-        resend_api_key="re_test-secret",
-        email_from_email="noreply@example.com",
-        payment_provider="raygate",
-        raygate_payment_store_identifier="acceptance-store",
-        raygate_payment_key_hex="11" * 32,
-        raygate_payment_iv_hex="22" * 16,
-        raygate_payment_merchant_id="merchant",
-        raygate_payment_terminal_id="terminal",
-        raygate_payment_base_url="https://pay.example.test",
-        raygate_payment_allowed_hostname="pay.example.test",
-        raygate_payment_stage=False,
+    preview_raygate_settings(
         raygate_payment_acceptance_order_id=(
             "00000000-0000-4000-8000-000000000001"
         ),
     ).validate_runtime_secrets()
+
+
+def test_preview_accepts_a_scoped_production_raygate_product_sku() -> None:
+    preview_raygate_settings(
+        raygate_payment_acceptance_sku="REMOTE-PAYMENT-10",
+    ).validate_runtime_secrets()
+
+
+def test_preview_rejects_multiple_raygate_acceptance_selectors() -> None:
+    runtime_settings = preview_raygate_settings(
+        raygate_payment_acceptance_order_id=(
+            "00000000-0000-4000-8000-000000000001"
+        ),
+        raygate_payment_acceptance_sku="REMOTE-PAYMENT-10",
+    )
+
+    with pytest.raises(RuntimeError, match="只能擇一"):
+        runtime_settings.validate_runtime_secrets()
+
+
+def test_preview_rejects_an_invalid_raygate_acceptance_sku() -> None:
+    runtime_settings = preview_raygate_settings(
+        raygate_payment_acceptance_sku="REMOTE PAYMENT 10",
+    )
+
+    with pytest.raises(RuntimeError, match="SKU（格式不正確）"):
+        runtime_settings.validate_runtime_secrets()
 
 
 @pytest.mark.parametrize(

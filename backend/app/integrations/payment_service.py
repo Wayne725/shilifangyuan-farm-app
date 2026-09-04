@@ -101,19 +101,39 @@ def ensure_payment_runtime_enabled(
     order_id: Optional[str] = None,
     amount: Optional[int] = None,
     fulfillment_method: Optional[FulfillmentMethod] = None,
+    product_sku: Optional[str] = None,
+    item_count: Optional[int] = None,
+    item_quantity: Optional[int] = None,
+    item_unit_price: Optional[int] = None,
+    item_subtotal: Optional[int] = None,
+    order_kind: Optional[OrderKind] = None,
 ) -> None:
     if settings.environment.strip().lower() != "preview":
         return
     configured_order_id = settings.raygate_payment_acceptance_order_id.strip()
-    if (
-        configured_order_id
-        and order_id
-        and hmac.compare_digest(configured_order_id, order_id)
-        and settings.payment_provider == RAYGATE_PAYMENT_PROVIDER
+    configured_sku = settings.raygate_payment_acceptance_sku.strip()
+    common_requirements_met = (
+        settings.payment_provider == RAYGATE_PAYMENT_PROVIDER
         and not settings.raygate_payment_stage
         and amount == RAYGATE_PREVIEW_ACCEPTANCE_AMOUNT
         and fulfillment_method == FulfillmentMethod.COOPERATIVE_PICKUP
-    ):
+    )
+    order_allowlisted = (
+        configured_order_id
+        and order_id
+        and hmac.compare_digest(configured_order_id, order_id)
+    )
+    sku_allowlisted = (
+        configured_sku
+        and product_sku
+        and hmac.compare_digest(configured_sku, product_sku)
+        and item_count == 1
+        and item_quantity == 1
+        and item_unit_price == RAYGATE_PREVIEW_ACCEPTANCE_AMOUNT
+        and item_subtotal == RAYGATE_PREVIEW_ACCEPTANCE_AMOUNT
+        and order_kind == OrderKind.REGULAR
+    )
+    if common_requirements_met and (order_allowlisted or sku_allowlisted):
         return
     raise PaymentApplicationError("Preview 展示環境不提供線上付款")
 
@@ -453,11 +473,28 @@ async def create_payment_attempt(
     )
     if order is None:
         raise PaymentApplicationError("找不到訂單")
+    acceptance_product_sku = None
+    acceptance_item = order.items[0] if len(order.items) == 1 else None
+    if (
+        settings.environment.strip().lower() == "preview"
+        and settings.raygate_payment_acceptance_sku.strip()
+        and acceptance_item is not None
+        and acceptance_item.source_product_id is not None
+    ):
+        acceptance_product_sku = await session.scalar(
+            select(Product.sku).where(Product.id == acceptance_item.source_product_id)
+        )
     ensure_payment_runtime_enabled(
         settings,
         order_id=order.id,
         amount=order.amount_total,
         fulfillment_method=order.fulfillment_method,
+        product_sku=acceptance_product_sku,
+        item_count=len(order.items),
+        item_quantity=(acceptance_item.quantity if acceptance_item else None),
+        item_unit_price=(acceptance_item.unit_price if acceptance_item else None),
+        item_subtotal=(acceptance_item.subtotal if acceptance_item else None),
+        order_kind=order.order_kind,
     )
     if order.payment_status == PaymentStatus.PAID:
         raise PaymentApplicationError("此訂單已付款")

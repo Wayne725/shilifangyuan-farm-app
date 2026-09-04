@@ -112,6 +112,23 @@ TEST_PAYMENT_HASH_KEY = "pwFHCqoQZGmho4w6"
 TEST_PAYMENT_HASH_IV = "EkRm7iFT261dpevs"
 
 
+def preview_raygate_acceptance_settings(**overrides) -> Settings:
+    values = {
+        "environment": "preview",
+        "payment_provider": "raygate",
+        "raygate_payment_store_identifier": "acceptance-store",
+        "raygate_payment_key_hex": "11" * 32,
+        "raygate_payment_iv_hex": "22" * 16,
+        "raygate_payment_merchant_id": "merchant",
+        "raygate_payment_terminal_id": "terminal",
+        "raygate_payment_base_url": "https://pay.example.test",
+        "raygate_payment_allowed_hostname": "pay.example.test",
+        "raygate_payment_stage": False,
+        **overrides,
+    }
+    return make_test_settings(**values)
+
+
 async def make_regular_order(database_session):
     user = User(
         email="buyer@example.test",
@@ -572,17 +589,7 @@ async def test_preview_allows_only_the_exact_ten_dollar_raygate_order(
     order.items[0].unit_price = 5
     order.items[0].subtotal = 10
     await database_session.commit()
-    settings = make_test_settings(
-        environment="preview",
-        payment_provider="raygate",
-        raygate_payment_store_identifier="acceptance-store",
-        raygate_payment_key_hex="11" * 32,
-        raygate_payment_iv_hex="22" * 16,
-        raygate_payment_merchant_id="merchant",
-        raygate_payment_terminal_id="terminal",
-        raygate_payment_base_url="https://pay.example.test",
-        raygate_payment_allowed_hostname="pay.example.test",
-        raygate_payment_stage=False,
+    settings = preview_raygate_acceptance_settings(
         raygate_payment_acceptance_order_id=order.id,
     )
 
@@ -598,6 +605,69 @@ async def test_preview_allows_only_the_exact_ten_dollar_raygate_order(
     assert attempt.checkout_payload["redirect_url"].startswith(
         "https://pay.example.test/calc/pay_encrypt/acceptance-store"
     )
+
+
+@pytest.mark.asyncio
+async def test_preview_allows_a_dedicated_ten_dollar_product_sku(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    product.sku = "REMOTE-PAYMENT-10"
+    order.amount_total = 10
+    order.items[0].quantity = 1
+    order.items[0].unit_price = 10
+    order.items[0].subtotal = 10
+    await database_session.commit()
+    settings = preview_raygate_acceptance_settings(
+        raygate_payment_acceptance_sku=product.sku,
+    )
+
+    attempt = await create_payment_attempt(
+        database_session,
+        order.id,
+        user,
+        settings,
+    )
+
+    assert attempt.provider == "raygate"
+    assert attempt.amount == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("product_sku", "quantity", "unit_price"),
+    [
+        ("ANOTHER-PRODUCT", 1, 10),
+        ("REMOTE-PAYMENT-10", 2, 5),
+    ],
+)
+async def test_preview_product_allowlist_rejects_other_products_and_quantities(
+    database_session,
+    product_sku: str,
+    quantity: int,
+    unit_price: int,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    product.sku = product_sku
+    order.amount_total = 10
+    order.items[0].quantity = quantity
+    order.items[0].unit_price = unit_price
+    order.items[0].subtotal = 10
+    await database_session.commit()
+    settings = preview_raygate_acceptance_settings(
+        raygate_payment_acceptance_sku="REMOTE-PAYMENT-10",
+    )
+
+    with pytest.raises(PaymentApplicationError, match="Preview"):
+        await create_payment_attempt(
+            database_session,
+            order.id,
+            user,
+            settings,
+        )
+
+    attempts = list(await database_session.scalars(select(PaymentAttempt)))
+    assert attempts == []
 
 
 @pytest.mark.asyncio
