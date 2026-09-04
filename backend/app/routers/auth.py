@@ -654,9 +654,10 @@ async def refresh(
             detail="登入工作階段已失效，請重新登入",
         )
     pair, replacement = _new_token_pair_and_session(user, settings)
+    session.add(replacement)
+    await session.flush()
     stored_session.revoked_at = now
     stored_session.replaced_by_id = replacement.id
-    session.add(replacement)
     await session.commit()
     return token_response(user, response, settings, pair)
 

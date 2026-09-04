@@ -6,7 +6,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
 from app.models import (
@@ -488,6 +488,28 @@ async def test_auth_register_verify_login_refresh_and_reset(
         },
     )
     assert after_logout.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotation_respects_replacement_foreign_key(
+    v2_context,
+) -> None:
+    client = v2_context["client"]
+    session = v2_context["session"]
+    await session.execute(text("PRAGMA foreign_keys=ON"))
+
+    logged_in = await client.post(
+        "/v1/auth/login",
+        json={
+            "email": "customer-b@example.com",
+            "password": "customer-b-pass-123",
+        },
+    )
+    assert logged_in.status_code == 200
+
+    refreshed = await client.post("/v1/auth/refresh")
+
+    assert refreshed.status_code == 200, refreshed.text
 
 
 @pytest.mark.asyncio
