@@ -9,7 +9,7 @@
 
 根目錄的 `render.yaml` 已定義三個 Render 資源。免費 Web Service 閒置後會休眠，免費 PostgreSQL 會在建立 30 天後到期，因此免費方案只適合展示與測試；正式營運需使用持久化資料庫、備份與不中斷服務方案。
 
-目前 Blueprint 預設使用 `APP_ENV=preview`：只建立虛擬展示資料，程式會明確拒絕建立或開啟任何線上付款頁，物流與真實證件上傳也維持停用。金流 provider 預設選用雷門，但 `RAYGATE_PAYMENT_*` 只提供空白的 `sync: false` 佔位，不含規格文件裡的範例憑證；即使誤填正式憑證，Preview 仍無法產生真實收款連結。Preview 必須填妥 Resend，否則 API 會拒絕啟動；同時仍要求平台產生強 JWT／reconciliation 密鑰與三組非預設展示密碼。升級 Sandbox 或 Production 前必須改用獨立的 `PII_ENCRYPTION_KEYS_JSON`。
+目前 Blueprint 預設使用 `APP_ENV=preview`：只建立虛擬展示資料，預設會明確拒絕建立或開啟任何線上付款頁，物流與真實證件上傳也維持停用。金流 provider 預設選用雷門，但 `RAYGATE_PAYMENT_*` 只提供空白的 `sync: false` 佔位，不含規格文件裡的範例憑證。唯一例外是人工設定 `RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID` 的正式 NT$10 單筆驗收；它只允許精確對應的合作社取貨訂單，且完成後必須立即清空。Preview 必須填妥 Resend，否則 API 會拒絕啟動；同時仍要求平台產生強 JWT／reconciliation 密鑰與三組非預設展示密碼。升級 Sandbox 或 Production 前必須改用獨立的 `PII_ENCRYPTION_KEYS_JSON`。
 
 ## 建立 Render Blueprint
 
@@ -76,6 +76,7 @@ API 啟動時會先執行 `python -m app.startup prepare`。Migration 與 Previe
 - `RAYGATE_PAYMENT_STAGE=true`
 - `RAYGATE_PAYMENT_CONTRACT_VERIFIED=false`（Sandbox 驗收期間維持關閉）
 - `RAYGATE_PAYMENT_RECONCILE_HOURS=24`（逾期後仍主動補查的期間）
+- `RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID`（平時留空；僅限 Preview 的指定 NT$10 合作社取貨訂單驗收）
 
 `RAYGATE_PAYMENT_STAGE` 只是防止把測試／正式設定放錯環境的安全閘門，不會自行切換 URL。Base URL 必須是公開 HTTPS 根網址，且 hostname 必須與 allowlist 設定完全一致。商店識別、Key、IV、Merchant ID、Terminal ID 與 Base URL 都必須來自雷門，禁止使用介接規格內的範例值。
 
@@ -87,6 +88,8 @@ API 啟動時會先執行 `python -m app.startup prepare`。Migration 與 Previe
 雷門規格將 `callback_url` 與 `return_url` 限制為 120 字元。目前導回網址會再加上 36 字元的 payment attempt ID，因此 `APP_BASE_URL` 不得超過 48 字元；正式登記 callback 前應以實際網域組出完整網址確認長度。
 
 雷門已確認目前沒有主動通知。瀏覽器導回會立即觸發 server-to-server 查單，但不會直接相信前端結果；未回站或尚未取得最終結果時，由前端有限補查與排程繼續收斂。正式啟用前還必須確認非終態最晚收斂時間、建議查單頻率、全額退款、重複退款與正式對帳方式；詳見 `docs/PAYMENT_FLOW.md`。
+
+Preview 單筆驗收只有在正式雷門設定完整、`RAYGATE_PAYMENT_STAGE=false`、指定訂單 UUID、訂單總額為 NT$10 且履約方式為合作社取貨時才會放行；會員款項與其他訂單仍會回覆拒絕付款。操作細節與收尾清單見 `docs/RAYGATE_SANDBOX_ACCEPTANCE.md`。
 
 ### 綠界 AIO Stage
 

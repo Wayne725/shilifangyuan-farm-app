@@ -371,11 +371,17 @@ class RayGateAdapter:
                 )
             )
         data = response_payload.get("Data")
-        if not isinstance(data, list):
-            raise IntegrationResponseError("RayGate query Data must be an array")
+        if isinstance(data, Mapping):
+            records = [data]
+        elif isinstance(data, list):
+            records = data
+        else:
+            raise IntegrationResponseError(
+                "RayGate query Data must be an object or array"
+            )
         matches = [
             self._parse_payment_result(item, require_pos_order_number=True)
-            for item in data
+            for item in records
             if isinstance(item, Mapping)
             and str(item.get("pos_order_number", "")) == pos_order_number
         ]

@@ -99,8 +99,11 @@ sequenceDiagram
 | `RAYGATE_PAYMENT_STAGE` | Sandbox 設 `true`、Production 設 `false` 的部署安全閘門；網址仍由 `BASE_URL` 明確指定 |
 | `RAYGATE_PAYMENT_CONTRACT_VERIFIED` | 完成回跳查單、定時補查、狀態與退款契約驗收後才設 `true`；正式環境未確認時會拒絕啟動 |
 | `RAYGATE_PAYMENT_RECONCILE_HOURS` | 付款逾期後仍主動補查的時數，預設 24；期限結束後須納入人工對帳 |
+| `RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID` | 僅供 Preview 正式小額驗收；填入唯一訂單 UUID 後，只放行該筆 NT$10、合作社取貨訂單。平時必須留空 |
 
 Key、IV、商戶與終端資料只能放在本機未追蹤的 `backend/.env` 或部署平台 Secret。不可把規格文件中的範例值當成專案憑證，也不可寫入 Git、前端、管理畫面或 log。
+
+Preview 的單筆驗收是額外安全閘門，不代表整站已正式啟用。它同時要求 `PAYMENT_PROVIDER=raygate`、正式雷門憑證、`RAYGATE_PAYMENT_STAGE=false`、精確訂單 UUID、訂單總額 NT$10 與合作社取貨；任一條件不符都維持拒絕付款。社員款項不適用此例外。驗收完成或中止後應立即清空 `RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID`。
 
 若要暫時保留既有綠界 AIO，將 `PAYMENT_PROVIDER=ecpay`，並設定原有 `ECPAY_PAYMENT_*` 變數。綠界物流與付款 provider 是兩套獨立設定；使用雷門付款不影響 `ECPAY_LOGISTICS_*`。
 

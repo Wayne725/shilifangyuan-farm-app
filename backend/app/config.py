@@ -6,6 +6,7 @@ import re
 from functools import lru_cache
 from typing import List
 from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -97,6 +98,7 @@ class Settings(BaseSettings):
     raygate_payment_stage: bool = True
     raygate_payment_contract_verified: bool = False
     raygate_payment_reconcile_hours: int = Field(default=24, ge=1, le=168)
+    raygate_payment_acceptance_order_id: str = ""
     ecpay_invoice_merchant_id: str = ""
     ecpay_invoice_hash_key: str = ""
     ecpay_invoice_hash_iv: str = ""
@@ -326,6 +328,49 @@ class Settings(BaseSettings):
             ):
                 if not is_public_https_origin(value):
                     invalid_secrets.append(f"{name}（必須為公開 HTTPS 網址）")
+        acceptance_order_id = self.raygate_payment_acceptance_order_id.strip()
+        if acceptance_order_id:
+            if environment != "preview":
+                invalid_secrets.append(
+                    "RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID"
+                    "（單筆驗收只允許用於 Preview）"
+                )
+            try:
+                UUID(acceptance_order_id)
+            except ValueError:
+                invalid_secrets.append(
+                    "RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID（必須是訂單 UUID）"
+                )
+            if self.payment_provider != "raygate":
+                invalid_secrets.append(
+                    "PAYMENT_PROVIDER（單筆驗收必須使用 raygate）"
+                )
+            if self.raygate_payment_stage:
+                invalid_secrets.append(
+                    "RAYGATE_PAYMENT_STAGE（正式小額驗收必須為 false）"
+                )
+            self._validate_raygate_payment_settings(invalid_secrets)
+            from .integrations.raygate import (
+                RayGateSettings,
+                uses_document_example_credentials,
+            )
+
+            if uses_document_example_credentials(
+                RayGateSettings(
+                    store_identifier=self.raygate_payment_store_identifier,
+                    key_hex=self.raygate_payment_key_hex,
+                    iv_hex=self.raygate_payment_iv_hex,
+                    base_url=self.raygate_payment_base_url,
+                    allowed_hostname=self.raygate_payment_allowed_hostname,
+                    merchant_id=self.raygate_payment_merchant_id,
+                    terminal_id=self.raygate_payment_terminal_id,
+                    device_type=self.raygate_payment_device_type,
+                    timeout_seconds=self.integration_timeout_seconds,
+                )
+            ):
+                invalid_secrets.append(
+                    "RAYGATE_PAYMENT_*（正式小額驗收不可使用規格書範例憑證）"
+                )
         if environment in SECURE_ENVIRONMENTS:
             r2_values = {
                 "CLOUDFLARE_R2_ACCOUNT_ID": self.cloudflare_r2_account_id,

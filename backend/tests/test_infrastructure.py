@@ -136,6 +136,78 @@ def test_preview_accepts_resend_without_commerce_or_storage_integrations() -> No
     ).validate_runtime_secrets()
 
 
+def test_preview_accepts_a_scoped_production_raygate_order() -> None:
+    settings(
+        environment="preview",
+        app_base_url="https://api.example.test",
+        web_base_url="https://app.example.test",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        demo_admin_password="preview-admin-strong",
+        demo_member_password="preview-member-strong",
+        demo_nonmember_password="preview-customer-strong",
+        resend_api_key="re_test-secret",
+        email_from_email="noreply@example.com",
+        payment_provider="raygate",
+        raygate_payment_store_identifier="acceptance-store",
+        raygate_payment_key_hex="11" * 32,
+        raygate_payment_iv_hex="22" * 16,
+        raygate_payment_merchant_id="merchant",
+        raygate_payment_terminal_id="terminal",
+        raygate_payment_base_url="https://pay.example.test",
+        raygate_payment_allowed_hostname="pay.example.test",
+        raygate_payment_stage=False,
+        raygate_payment_acceptance_order_id=(
+            "00000000-0000-4000-8000-000000000001"
+        ),
+    ).validate_runtime_secrets()
+
+
+@pytest.mark.parametrize(
+    "overrides, expected",
+    [
+        ({"payment_provider": "ecpay"}, "PAYMENT_PROVIDER"),
+        ({"raygate_payment_stage": True}, "RAYGATE_PAYMENT_STAGE"),
+        (
+            {"raygate_payment_acceptance_order_id": "not-an-order-id"},
+            "訂單 UUID",
+        ),
+    ],
+)
+def test_preview_rejects_an_unsafe_raygate_acceptance_configuration(
+    overrides: dict[str, object],
+    expected: str,
+) -> None:
+    values = {
+        "environment": "preview",
+        "app_base_url": "https://api.example.test",
+        "web_base_url": "https://app.example.test",
+        "jwt_secret": "j" * 32,
+        "internal_reconcile_secret": "r" * 32,
+        "demo_admin_password": "preview-admin-strong",
+        "demo_member_password": "preview-member-strong",
+        "demo_nonmember_password": "preview-customer-strong",
+        "resend_api_key": "re_test-secret",
+        "email_from_email": "noreply@example.com",
+        "payment_provider": "raygate",
+        "raygate_payment_store_identifier": "acceptance-store",
+        "raygate_payment_key_hex": "11" * 32,
+        "raygate_payment_iv_hex": "22" * 16,
+        "raygate_payment_merchant_id": "merchant",
+        "raygate_payment_terminal_id": "terminal",
+        "raygate_payment_base_url": "https://pay.example.test",
+        "raygate_payment_allowed_hostname": "pay.example.test",
+        "raygate_payment_stage": False,
+        "raygate_payment_acceptance_order_id": (
+            "00000000-0000-4000-8000-000000000001"
+        ),
+        **overrides,
+    }
+
+    with pytest.raises(RuntimeError, match=expected):
+        settings(**values).validate_runtime_secrets()
+
+
 def test_sandbox_requires_public_https_callback_urls() -> None:
     runtime_settings = settings(
         environment="sandbox",

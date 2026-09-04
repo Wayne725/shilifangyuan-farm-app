@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping, Optional
 
@@ -83,6 +84,9 @@ class PaymentApplicationError(ValueError):
     pass
 
 
+RAYGATE_PREVIEW_ACCEPTANCE_AMOUNT = 10
+
+
 SUCCESS_CALLBACK_TERMINAL_STATUSES = {
     PaymentStatus.PAID,
     PaymentStatus.LATE_PAID_REFUND_REQUIRED,
@@ -91,9 +95,27 @@ SUCCESS_CALLBACK_TERMINAL_STATUSES = {
 }
 
 
-def ensure_payment_runtime_enabled(settings: Settings) -> None:
-    if settings.environment.strip().lower() == "preview":
-        raise PaymentApplicationError("Preview 展示環境不提供線上付款")
+def ensure_payment_runtime_enabled(
+    settings: Settings,
+    *,
+    order_id: Optional[str] = None,
+    amount: Optional[int] = None,
+    fulfillment_method: Optional[FulfillmentMethod] = None,
+) -> None:
+    if settings.environment.strip().lower() != "preview":
+        return
+    configured_order_id = settings.raygate_payment_acceptance_order_id.strip()
+    if (
+        configured_order_id
+        and order_id
+        and hmac.compare_digest(configured_order_id, order_id)
+        and settings.payment_provider == RAYGATE_PAYMENT_PROVIDER
+        and not settings.raygate_payment_stage
+        and amount == RAYGATE_PREVIEW_ACCEPTANCE_AMOUNT
+        and fulfillment_method == FulfillmentMethod.COOPERATIVE_PICKUP
+    ):
+        return
+    raise PaymentApplicationError("Preview 展示環境不提供線上付款")
 
 
 def allow_local_refund_without_payment_attempt(settings: Settings) -> bool:
@@ -414,7 +436,6 @@ async def create_payment_attempt(
     settings: Settings,
     now: Optional[datetime] = None,
 ) -> PaymentAttempt:
-    ensure_payment_runtime_enabled(settings)
     current = now or datetime.now(timezone.utc)
     order = await session.scalar(
         select(Order)
@@ -432,6 +453,12 @@ async def create_payment_attempt(
     )
     if order is None:
         raise PaymentApplicationError("找不到訂單")
+    ensure_payment_runtime_enabled(
+        settings,
+        order_id=order.id,
+        amount=order.amount_total,
+        fulfillment_method=order.fulfillment_method,
+    )
     if order.payment_status == PaymentStatus.PAID:
         raise PaymentApplicationError("此訂單已付款")
     if order.payment_status in {

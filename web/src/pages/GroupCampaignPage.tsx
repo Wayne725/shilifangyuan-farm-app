@@ -37,6 +37,8 @@ interface GroupQuote {
   amount_total: number;
 }
 
+const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
+
 export function GroupCampaignPage() {
   const { campaignId } = useParams({ from: "/groups/$campaignId" });
   const { user, openLogin } = useAuth();
@@ -171,7 +173,7 @@ export function GroupCampaignPage() {
           <div className="checkout-step-title pickup-title"><span>02</span><div><small>FULFILLMENT</small><h2>取貨方式</h2></div></div>
           <div className="fulfillment-switch">
             <button type="button" className={method === "pickup" ? "selected" : ""} onClick={() => setMethod("pickup")}><Storefront size={22} /><span><strong>合作社取貨</strong><small>依預計取貨窗口領取</small></span><i><Check size={14} /></i></button>
-            <button type="button" className={method === "shipping" ? "selected shipping" : "shipping"} onClick={() => setMethod("shipping")} disabled={!item.can_ship}><Truck size={22} /><span><strong>宅配／超商取貨</strong><small>{item.can_ship ? `${temperatureLabels[item.shipping_temperature || "ambient"]}配送` : "此團購未開放配送"}</small></span><i><Check size={14} /></i></button>
+            {logisticsEnabled && <button type="button" className={method === "shipping" ? "selected shipping" : "shipping"} onClick={() => setMethod("shipping")} disabled={!item.can_ship}><Truck size={22} /><span><strong>宅配／超商取貨</strong><small>{item.can_ship ? `${temperatureLabels[item.shipping_temperature || "ambient"]}配送` : "此團購未開放配送"}</small></span><i><Check size={14} /></i></button>}
           </div>
 
           {method === "pickup" ? (
@@ -220,7 +222,7 @@ export function GroupCampaignPage() {
               <dl>
                 <div><dt>社員單價</dt><dd>{formatMoney(quote.data?.unit_price || item.member_price)}</dd></div>
                 <div><dt>商品小計</dt><dd>{formatMoney(quote.data?.product_subtotal || 0)}</dd></div>
-                <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>
+                {logisticsEnabled && <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>}
                 <InvoicePreferenceSummary value={invoicePreference} />
                 <div className="offer-total"><dt>合計</dt><dd>{formatMoney(quote.data?.amount_total || 0)}</dd></div>
               </dl>

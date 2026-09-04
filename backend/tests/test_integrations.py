@@ -564,6 +564,73 @@ async def test_preview_cannot_create_a_payment_attempt(
 
 
 @pytest.mark.asyncio
+async def test_preview_allows_only_the_exact_ten_dollar_raygate_order(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    order.amount_total = 10
+    order.items[0].unit_price = 5
+    order.items[0].subtotal = 10
+    await database_session.commit()
+    settings = make_test_settings(
+        environment="preview",
+        payment_provider="raygate",
+        raygate_payment_store_identifier="acceptance-store",
+        raygate_payment_key_hex="11" * 32,
+        raygate_payment_iv_hex="22" * 16,
+        raygate_payment_merchant_id="merchant",
+        raygate_payment_terminal_id="terminal",
+        raygate_payment_base_url="https://pay.example.test",
+        raygate_payment_allowed_hostname="pay.example.test",
+        raygate_payment_stage=False,
+        raygate_payment_acceptance_order_id=order.id,
+    )
+
+    attempt = await create_payment_attempt(
+        database_session,
+        order.id,
+        user,
+        settings,
+    )
+
+    assert attempt.provider == "raygate"
+    assert attempt.amount == 10
+    assert attempt.checkout_payload["redirect_url"].startswith(
+        "https://pay.example.test/calc/pay_encrypt/acceptance-store"
+    )
+
+
+@pytest.mark.asyncio
+async def test_preview_acceptance_rejects_a_different_order(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    order.amount_total = 10
+    await database_session.commit()
+    settings = make_test_settings(
+        environment="preview",
+        payment_provider="raygate",
+        raygate_payment_stage=False,
+        raygate_payment_acceptance_order_id=(
+            "00000000-0000-4000-8000-000000000001"
+        ),
+    )
+
+    with pytest.raises(PaymentApplicationError, match="Preview"):
+        await create_payment_attempt(
+            database_session,
+            order.id,
+            user,
+            settings,
+        )
+
+    attempts = list(await database_session.scalars(select(PaymentAttempt)))
+    await database_session.refresh(product)
+    assert attempts == []
+    assert product.stock_quantity == 3
+
+
+@pytest.mark.asyncio
 async def test_simulated_payment_is_rejected_and_releases_stock(
     database_session,
 ) -> None:

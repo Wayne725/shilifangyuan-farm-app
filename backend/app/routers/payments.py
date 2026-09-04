@@ -237,13 +237,23 @@ async def payment_checkout(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> Response:
-    try:
-        ensure_payment_runtime_enabled(settings)
-    except PaymentApplicationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     attempt = await session.get(PaymentAttempt, attempt_id)
     if attempt is None:
         raise HTTPException(status_code=404, detail="找不到付款頁")
+    fulfillment_method = None
+    if attempt.order_id is not None:
+        fulfillment_method = await session.scalar(
+            select(Order.fulfillment_method).where(Order.id == attempt.order_id)
+        )
+    try:
+        ensure_payment_runtime_enabled(
+            settings,
+            order_id=attempt.order_id,
+            amount=attempt.amount,
+            fulfillment_method=fulfillment_method,
+        )
+    except PaymentApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     expires_at = attempt.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)

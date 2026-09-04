@@ -338,6 +338,28 @@ async def test_query_uses_encrypted_json_and_required_headers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_accepts_single_object_returned_by_production() -> None:
+    result = payment_result(amount=10, pay_type="newebpay", pos_id="001")
+
+    async def transport(_url, _payload, _headers, _timeout):
+        return HTTPResponse(
+            status_code=200,
+            body=json.dumps(
+                {"ErrorCode": "0000", "Message": "查詢成功", "Data": result},
+                ensure_ascii=False,
+            ),
+            headers={},
+        )
+
+    adapter = RayGateAdapter(raygate_settings(), transport=transport)
+    queried = await adapter.query_order(result["pos_order_number"])
+
+    assert queried["TradeAmt"] == "10"
+    assert queried["PaymentType"] == "newebpay"
+    assert queried["PaymentDisposition"] == "paid"
+
+
+@pytest.mark.asyncio
 async def test_query_identifies_missing_transaction() -> None:
     async def transport(_url, _payload, _headers, _timeout):
         return HTTPResponse(
@@ -561,6 +583,79 @@ async def test_callback_is_confirmed_by_query_before_marking_paid(
         )
     )
     assert event is not None
+
+
+@pytest.mark.asyncio
+async def test_preview_acceptance_checkout_redirects_only_allowlisted_order(
+    database_session,
+) -> None:
+    user = User(
+        email="acceptance@example.test",
+        display_name="驗收買家",
+        password_hash="test",
+    )
+    order = Order(
+        order_number="ORD-RAYGATE-ACCEPTANCE",
+        order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.REGULAR,
+        fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
+        user=user,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=10,
+        contact_email=user.email,
+        payment_status=PaymentStatus.PENDING,
+        items=[
+            OrderItem(
+                product_name="付款驗收品",
+                unit_label="份",
+                quantity=1,
+                unit_price=10,
+                subtotal=10,
+                tax_type=TaxType.TAX_EXEMPT,
+            )
+        ],
+    )
+    attempt = PaymentAttempt(
+        order=order,
+        provider="raygate",
+        merchant_trade_no="ACCEPTANCE10",
+        amount=10,
+        status=PaymentStatus.PENDING,
+        checkout_payload={
+            "redirect_url": (
+                f"https://pay.example.test/calc/pay_encrypt/{STORE_IDENTIFIER}"
+                "?TransactionData=test&HashDigest=test"
+            )
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+    )
+    database_session.add_all([user, order, attempt])
+    await database_session.commit()
+    settings = make_test_settings(
+        environment="preview",
+        payment_provider="raygate",
+        raygate_payment_store_identifier=STORE_IDENTIFIER,
+        raygate_payment_key_hex=KEY_HEX,
+        raygate_payment_iv_hex=IV_HEX,
+        raygate_payment_merchant_id=MERCHANT_ID,
+        raygate_payment_terminal_id=TERMINAL_ID,
+        raygate_payment_base_url="https://pay.example.test",
+        raygate_payment_allowed_hostname="pay.example.test",
+        raygate_payment_stage=False,
+        raygate_payment_acceptance_order_id=order.id,
+    )
+
+    async with api_test_context(
+        database_session,
+        [payments_router],
+        settings=settings,
+    ) as client:
+        response = await client.get(f"/payments/{attempt.id}/checkout")
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(
+        f"https://pay.example.test/calc/pay_encrypt/{STORE_IDENTIFIER}"
+    )
 
 
 @pytest.mark.asyncio

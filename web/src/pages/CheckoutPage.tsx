@@ -40,6 +40,7 @@ import type {
 } from "../lib/types";
 
 type CheckoutMethod = Extract<FulfillmentMethod, "cooperative_pickup"> | "shipping";
+const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
 
 export function CheckoutPage() {
   const { user, openLogin } = useAuth();
@@ -73,6 +74,7 @@ export function CheckoutPage() {
   const rates = useQuery({
     queryKey: ["shipping-rates"],
     queryFn: () => apiFetch<ShippingRate[]>("/v1/shipping-rates"),
+    enabled: logisticsEnabled,
   });
   const quote = useQuery({
     queryKey: ["order-quote", itemKey, user?.id],
@@ -231,20 +233,22 @@ export function CheckoutPage() {
                 <span><strong>合作社取貨</strong><small>到指定站點領取，不另計運費</small></span>
                 <i><Check size={14} /></i>
               </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={checkoutMethod === "shipping"}
-                className={checkoutMethod === "shipping" ? "selected shipping" : "shipping"}
-                onClick={() => setCheckoutMethod("shipping")}
-                disabled={Boolean(eligibility.blockers.length)}
-              >
-                <Truck size={23} weight="light" />
-                <span><strong>宅配／超商取貨</strong><small>串接綠界物流，依溫層計費</small></span>
-                <i><Check size={14} /></i>
-              </button>
+              {logisticsEnabled && (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={checkoutMethod === "shipping"}
+                  className={checkoutMethod === "shipping" ? "selected shipping" : "shipping"}
+                  onClick={() => setCheckoutMethod("shipping")}
+                  disabled={Boolean(eligibility.blockers.length)}
+                >
+                  <Truck size={23} weight="light" />
+                  <span><strong>宅配／超商取貨</strong><small>串接綠界物流，依溫層計費</small></span>
+                  <i><Check size={14} /></i>
+                </button>
+              )}
             </div>
-            {eligibility.blockers.length > 0 && (
+            {logisticsEnabled && eligibility.blockers.length > 0 && (
               <div className="shipping-blockers">
                 <Package size={20} weight="light" />
                 <p>{eligibility.blockers.join("；")}。這筆仍可選擇合作社取貨。</p>
@@ -363,7 +367,7 @@ export function CheckoutPage() {
                       <dd>{checkoutMethod === "shipping" ? "綠界物流" : "合作社取貨"}</dd>
                     </div>
                     <InvoicePreferenceSummary value={invoicePreference} />
-                    {checkoutMethod === "shipping" && (
+                    {logisticsEnabled && checkoutMethod === "shipping" && (
                       <div className="summary-shipping">
                         <dt>預估運費</dt>
                         <dd>
