@@ -659,6 +659,93 @@ async def test_preview_acceptance_checkout_redirects_only_allowlisted_order(
 
 
 @pytest.mark.asyncio
+async def test_preview_acceptance_checkout_redirects_for_allowlisted_product_sku(
+    database_session,
+) -> None:
+    user = User(
+        email="sku-acceptance@example.test",
+        display_name="商品白名單買家",
+        password_hash="test",
+    )
+    product = Product(
+        slug="remote-payment-10",
+        sku="REMOTE-PAYMENT-10",
+        name="遠端付款驗收品（測試）",
+        category="生活用品",
+        unit="份",
+        member_price=10,
+        nonmember_price=10,
+        stock_quantity=20,
+        tax_type=TaxType.TAXABLE,
+    )
+    database_session.add_all([user, product])
+    await database_session.flush()
+    order = Order(
+        order_number="ORD-RAYGATE-SKU-ACCEPTANCE",
+        order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.REGULAR,
+        fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
+        user=user,
+        membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=10,
+        contact_email=user.email,
+        payment_status=PaymentStatus.PENDING,
+        items=[
+            OrderItem(
+                source_product_id=product.id,
+                product_name=product.name,
+                unit_label=product.unit,
+                quantity=1,
+                unit_price=10,
+                subtotal=10,
+                tax_type=product.tax_type,
+            )
+        ],
+    )
+    attempt = PaymentAttempt(
+        order=order,
+        provider="raygate",
+        merchant_trade_no="SKUACCEPTANCE10",
+        amount=10,
+        status=PaymentStatus.PENDING,
+        checkout_payload={
+            "redirect_url": (
+                f"https://pay.example.test/calc/pay_encrypt/{STORE_IDENTIFIER}"
+                "?TransactionData=test&HashDigest=test"
+            )
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+    )
+    database_session.add_all([order, attempt])
+    await database_session.commit()
+    settings = make_test_settings(
+        environment="preview",
+        payment_provider="raygate",
+        raygate_payment_store_identifier=STORE_IDENTIFIER,
+        raygate_payment_key_hex=KEY_HEX,
+        raygate_payment_iv_hex=IV_HEX,
+        raygate_payment_merchant_id=MERCHANT_ID,
+        raygate_payment_terminal_id=TERMINAL_ID,
+        raygate_payment_base_url="https://pay.example.test",
+        raygate_payment_allowed_hostname="pay.example.test",
+        raygate_payment_stage=False,
+        raygate_payment_acceptance_sku=product.sku,
+    )
+
+    async with api_test_context(
+        database_session,
+        [payments_router],
+        settings=settings,
+    ) as client:
+        response = await client.get(f"/payments/{attempt.id}/checkout")
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(
+        f"https://pay.example.test/calc/pay_encrypt/{STORE_IDENTIFIER}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_replayed_callback_can_advance_when_query_changes_to_paid(
     raygate_callback_context,
 ) -> None:

@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user
 from ..config import Settings, get_settings
@@ -25,6 +26,7 @@ from ..integrations.payment_service import (
     SQLAlchemyPaymentCallbackRepository,
     create_membership_payment_attempt,
     create_payment_attempt,
+    ensure_order_payment_runtime_enabled,
     ensure_payment_runtime_enabled,
     payment_adapter_from_settings,
     payment_attempt_read,
@@ -240,18 +242,23 @@ async def payment_checkout(
     attempt = await session.get(PaymentAttempt, attempt_id)
     if attempt is None:
         raise HTTPException(status_code=404, detail="找不到付款頁")
-    fulfillment_method = None
+    order = None
     if attempt.order_id is not None:
-        fulfillment_method = await session.scalar(
-            select(Order.fulfillment_method).where(Order.id == attempt.order_id)
+        order = await session.scalar(
+            select(Order)
+            .where(Order.id == attempt.order_id)
+            .options(selectinload(Order.items))
         )
     try:
-        ensure_payment_runtime_enabled(
-            settings,
-            order_id=attempt.order_id,
-            amount=attempt.amount,
-            fulfillment_method=fulfillment_method,
-        )
+        if order is not None:
+            await ensure_order_payment_runtime_enabled(
+                session,
+                settings,
+                order,
+                amount=attempt.amount,
+            )
+        else:
+            ensure_payment_runtime_enabled(settings, amount=attempt.amount)
     except PaymentApplicationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     expires_at = attempt.expires_at

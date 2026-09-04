@@ -104,3 +104,17 @@ test("Render 通過 CI 才部署，API 啟動具備可追蹤的資料庫準備�
   assert.match(apiService, /healthCheckPath: \/ready/);
   assert.match(workflow, /branches: \[main, codex\/v2-social-commerce\]/);
 });
+
+test("Render 正式前端以同網域代理 API，避免跨站登入 Cookie 遺失", () => {
+  const webService = renderBlueprint.match(/  - type: web\n    name: shilifangyuan-web[\s\S]*$/)?.[0] ?? "";
+  const apiRewriteIndex = webService.indexOf("source: /v1/*");
+  const spaRewriteIndex = webService.indexOf("source: /*");
+
+  assert.match(webService, /- key: VITE_API_BASE_URL\n\s+value: ""/);
+  assert.match(
+    webService,
+    /source: \/v1\/\*\n\s+destination: https:\/\/shilifangyuan-api\.onrender\.com\/v1\/\*/,
+  );
+  assert.ok(apiRewriteIndex >= 0);
+  assert.ok(spaRewriteIndex > apiRewriteIndex);
+});

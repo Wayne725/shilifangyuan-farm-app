@@ -57,7 +57,7 @@ services:
       - key: DEMO_NONMEMBER_PASSWORD
         sync: false
       - key: PAYMENT_PROVIDER
-        value: ecpay
+        value: raygate
       - key: RAYGATE_PAYMENT_STORE_IDENTIFIER
         sync: false
       - key: RAYGATE_PAYMENT_KEY_HEX
@@ -73,7 +73,7 @@ services:
       - key: RAYGATE_PAYMENT_ALLOWED_HOSTNAME
         sync: false
       - key: RAYGATE_PAYMENT_STAGE
-        value: "true"
+        value: "false"
       - key: RAYGATE_PAYMENT_CONTRACT_VERIFIED
         value: "false"
       - key: RAYGATE_PAYMENT_RECONCILE_HOURS
@@ -116,12 +116,15 @@ services:
     staticPublishPath: ./web/dist
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://shilifangyuan-api.onrender.com
+        value: ""
       - key: VITE_APP_ENV
         value: preview
       - key: VITE_LOGISTICS_ENABLED
         value: "false"
     routes:
+      - type: rewrite
+        source: /v1/*
+        destination: https://shilifangyuan-api.onrender.com/v1/*
       - type: rewrite
         source: /*
         destination: /index.html

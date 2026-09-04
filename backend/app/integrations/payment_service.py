@@ -138,6 +138,40 @@ def ensure_payment_runtime_enabled(
     raise PaymentApplicationError("Preview 展示環境不提供線上付款")
 
 
+async def ensure_order_payment_runtime_enabled(
+    session: AsyncSession,
+    settings: Settings,
+    order: Order,
+    *,
+    amount: Optional[int] = None,
+) -> None:
+    acceptance_item = order.items[0] if len(order.items) == 1 else None
+    acceptance_product_sku = None
+    if (
+        settings.environment.strip().lower() == "preview"
+        and settings.raygate_payment_acceptance_sku.strip()
+        and acceptance_item is not None
+        and acceptance_item.source_product_id is not None
+    ):
+        acceptance_product_sku = await session.scalar(
+            select(Product.sku).where(
+                Product.id == acceptance_item.source_product_id
+            )
+        )
+    ensure_payment_runtime_enabled(
+        settings,
+        order_id=order.id,
+        amount=order.amount_total if amount is None else amount,
+        fulfillment_method=order.fulfillment_method,
+        product_sku=acceptance_product_sku,
+        item_count=len(order.items),
+        item_quantity=(acceptance_item.quantity if acceptance_item else None),
+        item_unit_price=(acceptance_item.unit_price if acceptance_item else None),
+        item_subtotal=(acceptance_item.subtotal if acceptance_item else None),
+        order_kind=order.order_kind,
+    )
+
+
 def allow_local_refund_without_payment_attempt(settings: Settings) -> bool:
     return settings.environment.strip().lower() in {
         "development",
@@ -473,29 +507,7 @@ async def create_payment_attempt(
     )
     if order is None:
         raise PaymentApplicationError("找不到訂單")
-    acceptance_product_sku = None
-    acceptance_item = order.items[0] if len(order.items) == 1 else None
-    if (
-        settings.environment.strip().lower() == "preview"
-        and settings.raygate_payment_acceptance_sku.strip()
-        and acceptance_item is not None
-        and acceptance_item.source_product_id is not None
-    ):
-        acceptance_product_sku = await session.scalar(
-            select(Product.sku).where(Product.id == acceptance_item.source_product_id)
-        )
-    ensure_payment_runtime_enabled(
-        settings,
-        order_id=order.id,
-        amount=order.amount_total,
-        fulfillment_method=order.fulfillment_method,
-        product_sku=acceptance_product_sku,
-        item_count=len(order.items),
-        item_quantity=(acceptance_item.quantity if acceptance_item else None),
-        item_unit_price=(acceptance_item.unit_price if acceptance_item else None),
-        item_subtotal=(acceptance_item.subtotal if acceptance_item else None),
-        order_kind=order.order_kind,
-    )
+    await ensure_order_payment_runtime_enabled(session, settings, order)
     if order.payment_status == PaymentStatus.PAID:
         raise PaymentApplicationError("此訂單已付款")
     if order.payment_status in {

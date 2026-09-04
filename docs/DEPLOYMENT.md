@@ -15,9 +15,7 @@
 
 1. 將專案推送到私人 GitHub repository。
 2. 在 Render 選擇 **New → Blueprint**，連接該 repository。
-3. 若 Render 因名稱已被使用而更改服務網址，將 API 的公開網址填入：
-   - API 服務的 `APP_BASE_URL`
-   - Web 服務的 `VITE_API_BASE_URL`
+3. 若 Render 因名稱已被使用而更改服務網址，將 API 的公開網址填入 API 服務的 `APP_BASE_URL`，並同步更新 Web 的 `/v1/*` rewrite destination。
 4. 將 Web 公開網址填入 API 服務的 `WEB_BASE_URL`。
 5. 設定三組不同的強展示密碼；部署版不可沿用 README 的範例密碼。
 6. 重新部署 API 與 Web。
@@ -26,7 +24,7 @@ Cloudflare R2、選定的金流憑證與綠界物流憑證只在升級成整合�
 
 API 啟動時會先執行 `python -m app.startup prepare`。Migration 與 Preview seed 遇到暫時性資料庫錯誤時會指數退避重試，日誌會以 `startup_stage=migration` 或 `startup_stage=preview_seed` 標示失敗階段。Web 與 API 設為 GitHub checks 通過後才自動部署；`codex/v2-social-commerce` 分支因此也納入 push CI。
 
-`VITE_API_BASE_URL` 必須填 FastAPI 的公開 HTTPS 根網址，不含 `/v1`。新版 Web 在本機由 Vite 代理 `/v1`，正式靜態站則直接呼叫這個公開網址。
+Render 正式靜態站的 `VITE_API_BASE_URL` 保持空字串，並由排序在 SPA fallback 前面的 `/v1/*` rewrite 轉送到 FastAPI。瀏覽器因此只會對 Web 網域發送登入請求，後端設定的 HttpOnly refresh Cookie 不會被視為第三方 Cookie。本機開發同樣由 Vite 代理 `/v1`。
 
 `APP_BASE_URL` 必須是金流與綠界物流都可連線的公開 HTTPS API 根網址，供付款瀏覽器 return URL、相容 callback 欄位與物流 `ClientReplyURL` 使用；`WEB_BASE_URL` 必須是公開 HTTPS Web 根網址，供後端完成驗證後導回訂單或社員頁。兩者都不可填入 localhost、內網網址或額外路徑。
 
@@ -262,8 +260,7 @@ Repository Settings → Secrets and variables → Actions 新增：
 
 1. PostgreSQL 使用付費持久化方案，設定每日備份、還原演練與資料保留期限。
 2. `APP_ENV=production`。使用雷門付款時設定 `PAYMENT_PROVIDER=raygate`、正式 `RAYGATE_PAYMENT_BASE_URL`、一致的 `RAYGATE_PAYMENT_ALLOWED_HOSTNAME` 與正式商店憑證，將 `RAYGATE_PAYMENT_STAGE=false`，並且只在完成回跳查單、定時補查、狀態與退款契約驗收後設定 `RAYGATE_PAYMENT_CONTRACT_VERIFIED=true`；未確認時 API 會拒絕啟動。使用綠界付款則將 `ECPAY_PAYMENT_STAGE=false` 並更換兩個 `ECPAY_PAYMENT_*_URL`。綠界物流一律設定 `ECPAY_LOGISTICS_STAGE=false` 並更換五個 `ECPAY_LOGISTICS_*_URL`。發票若使用綠界，設定 `ECPAY_INVOICE_STAGE=false` 並更換三個 `ECPAY_INVOICE_*_URL`；若使用汎宇，設定 `INVOICE_PROVIDER=fanyu`、`FANYU_INVOICE_STAGE=false`、`FANYU_INVOICE_BASE_URL=https://web.einvoice.com.tw/einv`，取得正式環境專屬憑證並重新完成低額開票、查回與通知驗收後，才設 `FANYU_INVOICE_SIGNATURE_VERIFIED=true`。
-3. `APP_BASE_URL`、`WEB_BASE_URL`、`VITE_API_BASE_URL` 全部使用正式 HTTPS 網域；確認瀏覽器能回到平台，並確認需要主動通知的綠界物流與發票服務可連入各自 callback。雷門另須確認狀態、補查頻率、退款與正式對帳契約。
-   Web 與 API 最好使用同一自有主網域下的子網域，並實測瀏覽器未封鎖 HttpOnly refresh Cookie。
+3. `APP_BASE_URL`、`WEB_BASE_URL` 使用正式 HTTPS 網域；Render Web 維持空白 `VITE_API_BASE_URL`，並把 `/v1/*` rewrite destination 更新為正式 API 網域。確認重新整理後登入仍有效、瀏覽器能由金流回到平台，且需要主動通知的綠界物流與發票服務可連入各自 callback。雷門另須確認狀態、補查頻率、退款與正式對帳契約。
    Refresh token 由資料庫 session 管理且每次換發即撤銷舊 token；部署 migration 前不可先啟動新版 API。
 4. 設定正式寄件人姓名、郵遞區號與地址，完成綠界物流測試單、列印託運單、貨態回傳與異常件處理。
 5. 驗證 Email 寄件網域的 SPF、DKIM、DMARC，實測註冊驗證、密碼重設、訂單與社務通知。
