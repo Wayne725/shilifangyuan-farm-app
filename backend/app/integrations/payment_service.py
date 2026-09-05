@@ -1406,7 +1406,7 @@ class SQLAlchemyPaymentCallbackRepository:
             order,
             attempt,
             "payment_succeeded",
-            "付款成功",
+            "付款成功通知",
             "訂單 {} 已付款成功。".format(order.order_number),
         )
 

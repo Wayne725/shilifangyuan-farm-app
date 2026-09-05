@@ -8,7 +8,8 @@ import app.jobs as jobs
 from app.integrations.common import HTTPResponse
 from app.integrations.email_sender import EmailSendResult
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
-from app.models import Invoice, InvoiceStatus, OutboxEvent, OutboxStatus, PaymentStatus, User
+from app.models import Invoice, InvoiceStatus, PaymentStatus, User
+from app.routers.notifications import notifications_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
 from tests.support import api_test_context, auth_headers, make_test_settings
@@ -85,29 +86,32 @@ async def test_verified_payment_invoice_mail_duplicate_and_refund_pipeline(
     monkeypatch.setattr(jobs, "invoice_adapter_from_settings", lambda *args: invoice_adapter)
     monkeypatch.setattr(jobs, "email_sender_from_settings", lambda *args: EmailSender())
     now = datetime.now(timezone.utc)
-    assert await jobs._reconcile_expired_payments(session, settings, now, 100) == 1
+    report = await jobs.reconcile_once(session, settings, now=now)
+    assert report.payment_attempts == 1
+    assert report.outbox_failed == 0
     await session.refresh(order)
     assert order.payment_status == PaymentStatus.PAID
 
-    assert (await jobs._process_outbox(session, settings, now + timedelta(minutes=1), 100))[1] == 0
+    assert (await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=1))).outbox_failed == 0
     invoice = await session.scalar(select(Invoice).where(Invoice.order_id == order.id))
     assert invoice.status == InvoiceStatus.ISSUED
     assert invoice.invoice_number == "AB12345678"
     assert invoice_calls == ["queryInvoice", "openInvoice"]
-    pending = list(await session.scalars(select(OutboxEvent).where(
-        OutboxEvent.event_type == "send_email", OutboxEvent.status == OutboxStatus.PENDING
-    )))
-    assert any("AB12345678" in event.payload["text_content"] for event in pending)
-    await jobs._process_outbox(session, settings, now + timedelta(minutes=2), 100)
-    assert sum("AB12345678" in message.text_content for message in mail_calls) == 1
+    async with api_test_context(session, [notifications_router], settings=settings) as notification_client:
+        notifications = await notification_client.get("/v1/notifications", headers=auth_headers(order.user))
+    assert notifications.status_code == 200
+    assert any(item["event_type"] == "invoice_issued" and "AB12345678" in item["body"] for item in notifications.json())
+    await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=2))
+    assert [message.subject for message in mail_calls] == ["付款成功通知"]
+    assert all("AB12345678" not in message.text_content for message in mail_calls)
 
     repeated = await client.post(
         f"/v1/payment-attempts/{attempt.id}/refresh", headers=auth_headers(order.user)
     )
     assert repeated.status_code == 200
-    await jobs._process_outbox(session, settings, now + timedelta(minutes=3), 100)
+    await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=3))
     assert invoice_calls.count("openInvoice") == 1
-    assert sum("AB12345678" in message.text_content for message in mail_calls) == 1
+    assert [message.subject for message in mail_calls] == ["付款成功通知"]
 
     refund_adapter = FakeRayGateRefundAdapter(await payment_adapter.query_order(attempt.merchant_trade_no))
     monkeypatch.setattr(jobs, "refund_adapter_from_settings", lambda *args: refund_adapter)
@@ -117,7 +121,7 @@ async def test_verified_payment_invoice_mail_duplicate_and_refund_pipeline(
             headers=auth_headers(order.user),
         )
     assert cancelled.status_code == 200, cancelled.text
-    await jobs._process_outbox(session, settings, now + timedelta(minutes=4), 100)
+    await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=4))
     await session.refresh(order)
     await session.refresh(invoice)
     assert order.payment_status == PaymentStatus.REFUNDED

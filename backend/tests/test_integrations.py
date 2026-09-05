@@ -175,11 +175,11 @@ async def make_regular_order(database_session):
 
 
 @pytest.mark.asyncio
-async def test_fanyu_invoice_queues_platform_email_fallback(
+async def test_fanyu_invoice_does_not_send_a_duplicate_platform_email(
     database_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user, _product, order = await make_regular_order(database_session)
+    _user, _product, order = await make_regular_order(database_session)
     order.payment_status = PaymentStatus.PAID
     order.invoice_status = InvoiceStatus.PENDING
     event = OutboxEvent(
@@ -214,22 +214,22 @@ async def test_fanyu_invoice_queues_platform_email_fallback(
         "invoice_adapter_from_settings",
         lambda _settings: InvoiceAdapter(),
     )
+    emails = []
 
-    await jobs_module._process_invoice_event(
-        database_session,
-        make_test_settings(),
-        event,
-    )
+    class EmailProvider:
+        async def send(self, message):
+            emails.append(message)
+            return EmailSendResult(True, "isolated-email", 200, "mock")
 
-    email_event = await database_session.scalar(
-        select(OutboxEvent).where(
-            OutboxEvent.event_type == "send_email",
-            OutboxEvent.aggregate_id == user.id,
-        )
-    )
-    assert email_event is not None
-    assert email_event.payload["to_email"] == order.contact_email
-    assert email_event.payload["event_type"] == "invoice_issued"
+    monkeypatch.setattr(jobs_module, "email_sender_from_settings", lambda _: EmailProvider())
+    reports = [
+        await jobs_module.reconcile_once(database_session, make_test_settings())
+        for _ in range(3)
+    ]
+
+    assert all(report.outbox_failed == 0 for report in reports)
+    assert reports[0].outbox_completed >= 1
+    assert emails == []
 
 
 def signed_payment_callback(attempt, payment_date, simulate_paid="0"):

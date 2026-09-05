@@ -78,7 +78,8 @@ from .models import (
 from .v2_domain import apply_member_proposal_clock
 
 
-logger = logging.getLogger(__name__)
+# Uvicorn configures its own logger, not the root app logger.
+logger = logging.getLogger("uvicorn.error").getChild(__name__)
 
 
 @dataclass
@@ -1433,7 +1434,12 @@ async def _process_invoice_event(
                 "order_id": order.id,
                 "invoice_number": result.invoice_number,
             },
-            email=order.invoice_buyer_email or order.contact_email,
+            # Fanyu delivers the invoice via notifyEmail; keep this notice in-app.
+            email=(
+                None
+                if adapter.provider_name == "fanyu"
+                else order.invoice_buyer_email or order.contact_email
+            ),
             dedupe_key="invoice:{}".format(result.relate_number),
         )
     )

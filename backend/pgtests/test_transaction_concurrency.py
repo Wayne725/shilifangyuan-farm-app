@@ -16,11 +16,15 @@ from app.database import Base
 from app.integrations.common import HTTPResponse
 from app.integrations.email_sender import EmailSendResult
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
-from app.integrations.invoice_service import enqueue_invoice_issue
+from app.integrations.payment_service import (
+    SQLAlchemyPaymentCallbackRepository,
+    create_payment_attempt,
+    payment_adapter_from_settings,
+)
 from app.models import PaymentAttempt, PaymentStatus
 from tests.support import make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
-from tests.test_integrations import make_regular_order
+from tests.test_integrations import make_regular_order, payment_settings, signed_payment_callback
 
 
 @pytest.fixture
@@ -47,10 +51,14 @@ async def postgres_sessions():
 @pytest.mark.asyncio
 async def test_concurrent_workers_do_not_repeat_payment_query_invoice_or_email(postgres_sessions, monkeypatch):
     async with postgres_sessions() as session:
-        _buyer, _product, order = await make_regular_order(session)
-        order.payment_status = PaymentStatus.PAID
+        buyer, _product, order = await make_regular_order(session)
         order.contact_email = "isolated-ci@example.com"
-        enqueue_invoice_issue(session, order, trigger="verified_payment")
+        now = datetime.now(timezone.utc)
+        attempt = await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
+        callback = signed_payment_callback(attempt, now + timedelta(seconds=1))
+        await payment_adapter_from_settings(payment_settings()).process_callback(
+            callback, SQLAlchemyPaymentCallbackRepository(session),
+        )
         session.add(PaymentAttempt(
             order_id=order.id, provider="raygate", merchant_trade_no="CI-POLL-ONCE",
             amount=order.amount_total, status=PaymentStatus.EXPIRED,
@@ -106,4 +114,7 @@ async def test_concurrent_workers_do_not_repeat_payment_query_invoice_or_email(p
     assert payment_queries == ["CI-POLL-ONCE"]
     assert invoice_requests == ["queryInvoice", "openInvoice"]
     assert len(emails) == 1
-    assert "AB12345678" in emails[0].text_content
+    assert emails[0].subject == "付款成功通知"
+    assert emails[0].to_email == "isolated-ci@example.com"
+    assert "SLFTEST0001" in emails[0].text_content
+    assert "AB12345678" not in emails[0].text_content
