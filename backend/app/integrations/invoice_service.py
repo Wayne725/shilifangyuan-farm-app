@@ -381,6 +381,7 @@ def _apply_provider_query_result(
         or ""
     ) or None
     invoice.provider_status = provider_status or None
+    previous_status = invoice.status
     invoice.status = (
         InvoiceStatus.VOIDED
         if provider_status == "1"
@@ -388,13 +389,17 @@ def _apply_provider_query_result(
         if provider_status == "3"
         else InvoiceStatus.ISSUED
     )
+    if invoice.status == InvoiceStatus.ISSUED and previous_status in {
+        InvoiceStatus.VOID_PENDING, InvoiceStatus.VOIDED,
+    }:
+        invoice.status = previous_status
     invoice.provider_response = dict(query_result)
     invoice.error_message = (
         "汎宇回報發票已退回" if provider_status == "3" else None
     )
     if invoice.status == InvoiceStatus.ISSUED:
         invoice.issued_at = invoice.invoice_date or datetime.now(timezone.utc)
-    if invoice.status == InvoiceStatus.VOIDED:
+    if invoice.status == InvoiceStatus.VOIDED and invoice.voided_at is None:
         invoice.voided_at = datetime.now(timezone.utc)
     order.invoice_status = invoice.status
     return InvoiceIssueResult(
@@ -436,26 +441,18 @@ async def reconcile_order_invoice(
     )
     if order is None:
         raise InvoiceApplicationError("找不到發票訂單")
-    if order.payment_status != PaymentStatus.PAID:
+    if order.invoice is None and order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以查詢發票")
     _ensure_provider_binding(order, adapter)
-    request = invoice_request_from_order(
-        order,
-        order.invoice.relate_number
-        if order.invoice is not None
-        else invoice_relate_number(order.order_number),
-    )
-    prepared = adapter.prepare_invoice(request)
-    invoice, _ = await _ensure_invoice_record(
-        session,
-        order,
-        adapter,
-        prepared,
-    )
-    query_result = await _query_provider_invoice(
-        adapter,
-        order,
+    invoice = order.invoice
+    if invoice is None:
+        request = invoice_request_from_order(order, invoice_relate_number(order.order_number))
+        invoice, _ = await _ensure_invoice_record(
+            session, order, adapter, adapter.prepare_invoice(request),
+        )
+    query_result = await adapter.query_invoice(
         invoice.relate_number,
+        buyer_type=invoice.buyer_type.value,
     )
     result = _apply_provider_query_result(invoice, order, query_result)
     if commit:

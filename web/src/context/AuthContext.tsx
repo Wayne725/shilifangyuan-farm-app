@@ -21,6 +21,8 @@ import type { AuthResponse, User } from "../lib/types";
 interface AuthContextValue {
   user: User | null;
   isAuthReady: boolean;
+  sessionError: string;
+  retrySession: () => void;
   openLogin: () => void;
   logout: () => Promise<void>;
 }
@@ -31,23 +33,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [sessionError, setSessionError] = useState("");
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
+    setIsAuthReady(false);
+    setSessionError("");
     void restoreSession()
       .then((session) => {
-        if (active) setUser(session?.user ?? null);
+        if (active) {
+          setUser(session?.user ?? null);
+          setIsAuthReady(true);
+        }
       })
-      .finally(() => {
-        if (active) setIsAuthReady(true);
+      .catch((reason: unknown) => {
+        if (active) setSessionError(reason instanceof Error ? reason.message : "登入狀態確認失敗，請稍後重試。");
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [sessionAttempt]);
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -85,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, isAuthReady, openLogin: () => setOpen(true), logout }}
+      value={{ user, isAuthReady, sessionError, retrySession: () => setSessionAttempt((value) => value + 1), openLogin: () => setOpen(true), logout }}
     >
       {children}
       <Dialog.Root open={open} onOpenChange={setOpen}>

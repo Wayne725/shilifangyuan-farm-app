@@ -1470,7 +1470,8 @@ class SupplierRead(BaseModel):
     responsible_person: str
     contact_person: str
     phone: str
-    email: EmailStr
+    # Keep historical contacts readable; create/update still validate EmailStr.
+    email: str
     line_id: Optional[str]
     settlement_terms: str
     bank_account: str

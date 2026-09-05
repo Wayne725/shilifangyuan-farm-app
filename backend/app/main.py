@@ -18,6 +18,7 @@ from .database import SessionLocal, check_database_connection
 from .domain import DomainError
 from .jobs import (
     jobs_router,
+    periodic_reconciliation,
     schedule_background_reconcile,
     should_reconcile_now,
 )
@@ -37,10 +38,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    if get_settings().environment.strip().lower() in {"development", "test"}:
+    settings = get_settings()
+    if settings.environment.strip().lower() in {"development", "test"}:
         async with SessionLocal() as session:
             await seed_demo_data(session)
-    yield
+    async with periodic_reconciliation(settings):
+        yield
 
 
 def create_app() -> FastAPI:

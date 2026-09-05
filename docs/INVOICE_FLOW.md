@@ -1,6 +1,6 @@
 # 汎宇雲端電子發票流程
 
-更新日期：2026-09-04
+更新日期：2026-09-05（含本機驗收修復，尚未部署）
 
 ## 已確定需求
 
@@ -24,7 +24,7 @@ Checkout
        -> found: sync invoice number/status
        -> not found: openInvoice(order snapshot)
   -> Invoice + exact provider request + decimal InvoiceItem snapshot
-  -> in-app notification
+  -> in-app notification + platform email（下一輪 Outbox）
 ```
 
 開票時點已確定為「後端驗證付款成功後」。前端導回成功頁不具付款效力；只有金流 callback（供應商支援時）或 server-to-server 查詢通過後才會排入開票。雷門沒有主動通知，因此由回跳立即查單與背景補查確認。取貨與物流完成時保留相容性補排機制，僅用於舊資料或舊事件；同一訂單若已排入、已開立或待作廢，不會重複排入。
@@ -70,6 +70,8 @@ Checkout 會把下列資料直接保存到訂單，後續不再依使用者帳�
 
 因此，即使 `/openInvoice` 已在汎宇完成、平台卻因網路逾時沒收到回應，下次 worker 也會先查詢並復原，不會直接重開。
 
+常駐 API 可透過 `RECONCILIATION_ENABLED=true` 定期處理 Outbox，預設每輪結束後等待 60 秒；同一 process 沿用既有單輪執行限制。此設定預設關閉，本次只完成本機模擬驗收，雲端仍須部署並確認無瀏覽器流量時工作持續前進。部署步驟見 [部署手冊](DEPLOYMENT.md)。
+
 ## 退款後的發票補償
 
 - 退款完成時若發票已開立，系統一定建立 `invoice.adjustment_required`，不會只改付款狀態。
@@ -90,7 +92,10 @@ Content-Type: application/json
 
 規則：
 
-- 只允許管理員及已付款訂單。
+- 只允許管理員。已有發票的訂單，即使已退款或取消，仍可查詢該張發票；尚無發票則仍要求已付款。
+- 既有發票使用保存的銷貨單號及買方類型查詢，不依現在的訂單資料重建開票請求，也不呼叫開立 API。
+- 已有 provider 綁定不可跨供應商查詢／重開；沒有查到發票時保持原狀。
+- 供應商仍回報已開立時，不清除本機 `void_pending` 待辦或把 `voided` 改回已開立。查得已作廢才同步完成狀態。
 - 原因必填，不另外顯示確認視窗。
 - 成功與供應商失敗都寫入 `admin_audits`。
 - API 只回傳標準化後的發票號碼、日期與狀態，不回傳原始 provider payload、`auth`、APIKey 或簽章。
@@ -117,7 +122,7 @@ Content-Type: application/json
 
 | 汎宇查詢狀態 | 平台狀態 |
 |---|---|
-| `0` 或空值 | `issued` |
+| `0` 或空值 | `issued`；若原為 `void_pending`／`voided` 則保留原狀 |
 | `1` | `voided` |
 | `3` | `failed`（汎宇退回） |
 | 查無銷貨單 | 維持目前狀態，不視為已開立 |
@@ -126,7 +131,8 @@ Content-Type: application/json
 
 - 汎宇：依 `notifyEmail` 寄發官方發票通知；B2B 通知包含 PDF。
 - Resend：負責註冊、付款、訂單、退款等平台通知。
-- 使用汎宇時，平台仍建立站內「發票已開立」通知，但不再用 Resend 重寄同一封發票通知，避免同一信箱收到兩封相似信件。
+- 使用汎宇時，現行程式另建立站內「發票已開立」及平台 Email，內容是訂單／發票號碼，不是汎宇官方 PDF。這不是「確認汎宇寄信失敗後」才寄的備援；平台目前沒有官方送達回執可作此判斷。
+- 付款通知、平台開票通知及汎宇官方發票通知是三件事。收到前兩者不代表官方發票信已送達；失敗清單回收與送達追蹤仍待實作。
 
 ## 安全開關與環境變數
 

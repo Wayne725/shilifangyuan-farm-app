@@ -16,6 +16,7 @@ flowchart LR
     api --> outbox[("Outbox")]
     outbox --> email["Resend・MailerSend"]
     cron["GitHub Actions"] --> jobs["Reconciliation"]
+    timer["常駐 API 定期工作（需啟用）"] --> jobs
     jobs --> db
     jobs --> outbox
 ```
@@ -77,3 +78,5 @@ fulfillment_method  cooperative_pickup | event_pickup | ecpay_logistics
 - Payment 與物流外部事件以 `ExternalEvent` 去重；雷門付款以回跳立即查單、前端短暫補查與背景 reconciliation 收斂狀態。
 - Email 先寫入 Outbox，驗證碼與重設憑證加密保存；Resend 失敗時可由 MailerSend 備援。
 - `POST /internal/reconcile` 處理逾期保留、付款查單、團購、活動、便當、provider 退款、發票與通知。
+- `RECONCILIATION_ENABLED` 預設關閉；啟用後 FastAPI lifespan 持續驅動相同工作，不依賴瀏覽器流量。這不是獨立 worker，仍與 API 共用運算資源；多實例容量與併發行為需另外驗收。
+- 付款補查以 `PaymentAttempt.next_reconcile_at` 持久化公平排序與間隔；Outbox 保留原有取件與重試機制。

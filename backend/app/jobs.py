@@ -5,11 +5,12 @@ import asyncio
 import logging
 import time
 from dataclasses import asdict, dataclass
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy import case, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -184,6 +185,7 @@ async def lazy_reconcile(
             return None
         report = await reconcile_once(session, settings)
         _last_lazy_reconcile_at = current_monotonic
+        logger.info("reconcile_completed counts=%s", report.to_dict())
         return report.to_dict()
 
 
@@ -228,8 +230,9 @@ def schedule_background_reconcile(
                                 settings,
                                 minimum_interval_seconds=0,
                             )
-                        except Exception:
+                        except Exception as exc:
                             await session.rollback()
+                            logger.error("reconcile_failed error_type=%s", type(exc).__name__)
                 finally:
                     if _background_reconcile_task is asyncio.current_task():
                         _background_reconcile_task = None
@@ -249,8 +252,9 @@ def schedule_background_reconcile(
                         settings,
                         minimum_interval_seconds=minimum_interval_seconds,
                     )
-                except Exception:
+                except Exception as exc:
                     await session.rollback()
+                    logger.error("reconcile_failed error_type=%s", type(exc).__name__)
         finally:
             if _background_reconcile_task is asyncio.current_task():
                 _background_reconcile_task = None
@@ -258,6 +262,41 @@ def schedule_background_reconcile(
     task = asyncio.create_task(_run())
     _background_reconcile_task = task
     return task
+
+
+@asynccontextmanager
+async def periodic_reconciliation(settings: Settings):
+    if not settings.reconciliation_enabled:
+        yield
+        return
+    stop = asyncio.Event()
+
+    async def run():
+        logger.info("reconcile_scheduler_started interval_seconds=%s", settings.reconciliation_interval_seconds)
+        while not stop.is_set():
+            try:
+                await schedule_background_reconcile(
+                    settings, minimum_interval_seconds=settings.reconciliation_interval_seconds,
+                )
+            except Exception as exc:
+                logger.error("reconcile_scheduler_failed error_type=%s", type(exc).__name__)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=settings.reconciliation_interval_seconds)
+            except asyncio.TimeoutError:
+                continue
+
+    task = asyncio.create_task(run(), name="periodic-reconciliation")
+    try:
+        yield
+    finally:
+        stop.set()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=settings.integration_timeout_seconds + 5)
+        except asyncio.TimeoutError:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        logger.info("reconcile_scheduler_stopped")
 
 
 async def _reconcile_expired_payments(
@@ -269,10 +308,12 @@ async def _reconcile_expired_payments(
     raygate_late_payment_cutoff = now - timedelta(
         hours=settings.raygate_payment_reconcile_hours
     )
+    due = or_(PaymentAttempt.next_reconcile_at.is_(None), PaymentAttempt.next_reconcile_at <= now)
     attempt_ids = list(
         await session.scalars(
             select(PaymentAttempt.id)
             .where(
+                due,
                 or_(
                     (
                         (PaymentAttempt.status == PaymentStatus.PENDING)
@@ -299,11 +340,13 @@ async def _reconcile_expired_payments(
                 )
             )
             .order_by(
+                func.coalesce(PaymentAttempt.next_reconcile_at, PaymentAttempt.created_at),
                 case(
                     (PaymentAttempt.status == PaymentStatus.PENDING, 0),
                     else_=1,
                 ),
                 PaymentAttempt.expires_at,
+                PaymentAttempt.id,
             )
             .limit(limit)
         )
@@ -312,7 +355,21 @@ async def _reconcile_expired_payments(
         return 0
     processed = 0
     for attempt_id in attempt_ids:
-        attempt = await session.get(PaymentAttempt, attempt_id)
+        claim_time = max(now, datetime.now(timezone.utc))
+        claimed = await session.execute(
+            update(PaymentAttempt)
+            .where(
+                PaymentAttempt.id == attempt_id,
+                PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+                due,
+            )
+            .values(next_reconcile_at=claim_time + timedelta(seconds=settings.reconciliation_interval_seconds))
+            .execution_options(synchronize_session=False)
+        )
+        await session.commit()
+        if not claimed.rowcount:
+            continue
+        attempt = await session.get(PaymentAttempt, attempt_id, populate_existing=True)
         if attempt is None or attempt.status not in {
             PaymentStatus.PENDING,
             PaymentStatus.EXPIRED,

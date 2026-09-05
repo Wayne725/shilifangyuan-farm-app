@@ -66,6 +66,8 @@ jobs:
         run: alembic downgrade base
       - name: Verify migration re-upgrade
         run: alembic upgrade head
+      - name: Verify PostgreSQL payment and invoice concurrency
+        run: TEST_POSTGRES_URL="$DATABASE_URL" pytest pgtests -q --durations=10
       - name: Run pytest
         run: pytest -q --durations=20
 

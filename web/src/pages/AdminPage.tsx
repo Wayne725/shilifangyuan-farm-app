@@ -274,7 +274,6 @@ function AdminOrderAction({
   const [refundReason, setRefundReason] = useState("買家申請退款");
   const [invoiceReason, setInvoiceReason] = useState("");
   const refundControl = order.available_actions.includes("refund") && (refundOpen ? <div className="operation-refund"><input aria-label="退款原因" value={refundReason} onChange={(event) => setRefundReason(event.target.value)} /><button type="button" disabled={busy || !refundReason.trim()} onClick={() => onRefund(refundReason)}>確認退款</button><button type="button" onClick={() => setRefundOpen(false)}>取消</button></div> : <button type="button" disabled={busy} onClick={() => setRefundOpen(true)}>建立退款</button>);
-  if (order.payment_status !== "paid") return <small className="no-action">等待買家付款</small>;
   const invoiceControl = (
     <div className="operation-invoice-query">
       <label>
@@ -295,6 +294,14 @@ function AdminOrderAction({
       </button>
     </div>
   );
+  if (order.payment_status !== "paid") {
+    return (
+      <div className="operation-actions">
+        <small className="no-action">{order.payment_status === "pending" ? "等待買家付款" : adminPaymentStatusLabel(order.payment_status)}</small>
+        {order.invoice && invoiceControl}
+      </div>
+    );
+  }
   let fulfillmentControl: ReactNode = null;
   if (order.fulfillment_status === "pending_confirmation") {
     fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("preparing")}>進入備貨</button>;

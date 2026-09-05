@@ -37,6 +37,7 @@ from ..integrations.raygate import (
     canonical_event_key as raygate_event_key,
 )
 from ..models import (
+    FulfillmentStatus,
     MembershipCharge,
     Order,
     PaymentAttempt,
@@ -265,7 +266,11 @@ async def payment_checkout(
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if (
-        attempt.status != PaymentStatus.PENDING
+        (
+            order is not None
+            and (order.cancelled_at is not None or order.fulfillment_status == FulfillmentStatus.CANCELLED)
+        )
+        or attempt.status != PaymentStatus.PENDING
         or expires_at <= datetime.now(timezone.utc)
     ):
         raise HTTPException(status_code=410, detail="付款頁已失效")

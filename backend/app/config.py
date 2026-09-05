@@ -168,6 +168,8 @@ class Settings(BaseSettings):
     demo_nonmember_password: str = DEFAULT_DEMO_NONMEMBER_PASSWORD
     demo_reset_confirmation: str = ""
     payment_reservation_minutes: int = 15
+    reconciliation_enabled: bool = False
+    reconciliation_interval_seconds: float = Field(default=60.0, ge=30, le=3600)
     integration_timeout_seconds: float = 15.0
     default_vote_threshold: int = 10
     default_vote_days: int = 7

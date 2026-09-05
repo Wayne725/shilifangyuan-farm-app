@@ -77,16 +77,14 @@ export async function restoreSession(): Promise<AuthResponse | null> {
       const response = await requestApi("/v1/auth/refresh", {
         method: "POST",
       });
-      if (!response.ok) {
+      if (response.status === 401) {
         clearSession();
         return null;
       }
+      if (!response.ok) throw await errorFromResponse(response);
       const session = (await response.json()) as AuthResponse;
       saveSession(session);
       return session;
-    } catch {
-      clearSession();
-      return null;
     } finally {
       refreshPromise = null;
     }

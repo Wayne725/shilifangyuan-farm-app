@@ -2059,6 +2059,9 @@ class PaymentAttempt(Base):
     )
     checkout_payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     provider_response: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    next_reconcile_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True
     )

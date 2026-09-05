@@ -73,7 +73,13 @@ sequenceDiagram
 - `X-ePay-TerminalID`
 - `X-Merchant-DeviceType`（雷門有核發時才提供）
 
-查單使用 `POST {base_url}/api/query/{store_identifier}`。回跳時立即查一次；確認中頁面最多主動補查兩分鐘，採 5 秒後放慢到 15 秒；背景 reconciliation 會優先查詢有效期內的雷門付款，逾期後依 `RAYGATE_PAYMENT_RECONCILE_HOURS` 繼續有限補查。付款 reconciliation 依付款嘗試保存的 provider 選擇 adapter，不會因日後切換 `PAYMENT_PROVIDER` 而誤查舊交易。
+查單使用 `POST {base_url}/api/query/{store_identifier}`。回跳時立即查一次；確認中頁面最多主動補查兩分鐘，採 5 秒後放慢到 15 秒；背景 reconciliation 涵蓋有效期內的雷門付款，逾期後依 `RAYGATE_PAYMENT_RECONCILE_HOURS` 繼續有限補查。付款 reconciliation 依付款嘗試保存的 provider 選擇 adapter，不會因日後切換 `PAYMENT_PROVIDER` 而誤查舊交易。
+
+2026-09-05 本機修復新增 `next_reconcile_at`（migration `0013_payment_poll_schedule`）：依可查時間公平排序，取批次後逐筆以條件更新預約下一次查詢，提交後才呼叫供應商。查詢失敗也保留間隔，不讓前幾筆一直占滿批次；耗時批次依實際取件時間計算間隔。未查過的舊資料維持 NULL、可正常納入，不變更交易號碼、金額、provider payload 或既有補查期限。這是排程資料，不取代付款回應驗證與事件冪等保護；PostgreSQL 多程序併發仍須另行驗收。
+
+常駐 API 可啟用 `RECONCILIATION_ENABLED=true`，每輪完成後依 `RECONCILIATION_INTERVAL_SECONDS` 等待（預設 60 秒、最低 30 秒），沿用單 process 防重疊機制。不需瀏覽器回站才處理後續發票／通知，但仍須部署並確認設定。GitHub 排程保留為外部補跑，缺少 Secrets 或預設分支版本過舊仍需修正。
+
+已取消訂單拒絕建立新付款；已發出的平台 checkout 連結也會檢查取消狀態而回覆失效。已送達供應商的付款頁無法由本機檢查撤回，因此既有「取消後才查到付款成功」的補償／退款保護仍保留。
 
 退款使用 `POST {base_url}/api/refund/{store_identifier}`。現有規格的退款請求只有 `order_id` 與原付款方式 `refund_type`，沒有退款金額，因此平台只允許全額退款。Worker 在送出退款前先查單；若已是 `status=3` 則視為先前退款已完成，否則只有確認仍為已付款狀態才呼叫退款。退款紀錄保存原付款嘗試、provider、雷門退款單號與供應商回應，供重試與稽核使用。
 

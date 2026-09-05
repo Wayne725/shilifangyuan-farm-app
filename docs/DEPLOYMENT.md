@@ -5,7 +5,8 @@
 - `shilifangyuan-web`：Vite React 靜態網站
 - `shilifangyuan-api`：FastAPI 公開 HTTPS API
 - `shilifangyuan-db`：PostgreSQL
-- GitHub Actions：每 10 分鐘執行一次期限、付款、退款、發票與通知結算
+- 常駐 API 定期工作：需明確啟用，處理付款、發票及通知等既有 reconciliation 工作
+- GitHub Actions：設定每 10 分鐘外部補跑；須確認預設分支版本、Secrets 及實際執行結果
 
 根目錄的 `render.yaml` 已定義三個 Render 資源。免費 Web Service 閒置後會休眠，免費 PostgreSQL 會在建立 30 天後到期，因此免費方案只適合展示與測試；正式營運需使用持久化資料庫、備份與不中斷服務方案。
 
@@ -224,7 +225,22 @@ Repository Settings → Secrets and variables → Actions 新增：
 - `RECONCILE_SECRET`：與 Render API 使用相同值
 
 `.github/workflows/reconcile.yml` 每 10 分鐘喚醒 API 並執行結算，也可由 Actions 頁面手動執行。
-兩個 GitHub Secrets 未設定時，workflow 會明確失敗；雷門沒有主動通知，因此不得關閉此排程或忽略失敗告警。
+目前開發分支在兩個 GitHub Secrets 未設定時會明確失敗，但 2026-09-05 驗收發現 GitHub 預設分支仍使用舊版「略過且成功」邏輯。修改開發分支不等於修好實際排程；須對齊預設分支、設定 Secrets，並確認日誌確實呼叫後端。不得把綠燈當成已處理付款／發票的證據。
+
+## 2026-09-05 修復版部署檢查（本機完成，雲端待執行）
+
+1. 核對待部署 commit、API／Web 的部署分支及現有 Render 付費方案；`render.yaml` 仍有 `plan: free` 歷史值，不可未核對就整份套用 Blueprint，避免影響已購買的方案。這輪沒有更動雲端或計費。
+2. 先保留可還原的資料庫備份，在隔離 PostgreSQL 上驗證 migration，再升級至 `0013_payment_poll_schedule` 後啟動新版 API。新 migration 只加 nullable 欄位與索引；舊 0001～0012 必須完整保留，不可改名、刪除或以 stamp 跳過。這輪 SQLite 往返及 PostgreSQL 離線 DDL 通過，但不等於已在 PostgreSQL 實際升級成功。
+3. 先檢查既有待付款、退款、發票與 Email Outbox 的範圍及供應商設定。啟用定期工作會真正處理既有待辦，可能呼叫付款查詢、退款、開票及寄信，不是唯讀健康檢查。
+4. 常駐 API 設定 `RECONCILIATION_ENABLED=true`、`RECONCILIATION_INTERVAL_SECONDS=60`。程式與本機範例預設關閉；`render.yaml` 的新部署範本提供啟用值，但本機修改不會自動改變既有 Render 環境變數。
+5. 確認 `reconcile_scheduler_started`、`reconcile_completed` 持續出現；失敗日誌只有錯誤類別，不輸出憑證。每輪完成後等待設定間隔，因此不是固定每分鐘完成一次；大量待辦／外部逾時需另看處理量及堆積。
+6. 部署 Web 後測試重新整理、付款回站，以及暫時斷線後「重試連線」。只有 refresh 401 才視為憑證失效；503／網路錯誤不得直接要求重新登入。
+7. 由使用者同意的測試訂單驗收：付款後關閉瀏覽器，核對後端查單入帳、汎宇票號、同單查回及官方 Email。再分別測 Email 會員載具、手機條碼及 B2B；真實扣款與退款由使用者操作或另行授權。
+8. 退款後核對調整待辦，管理員填原因查回發票。自動作廢／折讓尚未完成，不可把退款完成當成發票也已完成處理。
+
+`RECONCILIATION_ENABLED=false` 只停止新增的定期驅動，不會關閉既有 request 補跑或外部 reconciliation 入口。如需停止所有外部交易工作，必須另行制定完整停機程序。程式回復時可保留新增欄位，不需為回復程式而降級正式資料庫。
+
+完整修復與限制見 [本輪修復報告](ACCEPTANCE_FIXES_2026-09-05.md)。
 
 ## 展示前檢查
 

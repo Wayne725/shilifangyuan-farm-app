@@ -508,6 +508,8 @@ async def create_payment_attempt(
     if order is None:
         raise PaymentApplicationError("找不到訂單")
     await ensure_order_payment_runtime_enabled(session, settings, order)
+    if order.cancelled_at is not None or order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        raise PaymentApplicationError("此訂單已取消，無法付款")
     if order.payment_status == PaymentStatus.PAID:
         raise PaymentApplicationError("此訂單已付款")
     if order.payment_status in {
