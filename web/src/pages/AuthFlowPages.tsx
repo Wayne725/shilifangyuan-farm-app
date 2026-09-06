@@ -8,7 +8,7 @@ import {
   ShoppingBag,
   UserPlus,
 } from "@phosphor-icons/react";
-import { Link, useSearch } from "@tanstack/react-router";
+import { Link, Navigate, useSearch } from "@tanstack/react-router";
 import { type FormEvent, type ReactNode, useState } from "react";
 
 import { useAuth } from "../context/AuthContext";
@@ -81,6 +81,7 @@ function AuthResult({
 
 export function RegisterPage() {
   const search = useSearch({ from: "/register" });
+  const { user } = useAuth();
   const intent = search.intent;
   const [memberNumber, setMemberNumber] = useState("");
   const [legalName, setLegalName] = useState("");
@@ -92,6 +93,8 @@ export function RegisterPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<AuthActionResponse | null>(null);
+
+  if (user) return <Navigate to="/" replace />;
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -310,7 +313,7 @@ export function RegisterPage() {
 
 export function VerifyEmailPage() {
   const search = useSearch({ from: "/verify-email" });
-  const { openLogin } = useAuth();
+  const { user, openLogin } = useAuth();
   const [email, setEmail] = useState(search.email || "");
   const [token, setToken] = useState(search.token || "");
   const [busy, setBusy] = useState(false);
@@ -318,6 +321,8 @@ export function VerifyEmailPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [verified, setVerified] = useState(false);
+
+  if (user) return <Navigate to="/" replace />;
 
   const verify = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
