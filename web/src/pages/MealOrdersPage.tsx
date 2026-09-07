@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
+import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import { createOrderPayment } from "../lib/commerce";
 import type { MealOrder, MealPickupCredential } from "../lib/types";
@@ -29,7 +30,7 @@ export function MealOrdersPage() {
     enabled: Boolean(selectedId && selected?.payment_status === "paid" && !["picked_up", "no_show", "cancelled"].includes(selected.fulfillment_status)),
     retry: false,
   });
-  const pay = useMutation({ mutationFn: createOrderPayment, onSuccess: (url) => window.location.assign(url) });
+  const pay = useMutation({ mutationFn: createOrderPayment, onSuccess: (url, orderId) => openOrderHandoff(url, orderId) });
   const cancel = useMutation({
     mutationFn: (orderId: string) => apiFetch(`/v1/meal-orders/${orderId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
     onSuccess: () => { setCancelOpen(false); queryClient.invalidateQueries({ queryKey: ["meal-orders"] }); },

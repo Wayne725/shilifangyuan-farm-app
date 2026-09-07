@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
+import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import {
   createOrderPayment,
@@ -75,11 +76,11 @@ export function OrdersPage() {
   const refreshedPaymentStatus = paymentConfirmation.data?.status;
   const openPayment = useMutation({
     mutationFn: createOrderPayment,
-    onSuccess: (url) => window.location.assign(url),
+    onSuccess: (url, orderId) => openOrderHandoff(url, orderId),
   });
   const reopenLogistics = useMutation({
     mutationFn: reissueLogisticsSelection,
-    onSuccess: (url) => window.location.assign(url),
+    onSuccess: (url, orderId) => openOrderHandoff(url, orderId),
   });
   const cancelOrder = useMutation({
     mutationFn: (orderId: string) =>
@@ -96,6 +97,10 @@ export function OrdersPage() {
   useEffect(() => {
     confirmationStartedAt.current = Date.now();
   }, [search.attempt_id]);
+
+  useEffect(() => {
+    if (search.order_id) setSelectedId(search.order_id);
+  }, [search.order_id]);
 
   useEffect(() => {
     if (!selectedId && orders.data?.[0]) setSelectedId(orders.data[0].id);

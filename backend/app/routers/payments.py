@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..integrations.common import IntegrationError
@@ -37,6 +37,7 @@ from ..integrations.raygate import (
     canonical_event_key as raygate_event_key,
 )
 from ..models import (
+    AdminAudit,
     FulfillmentStatus,
     MembershipCharge,
     Order,
@@ -45,6 +46,7 @@ from ..models import (
     User,
 )
 from ..rate_limit import PAYMENT_REFRESH_RULE, enforce
+from ..schemas import AdminActionReason
 
 
 payments_router = APIRouter(tags=["payments"])
@@ -229,6 +231,44 @@ async def refresh_payment_attempt_status(
     ):
         response["status"] = "confirming"
     return response
+
+
+@payments_router.post("/v1/admin/orders/{order_id}/payment/query")
+async def query_admin_order_payment(
+    order_id: str,
+    body: AdminActionReason,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    actor_id = admin.id
+    enforce(f"admin-payment-query:{actor_id}:{order_id}", PAYMENT_REFRESH_RULE)
+    attempt = await session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == order_id)
+        .order_by(PaymentAttempt.created_at.desc(), PaymentAttempt.id.desc()).limit(1)
+    )
+    if attempt is None:
+        raise HTTPException(404, "此訂單尚無付款紀錄")
+    if attempt.provider != RAYGATE_PAYMENT_PROVIDER:
+        raise HTTPException(409, "此操作僅支援原雷門付款紀錄")
+    attempt_id = attempt.id
+    session.add(AdminAudit(actor_id=actor_id, action="payment.query_requested", aggregate_type="order", aggregate_id=order_id,
+                           reason=body.reason, data={"attempt_id": attempt_id, "provider": "raygate"}))
+    await session.commit()
+    try:
+        await _refresh_raygate_attempt(session, settings, attempt)
+    except (IntegrationError, PaymentApplicationError, ValueError, TimeoutError) as exc:
+        await session.rollback()
+        session.add(AdminAudit(actor_id=actor_id, action="payment.query_failed", aggregate_type="order", aggregate_id=order_id,
+                               reason=body.reason, data={"attempt_id": attempt_id, "error_type": type(exc).__name__}))
+        await session.commit()
+        raise HTTPException(502, "金流查詢未成功，不能據此認定付款或退款完成；請稍後重查") from exc
+    await session.refresh(attempt)
+    session.add(AdminAudit(actor_id=actor_id, action="payment.queried", aggregate_type="order", aggregate_id=order_id,
+                           reason=body.reason, data={"attempt_id": attempt_id, "status": attempt.status.value}))
+    await session.commit()
+    return {"order_id": order_id, "attempt_id": attempt_id, "status": attempt.status.value,
+            "message": "已查詢最新一次付款紀錄；付款與退款以訂單狀態為準，發票另行核對"}
 
 
 @payments_router.get(

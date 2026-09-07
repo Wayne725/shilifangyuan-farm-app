@@ -131,6 +131,16 @@ export function MembershipApplicationPage() {
     const file = event.target.files?.[0];
     if (!file) return;
     setUploadError("");
+    if (file.size === 0 || file.size > 8 * 1024 * 1024) {
+      setUploadError("檔案大小須為 1 byte 至 8MB，請重新選擇");
+      event.target.value = "";
+      return;
+    }
+    if (!["image/jpeg", "image/png", "application/pdf"].includes(file.type)) {
+      setUploadError("僅支援 JPEG、PNG 或 PDF 檔案");
+      event.target.value = "";
+      return;
+    }
     setUploading(type);
     try {
       const buffer = await file.arrayBuffer();

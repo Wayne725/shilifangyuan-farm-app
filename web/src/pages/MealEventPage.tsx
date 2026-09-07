@@ -18,6 +18,7 @@ import {
   invoicePreferenceIsValid,
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
+import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDate, formatMoney, resolveAsset } from "../lib/api";
 import { beginMealCheckout, invoicePreferencePayload } from "../lib/commerce";
 import { mealEventStatusLabel } from "../lib/labels";
@@ -105,7 +106,7 @@ export function MealEventPage() {
       });
     },
     onSuccess: (outcome) => {
-      if (outcome.kind === "redirect") return window.location.assign(outcome.url);
+      if (outcome.kind === "redirect") return openOrderHandoff(outcome.url, outcome.orderId);
       const search = new URLSearchParams({ order_id: outcome.orderId, result: "resume", message: outcome.message });
       window.location.assign(`/orders?${search.toString()}`);
     },

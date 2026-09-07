@@ -7300,3 +7300,10 @@ p {
     transition-duration: 0.01ms !important;
   }
 }
+/* Transaction management keeps controls usable on narrow screens. */
+.admin-order-search, .admin-pagination { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0; }
+.admin-order-search label { display: grid; gap: 8px; flex: 1 1 220px; min-width: 0; }
+.admin-order-search input { width: 100%; min-width: 0; padding: 10px; }
+.admin-pagination { align-items: center; justify-content: space-between; }
+.admin-failure-panel { margin: 24px auto; padding: 24px; max-width: 1440px; }
+.failed-job { padding: 16px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }

@@ -14,6 +14,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
+import { openMembershipHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import { createMembershipPayment, refreshPaymentAttempt } from "../lib/commerce";
 import type {
@@ -97,7 +98,7 @@ export function AccountPage() {
   });
   const payCharge = useMutation({
     mutationFn: createMembershipPayment,
-    onSuccess: (url) => window.location.assign(url),
+    onSuccess: (url, chargeId) => openMembershipHandoff(url, chargeId),
   });
   const markAllRead = useMutation({
     mutationFn: () => apiFetch("/v1/notifications/read-all", { method: "POST" }),

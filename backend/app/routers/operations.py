@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime, time, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -17,6 +18,13 @@ from ..integrations.common import IntegrationError
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..models import (
     AdminAudit,
+    Order,
+    OrderFulfillment,
+    OutboxEvent,
+    OutboxStatus,
+    Invoice,
+    InvoiceStatus,
+    PaymentStatus,
     PickupLocation,
     Supplier,
     SupplierAccreditation,
@@ -26,7 +34,9 @@ from ..models import (
     new_id,
 )
 from ..schemas import (
+    AdminActionReason,
     PickupLocationCreate,
+    OrderRead,
     PickupLocationRead,
     PickupLocationUpdate,
     SupplierAccreditationCreate,
@@ -39,6 +49,118 @@ from ..schemas import (
 
 
 operations_router = APIRouter(tags=["operations"])
+
+
+async def job_retry_blocker(session: AsyncSession, event: OutboxEvent) -> str:
+    if event.status != OutboxStatus.FAILED:
+        return "工作並非失敗狀態，不可重複排入"
+    if event.event_type == "invoice.issue_requested":
+        order_id = str(event.payload.get("order_id") or event.aggregate_id)
+        order = await session.get(Order, order_id)
+        invoice = await session.scalar(select(Invoice).where(Invoice.order_id == order_id))
+        if order is None or order.payment_status != PaymentStatus.PAID or order.cancelled_at:
+            return "訂單未付款、已退款或已取消，不能重試開票"
+        if invoice and invoice.status in {InvoiceStatus.ISSUED, InvoiceStatus.VOID_PENDING, InvoiceStatus.VOIDED}:
+            return "已開票或進入調整流程，請先查詢發票"
+        return ""
+    if event.event_type == "send_email":
+        kind = event.payload.get("event_type")
+        if kind not in {"payment_succeeded", "refund_completed"}:
+            return "僅允許重送付款／退款通知；發票通知由汎宇處理，驗證信請重新申請"
+        data = event.payload.get("data") or {}
+        order = await session.get(Order, str(data.get("order_id", "")))
+        expected = PaymentStatus.PAID if kind == "payment_succeeded" else PaymentStatus.REFUNDED
+        if order is None or order.user_id != event.aggregate_id or order.payment_status != expected:
+            return "通知已不符合目前訂單狀態，不能重送"
+        return ""
+    return "此工作需先人工核對，不提供直接重送"
+
+
+def job_error_summary(event: OutboxEvent) -> str:
+    error = (event.last_error or "").lower()
+    if "timeout" in error or "timed out" in error or "逾時" in error:
+        return "外部服務回應逾時；交易結果不明時請先查詢"
+    if any(word in error for word in ("credential", "api key", "apikey", "401", "403", "授權", "設定", "簽章")):
+        return "外部服務授權或設定檢查失敗"
+    return "工作處理失敗，請核對供應商狀態與伺服器紀錄"
+
+
+@operations_router.get("/v1/admin/failed-jobs")
+async def list_failed_jobs(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    query = select(OutboxEvent).where(OutboxEvent.status == OutboxStatus.FAILED)
+    total = await session.scalar(select(func.count()).select_from(query.subquery()))
+    events = list(await session.scalars(query.order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc()).limit(limit).offset(offset)))
+    items = []
+    for event in events:
+        blocker = await job_retry_blocker(session, event)
+        items.append({"id": event.id, "event_type": event.event_type, "aggregate_id": event.aggregate_id,
+                      "status": event.status.value, "attempts": event.attempts,
+                      "error": job_error_summary(event), "retryable": not blocker, "retry_blocker": blocker})
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@operations_router.post("/v1/admin/failed-jobs/{event_id}/retry")
+async def retry_failed_job(
+    event_id: str,
+    body: AdminActionReason,
+    request: Request,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from ..rate_limit import INVOICE_QUERY_RULE, client_key, enforce
+
+    enforce(client_key(request, "admin-job-retry", admin.id), INVOICE_QUERY_RULE)
+    event = await session.scalar(select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update())
+    if event is None:
+        raise HTTPException(404, "找不到工作")
+    if blocker := await job_retry_blocker(session, event):
+        raise HTTPException(409, blocker)
+    audit = AdminAudit(actor_id=admin.id, action="outbox.retry_requested", aggregate_type="outbox", aggregate_id=event.id,
+                       reason=body.reason, data={"event_type": event.event_type, "previous_attempts": event.attempts})
+    session.add(audit)
+    event.status = OutboxStatus.PENDING
+    event.available_at = datetime.now(timezone.utc)
+    # Keep the same event/idempotency key and history; one further attempt per request.
+    await session.commit()
+    return {"id": event.id, "status": event.status.value, "audit_id": audit.id, "message": "已排入背景處理，尚未代表寄送或開票成功"}
+
+
+class AdminOrderPage(BaseModel):
+    items: list[OrderRead]
+    total: int
+    limit: int
+    offset: int
+
+
+@operations_router.get("/v1/admin/order-search", response_model=AdminOrderPage)
+async def search_admin_orders(
+    q: str = Query(default="", max_length=120),
+    limit: int = Query(default=12, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> AdminOrderPage:
+    from .orders import order_read
+
+    query = select(Order)
+    if term := q.strip():
+        query = query.where(or_(
+            Order.order_number.icontains(term, autoescape=True),
+            Order.contact_email.icontains(term, autoescape=True),
+            Order.invoice_buyer_tax_id.icontains(term, autoescape=True),
+        ))
+    total = await session.scalar(select(func.count()).select_from(query.subquery()))
+    orders = await session.scalars(query.options(
+        selectinload(Order.items), selectinload(Order.group_campaign),
+        selectinload(Order.meal_event), selectinload(Order.invoice),
+        selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),
+    ).order_by(Order.created_at.desc(), Order.id.desc()).offset(offset).limit(limit))
+    return AdminOrderPage(items=[order_read(order, True) for order in orders], total=total or 0, limit=limit, offset=offset)
 
 
 def _cipher(settings: Settings):

@@ -3,6 +3,7 @@ import {
   createRoute,
   createRouter,
   lazyRouteComponent,
+  redirect,
 } from "@tanstack/react-router";
 import type { ComponentType } from "react";
 
@@ -159,6 +160,14 @@ const checkoutRoute = createRoute({
   component: page("./pages/CheckoutPage", "CheckoutPage"),
 });
 
+const legacyCartRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/cart",
+  beforeLoad: () => {
+    throw redirect({ to: "/checkout", replace: true });
+  },
+});
+
 const ordersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/orders",
@@ -284,6 +293,7 @@ const routeTree = rootRoute.addChildren([
   directoryRoute,
   membershipRoute,
   checkoutRoute,
+  legacyCartRoute,
   ordersRoute,
   mealOrdersRoute,
   groupCampaignRoute,

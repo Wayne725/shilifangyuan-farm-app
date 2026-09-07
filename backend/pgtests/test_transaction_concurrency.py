@@ -118,3 +118,57 @@ async def test_concurrent_workers_do_not_repeat_payment_query_invoice_or_email(p
     assert emails[0].to_email == "isolated-ci@example.com"
     assert "SLFTEST0001" in emails[0].text_content
     assert "AB12345678" not in emails[0].text_content
+
+
+@pytest.mark.asyncio
+async def test_concurrent_admin_void_and_retry_submit_only_once(postgres_sessions, monkeypatch):
+    import app.routers.invoices as invoices
+    from app.models import Invoice, InvoiceStatus, OutboxEvent, OutboxStatus, Refund, RefundStatus, User, UserRole
+    from app.routers.operations import operations_router
+    from tests.support import api_test_context, auth_headers
+
+    async with postgres_sessions() as session:
+        admin, _product, order = await make_regular_order(session)
+        admin.user_role = UserRole.ADMIN
+        order.payment_status = PaymentStatus.REFUNDED
+        session.add(Invoice(order=order, relate_number="CONCURRENTVOID", provider="fanyu", status=InvoiceStatus.VOID_PENDING,
+                            invoice_number="AB12345678", invoice_date=datetime(2026, 9, 5, tzinfo=timezone.utc),
+                            total_amount=200, provider_request={"sellerID": "15989995"}))
+        session.add(Refund(order_id=order.id, amount=200, status=RefundStatus.COMPLETED, reason="隔離併發", requested_by_id=admin.id))
+        event = OutboxEvent(event_type="send_email", aggregate_type="user", aggregate_id=admin.id, status=OutboxStatus.FAILED,
+                            payload={"event_type": "refund_completed", "data": {"order_id": order.id}})
+        session.add(event)
+        await session.commit()
+        admin_id, order_id, event_id = admin.id, order.id, event.id
+
+    submitted = []
+    cancelled = False
+
+    async def transport(url, body, _headers, _timeout):
+        nonlocal cancelled
+        await asyncio.sleep(0.05)
+        if url.endswith("/cancelInvoice"):
+            submitted.append(body["reqData"])
+            cancelled = True
+            data = {"invNo": "AB12345678", "cancelDate": "20260906", "cancelTime": "11:00:00"}
+        else:
+            assert url.endswith("/queryInvoice")
+            data = {"invNo": "AB12345678", "invDate": "20260905", "status": "1" if cancelled else "0"}
+        return HTTPResponse(200, json.dumps({"statusCode": "0", "respData": data}), {})
+
+    adapter = FanyuInvoiceAdapter(fanyu_settings(), transport=transport)
+    monkeypatch.setattr(invoices, "invoice_adapter_from_settings", lambda _: adapter)
+
+    async def perform(path):
+        async with postgres_sessions() as session:
+            admin = await session.get(User, admin_id)
+            async with api_test_context(session, [invoices.invoices_router, operations_router], settings=make_test_settings(invoice_provider="fanyu")) as client:
+                response = await client.post(path, headers=auth_headers(admin), json={"reason": "隔離併發驗證"})
+                return response.status_code
+
+    results = await asyncio.gather(*(perform(f"/v1/admin/orders/{order_id}/invoice/void") for _ in range(5)))
+    assert set(results) <= {200, 202}
+    assert len(submitted) == 1
+    retries = await asyncio.gather(*(perform(f"/v1/admin/failed-jobs/{event_id}/retry") for _ in range(5)))
+    assert retries.count(200) == 1
+    assert retries.count(409) == 4

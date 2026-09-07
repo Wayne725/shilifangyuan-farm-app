@@ -15,6 +15,8 @@ import { useState, type ReactNode } from "react";
 
 import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminNav } from "../components/AdminNav";
+import { AdminFailurePanel } from "../components/AdminFailurePanel";
+import { AdminInvoiceAdjustment } from "../components/AdminInvoiceAdjustment";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import { shippingChannelLabels, temperatureLabels } from "../lib/commerce";
@@ -37,10 +39,20 @@ interface MemberRecord {
   status?: string;
 }
 
+interface AdminOrderPage {
+  items: Order[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export function AdminPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
+  const [orderSearchInput, setOrderSearchInput] = useState("");
+  const [orderSearch, setOrderSearch] = useState("");
+  const [orderOffset, setOrderOffset] = useState(0);
   const [supplierQuery, locationQuery, productQuery, memberQuery, orderQuery, rateQuery] = useQueries({
     queries: [
       {
@@ -64,8 +76,8 @@ export function AdminPage() {
         enabled: isAdmin,
       },
       {
-        queryKey: ["admin-orders"],
-        queryFn: () => apiFetch<Order[]>("/v1/orders"),
+        queryKey: ["admin-orders", orderSearch, orderOffset],
+        queryFn: () => apiFetch<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12`),
         enabled: isAdmin,
       },
       {
@@ -142,6 +154,7 @@ export function AdminPage() {
       </section>
 
       <AdminNav />
+      <AdminFailurePanel />
 
       <section className="admin-metrics">
         <Metric icon={Package} label="上架商品" value={activeProducts} />
@@ -208,8 +221,12 @@ export function AdminPage() {
           />
           {orderQuery.isPending && <LoadingLines count={4} />}
           {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
+          <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>
+            <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} placeholder="訂單編號、Email 或統編" maxLength={120} /></label>
+            <button className="button button-quiet" type="submit">搜尋</button>
+          </form>
           <div className="operations-list">
-            {orderQuery.data?.slice(0, 12).map((order) => (
+            {orderQuery.data?.items.map((order) => (
               <article key={order.id}>
                 <div className="operation-title">
                   <span>{formatDate(order.created_at)}</span>
@@ -231,9 +248,17 @@ export function AdminPage() {
                   onRefund={(reason) => refundOrder.mutate({ orderId: order.id, reason })}
                   onInvoiceQuery={(reason) => queryInvoice.mutate({ orderId: order.id, reason })}
                 />
+                <AdminInvoiceAdjustment order={order} />
+                <AdminPaymentQuery orderId={order.id} />
               </article>
             ))}
           </div>
+          {orderQuery.data && <nav className="admin-pagination" aria-label="訂單分頁">
+            <button className="button button-quiet" type="button" disabled={orderOffset === 0 || orderQuery.isFetching} onClick={() => setOrderOffset(Math.max(0, orderOffset - 12))}>上一頁</button>
+            <span>共 {orderQuery.data.total} 筆 · 第 {Math.floor(orderOffset / 12) + 1} 頁</span>
+            <button className="button button-quiet" type="button" disabled={orderOffset + 12 >= orderQuery.data.total || orderQuery.isFetching} onClick={() => setOrderOffset(orderOffset + 12)}>下一頁</button>
+          </nav>}
+          {orderQuery.data?.total === 0 && <p>沒有符合條件的訂單。</p>}
           {queryInvoice.isSuccess && <p className="form-success">{queryInvoice.data.message}</p>}
           {(updateFulfillment.isError || createLogistics.isError || advanceShipment.isError || refundOrder.isError || queryInvoice.isError) && (
             <p className="form-error">
@@ -251,6 +276,23 @@ export function AdminPage() {
       </section>
     </>
   );
+}
+
+function AdminPaymentQuery({ orderId }: { orderId: string }) {
+  const [reason, setReason] = useState("");
+  const queryClient = useQueryClient();
+  const query = useMutation({
+    mutationFn: () => apiFetch<{ message: string }>(`/v1/admin/orders/${orderId}/payment/query`, {
+      method: "POST", body: JSON.stringify({ reason: reason.trim() }),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
+  });
+  return <form className="operation-invoice-query" onSubmit={(event) => { event.preventDefault(); if (reason.trim()) query.mutate(); }}>
+    <label>金流查詢原因<input required maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+    <button type="submit" disabled={query.isPending || !reason.trim()}>重新查詢雷門付款</button>
+    {query.isError && <p className="form-error">{query.error.message}</p>}
+    {query.isSuccess && <p className="form-success">{query.data.message}</p>}
+  </form>;
 }
 
 function AdminOrderAction({
@@ -271,7 +313,7 @@ function AdminOrderAction({
   onInvoiceQuery: (reason: string) => void;
 }) {
   const [refundOpen, setRefundOpen] = useState(false);
-  const [refundReason, setRefundReason] = useState("買家申請退款");
+  const [refundReason, setRefundReason] = useState("");
   const [invoiceReason, setInvoiceReason] = useState("");
   const refundControl = order.available_actions.includes("refund") && (refundOpen ? <div className="operation-refund"><input aria-label="退款原因" value={refundReason} onChange={(event) => setRefundReason(event.target.value)} /><button type="button" disabled={busy || !refundReason.trim()} onClick={() => onRefund(refundReason)}>確認退款</button><button type="button" onClick={() => setRefundOpen(false)}>取消</button></div> : <button type="button" disabled={busy} onClick={() => setRefundOpen(true)}>建立退款</button>);
   const invoiceControl = (

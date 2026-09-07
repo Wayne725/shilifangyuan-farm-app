@@ -51,6 +51,17 @@ from .models import (
 )
 
 
+class AdminActionReason(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("請填寫操作原因")
+        return value.strip()
+
+
 class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 

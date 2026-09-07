@@ -12,6 +12,7 @@
     "site:dev": "pnpm dev",
     "site:build": "pnpm build",
     "test": "node --test tests/*.test.mjs tests/audits/*.test.mjs",
+    "test:browser": "node --test tests/browser/*.mjs",
     "typecheck": "pnpm --dir web typecheck"
   }
 }

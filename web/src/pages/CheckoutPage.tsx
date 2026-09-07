@@ -23,6 +23,7 @@ import {
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
+import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import {
   beginCheckout,
@@ -126,10 +127,10 @@ export function CheckoutPage() {
         fulfillment: { kind: "pickup", pickupLocationId },
       });
     },
-    onSuccess: (outcome) => {
+    onSuccess: async (outcome) => {
       clearCart();
       if (outcome.kind === "redirect") {
-        window.location.assign(outcome.url);
+        await openOrderHandoff(outcome.url, outcome.order.id);
         return;
       }
       const params = new URLSearchParams({
