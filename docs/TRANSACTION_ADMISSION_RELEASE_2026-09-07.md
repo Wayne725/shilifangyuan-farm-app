@@ -28,7 +28,9 @@
 - 前端與 API 契約檢查：31 passed；型別檢查與正式 build 通過。
 - Chromium 瀏覽器：19 passed（註冊／登入、付款返回、管理操作與入社上傳；供應商、API 與儲存服務均為模擬）。
 - 路由清單重新匯出：180 routes；無 migration 或依賴異動。
-- PostgreSQL 並行交易、GitHub CI、WebKit 與雲端部署收據待本輪後續核對。本機通過不能代替正式供應商驗收。
+- WebKit：19 passed；首次 17/19，縮小重現確認為連續 `goto` 未等待商店路由就緒，測試新增畫面就緒條件後整輪通過，Chromium 亦重新 19/19。未修改正式登入邏輯，未以忽略錯誤或固定睡眠掩蓋問題。
+- 交易程式提交 `0314b6c` 的 [GitHub CI](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/34089464242) 全通過：654 backend、2 PostgreSQL 並行案例、31 前端與 API 契約／build；PostgreSQL 18 空庫升到 0013、降回 base、再升到 0013 通過；Python 依賴掃描未發現已知漏洞。
+- 最後測試時序與本文件更新不改產品執行程式。雲端部署收據待實際上線後另記；上述結果不能代替正式供應商驗收。
 
 ## 仍未放行
 
