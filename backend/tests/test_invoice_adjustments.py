@@ -7,7 +7,7 @@ from app.integrations.common import HTTPResponse
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
 from app.models import Invoice, InvoiceBuyerType, InvoiceStatus, PaymentStatus, Refund, RefundStatus, UserRole
 from app.routers.invoices import invoices_router
-from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
 from tests.test_integrations import make_regular_order
 
@@ -19,13 +19,13 @@ pytestmark = pytest.mark.asyncio
 async def test_void_after_refund_uses_provider_snapshot_and_never_resubmits_uncertain_request(database_session, monkeypatch, uncertain, buyer_type):
     import app.routers.invoices as routes
 
-    admin, _product, order = await make_regular_order(database_session)
+    admin, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     admin.user_role = UserRole.ADMIN
     order.payment_status = PaymentStatus.REFUNDED
     invoice = Invoice(order=order, relate_number='INVTEST', provider='fanyu', status=InvoiceStatus.VOID_PENDING,
                       invoice_number='AB12345678', invoice_date=datetime(2026, 9, 5, tzinfo=timezone.utc),
                       total_amount=200, buyer_type=buyer_type, buyer_tax_id='24536806' if buyer_type == InvoiceBuyerType.COMPANY else None,
-                      provider_request={'sellerID': '15989995'})
+                      provider_request={'sellerID': '15989995'}, provider_context=fanyu_test_context())
     refund = Refund(order_id=order.id, amount=200, status=RefundStatus.COMPLETED, reason='測試退款', requested_by_id=admin.id)
     database_session.add_all([invoice, refund])
     await database_session.commit()
@@ -66,12 +66,12 @@ async def test_void_after_refund_uses_provider_snapshot_and_never_resubmits_unce
 async def test_void_rejects_unsafe_order_or_unconfirmed_provider_identity(database_session, monkeypatch, case):
     import app.routers.invoices as routes
 
-    admin, _product, order = await make_regular_order(database_session)
+    admin, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     admin.user_role = UserRole.CUSTOMER if case == 'customer' else UserRole.ADMIN
     order.payment_status = PaymentStatus.PENDING if case == 'unpaid' else PaymentStatus.REFUNDED
     invoice = Invoice(order=order, relate_number='SAFETYTEST', provider='fanyu', status=InvoiceStatus.VOIDED if case == 'status_conflict' else InvoiceStatus.VOID_PENDING,
                       invoice_number='AB12345678', invoice_date=datetime(2026, 9, 5, tzinfo=timezone.utc),
-                      total_amount=200, provider_status='0', provider_request={'sellerID': 'wrong' if case == 'wrong_seller' else '15989995'})
+                      total_amount=200, provider_status='0', provider_request={'sellerID': 'wrong' if case == 'wrong_seller' else '15989995'}, provider_context=fanyu_test_context())
     refund = Refund(order_id=order.id, amount=100 if case == 'partial_refund' else 200, status=RefundStatus.COMPLETED, reason='隔離測試', requested_by_id=admin.id)
     database_session.add_all([invoice, refund])
     await database_session.commit()

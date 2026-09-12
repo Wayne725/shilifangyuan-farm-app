@@ -9,7 +9,7 @@ from app.models import (
 )
 from app.routers.invoices import invoices_router
 from app.routers.payments import payments_router
-from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings
 from tests.test_integrations import make_regular_order, payment_settings
 
 pytestmark = pytest.mark.asyncio
@@ -52,12 +52,13 @@ async def test_refunded_invoice_query_preserves_adjustment_until_confirmed(
 ):
     import app.routers.invoices as invoice_routes
 
-    _buyer, _product, order = await make_regular_order(database_session)
+    _buyer, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     order.payment_status = PaymentStatus.REFUNDED
     order.invoice_status = previous
     # Historical buyer snapshot must remain authoritative even if the order differs.
     invoice = Invoice(
         order=order, relate_number="AUDIT-INVOICE-QUERY", provider="fanyu",
+        provider_context=fanyu_test_context(),
         invoice_number="AB12345671", buyer_type=InvoiceBuyerType.COMPANY, status=previous,
     )
     original_voided_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -69,6 +70,7 @@ async def test_refunded_invoice_query_preserves_adjustment_until_confirmed(
 
     class Provider:
         provider_name = "fanyu"
+        binding_context = fanyu_test_context()
 
         async def query_invoice(self, relate_number, *, buyer_type):
             assert relate_number == "AUDIT-INVOICE-QUERY"

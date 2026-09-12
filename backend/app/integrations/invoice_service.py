@@ -34,10 +34,22 @@ from .invoice import (
     PreparedInvoiceLine,
 )
 from .fanyu_invoice import FanyuInvoiceAdapter, FanyuInvoiceSettings
+from .invoice_context import fanyu_account_context
 
 
 class InvoiceApplicationError(ValueError):
     pass
+
+
+def invoice_context_from_settings(settings: Settings) -> dict:
+    if settings.invoice_provider != "fanyu":
+        return {"version": 1, "provider": settings.invoice_provider}
+    return fanyu_account_context(
+        base_url=settings.fanyu_invoice_base_url,
+        company_id=settings.fanyu_invoice_company_id,
+        seller_id=settings.fanyu_invoice_seller_id,
+        user_id=settings.fanyu_invoice_user_id,
+    )
 
 
 def invoice_adapter_from_settings(
@@ -238,14 +250,27 @@ def _paid_attempt(order: Order):
 
 
 def _ensure_provider_binding(order: Order, adapter: InvoiceProvider) -> None:
-    if order.invoice is None or order.invoice.provider == adapter.provider_name:
-        return
-    raise InvoiceApplicationError(
-        "此訂單原本使用 {} 發票，不能改由 {} 重送".format(
-            order.invoice.provider,
-            adapter.provider_name,
+    invoice = order.invoice
+    if invoice is not None and invoice.provider != adapter.provider_name:
+        raise InvoiceApplicationError(
+            "此訂單原本使用 {} 發票，不能改由 {} 重送".format(
+                invoice.provider, adapter.provider_name,
+            )
         )
-    )
+    order_context = order.invoice_provider_context
+    if order_context and order_context.get("provider") != adapter.provider_name:
+        raise InvoiceApplicationError("訂單發票環境／帳戶與目前設定不符，請先人工核對歷史來源")
+    if adapter.provider_name != "fanyu":
+        return
+    expected = getattr(adapter, "binding_context", None)
+    if not expected or order_context != expected or (
+        invoice is not None and invoice.provider_context != expected
+    ):
+        raise InvoiceApplicationError("汎宇發票環境／帳戶未確認或與目前設定不符，禁止開票、補查及作廢；請先人工核對歷史來源")
+    if invoice is not None and invoice.provider_request and (
+        invoice.provider_request.get("sellerID") != expected["seller_id"]
+    ):
+        raise InvoiceApplicationError("汎宇發票環境／帳戶與原始銷售資料不符，請先人工核對歷史來源")
 
 
 async def _ensure_invoice_record(
@@ -314,6 +339,7 @@ async def _ensure_invoice_record(
         order=order,
         relate_number=prepared.relate_number,
         provider=provider,
+        provider_context=(dict(order.invoice_provider_context) if order.invoice_provider_context else None),
         payment_attempt_id=(paid_attempt.id if paid_attempt else None),
         buyer_type=order.invoice_buyer_type,
         buyer_tax_id=order.invoice_buyer_tax_id,

@@ -16,6 +16,7 @@ from ..auth import (
     require_admin,
 )
 from ..config import Settings, get_settings
+from ..sales_scope import require_sales_scope_allows
 from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationError
@@ -201,6 +202,10 @@ def _storage(settings: Settings):
 def get_document_storage(settings: Settings = Depends(get_settings)):
     """Injectable so the private-document path can be covered by tests."""
     return _storage(settings)
+
+
+def require_membership_document_intake(settings: Settings = Depends(get_settings)) -> None:
+    require_sales_scope_allows(settings)
 
 
 async def _application_for_user(
@@ -483,6 +488,7 @@ async def save_my_application(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
+    require_sales_scope_allows(settings)
     application = await _save_profile_and_application(
         session,
         user,
@@ -502,6 +508,7 @@ async def submit_my_application(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
+    require_sales_scope_allows(settings)
     application = await _application_for_user(
         session,
         user.id,
@@ -552,6 +559,7 @@ async def resubmit_supplement(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
+    require_sales_scope_allows(settings)
     application = await _application_for_user(
         session,
         user.id,
@@ -731,6 +739,7 @@ async def list_my_documents(
     "/v1/membership/documents/upload-url",
     response_model=MembershipDocumentUploadRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_membership_document_intake)],
 )
 async def create_document_upload_url(
     body: MembershipDocumentUploadRequest,
@@ -738,7 +747,9 @@ async def create_document_upload_url(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     storage=Depends(get_document_storage),
+    settings: Settings = Depends(get_settings),
 ) -> MembershipDocumentUploadRead:
+    require_sales_scope_allows(settings)
     _ensure_user_can_apply(user)
     enforce(
         client_key(request, "membership-document-upload", user.id),
@@ -887,6 +898,7 @@ async def delete_my_document(
 @membership_router.post(
     "/v1/membership/documents/{document_id}/confirm",
     response_model=MembershipDocumentRead,
+    dependencies=[Depends(require_membership_document_intake)],
 )
 async def confirm_document_upload(
     document_id: str,
@@ -894,7 +906,9 @@ async def confirm_document_upload(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     storage=Depends(get_document_storage),
+    settings: Settings = Depends(get_settings),
 ) -> MembershipDocumentRead:
+    require_sales_scope_allows(settings)
     document = await session.scalar(
         select(MembershipDocument)
         .join(MembershipApplication)
@@ -1187,7 +1201,9 @@ async def approve_membership_application(
     body: MembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> MembershipRead:
+    require_sales_scope_allows(settings)
     application = await session.scalar(
         select(MembershipApplication)
         .where(MembershipApplication.id == application_id)

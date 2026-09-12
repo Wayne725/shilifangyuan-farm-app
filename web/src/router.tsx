@@ -249,6 +249,9 @@ const newGroupVoteRoute = createRoute({
 const mealOrdersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/meal-orders",
+  validateSearch: (search: Record<string, unknown>): { order_id?: string } => ({
+    order_id: typeof search.order_id === "string" ? search.order_id : undefined,
+  }),
   component: page("./pages/MealOrdersPage", "MealOrdersPage"),
 });
 

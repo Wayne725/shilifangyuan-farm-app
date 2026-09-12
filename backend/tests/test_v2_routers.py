@@ -68,6 +68,7 @@ from app.routers.membership import membership_router
 from app.routers.orders import orders_router
 from app.schemas import InvoicePreferenceInput
 from tests.support import (
+    fanyu_test_context,
     api_test_context,
     auth_headers,
     fast_password_hash,
@@ -217,6 +218,7 @@ async def test_admin_invoice_query_requires_reason_and_records_audit(
     customer = v2_context["customer_b"]
     order = Order(
         order_number="SLFINVOICEQUERY01",
+        invoice_provider_context=fanyu_test_context(),
         order_kind=OrderKind.REGULAR,
         user_id=customer.id,
         membership_type_snapshot=MembershipType.NONMEMBER,
@@ -241,6 +243,7 @@ async def test_admin_invoice_query_requires_reason_and_records_audit(
 
     class InvoiceAdapter:
         provider_name = "fanyu"
+        binding_context = fanyu_test_context()
 
         def prepare_invoice(self, request):
             return prepare_test_invoice(request, provider="fanyu")

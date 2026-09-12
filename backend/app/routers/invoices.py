@@ -213,6 +213,12 @@ async def query_order_invoice(
             raise InvoiceApplicationError("找不到發票資料")
     except InvoiceApplicationError as exc:
         await session.rollback()
+        session.add(AdminAudit(
+            actor_id=actor_id, action="invoice.query_blocked",
+            aggregate_type="order", aggregate_id=order_id_value,
+            reason=body.reason, data={"error_type": type(exc).__name__},
+        ))
+        await session.commit()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except IntegrationConfigurationError as exc:
         await session.rollback()

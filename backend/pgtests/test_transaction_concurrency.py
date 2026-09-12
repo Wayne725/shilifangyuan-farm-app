@@ -22,7 +22,7 @@ from app.integrations.payment_service import (
     payment_adapter_from_settings,
 )
 from app.models import PaymentAttempt, PaymentStatus
-from tests.support import make_test_settings
+from tests.support import fanyu_test_context, make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
 from tests.test_integrations import make_regular_order, payment_settings, signed_payment_callback
 
@@ -51,7 +51,7 @@ async def postgres_sessions():
 @pytest.mark.asyncio
 async def test_concurrent_workers_do_not_repeat_payment_query_invoice_or_email(postgres_sessions, monkeypatch):
     async with postgres_sessions() as session:
-        buyer, _product, order = await make_regular_order(session)
+        buyer, _product, order = await make_regular_order(session, invoice_context=fanyu_test_context())
         order.contact_email = "isolated-ci@example.com"
         now = datetime.now(timezone.utc)
         attempt = await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
@@ -128,12 +128,12 @@ async def test_concurrent_admin_void_and_retry_submit_only_once(postgres_session
     from tests.support import api_test_context, auth_headers
 
     async with postgres_sessions() as session:
-        admin, _product, order = await make_regular_order(session)
+        admin, _product, order = await make_regular_order(session, invoice_context=fanyu_test_context())
         admin.user_role = UserRole.ADMIN
         order.payment_status = PaymentStatus.REFUNDED
         session.add(Invoice(order=order, relate_number="CONCURRENTVOID", provider="fanyu", status=InvoiceStatus.VOID_PENDING,
                             invoice_number="AB12345678", invoice_date=datetime(2026, 9, 5, tzinfo=timezone.utc),
-                            total_amount=200, provider_request={"sellerID": "15989995"}))
+                            total_amount=200, provider_request={"sellerID": "15989995"}, provider_context=fanyu_test_context()))
         session.add(Refund(order_id=order.id, amount=200, status=RefundStatus.COMPLETED, reason="隔離併發", requested_by_id=admin.id))
         event = OutboxEvent(event_type="send_email", aggregate_type="user", aggregate_id=admin.id, status=OutboxStatus.FAILED,
                             payload={"event_type": "refund_completed", "data": {"order_id": order.id}})

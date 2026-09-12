@@ -93,7 +93,7 @@ from app.models import (
     TargetType,
     User,
 )
-from tests.support import make_test_settings, prepare_test_invoice
+from tests.support import fanyu_test_context, make_test_settings, prepare_test_invoice
 
 
 INVOICE_MERCHANT_ID = "2000132"
@@ -131,7 +131,7 @@ def preview_raygate_acceptance_settings(**overrides) -> Settings:
     return make_test_settings(**values)
 
 
-async def make_regular_order(database_session):
+async def make_regular_order(database_session, *, invoice_context=None):
     user = User(
         email="buyer@example.test",
         display_name="測試買家",
@@ -152,6 +152,7 @@ async def make_regular_order(database_session):
     await database_session.flush()
     order = Order(
         order_number="SLFTEST0001",
+        invoice_provider_context=invoice_context,
         order_kind=OrderKind.REGULAR,
         user_id=user.id,
         membership_type_snapshot=user.membership_type,
@@ -179,7 +180,7 @@ async def test_fanyu_invoice_does_not_send_a_duplicate_platform_email(
     database_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _user, _product, order = await make_regular_order(database_session)
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     order.payment_status = PaymentStatus.PAID
     order.invoice_status = InvoiceStatus.PENDING
     event = OutboxEvent(
@@ -193,6 +194,7 @@ async def test_fanyu_invoice_does_not_send_a_duplicate_platform_email(
 
     class InvoiceAdapter:
         provider_name = "fanyu"
+        binding_context = fanyu_test_context()
 
         def prepare_invoice(self, request):
             return prepare_test_invoice(request, provider="fanyu")
@@ -931,7 +933,7 @@ async def test_paid_order_invoice_is_queried_then_issued_once(
 async def test_fanyu_no_data_query_is_followed_by_one_issue(
     database_session,
 ) -> None:
-    _user, _product, order = await make_regular_order(database_session)
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     order.payment_status = PaymentStatus.PAID
     order.fulfillment_status = FulfillmentStatus.PICKED_UP
     order.invoice_status = InvoiceStatus.PENDING
@@ -942,6 +944,7 @@ async def test_fanyu_no_data_query_is_followed_by_one_issue(
 
         def __init__(self):
             self.issue_count = 0
+            self.binding_context = fanyu_test_context()
 
         def prepare_invoice(self, request):
             return prepare_test_invoice(request, provider="fanyu")
@@ -980,7 +983,7 @@ async def test_fanyu_no_data_query_is_followed_by_one_issue(
 async def test_fanyu_invoice_persists_exact_provider_request_snapshot(
     database_session,
 ) -> None:
-    _user, _product, order = await make_regular_order(database_session)
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     order.payment_status = PaymentStatus.PAID
     order.invoice_status = InvoiceStatus.PENDING
     order.invoice_buyer_type = InvoiceBuyerType.COMPANY
@@ -1074,7 +1077,7 @@ async def test_fanyu_personal_cloud_order_uses_contact_email_as_member_carrier(
 async def test_invoice_query_recovers_provider_result_without_reissuing(
     database_session,
 ) -> None:
-    _user, _product, order = await make_regular_order(database_session)
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     order.payment_status = PaymentStatus.PAID
     order.fulfillment_status = FulfillmentStatus.PICKED_UP
     order.invoice_status = InvoiceStatus.FAILED
@@ -1094,6 +1097,8 @@ async def test_invoice_query_recovers_provider_result_without_reissuing(
                 "RandomNumber": "3456",
                 "ProviderStatus": "0",
             }
+
+        binding_context = fanyu_test_context()
 
         async def issue_prepared_invoice(self, request):
             raise AssertionError("查到既有發票後不可重複開立")

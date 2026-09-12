@@ -4,12 +4,14 @@ import base64
 import json
 import re
 from functools import lru_cache
-from typing import List
+from typing import List, Literal
 from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .integrations.fanyu_endpoints import is_fanyu_api_base_url
 
 
 DEFAULT_JWT_SECRET = "change-this-development-jwt-secret"
@@ -43,6 +45,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"),
     )
     debug: bool = False
+    sales_scope: Literal["all", "meals_only"] = "all"
     api_v1_prefix: str = "/v1"
     database_url: str = "sqlite+aiosqlite:///./shilifangyuan.db"
     database_pool_size: int = Field(default=5, ge=1, le=20)
@@ -221,6 +224,9 @@ class Settings(BaseSettings):
 
     def validate_runtime_secrets(self) -> None:
         environment = self.environment.strip().lower()
+        meals_only_production = (
+            environment == "production" and self.sales_scope == "meals_only"
+        )
         if environment not in REMOTE_ENVIRONMENTS:
             return
 
@@ -396,9 +402,19 @@ class Settings(BaseSettings):
                 ),
                 "CLOUDFLARE_R2_BUCKET": self.cloudflare_r2_bucket,
             }
-            invalid_secrets.extend(
-                name for name in R2_REQUIRED_SETTINGS if not r2_values[name].strip()
-            )
+            if not meals_only_production:
+                invalid_secrets.extend(
+                    name for name in R2_REQUIRED_SETTINGS if not r2_values[name].strip()
+                )
+            if meals_only_production:
+                if self.payment_provider != "raygate":
+                    invalid_secrets.append("PAYMENT_PROVIDER（便當限定正式上線須使用 raygate）")
+                if self.invoice_provider != "fanyu":
+                    invalid_secrets.append("INVOICE_PROVIDER（便當限定正式上線須使用 fanyu）")
+                if not self.reconciliation_enabled:
+                    invalid_secrets.append("RECONCILIATION_ENABLED（便當正式付款須啟用背景補查）")
+                if urlparse(self.fanyu_invoice_base_url).hostname != "api01.einvoice.com.tw":
+                    invalid_secrets.append("FANYU_INVOICE_BASE_URL（便當正式上線須使用已驗證的 api01 主機）")
             if self.payment_provider == "ecpay":
                 if not self.ecpay_payment_merchant_id.strip():
                     invalid_secrets.append("ECPAY_PAYMENT_MERCHANT_ID")
@@ -437,12 +453,13 @@ class Settings(BaseSettings):
                         "FANYU_INVOICE_SIGNATURE_VERIFIED"
                         "（須先用汎宇官方測試向量驗證）"
                     )
-            if not self.ecpay_logistics_merchant_id.strip():
-                invalid_secrets.append("ECPAY_LOGISTICS_MERCHANT_ID")
-            if len(self.ecpay_logistics_hash_key.encode("utf-8")) != 16:
-                invalid_secrets.append("ECPAY_LOGISTICS_HASH_KEY（必須為 16 bytes）")
-            if len(self.ecpay_logistics_hash_iv.encode("utf-8")) != 16:
-                invalid_secrets.append("ECPAY_LOGISTICS_HASH_IV（必須為 16 bytes）")
+            if not meals_only_production:
+                if not self.ecpay_logistics_merchant_id.strip():
+                    invalid_secrets.append("ECPAY_LOGISTICS_MERCHANT_ID")
+                if len(self.ecpay_logistics_hash_key.encode("utf-8")) != 16:
+                    invalid_secrets.append("ECPAY_LOGISTICS_HASH_KEY（必須為 16 bytes）")
+                if len(self.ecpay_logistics_hash_iv.encode("utf-8")) != 16:
+                    invalid_secrets.append("ECPAY_LOGISTICS_HASH_IV（必須為 16 bytes）")
             self._validate_pii_encryption_settings(invalid_secrets)
             invoice_stage = (
                 self.ecpay_invoice_stage
@@ -464,19 +481,21 @@ class Settings(BaseSettings):
                 if self.invoice_provider == "ecpay"
                 else "FANYU_INVOICE_STAGE"
             )
-            stage_values = (payment_stage, invoice_stage, self.ecpay_logistics_stage)
+            stage_values = (payment_stage, invoice_stage)
+            stage_names = f"{payment_stage_name}、{invoice_stage_name}"
+            if not meals_only_production:
+                stage_values += (self.ecpay_logistics_stage,)
+                stage_names += " 與 ECPAY_LOGISTICS_STAGE"
             if environment == "sandbox" and not all(stage_values):
                 invalid_secrets.append(
-                    f"{payment_stage_name}、{invoice_stage_name} 與 "
-                    "ECPAY_LOGISTICS_STAGE 必須為 true"
+                    f"{stage_names} 必須為 true"
                 )
             if environment == "production" and any(stage_values):
                 invalid_secrets.append(
-                    f"{payment_stage_name}、{invoice_stage_name} 與 "
-                    "ECPAY_LOGISTICS_STAGE 必須為 false"
+                    f"{stage_names} 必須為 false"
                 )
             if environment == "production":
-                provider_urls = [
+                provider_urls = [] if meals_only_production else [
                     (
                         "ECPAY_LOGISTICS_SELECTION_URL",
                         self.ecpay_logistics_selection_url,
@@ -562,18 +581,14 @@ class Settings(BaseSettings):
                             "（須先確認回跳查單、定時補查、狀態與退款契約）"
                         )
                 if self.invoice_provider == "fanyu":
-                    parsed = urlparse(self.fanyu_invoice_base_url.strip())
-                    if (
-                        parsed.scheme != "https"
-                        or parsed.hostname != "web.einvoice.com.tw"
-                        or parsed.query
-                        or parsed.fragment
+                    if not is_fanyu_api_base_url(
+                        self.fanyu_invoice_base_url, production_only=True
                     ):
                         invalid_secrets.append(
                             "FANYU_INVOICE_BASE_URL"
-                            "（正式環境必須使用汎宇正式 HTTPS 網址）"
+                            "（正式環境必須使用汎宇正式 HTTPS /einv 根網址，不可包含登入路徑）"
                         )
-                if "測試" in self.ecpay_logistics_sender_address:
+                if not meals_only_production and "測試" in self.ecpay_logistics_sender_address:
                     invalid_secrets.append(
                         "ECPAY_LOGISTICS_SENDER_ADDRESS（不可使用測試地址）"
                     )

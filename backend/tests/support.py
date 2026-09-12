@@ -20,6 +20,17 @@ from app.integrations.invoice import (
 from app.models import User
 
 
+def fanyu_test_context() -> dict:
+    return {
+        "version": 1,
+        "provider": "fanyu",
+        "base_url": "https://webtest.einvoice.com.tw/einv",
+        "company_id": "15989995",
+        "seller_id": "15989995",
+        "user_id": "15989995ADMIN",
+    }
+
+
 def make_test_settings(**overrides: Any) -> Settings:
     values = {
         "environment": "test",
@@ -50,7 +61,10 @@ def prepare_test_invoice(
         provider=provider,
         relate_number=request.relate_number,
         buyer_type=request.buyer_type,
-        provider_request={"RelateNumber": request.relate_number},
+        provider_request=(
+            {"orderID": request.relate_number, "sellerID": "15989995"}
+            if provider == "fanyu" else {"RelateNumber": request.relate_number}
+        ),
         sales_amount=total,
         tax_amount=Decimal("0"),
         total_amount=total,

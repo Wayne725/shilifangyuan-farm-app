@@ -12,7 +12,7 @@ from app.models import Invoice, InvoiceStatus, PaymentStatus, User
 from app.routers.notifications import notifications_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
-from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
 from tests.test_raygate import FakeRayGateRefundAdapter
 
@@ -51,6 +51,7 @@ async def test_verified_payment_invoice_mail_duplicate_and_refund_pipeline(
 ):
     client, session, order, attempt, payment_adapter, _raw_result = raygate_callback_context
     order.contact_email = "audit-buyer@example.com"
+    order.invoice_provider_context = fanyu_test_context()
     order.user.email = order.contact_email
     await session.commit()
     settings = make_test_settings(payment_provider="raygate", invoice_provider="fanyu")

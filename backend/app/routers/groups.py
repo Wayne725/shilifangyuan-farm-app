@@ -15,6 +15,9 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
+from ..config import Settings, get_settings
+from ..sales_scope import require_sales_scope_allows
+from ..integrations.invoice_service import invoice_context_from_settings
 from ..domain import (
     DomainError,
     aware,
@@ -455,7 +458,9 @@ async def join_campaign(
     body: GroupJoinRequest,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> OrderRead:
+    require_sales_scope_allows(settings)
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到團購")
@@ -506,6 +511,7 @@ async def join_campaign(
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.GROUP,
+        invoice_provider_context=invoice_context_from_settings(settings),
         sales_channel=SalesChannel.GROUP,
         fulfillment_method=body.fulfillment_method,
         user_id=user.id,

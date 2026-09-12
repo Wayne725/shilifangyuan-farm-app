@@ -15,6 +15,8 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
+from ..config import Settings, get_settings
+from ..sales_scope import require_sales_scope_allows
 from ..domain import (
     DomainError,
     ensure_self_cancel_allowed,
@@ -24,7 +26,7 @@ from ..domain import (
     price_for_membership,
     remove_paid_quantity,
 )
-from ..integrations.invoice_service import enqueue_invoice_issue
+from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
 from ..integrations.payment_service import (
     PaymentApplicationError,
     create_provider_aware_refund,
@@ -212,7 +214,9 @@ async def create_order(
     body: OrderCreate,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> OrderRead:
+    require_sales_scope_allows(settings)
     if body.fulfillment_method not in {
         FulfillmentMethod.COOPERATIVE_PICKUP,
         FulfillmentMethod.ECPAY_LOGISTICS,
@@ -239,6 +243,7 @@ async def create_order(
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.REGULAR,
+        invoice_provider_context=invoice_context_from_settings(settings),
         sales_channel=SalesChannel.REGULAR,
         fulfillment_method=body.fulfillment_method,
         user_id=user.id,

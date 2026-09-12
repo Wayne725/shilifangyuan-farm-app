@@ -11,13 +11,13 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
-import { apiFetch, formatDate, formatMoney } from "../lib/api";
+import { ApiError, apiFetch, formatDate, formatMoney } from "../lib/api";
 import {
   createOrderPayment,
   refreshPaymentAttempt,
@@ -30,7 +30,7 @@ import {
   invoiceStatusLabel,
   paymentStatusLabel,
 } from "../lib/labels";
-import type { Order, PaymentAttemptStatus } from "../lib/types";
+import type { MealOrder, Order, PaymentAttemptStatus } from "../lib/types";
 
 const shipmentLabels: Record<string, string> = {
   draft: "待選擇物流",
@@ -46,6 +46,7 @@ const shipmentLabels: Record<string, string> = {
 export function OrdersPage() {
   const { user, isAuthReady, openLogin } = useAuth();
   const search = useSearch({ from: "/orders" });
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const confirmationStartedAt = useRef(Date.now());
   const [selectedId, setSelectedId] = useState(search.order_id || "");
@@ -116,6 +117,19 @@ export function OrdersPage() {
   }, [queryClient, refreshedPaymentStatus]);
 
   const selected = orders.data?.find((order) => order.id === selectedId);
+  const returnedMeal = useQuery({
+    queryKey: ["returned-meal-order", user?.id, search.order_id],
+    queryFn: async () => {
+      try {
+        return await apiFetch<MealOrder>(`/v1/meal-orders/${search.order_id}`);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    enabled: Boolean(user && search.order_id && selected?.id === search.order_id && selected.sales_channel === "meal_preorder"),
+    retry: false,
+  });
   const storedPaymentStatus =
     selected && selected.id === search.order_id
       ? selected.payment_status
@@ -136,6 +150,12 @@ export function OrdersPage() {
   );
   const actionError =
     openPayment.error || reopenLogistics.error || cancelOrder.error;
+
+  useEffect(() => {
+    if (returnedMeal.isSuccess && !returnedMeal.isFetching && returnedMeal.data && returnedMeal.data.id === search.order_id && !selectedPaymentIsConfirming) {
+      void navigate({ to: "/meal-orders", search: { order_id: returnedMeal.data.id }, replace: true });
+    }
+  }, [navigate, returnedMeal.data, returnedMeal.isFetching, returnedMeal.isSuccess, search.order_id, selectedPaymentIsConfirming]);
 
   if (!isAuthReady) {
     return (
@@ -179,6 +199,7 @@ export function OrdersPage() {
       )}
 
       {orders.isPending && <LoadingLines count={4} />}
+      {returnedMeal.isError && <DataState kind="error" title="便當取餐頁暫時無法開啟" detail={returnedMeal.error.message} />}
       {orders.isError && (
         <DataState kind="error" title="訂單暫時無法讀取" detail={orders.error.message} />
       )}

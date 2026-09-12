@@ -208,6 +208,105 @@ def test_fanyu_builds_company_invoice_with_untaxed_line_amounts() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('buyer_type', ['personal', 'company'])
+async def test_fanyu_web2_cloud_invoice_and_query_preserve_provider_contract(buyer_type):
+    requests = []
+
+    async def transport(url, payload, headers, timeout):
+        requests.append((url, payload))
+        return HTTPResponse(
+            status_code=200,
+            body='{"statusCode":"0","respData":{"invNo":"AB12345678","invDate":"20260908","status":"0"}}',
+            headers={},
+        )
+
+    adapter = FanyuInvoiceAdapter(
+        fanyu_settings(base_url='https://web2.einvoice.com.tw/einv'),
+        transport=transport,
+    )
+    request = InvoiceIssueRequest(
+        relate_number='ISOLATED2026090801',
+        customer_email='buyer@example.test',
+        buyer_type=buyer_type,
+        buyer_tax_id='12345675' if buyer_type == 'company' else '',
+        buyer_name='測試公司' if buyer_type == 'company' else '',
+        carrier_type='cloud',
+        items=[InvoiceLine(name='隔離驗證商品', quantity=1, unit_price=105)],
+    )
+    issued = await adapter.issue_invoice(request)
+    queried = await adapter.query_invoice(request.relate_number, buyer_type=buyer_type)
+
+    assert [url for url, _ in requests] == [
+        'https://web2.einvoice.com.tw/einv/openInvoice',
+        'https://web2.einvoice.com.tw/einv/queryInvoice',
+    ]
+    data = requests[0][1]['reqData']
+    assert data['carrierType'] == 'EG0478'
+    assert data['carrierID1'] == data['carrierID2'] == data['notifyEmail'] == 'buyer@example.test'
+    assert data['printMark'] == 'N'
+    assert data['process_type'] == ('B' if buyer_type == 'company' else 'C')
+    assert 'invNo' not in data
+    assert issued.invoice_number == queried['InvoiceNo'] == 'AB12345678'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('buyer_type', ['personal', 'company'])
+async def test_web2_accepts_invoice_detail_sequence_with_three_character_limit(buyer_type):
+    async def transport(url, payload, headers, timeout):
+        detail = payload['reqData']['Details'][0]
+        if len(detail['sequenceNumber']) > 3:
+            return HTTPResponse(200, '{"statusCode":"2","statusDesc":"序號0001: 商品明細排列序號長度不可超過3;"}', {})
+        assert detail['sequenceNumber'] == '001'
+        return HTTPResponse(200, '{"statusCode":"0","respData":{"invNo":"AB12345678","invDate":"20260908"}}', {})
+
+    adapter = FanyuInvoiceAdapter(
+        fanyu_settings(base_url='https://web2.einvoice.com.tw:443/einv/'),
+        transport=transport,
+    )
+    request = InvoiceIssueRequest(
+        relate_number='ISOLATEDWEB2SEQUENCE', customer_email='buyer@example.test',
+        buyer_type=buyer_type, buyer_tax_id='12345675', buyer_name='隔離測試公司',
+        items=[InvoiceLine(name='隔離驗證商品', quantity=1, unit_price=10)],
+    )
+    result = await adapter.issue_invoice(request)
+    assert result.invoice_number == 'AB12345678'
+
+
+@pytest.mark.asyncio
+async def test_web2_rejects_too_many_details_before_sending_invoice():
+    async def transport(*args):
+        pytest.fail('超出序號範圍不應送出開票')
+
+    adapter = FanyuInvoiceAdapter(
+        fanyu_settings(base_url='https://web2.einvoice.com.tw/einv'), transport=transport,
+    )
+    request = InvoiceIssueRequest(
+        relate_number='ISOLATEDWEB2LIMIT', customer_email='buyer@example.test',
+        items=[InvoiceLine(name='隔離商品', quantity=1, unit_price=1)] * 1000,
+    )
+    with pytest.raises(ValueError, match='999'):
+        await adapter.issue_invoice(request)
+
+
+@pytest.mark.parametrize(('host', 'size', 'first', 'last'), [
+    ('web2.einvoice.com.tw', 999, '001', '999'),
+    ('web.einvoice.com.tw', 1000, '0001', '1000'),
+    ('webtest.einvoice.com.tw', 1000, '0001', '1000'),
+])
+def test_fanyu_sequence_format_preserves_legacy_hosts_and_unique_numbers(host, size, first, last):
+    adapter = FanyuInvoiceAdapter(fanyu_settings(base_url=f'https://{host}/einv'))
+    prepared = adapter.prepare_invoice(InvoiceIssueRequest(
+        relate_number='ISOLATEDSEQUENCE', customer_email='buyer@example.test',
+        items=[InvoiceLine(name='隔離商品', quantity=1, unit_price=1)] * size,
+    ))
+    sequences = [item['sequenceNumber'] for item in prepared.provider_request['Details']]
+    assert sequences[0] == first
+    assert sequences[-1] == last
+    assert len(set(sequences)) == size
+    assert prepared.items[-1].sequence_number == size
+
+
+@pytest.mark.asyncio
 async def test_fanyu_open_and_query_use_official_paths_and_normalize_result() -> None:
     requests = []
 

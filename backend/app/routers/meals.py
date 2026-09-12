@@ -24,6 +24,7 @@ from ..integrations.notifications import (
     SQLAlchemyNotificationRepository,
 )
 from ..integrations.invoice_service import (
+    invoice_context_from_settings,
     enqueue_invoice_adjustment_after_refund,
     enqueue_invoice_issue,
 )
@@ -34,6 +35,7 @@ from ..integrations.payment_service import (
     reverse_order_purchase_points,
 )
 from ..meal_pricing import price_meal_line
+from ..sales_scope import DEMO_MEAL_EVENT_IDS
 from ..models import (
     AdminAudit,
     FulfillmentMethod,
@@ -84,6 +86,15 @@ from ..v2_domain import (
 
 
 meals_router = APIRouter(tags=["meals"])
+
+
+def _require_live_meal_event(event_id: str, settings: Settings) -> None:
+    if (
+        settings.environment == "production"
+        and settings.sales_scope == "meals_only"
+        and event_id in DEMO_MEAL_EVENT_IDS
+    ):
+        raise HTTPException(status_code=409, detail="展示場次不可正式下單，請等待正式場次公告")
 
 
 def make_meal_order_number(
@@ -216,11 +227,15 @@ async def _meal_order_read(
         raise HTTPException(status_code=500, detail="便當訂單履約資料不完整")
     credential_available = (
         order.payment_status == PaymentStatus.PAID
-        and fulfillment.status
-        not in {
-            FulfillmentState.CANCELLED,
-            FulfillmentState.NO_SHOW,
-            FulfillmentState.PICKED_UP,
+        and order.cancelled_at is None
+        and event.status not in {
+            MealEventStatus.CANCELLED,
+            MealEventStatus.COMPLETED,
+        }
+        and fulfillment.status in {
+            FulfillmentState.PENDING_CONFIRMATION,
+            FulfillmentState.PREPARING,
+            FulfillmentState.READY_FOR_PICKUP,
         }
     )
     qr_payload = _pickup_qr_payload(order)
@@ -246,6 +261,12 @@ async def _meal_order_read(
         pickup_qr_payload=qr_payload,
         payment_status=order.payment_status,
         invoice_status=order.invoice_status,
+        invoice_number=(order.invoice.invoice_number if order.invoice else None),
+        invoice_date=(
+            _aware(order.invoice.invoice_date)
+            if order.invoice and order.invoice.invoice_date
+            else None
+        ),
         fulfillment_status=_MEAL_FULFILLMENT_LABELS.get(
             fulfillment.status if fulfillment is not None else None,
             "pending",
@@ -398,6 +419,7 @@ def _meal_order_query():
             ),
             selectinload(Order.meal_event),
             selectinload(Order.fulfillment),
+            selectinload(Order.invoice),
         )
     )
 
@@ -534,7 +556,9 @@ async def quote_meal_order(
     event_id: str,
     body: MealOrderCreate,
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> MealOrderQuoteRead:
+    _require_live_meal_event(event_id, settings)
     event = await _load_event(session, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="找不到便當場次")
@@ -614,11 +638,13 @@ async def create_meal_order(
     body: MealOrderCreate,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> MealOrderRead:
+    _require_live_meal_event(event_id, settings)
     event = await _load_event(session, event_id, for_update=True)
     if event is None:
         raise HTTPException(status_code=404, detail="找不到便當場次")
-    quote = await quote_meal_order(event_id, body, session)
+    quote = await quote_meal_order(event_id, body, session, settings)
     by_id = {offering.id: offering for offering in event.offerings}
     quote_by_offering = {item.offering_id: item for item in quote.items}
     now = datetime.now(timezone.utc)
@@ -630,6 +656,7 @@ async def create_meal_order(
         order_number=order_number,
         order_kind=OrderKind.REGULAR,
         sales_channel=SalesChannel.MEAL_PREORDER,
+        invoice_provider_context=invoice_context_from_settings(settings),
         fulfillment_method=FulfillmentMethod.EVENT_PICKUP,
         user_id=user.id,
         meal_event_id=event.id,
@@ -1275,11 +1302,18 @@ async def redeem_meal_pickup(
         )
         .options(selectinload(Order.fulfillment))
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if order is None or order.fulfillment is None:
         raise HTTPException(status_code=404, detail="找不到有效取餐碼")
     if order.fulfillment.status == FulfillmentState.PICKED_UP:
         raise HTTPException(status_code=409, detail="此取餐碼已核銷")
+    if order.cancelled_at is not None or order.fulfillment.status not in {
+        FulfillmentState.PENDING_CONFIRMATION,
+        FulfillmentState.PREPARING,
+        FulfillmentState.READY_FOR_PICKUP,
+    }:
+        raise HTTPException(status_code=409, detail="此取餐憑證已失效")
     now = datetime.now(timezone.utc)
     order.fulfillment.status = FulfillmentState.PICKED_UP
     order.fulfillment.fulfilled_at = now

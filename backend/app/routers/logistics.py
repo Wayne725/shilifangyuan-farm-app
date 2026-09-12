@@ -27,6 +27,7 @@ from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
+from ..sales_scope import require_sales_scope_allows
 from ..database import get_session
 from ..domain import DomainError
 from ..integrations.common import IntegrationError
@@ -571,6 +572,7 @@ async def create_logistics_selection(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> LogisticsSelectionRead:
+    require_sales_scope_allows(settings)
     order = await _load_order(session, order_id, lock=True)
     _ensure_order_viewer(order, user)
     if order.payment_status != PaymentStatus.PENDING:
@@ -674,6 +676,7 @@ async def reissue_logistics_selection_link(
     fresh token; without it an abandoned selection would strand the order,
     because payment is blocked until the store/address is fixed.
     """
+    require_sales_scope_allows(settings)
     order = await _load_order(session, order_id, lock=True)
     _ensure_order_viewer(order, user)
     if order.payment_status != PaymentStatus.PENDING:
@@ -720,6 +723,7 @@ async def open_logistics_selection_page(
     which cannot carry a Bearer token, so the one-time token in the path is the
     credential — exactly like `/payments/{attempt_id}/checkout`.
     """
+    require_sales_scope_allows(settings)
     shipment = await _shipment_for_token(session, token)
     if shipment.status not in {
         ShipmentStatus.SELECTION_PENDING,
@@ -915,6 +919,7 @@ async def create_formal_logistics_order(
             shipment=_shipment_read(shipment),
             provider=_safe_provider_payload(shipment.provider_payload or {}),
         )
+    require_sales_scope_allows(settings)
     if (
         order.fulfillment_status
         in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}

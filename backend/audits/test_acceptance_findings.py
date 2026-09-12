@@ -27,7 +27,7 @@ from app.models import (
     UserRole,
 )
 from app.routers.operations import operations_router
-from tests.support import api_test_context, auth_headers, prepare_test_invoice
+from tests.support import api_test_context, auth_headers, fanyu_test_context, prepare_test_invoice
 from tests.test_integrations import make_regular_order, payment_settings
 from tests.test_real_cooperative_records import real_data_settings
 
@@ -73,7 +73,7 @@ async def test_a02_supplier_seed_email_does_not_break_admin_list(database_sessio
 
 
 async def test_a03_refunded_invoice_can_query_provider_void_status(database_session):
-    _user, _product, order = await make_regular_order(database_session)
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     order.payment_status = PaymentStatus.REFUNDED
     order.invoice_status = InvoiceStatus.VOID_PENDING
     database_session.add(
@@ -81,6 +81,7 @@ async def test_a03_refunded_invoice_can_query_provider_void_status(database_sess
             order=order,
             relate_number="INVSLFTEST0001",
             provider="fanyu",
+            provider_context=fanyu_test_context(),
             invoice_number="AB12345671",
             status=InvoiceStatus.VOID_PENDING,
         )
@@ -89,6 +90,7 @@ async def test_a03_refunded_invoice_can_query_provider_void_status(database_sess
 
     class Adapter:
         provider_name = "fanyu"
+        binding_context = fanyu_test_context()
 
         def prepare_invoice(self, request):
             return prepare_test_invoice(request, provider="fanyu")

@@ -15,14 +15,14 @@ from app.integrations.payment_service import (
     create_payment_attempt,
     payment_adapter_from_settings,
 )
-from tests.support import make_test_settings
+from tests.support import fanyu_test_context, make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
 from tests.test_integrations import make_regular_order, payment_settings, signed_payment_callback
 
 
 @pytest.mark.asyncio
 async def test_lifespan_finishes_invoice_and_email_without_browser_traffic(database_session, monkeypatch):
-    user, _product, order = await make_regular_order(database_session)
+    user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
     order.contact_email = "invoice-audit@example.com"
     now = datetime.now(timezone.utc)
     attempt = await create_payment_attempt(database_session, order.id, user, payment_settings(), now=now)

@@ -1242,6 +1242,8 @@ class MealOrderRead(ApiModel):
     pickup_qr_payload: Optional[str]
     payment_status: PaymentStatus
     invoice_status: InvoiceStatus
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[datetime] = None
     fulfillment_status: str
     paid_at: Optional[datetime]
     cancelled_at: Optional[datetime]

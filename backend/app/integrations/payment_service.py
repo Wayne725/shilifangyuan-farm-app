@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from ..config import Settings
+from ..sales_scope import SalesScopeError, ensure_sales_scope_allows
 from ..domain import (
     apply_paid_quantity,
     order_fulfillment_is_irreversible,
@@ -77,6 +78,7 @@ from .invoice import is_mobile_barcode_format
 from .invoice_service import (
     enqueue_invoice_adjustment_after_refund,
     enqueue_invoice_issue,
+    invoice_context_from_settings,
 )
 
 
@@ -107,7 +109,18 @@ def ensure_payment_runtime_enabled(
     item_unit_price: Optional[int] = None,
     item_subtotal: Optional[int] = None,
     order_kind: Optional[OrderKind] = None,
+    sales_channel: Optional[SalesChannel] = None,
+    meal_event_id: Optional[str] = None,
 ) -> None:
+    try:
+        ensure_sales_scope_allows(
+            settings,
+            sales_channel=sales_channel,
+            fulfillment_method=fulfillment_method,
+            meal_event_id=meal_event_id,
+        )
+    except SalesScopeError as exc:
+        raise PaymentApplicationError(str(exc)) from exc
     if settings.environment.strip().lower() != "preview":
         return
     configured_order_id = settings.raygate_payment_acceptance_order_id.strip()
@@ -169,7 +182,44 @@ async def ensure_order_payment_runtime_enabled(
         item_unit_price=(acceptance_item.unit_price if acceptance_item else None),
         item_subtotal=(acceptance_item.subtotal if acceptance_item else None),
         order_kind=order.order_kind,
+        sales_channel=order.sales_channel,
+        meal_event_id=order.meal_event_id,
     )
+    if settings.sales_scope == "meals_only":
+        if (
+            settings.environment.strip().lower() == "production"
+            and order.invoice_provider_context != invoice_context_from_settings(settings)
+        ):
+            raise PaymentApplicationError(
+                "此訂單的發票平台資料已過期或未設定，無法付款；請重新訂購便當"
+            )
+        if (
+            order.order_kind != OrderKind.REGULAR
+            or order.group_campaign_id is not None
+            or not order.items
+            or any(
+                item.source_meal_offering_id is None
+                or item.source_product_id is not None
+                or item.source_bundle_id is not None
+                for item in order.items
+            )
+        ):
+            raise PaymentApplicationError("便當訂單資料不完整，無法付款")
+        offering_ids = {item.source_meal_offering_id for item in order.items}
+        matching_offerings = set(await session.scalars(
+            select(MealEventOffering.id)
+            .join(MealEvent, MealEvent.id == MealEventOffering.meal_event_id)
+            .where(
+                MealEvent.id == order.meal_event_id,
+                MealEventOffering.id.in_(offering_ids),
+            )
+        ))
+        event_pickup_exists = await session.scalar(select(exists().where(
+            OrderFulfillment.order_id == order.id,
+            OrderFulfillment.method == FulfillmentMethod.EVENT_PICKUP,
+        )))
+        if matching_offerings != offering_ids or not event_pickup_exists:
+            raise PaymentApplicationError("便當訂單場次或取餐資料不完整，無法付款")
 
 
 def allow_local_refund_without_payment_attempt(settings: Settings) -> bool:

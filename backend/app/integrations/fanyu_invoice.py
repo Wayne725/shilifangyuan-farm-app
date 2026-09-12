@@ -15,7 +15,7 @@ from .common import (
     HTTPResponse,
     IntegrationConfigurationError,
     IntegrationResponseError,
-    post_json,
+    post_json_no_redirect,
 )
 from .invoice import (
     BarcodeValidation,
@@ -27,11 +27,15 @@ from .invoice import (
     is_mobile_barcode_format,
     normalize_mobile_barcode,
 )
+from .fanyu_endpoints import (
+    FANYU_TEST_BASE_URL,
+    FANYU_PRODUCTION_BASE_URL,
+    FANYU_HOSTS,
+    is_fanyu_api_base_url,
+)
+from .invoice_context import fanyu_account_context
 
 
-FANYU_TEST_BASE_URL = "https://webtest.einvoice.com.tw/einv"
-FANYU_PRODUCTION_BASE_URL = "https://web.einvoice.com.tw/einv"
-FANYU_HOSTS = {"webtest.einvoice.com.tw", "web.einvoice.com.tw"}
 TAIPEI = ZoneInfo("Asia/Taipei")
 INVOICE_NUMBER_PATTERN = re.compile(r"^[A-Z]{2}[0-9]{8}$")
 
@@ -73,15 +77,9 @@ class FanyuInvoiceSettings:
             raise IntegrationConfigurationError("汎宇 companyID 格式不正確")
         if not re.fullmatch(r"[0-9]{8,10}", self.seller_id):
             raise IntegrationConfigurationError("汎宇 sellerID 格式不正確")
-        parsed = urlparse(self.base_url.rstrip("/"))
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname not in FANYU_HOSTS
-            or parsed.query
-            or parsed.fragment
-        ):
+        if not is_fanyu_api_base_url(self.base_url):
             raise IntegrationConfigurationError(
-                "汎宇 API 必須使用官方 HTTPS 網址"
+                "汎宇 API 必須使用官方 HTTPS /einv 根網址，不可包含登入路徑或網址參數"
             )
         if not self.signature_verified:
             raise IntegrationConfigurationError(
@@ -117,11 +115,20 @@ class FanyuInvoiceAdapter:
     def __init__(
         self,
         settings: FanyuInvoiceSettings,
-        transport: JsonTransport = post_json,
+        transport: JsonTransport = post_json_no_redirect,
     ) -> None:
         settings.validate()
         self.settings = settings
         self.transport = transport
+
+    @property
+    def binding_context(self) -> dict:
+        return fanyu_account_context(
+            base_url=self.settings.base_url,
+            company_id=self.settings.company_id,
+            seller_id=self.settings.seller_id,
+            user_id=self.settings.user_id,
+        )
 
     def build_envelope(
         self,
@@ -179,6 +186,14 @@ class FanyuInvoiceAdapter:
         else:
             tax_type = "1"
 
+        # api01 沿用成功實測的 001 補零；僅 web2 已證實最多 3 碼。
+        host = urlparse(self.settings.base_url).hostname
+        sequence_width = (
+            3 if host in {"api01.einvoice.com.tw", "web2.einvoice.com.tw"} else 4
+        )
+        sequence_limit = 999 if host == "web2.einvoice.com.tw" else 9999
+        if len(request.items) > sequence_limit:
+            raise ValueError(f"汎宇目前主機的發票明細不可超過 {sequence_limit} 筆")
         details = []
         for index, item in enumerate(request.items, start=1):
             if company_invoice and item.tax_type == "1":
@@ -198,7 +213,7 @@ class FanyuInvoiceAdapter:
                     "unit": item.unit[:6],
                     "unitprice": _decimal_text(unit_price),
                     "amount": _decimal_text(amount),
-                    "sequenceNumber": f"{index:04d}",
+                    "sequenceNumber": f"{index:0{sequence_width}d}",
                     "remark": item.remark[:120],
                     "taxType": item.tax_type,
                 }

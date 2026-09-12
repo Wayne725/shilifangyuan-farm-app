@@ -1682,6 +1682,9 @@ class Order(Base):
     invoice_carrier_value: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True
     )
+    invoice_provider_context: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
     fulfillment_status: Mapped[FulfillmentStatus] = mapped_column(
         enum_type(FulfillmentStatus, "fulfillment_status"),
         default=FulfillmentStatus.PENDING_CONFIRMATION,
@@ -2193,6 +2196,7 @@ class Invoice(Base):
     )
     provider_request: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     provider_response: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    provider_context: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     issued_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

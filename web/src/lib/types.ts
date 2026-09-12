@@ -489,6 +489,8 @@ export interface MealOrder {
   pickup_qr_payload?: string | null;
   payment_status: string;
   invoice_status: string;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
   fulfillment_status: string;
   paid_at?: string | null;
   cancelled_at?: string | null;
