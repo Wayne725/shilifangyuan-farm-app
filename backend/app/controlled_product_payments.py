@@ -10,12 +10,18 @@ from .models import FulfillmentMethod, Order, OrderKind, Product, SalesChannel
 MEALS_TEST_PRODUCT_AMOUNT = 10
 
 
+def meals_test_product_pairs(settings: Settings) -> dict[str, str]:
+    try:
+        return settings.configured_meals_test_products()
+    except RuntimeError:
+        return {}
+
+
 def meals_test_product_enabled(settings: Settings) -> bool:
     return (
         settings.environment.strip().lower() == "production"
         and settings.sales_scope == "meals_only"
-        and bool(settings.meals_test_product_id.strip())
-        and bool(settings.meals_test_product_sku.strip())
+        and bool(meals_test_product_pairs(settings))
         and settings.payment_provider == "raygate"
         and not settings.raygate_payment_stage
         and settings.raygate_payment_contract_verified
@@ -48,8 +54,9 @@ async def is_meals_test_product_order(
     ):
         return False
     item = order.items[0]
+    configured_sku = meals_test_product_pairs(settings).get(item.source_product_id)
     if (
-        item.source_product_id != settings.meals_test_product_id.strip()
+        configured_sku is None
         or item.source_bundle_id is not None
         or item.source_meal_offering_id is not None
         or item.quantity != 1
@@ -60,7 +67,7 @@ async def is_meals_test_product_order(
     # Existing reservations may already own the last unit; stock is checked on reservation.
     return bool(await session.scalar(select(exists().where(
         Product.id == item.source_product_id,
-        Product.sku == settings.meals_test_product_sku.strip(),
+        Product.sku == configured_sku,
         Product.is_active.is_(True),
         Product.can_ship.is_(False),
         Product.member_price == MEALS_TEST_PRODUCT_AMOUNT,

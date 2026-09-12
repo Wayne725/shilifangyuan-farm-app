@@ -16,7 +16,7 @@ from ..auth import (
 )
 from ..database import get_session
 from ..config import Settings, get_settings
-from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled
+from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled, meals_test_product_pairs
 from ..sales_scope import require_sales_scope_allows
 from ..domain import (
     DomainError,
@@ -222,7 +222,7 @@ async def create_order(
         require_sales_scope_allows(settings)
     elif (
         len(body.items) != 1
-        or body.items[0].product_id != settings.meals_test_product_id.strip()
+        or body.items[0].product_id not in meals_test_product_pairs(settings)
         or body.items[0].quantity != 1
         or body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP
     ):

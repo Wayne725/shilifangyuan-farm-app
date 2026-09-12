@@ -78,6 +78,7 @@ Render 正式靜態站的 `VITE_API_BASE_URL` 保持空字串，並由排序在 
 - `RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID`（平時留空；僅限 Preview 的指定 NT$10 合作社取貨訂單驗收）
 - `RAYGATE_PAYMENT_ACCEPTANCE_SKU`（平時留空；遠端驗收時只放行指定的 NT$10 測試商品）
 - `MEALS_TEST_PRODUCT_ID` / `MEALS_TEST_PRODUCT_SKU`（預設空白；僅限 `production + meals_only` 成對設定，允許指定商品單件 NT$10、合作社自取的正式付款；不開放混單、物流、團購或入社收費。停用不影響既有交易回呼與退款。）
+- `MEALS_TEST_SECONDARY_PRODUCT_ID` / `MEALS_TEST_SECONDARY_PRODUCT_SKU`（第二組可選的精確 ID／SKU，預設皆空；與第一組互相獨立，同樣只能單品一件 NT$10 自取，不得兩品混單。每組缺欄、重複 ID／SKU 或跨組配對均不得放行。兩組皆留空才是關閉所有商品測試入口。）
 
 `RAYGATE_PAYMENT_STAGE` 只是防止把測試／正式設定放錯環境的安全閘門，不會自行切換 URL。Base URL 必須是公開 HTTPS 根網址，且 hostname 必須與 allowlist 設定完全一致。商店識別、Key、IV、Merchant ID、Terminal ID 與 Base URL 都必須來自雷門，禁止使用介接規格內的範例值。
 
