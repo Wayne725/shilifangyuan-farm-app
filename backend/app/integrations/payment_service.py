@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from ..config import Settings
+from ..controlled_product_payments import is_meals_test_product_order
 from ..sales_scope import SalesScopeError, ensure_sales_scope_allows
 from ..domain import (
     apply_paid_quantity,
@@ -158,6 +159,12 @@ async def ensure_order_payment_runtime_enabled(
     *,
     amount: Optional[int] = None,
 ) -> None:
+    if await is_meals_test_product_order(session, settings, order, amount=amount):
+        if order.invoice_provider_context != invoice_context_from_settings(settings):
+            raise PaymentApplicationError(
+                "此訂單的發票平台資料已過期或未設定，無法付款；請重新訂購測試商品"
+            )
+        return
     acceptance_item = order.items[0] if len(order.items) == 1 else None
     acceptance_product_sku = None
     if (

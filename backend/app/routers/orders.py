@@ -16,6 +16,7 @@ from ..auth import (
 )
 from ..database import get_session
 from ..config import Settings, get_settings
+from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled
 from ..sales_scope import require_sales_scope_allows
 from ..domain import (
     DomainError,
@@ -216,7 +217,16 @@ async def create_order(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> OrderRead:
-    require_sales_scope_allows(settings)
+    controlled_product = meals_test_product_enabled(settings)
+    if not controlled_product:
+        require_sales_scope_allows(settings)
+    elif (
+        len(body.items) != 1
+        or body.items[0].product_id != settings.meals_test_product_id.strip()
+        or body.items[0].quantity != 1
+        or body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP
+    ):
+        require_sales_scope_allows(settings)
     if body.fulfillment_method not in {
         FulfillmentMethod.COOPERATIVE_PICKUP,
         FulfillmentMethod.ECPAY_LOGISTICS,
@@ -299,6 +309,8 @@ async def create_order(
             ),
         ),
     )
+    if controlled_product and not await is_meals_test_product_order(session, settings, order):
+        require_sales_scope_allows(settings)
     session.add(order)
     await session.commit()
     order = await load_order(session, order.id)

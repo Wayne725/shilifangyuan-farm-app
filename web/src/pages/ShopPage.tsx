@@ -5,7 +5,7 @@ import { Link } from "@tanstack/react-router";
 
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
 import { useCommerce } from "../context/CommerceContext";
-import { apiFetch, formatDate, replaceBrokenAsset, resolveAsset } from "../lib/api";
+import { apiFetch, formatDate, formatDateTime, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import { mealEventStatusLabel } from "../lib/labels";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
@@ -117,7 +117,7 @@ export function ShopPage() {
         <Tabs.Content value="meals" className="tab-content">
           <SectionHeading
             eyebrow="MEALS ON SCHEDULE"
-            title="預約一份剛好的午餐"
+            title="預約一份剛好的便當"
             description="可訂數量、截止時間與領餐窗口直接跟著餐期走。"
           />
           <div className="market-subnav"><Link className="button button-quiet" to="/meal-orders"><BowlFood size={17} />我的取餐憑證</Link></div>
@@ -138,7 +138,8 @@ export function ShopPage() {
                   <span>{mealEventStatusLabel(meal.status)}</span>
                   <h3>{meal.title}</h3>
                   <p>{meal.offerings.map((offering) => offering.meal_name).join("、") || "供餐內容與取餐時段由合作社公告。"}</p>
-                  <small>預訂截止 {formatDate(meal.ordering_ends_at)}</small>
+                  <small>預訂截止 {formatDateTime(meal.ordering_ends_at)}</small>
+                  <small>取餐 {formatDateTime(meal.pickup_starts_at)} 至 {formatDateTime(meal.pickup_ends_at)}</small>
                 </div>
               </Link>
             ))}

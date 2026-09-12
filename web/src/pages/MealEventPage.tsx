@@ -19,7 +19,7 @@ import {
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
-import { apiFetch, formatDate, formatMoney, resolveAsset } from "../lib/api";
+import { apiFetch, formatDateTime, formatMoney, resolveAsset } from "../lib/api";
 import { beginMealCheckout, invoicePreferencePayload } from "../lib/commerce";
 import { mealEventStatusLabel } from "../lib/labels";
 import type {
@@ -164,8 +164,9 @@ export function MealEventPage() {
           <p>選好餐點與客製內容，付款完成後即可取得現場取餐碼。</p>
           <dl>
             <div><dt>取餐地點</dt><dd>{mealEvent.location}</dd></div>
-            <div><dt>預訂截止</dt><dd>{formatDate(mealEvent.ordering_ends_at)}</dd></div>
-            <div><dt>開始取餐</dt><dd>{formatDate(mealEvent.pickup_starts_at)}</dd></div>
+            <div><dt>預訂截止</dt><dd>{formatDateTime(mealEvent.ordering_ends_at)}</dd></div>
+            <div><dt>開始取餐</dt><dd>{formatDateTime(mealEvent.pickup_starts_at)}</dd></div>
+            <div><dt>取餐結束</dt><dd>{formatDateTime(mealEvent.pickup_ends_at)}</dd></div>
           </dl>
         </div>
       </div>
@@ -230,7 +231,7 @@ export function MealEventPage() {
           <BowlFood size={29} weight="light" />
           <p className="eyebrow">MEAL PRE-ORDER</p>
           <h2>餐點摘要</h2>
-          <div className="pickup-window"><MapPin size={19} /><div><strong>{mealEvent.location}</strong><small>{formatDate(mealEvent.pickup_starts_at)} 至 {formatDate(mealEvent.pickup_ends_at)}</small></div></div>
+          <div className="pickup-window"><MapPin size={19} /><div><strong>{mealEvent.location}</strong><small>{formatDateTime(mealEvent.pickup_starts_at)} 至 {formatDateTime(mealEvent.pickup_ends_at)}</small></div></div>
           {quote.isPending && <LoadingLines count={2} />}
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}

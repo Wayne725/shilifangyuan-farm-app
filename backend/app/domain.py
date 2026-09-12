@@ -263,6 +263,7 @@ def order_available_actions(
             if (
                 order.meal_event is not None
                 and order.paid_at is not None
+                and not order_fulfillment_is_irreversible(order)
                 and current
                 <= min(
                     aware(order.paid_at)

@@ -17,7 +17,7 @@ from ..auth import (
 )
 from ..config import Settings, get_settings
 from ..database import get_session
-from ..domain import DomainError, included_tax_amount, order_available_actions
+from ..domain import DomainError, included_tax_amount, order_available_actions, order_fulfillment_is_irreversible
 from ..integrations.notifications import (
     NotificationCommand,
     NotificationService,
@@ -508,11 +508,15 @@ async def _unique_pickup_code(session: AsyncSession) -> str:
 @meals_router.get("/v1/meal-events", response_model=list[MealEventRead])
 async def list_meal_events(
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> list[MealEventRead]:
     events = (
         await session.scalars(
             select(MealEvent)
             .where(
+                MealEvent.id.notin_(DEMO_MEAL_EVENT_IDS)
+                if settings.environment.strip().lower() == "production"
+                else True,
                 MealEvent.status.in_(
                     [
                         MealEventStatus.PUBLISHED,
@@ -772,6 +776,8 @@ async def cancel_meal_order(
         raise HTTPException(status_code=404, detail="找不到便當訂單")
     if order.cancelled_at is not None:
         raise HTTPException(status_code=409, detail="訂單已取消")
+    if order_fulfillment_is_irreversible(order):
+        raise HTTPException(status_code=409, detail="便當已完成取餐，無法自行取消")
     if not can_cancel_meal_order(
         order.paid_at,
         order.meal_event.ordering_ends_at,

@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     )
     debug: bool = False
     sales_scope: Literal["all", "meals_only"] = "all"
+    meals_test_product_id: str = Field(default="", max_length=36)
+    meals_test_product_sku: str = Field(default="", max_length=80)
     api_v1_prefix: str = "/v1"
     database_url: str = "sqlite+aiosqlite:///./shilifangyuan.db"
     database_pool_size: int = Field(default=5, ge=1, le=20)
@@ -227,6 +229,19 @@ class Settings(BaseSettings):
         meals_only_production = (
             environment == "production" and self.sales_scope == "meals_only"
         )
+        test_product_id = self.meals_test_product_id.strip()
+        test_product_sku = self.meals_test_product_sku.strip()
+        if test_product_id or test_product_sku:
+            if not meals_only_production or not (test_product_id and test_product_sku):
+                raise RuntimeError(
+                    "MEALS_TEST_PRODUCT_ID/MEALS_TEST_PRODUCT_SKU 必須成對設定，且僅限 production + meals_only"
+                )
+            try:
+                UUID(test_product_id)
+            except ValueError as exc:
+                raise RuntimeError("MEALS_TEST_PRODUCT_ID 必須為 UUID") from exc
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", test_product_sku):
+                raise RuntimeError("MEALS_TEST_PRODUCT_SKU 格式不正確")
         if environment not in REMOTE_ENVIRONMENTS:
             return
 
