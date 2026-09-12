@@ -41,17 +41,17 @@ export function ShopPage() {
 
       <Tabs.Root className="market-tabs" defaultValue="products">
         <Tabs.List className="tab-list" aria-label="消費類型">
-          <Tabs.Trigger value="products">
-            <Package size={18} weight="light" />
-            日常選品
+          <Tabs.Trigger value="meals">
+            <BowlFood size={18} weight="light" />
+            便當預購
           </Tabs.Trigger>
           <Tabs.Trigger value="groups">
             <UsersThree size={18} weight="light" />
             共同團購
           </Tabs.Trigger>
-          <Tabs.Trigger value="meals">
-            <BowlFood size={18} weight="light" />
-            便當預購
+          <Tabs.Trigger value="products">
+            <Package size={18} weight="light" />
+            日常選品
           </Tabs.Trigger>
         </Tabs.List>
 
