@@ -18,7 +18,7 @@ const tabs = [
 ];
 
 for (const width of [1440, 390]) {
-  test(`${width}px 生活消費依便當、團購、選品排序，保留選品預設及各分頁內容`, { timeout: 30000 }, async (t) => {
+  test(`${width}px 生活消費依便當、團購、選品排序，預設便當並驗證分頁切換及重新載入`, { timeout: 30000 }, async (t) => {
     const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
     t.after(() => browser.close());
     const context = await browser.newContext({
@@ -54,9 +54,9 @@ for (const width of [1440, 390]) {
     const tabList = page.getByRole('tablist', { name: '消費類型', exact: true });
     await tabList.waitFor();
     const selected = tabList.getByRole('tab', { selected: true });
-    assert.equal(await selected.innerText(), '日常選品');
-    await page.getByRole('tabpanel', { name: '日常選品', exact: true })
-      .getByRole('heading', { name: '合作社選品', exact: true }).waitFor();
+    assert.equal(await selected.innerText(), '便當預購');
+    await page.getByRole('tabpanel', { name: '便當預購', exact: true })
+      .getByRole('heading', { name: '預約一份剛好的便當', exact: true }).waitFor();
     assert.deepEqual(await tabList.getByRole('tab').allTextContents(), tabs.map(({ name }) => name));
     const positions = await tabList.getByRole('tab').evaluateAll((elements) => elements.map((element) => {
       const { x, y, width, height } = element.getBoundingClientRect();
@@ -73,6 +73,12 @@ for (const width of [1440, 390]) {
       await panel.getByRole('heading', { name: heading, exact: true }).waitFor();
       assert.equal(await page.getByRole('tabpanel').count(), 1);
     }
+    await page.reload();
+    await tabList.waitFor();
+    assert.equal(await selected.innerText(), '便當預購');
+    await page.getByRole('tabpanel', { name: '便當預購', exact: true })
+      .getByRole('heading', { name: '預約一份剛好的便當', exact: true }).waitFor();
+    assert.equal(await page.getByRole('tabpanel').count(), 1);
     assert.deepEqual(unknownApi, []);
     assert.deepEqual(mutations, []);
     assert.equal(new URL(page.url()).pathname, '/shop');

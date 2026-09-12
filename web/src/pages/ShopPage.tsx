@@ -39,7 +39,7 @@ export function ShopPage() {
         </div>
       </section>
 
-      <Tabs.Root className="market-tabs" defaultValue="products">
+      <Tabs.Root className="market-tabs" defaultValue="meals">
         <Tabs.List className="tab-list" aria-label="消費類型">
           <Tabs.Trigger value="meals">
             <BowlFood size={18} weight="light" />
