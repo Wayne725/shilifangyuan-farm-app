@@ -79,7 +79,7 @@ for (const intent of ['nonmember', 'existing_member']) {
       const calls = await mockAccount(context);
       const page = await context.newPage();
       await page.goto(`${base}/shop`);
-      await page.getByRole('tablist', { name: '消費類型', exact: true }).waitFor();
+      await page.getByLabel('取餐日期', { exact: true }).waitFor();
       await page.goto(`${base}/register?intent=${intent}`);
       if (intent === 'existing_member') {
         await page.getByLabel('社員編號', { exact: true }).fill('TEST-001');

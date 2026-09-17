@@ -19,9 +19,10 @@ import {
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
-import { apiFetch, formatDateTime, formatMoney, resolveAsset } from "../lib/api";
+import { apiFetch, formatMoney, resolveAsset } from "../lib/api";
 import { beginMealCheckout, invoicePreferencePayload } from "../lib/commerce";
 import { mealEventStatusLabel } from "../lib/labels";
+import { formatMealDateTime, mealOrderingOpen, pickupTimeOptions, taipeiInputToIso, validPickupTime } from "../lib/meal-time";
 import type {
   MealEvent,
   MealOptionGroup,
@@ -30,6 +31,7 @@ import type {
 
 interface MealQuote {
   amount_total: number;
+  pickup_at?: string | null;
   items: Array<{
     offering_id: string;
     meal_name: string;
@@ -50,13 +52,18 @@ export function MealEventPage() {
   const { user, openLogin } = useAuth();
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [selections, setSelections] = useState<SelectionState>({});
+  const [pickupAt, setPickupAt] = useState("");
+  const [now, setNow] = useState(Date.now);
   const [invoicePreference, setInvoicePreference] = useState(
     () => defaultInvoicePreference(user?.email || ""),
   );
   const event = useQuery({
     queryKey: ["meal-event", eventId],
     queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
+    refetchInterval: 30000,
   });
+  const pickupReady = Boolean(event.data && validPickupTime(pickupAt, event.data, now));
+  const orderingOpen = Boolean(event.data && mealOrderingOpen(event.data, now));
   const activeOfferings = event.data?.offerings.filter((item) => item.is_active) || [];
   const items = useMemo(
     () => activeOfferings
@@ -81,25 +88,31 @@ export function MealEventPage() {
     .map((item) => `${item.offering_id}:${item.quantity}:${[...item.option_ids].sort().join(",")}`)
     .join("|");
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey, invoicePreference],
+    queryKey: ["meal-quote", eventId, itemKey, pickupAt, invoicePreference],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
       body: JSON.stringify({
         items,
+        pickup_at: taipeiInputToIso(pickupAt),
         contact_email: user?.email || "preview@example.com",
         ...invoicePreferencePayload(invoicePreference),
       }),
     }),
     enabled:
       items.length > 0 &&
+      orderingOpen &&
+      pickupReady &&
       selectionsReady &&
       invoicePreferenceIsValid(invoicePreference),
   });
   const checkout = useMutation({
     mutationFn: () => {
       if (!user) throw new Error("請先登入");
+      if (!event.data || !mealOrderingOpen(event.data)) throw new Error("本場次已截止或尚未開放預訂");
+      if (!event.data || !validPickupTime(pickupAt, event.data)) throw new Error("請選擇供餐時段內尚未經過的取餐時間");
       return beginMealCheckout({
         eventId,
+        pickupAt: taipeiInputToIso(pickupAt),
         items,
         contactEmail: user.email,
         invoicePreference,
@@ -111,6 +124,12 @@ export function MealEventPage() {
       window.location.assign(`/orders?${search.toString()}`);
     },
   });
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => { setPickupAt(""); }, [eventId]);
 
   useEffect(() => {
     if (!user?.email) return;
@@ -127,7 +146,8 @@ export function MealEventPage() {
   const mealEvent = event.data;
   const firstImage = activeOfferings.find((offering) => offering.image_url)?.image_url;
   const canOrder =
-    mealEvent.status === "published" &&
+    orderingOpen &&
+    pickupReady &&
     items.length > 0 &&
     selectionsReady &&
     invoicePreferenceIsValid(invoicePreference);
@@ -164,16 +184,22 @@ export function MealEventPage() {
           <p>選好餐點與客製內容，付款完成後即可取得現場取餐碼。</p>
           <dl>
             <div><dt>取餐地點</dt><dd>{mealEvent.location}</dd></div>
-            <div><dt>預訂截止</dt><dd>{formatDateTime(mealEvent.ordering_ends_at)}</dd></div>
-            <div><dt>開始取餐</dt><dd>{formatDateTime(mealEvent.pickup_starts_at)}</dd></div>
-            <div><dt>取餐結束</dt><dd>{formatDateTime(mealEvent.pickup_ends_at)}</dd></div>
+            <div><dt>開放預訂</dt><dd>{formatMealDateTime(mealEvent.ordering_starts_at)}</dd></div>
+            <div><dt>預訂截止</dt><dd>{formatMealDateTime(mealEvent.ordering_ends_at)}</dd></div>
+            <div><dt>取餐時段</dt><dd>{formatMealDateTime(mealEvent.pickup_starts_at)} 至 {formatMealDateTime(mealEvent.pickup_ends_at)}</dd></div>
           </dl>
         </div>
       </div>
 
       <div className="offer-checkout meal-checkout">
         <div>
-          <div className="checkout-step-title"><span>01</span><div><small>MEAL SELECTION</small><h2>選擇餐點</h2></div></div>
+          <section className="social-form" aria-label="選擇取餐時間">
+            <div className="checkout-step-title"><span>01</span><div><small>PICKUP TIME</small><h2>選擇取餐時間</h2></div></div>
+            <label className="field"><span>預計取餐時間（台灣時間）</span><select aria-label="預計取餐時間（台灣時間）" required value={pickupAt} onChange={(input) => setPickupAt(input.target.value)}><option value="">請選擇取餐時刻</option>{pickupTimeOptions(mealEvent, now).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            <p className="field-help">每 10 分鐘一個可選時刻，依本場供餐時段開放。跨午夜場次會標示次日日期。</p>
+            {pickupAt && !pickupReady && <p className="form-error">請重新選擇供餐時段內、尚未經過的取餐時間。</p>}
+          </section>
+          <div className="checkout-step-title"><span>02</span><div><small>MEAL SELECTION</small><h2>選擇餐點</h2></div></div>
           <div className="meal-offering-list">
             {activeOfferings.map((offering) => {
               const quantity = quantities[offering.id] || 0;
@@ -222,7 +248,7 @@ export function MealEventPage() {
           </div>
           <InvoicePreferenceFields
             onChange={setInvoicePreference}
-            sectionNumber="02"
+            sectionNumber="03"
             value={invoicePreference}
           />
         </div>
@@ -231,10 +257,12 @@ export function MealEventPage() {
           <BowlFood size={29} weight="light" />
           <p className="eyebrow">MEAL PRE-ORDER</p>
           <h2>餐點摘要</h2>
-          <div className="pickup-window"><MapPin size={19} /><div><strong>{mealEvent.location}</strong><small>{formatDateTime(mealEvent.pickup_starts_at)} 至 {formatDateTime(mealEvent.pickup_ends_at)}</small></div></div>
-          {quote.isPending && <LoadingLines count={2} />}
+          <div className="pickup-window"><MapPin size={19} /><div><strong>{mealEvent.location}</strong><small>{formatMealDateTime(mealEvent.pickup_starts_at)} 至 {formatMealDateTime(mealEvent.pickup_ends_at)}</small>{pickupReady && <small>預計取餐：{formatMealDateTime(taipeiInputToIso(pickupAt))}</small>}</div></div>
+          {quote.isFetching && <LoadingLines count={2} />}
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}
+          {!pickupAt && <p className="meal-selection-notice">請選擇預計取餐時間。</p>}
+          {!orderingOpen && <p className="meal-selection-notice">目前不在本場次的開放預訂時間內。</p>}
           <dl>
             {quote.data?.items.map((item) => (
               <div className="meal-quote-line" key={item.offering_id}>
@@ -248,7 +276,7 @@ export function MealEventPage() {
           {!user ? (
             <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後預訂</button>
           ) : (
-            <button className="button button-system full-width" type="button" disabled={!canOrder || !quote.data || checkout.isPending} onClick={() => checkout.mutate()}>
+            <button className="button button-system full-width" type="button" disabled={!canOrder || !quote.data || quote.isFetching || quote.isError || checkout.isPending} onClick={() => checkout.mutate()}>
               {checkout.isPending ? "建立餐點訂單中…" : "預訂並前往線上付款"}
             </button>
           )}

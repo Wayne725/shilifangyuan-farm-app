@@ -41,6 +41,7 @@ from ..member_claims import (
     roster_aad,
     verified_roster_entry,
 )
+from ..member_shares import MemberSharesError, update_member_shares
 from ..models import (
     AdminAudit,
     MemberDirectoryEntry,
@@ -77,9 +78,11 @@ from ..schemas import (
     MembershipFeeScheduleInput,
     MembershipMeRead,
     MembershipProfileRead,
+    MembershipPublicRead,
     MembershipRead,
     MemberRosterEntryCreate,
     MemberRosterEntryRead,
+    MemberSharesUpdate,
 )
 
 
@@ -96,8 +99,14 @@ def _aware_optional(value: Optional[datetime]) -> Optional[datetime]:
     return _aware(value) if value is not None else None
 
 
-def _ensure_user_can_apply(user: User) -> None:
+def _ensure_user_can_apply(user: User, application: Optional[MembershipApplication] = None) -> None:
     membership = user.__dict__.get("membership")
+    if (
+        membership is not None and membership.status == MembershipStatus.TRAINEE
+        and application is not None and membership.application_id == application.id
+        and application.status == MembershipApplicationStatus.NEEDS_SUPPLEMENT
+    ):
+        return
     if membership is not None and membership.status in {
         MembershipStatus.TRAINEE,
         MembershipStatus.ACTIVE,
@@ -186,6 +195,7 @@ def _roster_response(
         is_active=entry.is_active,
         claimed=entry.claimed_user_id is not None,
         claimed_at=_aware_optional(entry.claimed_at),
+        updated_at=_aware(entry.updated_at),
     )
 
 
@@ -204,8 +214,12 @@ def get_document_storage(settings: Settings = Depends(get_settings)):
     return _storage(settings)
 
 
-def require_membership_document_intake(settings: Settings = Depends(get_settings)) -> None:
+def require_membership_document_intake(
+    _user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> None:
     require_sales_scope_allows(settings)
+    raise HTTPException(status_code=410, detail="入社申請已不收取身分證或證件，請直接填寫基本資料")
 
 
 async def _application_for_user(
@@ -278,9 +292,6 @@ async def _application_response(
             ),
             consent_version=profile.consent_version,
             consented_at=_aware(profile.consented_at),
-            identity_number=_decrypt_optional(
-                cipher, profile.identity_number_encrypted, aad
-            ),
             gender=_decrypt_optional(cipher, profile.gender_encrypted, aad),
             place_of_origin=_decrypt_optional(
                 cipher, profile.place_of_origin_encrypted, aad
@@ -324,12 +335,12 @@ async def _save_profile_and_application(
     body: MembershipApplicationSubmit,
     settings: Settings,
 ) -> MembershipApplication:
-    _ensure_user_can_apply(user)
     application = await _application_for_user(
         session,
         user.id,
         for_update=True,
     )
+    _ensure_user_can_apply(user, application)
     if application is None:
         application = MembershipApplication(user_id=user.id)
         session.add(application)
@@ -364,7 +375,6 @@ async def _save_profile_and_application(
         ),
     }
     optional_private_fields = {
-        "identity_number_encrypted": body.identity_number,
         "gender_encrypted": body.gender,
         "place_of_origin_encrypted": body.place_of_origin,
         "occupation_encrypted": body.occupation,
@@ -416,6 +426,11 @@ async def _ensure_membership_charges(
         .where(Membership.user_id == application.user_id)
         .with_for_update()
     )
+    if (
+        membership is not None and membership.status == MembershipStatus.TRAINEE
+        and membership.application_id == application.id
+    ):
+        return membership
     if membership is None:
         membership = Membership(
             user_id=application.user_id,
@@ -524,16 +539,6 @@ async def submit_my_application(
     )
     if profile is None:
         raise HTTPException(status_code=409, detail="請先填寫入社資料")
-    confirmed_types = {
-        document.document_type
-        for document in application.documents
-        if document.status == MembershipDocumentStatus.CONFIRMED
-    }
-    if len(confirmed_types) < 3:
-        raise HTTPException(
-            status_code=409,
-            detail="請先上傳並確認身分證正反面及第二證件",
-        )
     await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.SUBMITTED
     application.submitted_at = datetime.now(timezone.utc)
@@ -577,16 +582,6 @@ async def resubmit_supplement(
     )
     if profile is None:
         raise HTTPException(status_code=409, detail="請先填寫入社資料")
-    confirmed_types = {
-        document.document_type
-        for document in application.documents
-        if document.status == MembershipDocumentStatus.CONFIRMED
-    }
-    if len(confirmed_types) < 3:
-        raise HTTPException(
-            status_code=409,
-            detail="請先上傳並確認身分證正反面及第二證件",
-        )
     await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.SUBMITTED
     application.submitted_at = datetime.now(timezone.utc)
@@ -750,7 +745,6 @@ async def create_document_upload_url(
     settings: Settings = Depends(get_settings),
 ) -> MembershipDocumentUploadRead:
     require_sales_scope_allows(settings)
-    _ensure_user_can_apply(user)
     enforce(
         client_key(request, "membership-document-upload", user.id),
         DOCUMENT_UPLOAD_RULE,
@@ -760,6 +754,7 @@ async def create_document_upload_url(
         user.id,
         for_update=True,
     )
+    _ensure_user_can_apply(user, application)
     if application is None:
         application = MembershipApplication(user_id=user.id)
         session.add(application)
@@ -1010,7 +1005,7 @@ async def get_my_membership(
     return MembershipMeRead(
         membership_type=membership_type_for_user(user),
         membership=(
-            MembershipRead.model_validate(membership).model_dump(mode="json")
+            MembershipPublicRead.model_validate(membership)
             if membership is not None
             else None
         ),
@@ -1024,14 +1019,16 @@ async def get_my_membership(
 
 @membership_router.post(
     "/v1/membership/claim-existing",
-    response_model=MembershipRead,
+    response_model=MembershipPublicRead,
 )
 async def claim_existing_membership(
     body: ExistingMemberClaimRequest,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
-) -> MembershipRead:
+) -> MembershipPublicRead:
+    if user.email_verified_at is None:
+        raise HTTPException(status_code=403, detail="請先完成帳號 Email 驗證，再認領社員資格")
     try:
         entry = await verified_roster_entry(
             session,
@@ -1063,7 +1060,7 @@ async def claim_existing_membership(
             detail="社員資料無法核對，請確認名冊登記內容",
         ) from exc
     await session.commit()
-    return MembershipRead.model_validate(membership)
+    return MembershipPublicRead.model_validate(membership)
 
 
 @membership_router.get(
@@ -1215,17 +1212,11 @@ async def approve_membership_application(
         or application.status != MembershipApplicationStatus.SUBMITTED
     ):
         raise HTTPException(status_code=409, detail="此申請目前不可核准")
-    if (
-        len(
-            {
-                document.document_type
-                for document in application.documents
-                if document.status == MembershipDocumentStatus.CONFIRMED
-            }
-        )
-        < 3
-    ):
-        raise HTTPException(status_code=409, detail="申請人證件尚未齊全")
+    profile_id = await session.scalar(
+        select(MemberProfile.id).where(MemberProfile.user_id == application.user_id)
+    )
+    if profile_id is None:
+        raise HTTPException(status_code=409, detail="申請人基本資料尚未齊全，請先要求補件")
     membership = await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.APPROVED
     application.reviewed_by_id = admin.id
@@ -1419,6 +1410,45 @@ async def list_member_roster(
     ).all()
     cipher = _cipher(settings)
     return [_roster_response(entry, cipher) for entry in entries]
+
+@membership_router.patch("/v1/admin/member-roster/{entry_id}/shares", response_model=MemberRosterEntryRead)
+async def update_roster_shares(
+    entry_id: str,
+    body: MemberSharesUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MemberRosterEntryRead:
+    try:
+        roster, _membership = await update_member_shares(
+            session, target_kind="roster", target_id=entry_id, actor_id=admin.id, changes=body,
+        )
+        await session.commit()
+    except MemberSharesError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    assert roster is not None
+    return _roster_response(roster, _cipher(settings))
+
+
+@membership_router.patch("/v1/admin/members/{membership_id}/shares", response_model=MembershipRead)
+async def update_membership_shares(
+    membership_id: str,
+    body: MemberSharesUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipRead:
+    try:
+        _roster, membership = await update_member_shares(
+            session, target_kind="membership", target_id=membership_id, actor_id=admin.id, changes=body,
+        )
+        await session.commit()
+    except MemberSharesError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    assert membership is not None
+    return MembershipRead.model_validate(membership)
+
 
 
 @membership_router.post(

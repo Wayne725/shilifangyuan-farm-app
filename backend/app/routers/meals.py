@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -35,6 +35,7 @@ from ..integrations.payment_service import (
     reverse_order_purchase_points,
 )
 from ..meal_pricing import price_meal_line
+from ..meal_schedules import TAIPEI, generate_scheduled_meal_events
 from ..sales_scope import DEMO_MEAL_EVENT_IDS
 from ..models import (
     AdminAudit,
@@ -48,6 +49,7 @@ from ..models import (
     MealEventStatus,
     MealOption,
     MealOptionGroup,
+    MealScheduleTemplate,
     Order,
     OrderFulfillment,
     OrderItem,
@@ -77,6 +79,8 @@ from ..schemas import (
     MealPickupRedemptionRead,
     MealPickupVerify,
     MealRead,
+    MealScheduleInput,
+    MealScheduleRead,
 )
 from ..v2_domain import (
     can_cancel_meal_order,
@@ -135,7 +139,14 @@ def _meal_option_groups_read(meal: Meal) -> list[MealOptionGroupRead]:
     ]
 
 
-def _meal_event_read(event: MealEvent) -> MealEventRead:
+def _meal_event_allows_edit(event: MealEvent, now: datetime) -> bool:
+    return event.status == MealEventStatus.DRAFT or (
+        event.status == MealEventStatus.PUBLISHED and _aware(event.ordering_ends_at) > now
+    )
+
+
+def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRead:
+    local_pickup = _aware(event.pickup_starts_at).astimezone(TAIPEI)
     return MealEventRead(
         id=event.id,
         title=event.title,
@@ -145,6 +156,10 @@ def _meal_event_read(event: MealEvent) -> MealEventRead:
         pickup_starts_at=_aware(event.pickup_starts_at),
         pickup_ends_at=_aware(event.pickup_ends_at),
         status=event.status,
+        service_date=event.service_date or local_pickup.date(),
+        meal_period=event.meal_period or ("dinner" if local_pickup.hour >= 15 else "lunch"),
+        schedule_template_id=event.schedule_template_id,
+        can_edit=can_edit,
         offerings=[
             MealOfferingRead(
                 id=offering.id,
@@ -255,6 +270,7 @@ async def _meal_order_read(
         venue_name=event.location,
         pickup_start=_aware(event.pickup_starts_at),
         pickup_end=_aware(event.pickup_ends_at),
+        pickup_at=_aware(fulfillment.pickup_at) if fulfillment.pickup_at else None,
         pickup_code=(
             fulfillment.pickup_code if credential_available else None
         ),
@@ -442,6 +458,20 @@ async def list_meal_orders(
     return [await _meal_order_read(session, order) for order in orders]
 
 
+@meals_router.get("/v1/admin/meal-events/{event_id}/orders", response_model=list[MealOrderRead])
+async def admin_list_meal_event_orders(
+    event_id: str,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[MealOrderRead]:
+    if await session.get(MealEvent, event_id) is None:
+        raise HTTPException(status_code=404, detail="找不到便當場次")
+    orders = list(await session.scalars(
+        _meal_order_query().where(Order.meal_event_id == event_id).order_by(Order.created_at)
+    ))
+    return [await _meal_order_read(session, order) for order in orders]
+
+
 @meals_router.get(
     "/v1/meal-orders/{order_id}",
     response_model=MealOrderRead,
@@ -619,11 +649,18 @@ async def quote_meal_order(
                 ],
             }
         )
+    pickup_at = body.pickup_at or max(
+        _aware(event.pickup_starts_at),
+        now.replace(second=0, microsecond=0) + timedelta(minutes=1),
+    )
+    if pickup_at <= now or not (_aware(event.pickup_starts_at) <= pickup_at < _aware(event.pickup_ends_at)):
+        raise HTTPException(status_code=422, detail="請選擇場次取餐區間內、尚未過去的取餐時間")
     return MealOrderQuoteRead(
         sales_channel=SalesChannel.MEAL_PREORDER,
         fulfillment_method=FulfillmentMethod.EVENT_PICKUP,
         items=lines,
         amount_total=total,
+        pickup_at=pickup_at,
         pickup={
             "location": event.location,
             "starts_at": event.pickup_starts_at,
@@ -731,6 +768,7 @@ async def create_meal_order(
             pickup_location=event.location,
             pickup_starts_at=event.pickup_starts_at,
             pickup_ends_at=event.pickup_ends_at,
+            pickup_at=quote.pickup_at,
             pickup_code=pickup_code,
         ),
     )
@@ -776,8 +814,11 @@ async def cancel_meal_order(
         raise HTTPException(status_code=404, detail="找不到便當訂單")
     if order.cancelled_at is not None:
         raise HTTPException(status_code=409, detail="訂單已取消")
-    if order_fulfillment_is_irreversible(order):
-        raise HTTPException(status_code=409, detail="便當已完成取餐，無法自行取消")
+    if order_fulfillment_is_irreversible(order) or (
+        order.fulfillment is not None
+        and order.fulfillment.status in {FulfillmentState.NO_SHOW, FulfillmentState.CANCELLED}
+    ):
+        raise HTTPException(status_code=409, detail="此便當已取餐或結束履約，無法自行取消")
     if not can_cancel_meal_order(
         order.paid_at,
         order.meal_event.ordering_ends_at,
@@ -848,6 +889,89 @@ async def cancel_meal_order(
         "payment_status": order.payment_status.value,
         "fulfillment_status": FulfillmentState.CANCELLED.value,
     }
+
+
+async def _validate_schedule_meals(session: AsyncSession, body: MealScheduleInput) -> None:
+    meal_ids = {offering.meal_id for offering in body.offerings}
+    query = select(Meal.id).where(Meal.id.in_(meal_ids))
+    if body.enabled:
+        query = query.where(Meal.is_active.is_(True))
+    valid_ids = set(await session.scalars(query))
+    if valid_ids != meal_ids:
+        raise HTTPException(status_code=422, detail="每日菜單包含無效或停用餐點")
+
+
+def _schedule_values(body: MealScheduleInput) -> dict[str, Any]:
+    values = body.model_dump(mode="json")
+    for name in ("pickup_start_time", "pickup_end_time", "cutoff_time"):
+        values[name] = getattr(body, name).strftime("%H:%M")
+    return values
+
+
+@meals_router.get("/v1/admin/meal-schedules", response_model=list[MealScheduleRead])
+async def admin_list_meal_schedules(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[MealScheduleRead]:
+    templates = list(await session.scalars(select(MealScheduleTemplate).order_by(MealScheduleTemplate.created_at)))
+    return [MealScheduleRead.model_validate(template) for template in templates]
+
+
+@meals_router.post("/v1/admin/meal-schedules", response_model=MealScheduleRead, status_code=201)
+async def admin_create_meal_schedule(
+    body: MealScheduleInput,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MealScheduleRead:
+    await _validate_schedule_meals(session, body)
+    template = MealScheduleTemplate(**_schedule_values(body), created_by_id=admin.id)
+    session.add(template)
+    await session.flush()
+    session.add(AdminAudit(
+        actor_id=admin.id, action="meal_schedule.create", aggregate_type="meal_schedule",
+        aggregate_id=template.id, data=body.model_dump(mode="json"),
+    ))
+    await generate_scheduled_meal_events(session, datetime.now(timezone.utc), template_id=template.id)
+    return MealScheduleRead.model_validate(template)
+
+
+@meals_router.put("/v1/admin/meal-schedules/{template_id}", response_model=MealScheduleRead)
+async def admin_update_meal_schedule(
+    template_id: str,
+    body: MealScheduleInput,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MealScheduleRead:
+    template = await session.scalar(select(MealScheduleTemplate).where(MealScheduleTemplate.id == template_id).with_for_update())
+    if template is None:
+        raise HTTPException(status_code=404, detail="找不到每日供餐設定")
+    await _validate_schedule_meals(session, body)
+    before = MealScheduleRead.model_validate(template).model_dump(mode="json")
+    for name, value in _schedule_values(body).items():
+        setattr(template, name, value)
+    await session.flush()
+    session.add(AdminAudit(
+        actor_id=admin.id, action="meal_schedule.update", aggregate_type="meal_schedule",
+        aggregate_id=template.id, data={"before": before, "after": body.model_dump(mode="json")},
+    ))
+    await generate_scheduled_meal_events(session, datetime.now(timezone.utc), template_id=template.id)
+    return MealScheduleRead.model_validate(template)
+
+
+@meals_router.post("/v1/admin/meal-schedules/{template_id}/generate")
+async def admin_generate_meal_schedule(
+    template_id: str,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    template = await session.get(MealScheduleTemplate, template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="找不到每日供餐設定")
+    if not template.enabled:
+        raise HTTPException(status_code=409, detail="請先啟用每日供餐設定")
+    await _validate_schedule_meals(session, MealScheduleRead.model_validate(template))
+    created_ids = await generate_scheduled_meal_events(session, datetime.now(timezone.utc), template_id=template.id)
+    return {"created_count": len(created_ids), "created_event_ids": created_ids}
 
 
 @meals_router.get(
@@ -944,7 +1068,14 @@ async def admin_list_meal_events(
             .order_by(MealEvent.created_at.desc())
         )
     ).all()
-    return [_meal_event_read(event) for event in events]
+    ordered_event_ids = set(await session.scalars(
+        select(Order.meal_event_id).where(Order.meal_event_id.in_([event.id for event in events])).distinct()
+    ))
+    now = datetime.now(timezone.utc)
+    return [_meal_event_read(
+        event,
+        can_edit=_meal_event_allows_edit(event, now) and event.id not in ordered_event_ids,
+    ) for event in events]
 
 
 @meals_router.post(
@@ -999,7 +1130,46 @@ async def admin_create_meal_event(
     await session.commit()
     event = await _load_event(session, event.id)
     assert event is not None
-    return _meal_event_read(event)
+    return _meal_event_read(event, can_edit=True)
+
+
+@meals_router.put("/v1/admin/meal-events/{event_id}", response_model=MealEventRead)
+async def admin_update_meal_event(
+    event_id: str,
+    body: MealEventCreate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MealEventRead:
+    event = await _load_event(session, event_id, for_update=True)
+    if event is None:
+        raise HTTPException(status_code=404, detail="找不到便當場次")
+    if not _meal_event_allows_edit(event, datetime.now(timezone.utc)):
+        raise HTTPException(status_code=409, detail="僅草稿或尚未截單的開放訂購場次可編輯")
+    if await session.scalar(select(Order.id).where(Order.meal_event_id == event_id).limit(1)):
+        raise HTTPException(status_code=409, detail="此場次已有訂單，為保留訂購承諾不可修改；請另建場次")
+    service_date = _aware(body.pickup_starts_at).astimezone(TAIPEI).date()
+    if event.schedule_template_id and service_date != event.service_date:
+        raise HTTPException(status_code=422, detail="排程場次不可更換供餐日期；請另建手動場次")
+    if event.status == MealEventStatus.PUBLISHED and _aware(body.ordering_ends_at) <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=422, detail="已發布場次的訂購截止時間不得設為過去")
+    meal_ids = {offering.meal_id for offering in body.offerings}
+    active_ids = set(await session.scalars(select(Meal.id).where(Meal.id.in_(meal_ids), Meal.is_active.is_(True))))
+    if meal_ids != active_ids:
+        raise HTTPException(status_code=422, detail="場次包含無效或停用餐點")
+    before = _meal_event_read(event).model_dump(mode="json")
+    event.offerings.clear()
+    await session.flush()
+    for name, value in body.model_dump(exclude={"offerings"}).items():
+        setattr(event, name, value)
+    event.offerings = [MealEventOffering(**offering.model_dump()) for offering in body.offerings]
+    session.add(AdminAudit(
+        actor_id=admin.id, action="meal_event.update", aggregate_type="meal_event", aggregate_id=event.id,
+        data={"before": before, "after": body.model_dump(mode="json")},
+    ))
+    await session.commit()
+    updated = await _load_event(session, event.id)
+    assert updated is not None
+    return _meal_event_read(updated, can_edit=True)
 
 
 @meals_router.post(
@@ -1041,6 +1211,7 @@ async def publish_meal_event(
     if _aware(event.ordering_ends_at) <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="訂購截止時間已過")
     event.status = MealEventStatus.PUBLISHED
+    has_orders = await session.scalar(select(Order.id).where(Order.meal_event_id == event.id).limit(1))
     session.add(
         AdminAudit(
             actor_id=admin.id,
@@ -1050,7 +1221,7 @@ async def publish_meal_event(
         )
     )
     await session.commit()
-    return _meal_event_read(event)
+    return _meal_event_read(event, can_edit=has_orders is None)
 
 
 @meals_router.post(
@@ -1069,6 +1240,9 @@ async def open_meal_pickup(
         MealEventStatus.ORDERING_CLOSED,
     }:
         raise HTTPException(status_code=409, detail="此場次目前不可開放取餐")
+    now = datetime.now(timezone.utc)
+    if not (_aware(event.pickup_starts_at) <= now < _aware(event.pickup_ends_at)):
+        raise HTTPException(status_code=409, detail="目前不在場次取餐時間內")
     event.status = MealEventStatus.PICKUP_OPEN
     orders = (
         await session.scalars(
@@ -1292,6 +1466,9 @@ async def redeem_meal_pickup(
     event = await session.get(MealEvent, event_id)
     if event is None or event.status != MealEventStatus.PICKUP_OPEN:
         raise HTTPException(status_code=409, detail="此場次尚未開放取餐")
+    now = datetime.now(timezone.utc)
+    if not (_aware(event.pickup_starts_at) <= now < _aware(event.pickup_ends_at)):
+        raise HTTPException(status_code=409, detail="目前不在場次取餐時間內")
     credential_filter = (
         OrderFulfillment.pickup_code == body.pickup_code
         if body.pickup_code is not None

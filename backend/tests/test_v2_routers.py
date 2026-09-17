@@ -723,6 +723,7 @@ async def test_existing_customer_account_can_claim_matching_member_roster(
     assert claimed.status_code == 200
     assert claimed.json()["status"] == "active"
     assert claimed.json()["member_number"] == "SLF-2020-0077"
+    assert not any(key.startswith("share_") for key in claimed.json())
     mine = await client.get(
         "/v1/members/me",
         headers=auth_headers(customer),
@@ -1066,43 +1067,19 @@ async def test_membership_submission_adds_charges_before_admin_approval(
         )
         assert schedule.status_code == 201
 
-    missing_documents = await client.post(
-        "/v1/membership/application/submit",
-        headers=headers,
-    )
-    assert missing_documents.status_code == 409
-
     application = await session.scalar(
         select(MembershipApplication).where(
             MembershipApplication.user_id == applicant.id
         )
     )
     assert application is not None
-    now = datetime.now(timezone.utc)
-    documents = [
-        MembershipDocument(
-            application_id=application.id,
-            document_type=document_type,
-            status=MembershipDocumentStatus.CONFIRMED,
-            object_key=f"sandbox/{application.id}/{document_type.value}",
-            content_type="image/png",
-            size_bytes=512,
-            checksum_sha256=hashlib.sha256(
-                document_type.value.encode("utf-8")
-            ).hexdigest(),
-            confirmed_at=now,
-        )
-        for document_type in MembershipDocumentType
-    ]
-    session.add_all(documents)
-    await session.commit()
-
     submitted = await client.post(
         "/v1/membership/application/submit",
         headers=headers,
     )
     assert submitted.status_code == 200
     assert submitted.json()["status"] == "submitted"
+    assert submitted.json()["documents"] == []
     pending_membership = await session.scalar(
         select(Membership).where(Membership.user_id == applicant.id)
     )
@@ -1157,7 +1134,7 @@ async def test_membership_submission_adds_charges_before_admin_approval(
 
     approved = await client.post(
         f"/v1/admin/membership-applications/{application.id}/approve",
-        json={"reason": "Sandbox 證件齊全"},
+        json={"reason": "Sandbox 基本資料齊全"},
         headers=auth_headers(admin),
     )
     assert approved.status_code == 200
@@ -2067,7 +2044,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
                 now - timedelta(hours=1)
             ).isoformat(),
             "ordering_ends_at": (now + timedelta(hours=1)).isoformat(),
-            "pickup_starts_at": (now + timedelta(hours=2)).isoformat(),
+            "pickup_starts_at": (now - timedelta(minutes=10)).isoformat(),
             "pickup_ends_at": (now + timedelta(hours=3)).isoformat(),
             "offerings": [
                 {
@@ -2640,212 +2617,69 @@ class RecordingDocumentStorage:
     async def delete_document(self, object_key: str) -> None:
         self.stored.pop(object_key, None)
 
-    def create_download_url(self, object_key: str) -> str:
+    def create_download_url(self, object_key: str, *, expires_in_seconds: int | None = None) -> str:
         self.downloaded.append(object_key)
         return f"https://r2.example.test/{object_key}?download-signed=1"
 
 
 @pytest.mark.asyncio
-async def test_membership_document_upload_then_confirm_round_trip(
-    v2_context,
-) -> None:
-    """Regression: the signed URL must carry the checksum confirm() verifies."""
+async def test_membership_document_upload_and_confirm_disabled(v2_context) -> None:
     from app.routers.membership import get_document_storage
 
     client = v2_context["client"]
-    applicant = v2_context["applicant"]
     storage = RecordingDocumentStorage()
-    client._transport.app.dependency_overrides[get_document_storage] = (
-        lambda: storage
-    )
-    checksum = hashlib.sha256(b"sandbox-test-document").hexdigest()
-
-    upload = await client.post(
-        "/v1/membership/documents/upload-url",
-        json={
-            "document_type": "id_front",
-            "content_type": "image/png",
-            "size_bytes": 2048,
-            "checksum_sha256": checksum,
-        },
-        headers=auth_headers(applicant),
-    )
-    assert upload.status_code == 201, upload.text
-    body = upload.json()
-    assert body["required_headers"]["x-amz-meta-sha256"] == checksum
-    assert storage.tickets[0]["sha256"] == checksum
-
-    confirmed = await client.post(
-        f"/v1/membership/documents/{body['document_id']}/confirm",
-        json={"checksum_sha256": checksum},
-        headers=auth_headers(applicant),
-    )
-    assert confirmed.status_code == 200, confirmed.text
-    assert confirmed.json()["status"] == "confirmed"
-
-    application = await client.get(
-        "/v1/membership/application",
-        headers=auth_headers(applicant),
-    )
-    assert application.status_code == 200
-    assert application.json()["profile"] is None
-    assert application.json()["documents"] == [confirmed.json()]
-
-    mismatched = await client.post(
-        f"/v1/membership/documents/{body['document_id']}/confirm",
-        json={"checksum_sha256": "b" * 64},
-        headers=auth_headers(applicant),
-    )
-    assert mismatched.status_code == 409
+    client._transport.app.dependency_overrides[get_document_storage] = lambda: storage
+    headers = auth_headers(v2_context["applicant"])
+    upload = await client.post("/v1/membership/documents/upload-url", headers=headers, json={
+        "document_type": "id_front", "content_type": "image/png",
+        "size_bytes": 2048, "checksum_sha256": "a" * 64,
+    })
+    confirm = await client.post("/v1/membership/documents/legacy/confirm", headers=headers, json={"checksum_sha256": "a" * 64})
+    assert upload.status_code == confirm.status_code == 410
+    assert storage.tickets == []
+    assert (await client.get("/v1/membership/application", headers=headers)).status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_membership_document_review_replace_and_delete_are_audited(
-    v2_context,
-) -> None:
-    from app.routers.membership import get_document_storage
+async def test_legacy_membership_document_review_and_delete_are_audited(v2_context) -> None:
+    from tests.membership_support import seed_legacy_document
 
-    client = v2_context["client"]
-    session = v2_context["session"]
-    applicant = v2_context["applicant"]
-    admin = v2_context["admin"]
-    customer_b = v2_context["customer_b"]
+    client, session = v2_context["client"], v2_context["session"]
+    applicant, admin = v2_context["applicant"], v2_context["admin"]
     storage = RecordingDocumentStorage()
-    client._transport.app.dependency_overrides[get_document_storage] = (
-        lambda: storage
-    )
-    checksum_a = hashlib.sha256(b"first-sandbox-document").hexdigest()
-    checksum_b = hashlib.sha256(b"replacement-sandbox-document").hexdigest()
-
-    first_upload = await client.post(
-        "/v1/membership/documents/upload-url",
-        json={
-            "document_type": "id_front",
-            "content_type": "image/png",
-            "size_bytes": 2048,
-            "checksum_sha256": checksum_a,
-        },
-        headers=auth_headers(applicant),
-    )
-    assert first_upload.status_code == 201, first_upload.text
-    first_body = first_upload.json()
-    first_key = first_body["object_key"]
-    verified_first_key = first_key.replace(
-        "membership-documents/pending/",
-        "membership-documents/verified/",
-        1,
-    )
-    confirmed = await client.post(
-        f"/v1/membership/documents/{first_body['document_id']}/confirm",
-        json={"checksum_sha256": checksum_a},
-        headers=auth_headers(applicant),
-    )
-    assert confirmed.status_code == 200, confirmed.text
-    application = await client.get(
-        "/v1/membership/application",
-        headers=auth_headers(applicant),
-    )
-    application_id = application.json()["id"]
-
-    download = await client.get(
-        f"/v1/admin/membership-applications/{application_id}/documents/"
-        f"{first_body['document_id']}/download-url",
-        headers=auth_headers(admin),
-    )
+    document = await seed_legacy_document(v2_context, storage)
+    original_key = document.object_key
+    download_path = f"/v1/admin/membership-applications/{document.application_id}/documents/{document.id}/download-url"
+    denied = await client.get(download_path, headers=auth_headers(v2_context["customer_b"]))
+    assert denied.status_code == 403
+    download = await client.get(download_path, headers=auth_headers(admin))
     assert download.status_code == 200, download.text
-    assert download.json() == {
-        "download_url": (
-            f"https://r2.example.test/{verified_first_key}?download-signed=1"
-        ),
-        "expires_in_seconds": 120,
-    }
-    view_audit = await session.scalar(
-        select(AdminAudit).where(
-            AdminAudit.action == "membership.view_document",
-            AdminAudit.aggregate_id == first_body["document_id"],
-        )
-    )
-    assert view_audit is not None
-    assert view_audit.actor_id == admin.id
-    assert view_audit.data == {
-        "actor_role": "admin",
-        "application_id": application_id,
-        "document_type": "id_front",
-        "expires_in_seconds": 120,
-    }
-    assert first_key not in str(view_audit.data)
-    assert checksum_a not in str(view_audit.data)
-
-    replacement = await client.post(
-        "/v1/membership/documents/upload-url",
-        json={
-            "document_type": "id_front",
-            "content_type": "image/png",
-            "size_bytes": 3072,
-            "checksum_sha256": checksum_b,
-        },
-        headers=auth_headers(applicant),
-    )
-    assert replacement.status_code == 201, replacement.text
-    replacement_body = replacement.json()
-    replacement_key = replacement_body["object_key"]
-    assert replacement_body["document_id"] == first_body["document_id"]
-    assert first_key not in storage.stored
-    replacement_audit = await session.scalar(
-        select(AdminAudit).where(
-            AdminAudit.action == "membership.document_replaced",
-            AdminAudit.aggregate_id == first_body["document_id"],
-        )
-    )
-    assert replacement_audit is not None
-    assert replacement_audit.actor_id == applicant.id
-    assert replacement_audit.data["actor_role"] == "applicant"
-    assert replacement_audit.data["previous_status"] == "confirmed"
-    assert first_key not in str(replacement_audit.data)
-    assert replacement_key not in str(replacement_audit.data)
-    assert checksum_b not in str(replacement_audit.data)
-
-    forbidden = await client.delete(
-        f"/v1/membership/documents/{first_body['document_id']}",
-        headers=auth_headers(customer_b),
-    )
+    assert download.json()["download_url"] == f"https://r2.example.test/{original_key}?download-signed=1"
+    view_audit = await session.scalar(select(AdminAudit).where(
+        AdminAudit.action == "membership.view_document", AdminAudit.aggregate_id == document.id,
+    ))
+    assert view_audit is not None and view_audit.actor_id == admin.id
+    assert view_audit.data["document_type"] == "id_front"
+    assert original_key not in str(view_audit.data)
+    replacement = await client.post("/v1/membership/documents/upload-url", headers=auth_headers(applicant), json={
+        "document_type": "id_front", "content_type": "image/png", "size_bytes": 3072, "checksum_sha256": "b" * 64,
+    })
+    assert replacement.status_code == 410
+    assert original_key in storage.stored
+    forbidden = await client.delete(f"/v1/membership/documents/{document.id}", headers=auth_headers(v2_context["customer_b"]))
     assert forbidden.status_code == 404
-    assert replacement_key in storage.stored
-
-    deleted = await client.delete(
-        f"/v1/membership/documents/{first_body['document_id']}",
-        headers=auth_headers(applicant),
-    )
+    deleted = await client.delete(f"/v1/membership/documents/{document.id}", headers=auth_headers(applicant))
     assert deleted.status_code == 204, deleted.text
-    assert replacement_key not in storage.stored
-    saved_document = await session.get(
-        MembershipDocument,
-        first_body["document_id"],
-    )
-    assert saved_document is not None
-    await session.refresh(saved_document)
-    assert saved_document.status == MembershipDocumentStatus.DELETED
-    assert saved_document.deleted_at is not None
-    delete_audit = await session.scalar(
-        select(AdminAudit).where(
-            AdminAudit.action == "membership.document_deleted",
-            AdminAudit.aggregate_id == first_body["document_id"],
-        )
-    )
-    assert delete_audit is not None
-    assert delete_audit.actor_id == applicant.id
-    assert delete_audit.data == {
-        "actor_role": "applicant",
-        "application_id": application_id,
-        "document_type": "id_front",
-    }
-    assert replacement_key not in str(delete_audit.data)
-    listed = await client.get(
-        "/v1/membership/documents",
-        headers=auth_headers(applicant),
-    )
-    assert listed.status_code == 200
-    assert listed.json() == []
+    assert original_key not in storage.stored
+    await session.refresh(document)
+    assert document.status == MembershipDocumentStatus.DELETED
+    delete_audit = await session.scalar(select(AdminAudit).where(
+        AdminAudit.action == "membership.document_deleted", AdminAudit.aggregate_id == document.id,
+    ))
+    assert delete_audit is not None and delete_audit.actor_id == applicant.id
+    assert delete_audit.data == {"actor_role": "applicant", "application_id": document.application_id, "document_type": "id_front"}
+    assert original_key not in str(delete_audit.data)
+    assert (await client.get("/v1/membership/documents", headers=auth_headers(applicant))).json() == []
 
 
 @pytest.mark.asyncio

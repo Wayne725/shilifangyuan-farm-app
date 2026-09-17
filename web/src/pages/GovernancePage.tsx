@@ -1,14 +1,14 @@
-import { CalendarCheck, NotePencil, Plus, UsersThree } from "@phosphor-icons/react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { NotePencil, Plus, UsersThree } from "@phosphor-icons/react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { SocialNav } from "../components/SocialNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch, formatDateTime } from "../lib/api";
+import { apiFetch } from "../lib/api";
 import { proposalStatusLabel } from "../lib/labels";
-import type { Meeting, MembershipSummary, Proposal } from "../lib/types";
+import type { MembershipSummary, Proposal } from "../lib/types";
 
 const emptyForm = { title: "", body: "", proposal_type: "resolution" as Proposal["proposal_type"], options: "" };
 
@@ -23,10 +23,11 @@ export function GovernancePage() {
     enabled: Boolean(user),
   });
   const canAccess = membership.data?.membership_type === "member";
-  const [proposals, meetings] = useQueries({ queries: [
-    { queryKey: ["member-proposals"], queryFn: () => apiFetch<Proposal[]>("/v1/member-proposals"), enabled: canAccess },
-    { queryKey: ["meetings"], queryFn: () => apiFetch<Meeting[]>("/v1/meetings"), enabled: canAccess },
-  ] });
+  const proposals = useQuery({
+    queryKey: ["member-proposals"],
+    queryFn: () => apiFetch<Proposal[]>("/v1/member-proposals"),
+    enabled: canAccess,
+  });
   const createProposal = useMutation({
     mutationFn: async () => {
       const options = form.proposal_type === "multiple_choice"
@@ -53,13 +54,13 @@ export function GovernancePage() {
   return (
     <section className="social-page-shell">
       <header className="social-page-heading">
-        <div><p className="eyebrow">CO-OP GOVERNANCE</p><h1>提案議事</h1></div>
+        <div><p className="eyebrow">MEMBER PROPOSALS</p><h1>社員提案</h1></div>
         {canAccess && <button className="button button-system" type="button" onClick={() => setShowForm((value) => !value)}><Plus size={18} />提出提案</button>}
       </header>
       <SocialNav />
 
       {!user ? (
-        <div className="social-access-card"><NotePencil size={38} weight="light" /><h2>登入後進入社員議事</h2><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></div>
+        <div className="social-access-card"><NotePencil size={38} weight="light" /><h2>登入後查看社員提案</h2><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></div>
       ) : membership.isPending ? <LoadingLines count={3} /> : !canAccess ? (
         <div className="social-access-card"><UsersThree size={38} weight="light" /><h2>此功能開放給正式社員</h2><Link className="button button-system" to="/membership">查看入社進度</Link></div>
       ) : (
@@ -78,7 +79,7 @@ export function GovernancePage() {
             </form>
           )}
 
-          <div className="governance-layout">
+          <div className="proposals-layout">
             <section className="governance-proposals">
               <div className="section-title-row"><div><p className="eyebrow">PROPOSALS</p><h2>社員提案</h2></div><span>{proposals.data?.length ?? 0} 件</span></div>
               {proposals.isPending && <LoadingLines count={4} />}
@@ -96,35 +97,9 @@ export function GovernancePage() {
               </div>
             </section>
 
-            <aside className="meeting-panel">
-              <div className="section-title-row"><div><p className="eyebrow">MEETINGS</p><h2>社員會議</h2></div><CalendarCheck size={27} weight="light" /></div>
-              {meetings.isPending && <LoadingLines count={3} />}
-              {meetings.data?.length === 0 && <DataState title="目前沒有會議紀錄" detail="管理員建立會議後會顯示在這裡。" />}
-              <div className="meeting-list">
-                {meetings.data?.map((meeting) => (
-                  <article key={meeting.id}>
-                    <span>{meetingTypeLabel(meeting.meeting_type)}</span>
-                    <h3>{meeting.title}</h3>
-                    <time>{formatDateTime(meeting.starts_at)} · {meeting.location}</time>
-                    {meeting.agenda.length > 0 && <ul>{meeting.agenda.map((item, index) => <li key={index}>{agendaLabel(item, index)}</li>)}</ul>}
-                    {meeting.resolutions.length > 0 && <div className="meeting-resolutions">{meeting.resolutions.map((resolution) => <p key={resolution.id}><strong>{resolution.title}</strong><span>{resolution.resolution_text}</span></p>)}</div>}
-                    <div className="meeting-attendance"><strong>{Math.round(meeting.attendance_rate * 100)}%</strong><small>{meeting.attended_count}/{meeting.eligible_member_count} 人出席</small></div>
-                  </article>
-                ))}
-              </div>
-            </aside>
           </div>
         </>
       )}
     </section>
   );
-}
-
-function meetingTypeLabel(type: string) {
-  return { general_assembly: "社員大會", affairs: "社務會議" }[type] || type;
-}
-
-function agendaLabel(item: Record<string, unknown>, index: number) {
-  const title = item.title || item.label || item.subject;
-  return typeof title === "string" ? title : `議程 ${index + 1}`;
 }

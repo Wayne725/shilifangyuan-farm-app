@@ -1,19 +1,12 @@
-import { CheckCircle, FileArrowUp, IdentificationCard, ShieldWarning, Trash, UserCircle } from "@phosphor-icons/react";
+import { CheckCircle, IdentificationCard, UserCircle } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
-import { DataState, LoadingLines } from "../components/Shared";
+import { LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch } from "../lib/api";
-import type { MembershipApplication, MembershipDocument, MembershipSummary } from "../lib/types";
-
-type DocumentType = MembershipDocument["document_type"];
-type UploadTicket = {
-  document_id: string;
-  upload_url: string;
-  required_headers: Record<string, string>;
-};
+import type { MembershipApplication, MembershipSummary } from "../lib/types";
 
 const emptyForm = {
   legal_name: "",
@@ -21,7 +14,6 @@ const emptyForm = {
   birth_date: "",
   address: "",
   emergency_contact: "",
-  identity_number: "",
   gender: "",
   place_of_origin: "",
   occupation: "",
@@ -31,21 +23,11 @@ const emptyForm = {
   line_id: "",
 };
 
-const documentSlots: Array<{ type: DocumentType; label: string }> = [
-  { type: "id_front", label: "身分證正面" },
-  { type: "id_back", label: "身分證反面" },
-  { type: "secondary", label: "第二證件" },
-];
-const isDemoEnvironment = import.meta.env.VITE_APP_ENV !== "production";
-
 export function MembershipApplicationPage() {
   const { user, openLogin } = useAuth();
   const queryClient = useQueryClient();
   const [form, setForm] = useState(emptyForm);
   const [consented, setConsented] = useState(false);
-  const [uploading, setUploading] = useState<DocumentType | null>(null);
-  const [uploadError, setUploadError] = useState("");
-  const [testDocumentConfirmed, setTestDocumentConfirmed] = useState(false);
   const membership = useQuery({
     queryKey: ["membership-me", user?.id],
     queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
@@ -73,7 +55,6 @@ export function MembershipApplicationPage() {
       birth_date: profile.birth_date,
       address: profile.address,
       emergency_contact: profile.emergency_contact,
-      identity_number: profile.identity_number || "",
       gender: profile.gender || "",
       place_of_origin: profile.place_of_origin || "",
       occupation: profile.occupation || "",
@@ -91,7 +72,6 @@ export function MembershipApplicationPage() {
       body: JSON.stringify({
         ...form,
         consent_version: application.data?.profile?.consent_version || "membership-data-v1",
-        identity_number: form.identity_number || null,
         gender: form.gender || null,
         place_of_origin: form.place_of_origin || null,
         occupation: form.occupation || null,
@@ -117,49 +97,10 @@ export function MembershipApplicationPage() {
     mutationFn: () => apiFetch<MembershipApplication>("/v1/membership/application/withdraw", { method: "POST", body: JSON.stringify({ reason: "申請人自行撤回" }) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["membership-application"] }),
   });
-  const deleteDocument = useMutation({
-    mutationFn: (id: string) => apiFetch(`/v1/membership/documents/${id}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["membership-application"] }),
-  });
 
   function save(event: FormEvent) {
     event.preventDefault();
     saveProfile.mutate();
-  }
-
-  async function uploadDocument(type: DocumentType, event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setUploadError("");
-    if (file.size === 0 || file.size > 8 * 1024 * 1024) {
-      setUploadError("檔案大小須為 1 byte 至 8MB，請重新選擇");
-      event.target.value = "";
-      return;
-    }
-    if (!["image/jpeg", "image/png", "application/pdf"].includes(file.type)) {
-      setUploadError("僅支援 JPEG、PNG 或 PDF 檔案");
-      event.target.value = "";
-      return;
-    }
-    setUploading(type);
-    try {
-      const buffer = await file.arrayBuffer();
-      const digest = await crypto.subtle.digest("SHA-256", buffer);
-      const checksum = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      const ticket = await apiFetch<UploadTicket>("/v1/membership/documents/upload-url", {
-        method: "POST",
-        body: JSON.stringify({ document_type: type, content_type: file.type, size_bytes: file.size, checksum_sha256: checksum }),
-      });
-      const uploadResponse = await fetch(ticket.upload_url, { method: "PUT", headers: ticket.required_headers, body: file });
-      if (!uploadResponse.ok) throw new Error("證件上傳失敗，請重新選擇檔案");
-      await apiFetch(`/v1/membership/documents/${ticket.document_id}/confirm`, { method: "POST", body: JSON.stringify({ checksum_sha256: checksum }) });
-      await queryClient.invalidateQueries({ queryKey: ["membership-application"] });
-    } catch (error) {
-      setUploadError(error instanceof Error ? error.message : "證件上傳失敗");
-    } finally {
-      setUploading(null);
-      event.target.value = "";
-    }
   }
 
   if (!user) {
@@ -172,13 +113,12 @@ export function MembershipApplicationPage() {
 
   const status = application.data?.status || "draft";
   const editable = ["draft", "needs_supplement"].includes(status);
-  const confirmedCount = documentSlots.filter(({ type }) => application.data?.documents.some((document) => document.document_type === type && document.status === "confirmed")).length;
 
   return (
     <section className="membership-page">
       <header className="workspace-heading membership-workspace-heading">
         <div><p className="eyebrow">MEMBERSHIP APPLICATION</p><h1>入社申請</h1></div>
-        <div className="application-status"><span>{applicationStatusLabel(status)}</span><strong>{confirmedCount}/3</strong><small>證件已確認</small></div>
+        <div className="application-status"><span>{applicationStatusLabel(status)}</span><small>填妥基本資料即可送出</small></div>
       </header>
 
       {application.data?.review_reason && <div className="return-banner failed"><IdentificationCard size={22} /><div><strong>審核意見</strong><span>{application.data.review_reason}</span></div></div>}
@@ -188,7 +128,6 @@ export function MembershipApplicationPage() {
           <div className="form-heading"><div><p className="eyebrow">PROFILE</p><h2>基本資料</h2></div></div>
           <div className="field-grid three-columns">
             <label className="field"><span>姓名</span><input required disabled={!editable} value={form.legal_name} onChange={(event) => setForm({ ...form, legal_name: event.target.value })} /></label>
-            <label className="field"><span>身分證字號</span><input disabled={!editable} value={form.identity_number} onChange={(event) => setForm({ ...form, identity_number: event.target.value })} /></label>
             <label className="field"><span>出生日期</span><input required disabled={!editable} type="date" value={form.birth_date} onChange={(event) => setForm({ ...form, birth_date: event.target.value })} /></label>
             <label className="field"><span>性別</span><input disabled={!editable} value={form.gender} onChange={(event) => setForm({ ...form, gender: event.target.value })} /></label>
             <label className="field"><span>籍貫</span><input disabled={!editable} value={form.place_of_origin} onChange={(event) => setForm({ ...form, place_of_origin: event.target.value })} /></label>
@@ -208,50 +147,14 @@ export function MembershipApplicationPage() {
         </section>
       </form>
 
-      <section className="document-section">
-        <div className="form-heading"><div><p className="eyebrow">DOCUMENTS</p><h2>身分證件</h2></div><span>JPEG、PNG 或 PDF，單檔 8MB 以內</span></div>
-        {isDemoEnvironment && (
-          <div className="document-safety-notice" role="note">
-            <ShieldWarning size={24} weight="light" />
-            <div>
-              <strong>展示環境禁止上傳真實身分證件</strong>
-              <p>請只使用自行製作、沒有真實姓名與證號的測試檔案。</p>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={testDocumentConfirmed}
-                  onChange={(event) => setTestDocumentConfirmed(event.target.checked)}
-                />
-                我確認本次只會上傳測試檔案
-              </label>
-            </div>
-          </div>
-        )}
-        <div className="document-grid">
-          {documentSlots.map((slot) => {
-            const document = application.data?.documents.find((item) => item.document_type === slot.type);
-            return (
-              <article key={slot.type} className={document?.status === "confirmed" ? "confirmed" : ""}>
-                {document?.status === "confirmed" ? <CheckCircle size={28} weight="light" /> : <FileArrowUp size={28} weight="light" />}
-                <h3>{slot.label}</h3>
-                <span>{document?.status === "confirmed" ? "已確認" : uploading === slot.type ? "上傳中" : "尚未上傳"}</span>
-                {editable && <label className="button button-quiet"><input type="file" accept="image/jpeg,image/png,application/pdf" disabled={uploading !== null || (isDemoEnvironment && !testDocumentConfirmed)} onChange={(event) => uploadDocument(slot.type, event)} />{document ? "重新上傳" : "選擇檔案"}</label>}
-                {document && editable && <button className="document-delete" type="button" aria-label={`刪除${slot.label}`} disabled={deleteDocument.isPending} onClick={() => deleteDocument.mutate(document.id)}><Trash size={16} /></button>}
-              </article>
-            );
-          })}
-        </div>
-        {uploadError && <p className="form-error">{uploadError}</p>}
-      </section>
-
       <section className="application-actions">
         <div><p className="eyebrow">NEXT STEP</p><h2>{applicationNextStep(status)}</h2></div>
         <div>
-          {editable && <button className="button button-system" type="button" disabled={!application.data?.profile || confirmedCount < 3 || submitApplication.isPending} onClick={() => submitApplication.mutate()}>{status === "needs_supplement" ? "重新送件" : "送出申請"}</button>}
+          {editable && <button className="button button-system" type="button" disabled={!application.data?.profile || submitApplication.isPending} onClick={() => submitApplication.mutate()}>{status === "needs_supplement" ? "重新送件" : "送出申請"}</button>}
           {["draft", "submitted", "needs_supplement", "approved"].includes(status) && application.data && <button className="button button-quiet" type="button" disabled={withdrawApplication.isPending} onClick={() => withdrawApplication.mutate()}>撤回申請</button>}
           {["submitted", "approved"].includes(status) && <Link className="button button-primary" to="/account" search={{ membership_charge_id: undefined, payment: undefined }}>查看社員款項</Link>}
         </div>
-        {(submitApplication.isError || withdrawApplication.isError || deleteDocument.isError) && <p className="form-error">{submitApplication.error?.message || withdrawApplication.error?.message || deleteDocument.error?.message}</p>}
+        {(submitApplication.isError || withdrawApplication.isError) && <p className="form-error">{submitApplication.error?.message || withdrawApplication.error?.message}</p>}
       </section>
     </section>
   );
@@ -262,5 +165,5 @@ function applicationStatusLabel(status: string) {
 }
 
 function applicationNextStep(status: string) {
-  return { draft: "完成資料與證件後送出", submitted: "合作社正在審核", needs_supplement: "依審核意見完成補件", approved: "完成款項與後續程序", rejected: "請聯絡合作社確認後續", withdrawn: "申請已撤回" }[status] || "查看申請進度";
+  return { draft: "完成基本資料後送出", submitted: "合作社正在審核", needs_supplement: "依審核意見補充基本資料", approved: "完成款項與後續程序", rejected: "請聯絡合作社確認後續", withdrawn: "申請已撤回" }[status] || "查看申請進度";
 }

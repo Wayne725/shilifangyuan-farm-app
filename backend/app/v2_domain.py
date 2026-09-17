@@ -170,7 +170,7 @@ def validate_meal_preorder(
     now: Optional[datetime] = None,
 ) -> None:
     current = now or utcnow()
-    if event.status != MealEventStatus.PUBLISHED:
+    if event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}:
         raise DomainError("此便當場次目前未開放預購")
     if not (
         aware(event.ordering_starts_at)

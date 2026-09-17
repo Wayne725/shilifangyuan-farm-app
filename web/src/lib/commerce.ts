@@ -301,6 +301,7 @@ export type MealCheckoutOutcome =
 
 export async function beginMealCheckout(input: {
   eventId: string;
+  pickupAt: string;
   items: Array<{
     offering_id: string;
     quantity: number;
@@ -315,6 +316,7 @@ export async function beginMealCheckout(input: {
       method: "POST",
       body: JSON.stringify({
         items: input.items,
+        pickup_at: input.pickupAt,
         contact_email: input.contactEmail,
         ...invoicePreferencePayload(input.invoicePreference),
       }),

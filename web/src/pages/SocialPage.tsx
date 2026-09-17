@@ -1,6 +1,7 @@
 import {
   ArrowRight,
   CalendarBlank,
+  CalendarCheck,
   IdentificationCard,
   NotePencil,
   UsersThree,
@@ -84,7 +85,6 @@ export function SocialPage() {
             <div><small>正式社員</small><strong>{user.display_name}</strong></div>
             <dl>
               <div><dt>社員編號</dt><dd>{membership.data?.membership?.member_number}</dd></div>
-              <div><dt>股數</dt><dd>{membership.data?.membership?.share_count ?? 0}</dd></div>
               <div><dt>公開名錄</dt><dd>{membership.data?.directory?.is_public ? "已公開" : "未公開"}</dd></div>
             </dl>
           </section>
@@ -112,6 +112,13 @@ export function SocialPage() {
                 <small>你的公開狀態</small>
                 <ArrowRight size={20} />
               </Link>
+              <Link className="social-feature" to="/meetings">
+                <CalendarCheck size={28} weight="light" />
+                <span>社員會議</span>
+                <strong>{meetings.data?.length ?? 0}</strong>
+                <small>場會議與紀錄</small>
+                <ArrowRight size={20} />
+              </Link>
             </div>
 
             <div className="social-feed-grid">
@@ -129,7 +136,7 @@ export function SocialPage() {
               </section>
 
               <section className="social-feed governance-feed">
-                <header><div><p className="eyebrow">GOVERNANCE</p><h2>議事進度</h2></div><Link className="text-link" to="/governance">進入議事</Link></header>
+                <header><div><p className="eyebrow">PROPOSALS</p><h2>提案進度</h2></div><Link className="text-link" to="/governance">查看提案</Link></header>
                 {proposals.data?.slice(0, 3).map((proposal) => (
                   <Link key={proposal.id} to="/proposals/$proposalId" params={{ proposalId: proposal.id }}>
                     <span>{proposalStatusLabel(proposal.status)}</span>
@@ -137,13 +144,18 @@ export function SocialPage() {
                     <b>{proposal.tally.total}</b>
                   </Link>
                 ))}
-                {meetings.data?.[0] && (
-                  <div className="next-meeting">
-                    <small>最近會議</small>
-                    <strong>{meetings.data[0].title}</strong>
-                    <span>{formatDate(meetings.data[0].starts_at)} · {meetings.data[0].location}</span>
-                  </div>
-                )}
+              </section>
+              <section className="social-feed">
+                <header><div><p className="eyebrow">MEETINGS</p><h2>社員會議</h2></div><Link className="text-link" to="/meetings">查看會議</Link></header>
+                {meetings.isPending && <LoadingLines count={2} />}
+                {meetings.isError && <DataState kind="error" title="會議暫時無法讀取" detail={meetings.error.message} />}
+                {meetings.data?.length === 0 && <DataState title="目前沒有會議紀錄" detail="合作社公告後會顯示在這裡。" />}
+                {meetings.data?.slice(0, 3).map((meeting) => (
+                  <article key={meeting.id}>
+                    <time>{formatDate(meeting.starts_at)}</time>
+                    <div><strong>{meeting.title}</strong><small>{meeting.location}</small></div>
+                  </article>
+                ))}
               </section>
             </div>
           </section>

@@ -48,7 +48,7 @@ def test_binding_migration_keeps_legacy_rows_unbound_and_preserves_snapshots(tmp
             assert connection.execute(text("SELECT id, order_number, amount_total FROM orders")).all() == orders_before
             assert connection.execute(text("SELECT provider_context FROM invoices")).scalar() is None
             assert connection.execute(text("SELECT invoice_provider_context FROM orders")).scalar() is None
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0014_invoice_account_binding"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0017_meal_order_pickup_overlap"
         command.downgrade(config, "0013_payment_poll_schedule")
         with engine.connect() as connection:
             assert connection.execute(snapshot_sql).all() == before

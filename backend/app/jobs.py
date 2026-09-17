@@ -18,6 +18,7 @@ from sqlalchemy.orm import selectinload
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
 from .domain import apply_proposal_clock, remove_paid_quantity
+from .meal_schedules import generate_scheduled_meal_events
 from .integrations.common import IntegrationError
 from .integrations.invoice_service import (
     enqueue_invoice_adjustment_after_refund,
@@ -90,6 +91,7 @@ class ReconcileReport:
     member_proposals: int = 0
     activities: int = 0
     meal_events: int = 0
+    meal_events_created: int = 0
     outbox_completed: int = 0
     outbox_failed: int = 0
 
@@ -153,6 +155,7 @@ async def reconcile_once(
         current,
         limit,
     )
+    report.meal_events_created = len(await generate_scheduled_meal_events(session, current, limit=limit))
     completed, failed = await _process_outbox(
         session, active_settings, current, limit
     )
@@ -665,6 +668,9 @@ async def _reconcile_meal_events(
             select(MealEvent)
             .where(
                 or_(
+                    MealEvent.status.in_([
+                        MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSED,
+                    ]) & (MealEvent.pickup_starts_at <= now),
                     (
                         MealEvent.status == MealEventStatus.PUBLISHED
                     )
@@ -687,15 +693,25 @@ async def _reconcile_meal_events(
     )
     changed = 0
     for event in events:
-        if (
-            event.status == MealEventStatus.PUBLISHED
-            and _aware(event.ordering_ends_at) <= now
-            and _aware(event.pickup_ends_at) > now
-        ):
-            event.status = MealEventStatus.ORDERING_CLOSED
-            changed += 1
-            continue
         if _aware(event.pickup_ends_at) > now:
+            if _aware(event.pickup_starts_at) <= now:
+                event.status = MealEventStatus.PICKUP_OPEN
+                ready_orders = list(await session.scalars(
+                    select(Order).where(
+                        Order.meal_event_id == event.id,
+                        Order.payment_status == PaymentStatus.PAID,
+                        Order.cancelled_at.is_(None),
+                    ).options(selectinload(Order.fulfillment)).with_for_update()
+                ))
+                for order in ready_orders:
+                    if order.fulfillment is not None and order.fulfillment.status in {
+                        FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING,
+                    }:
+                        order.fulfillment.status = FulfillmentState.READY_FOR_PICKUP
+                        order.fulfillment_status = FulfillmentStatus.READY_FOR_PICKUP
+            elif event.status == MealEventStatus.PUBLISHED and _aware(event.ordering_ends_at) <= now:
+                event.status = MealEventStatus.ORDERING_CLOSED
+            changed += 1
             continue
         orders = list(
             await session.scalars(

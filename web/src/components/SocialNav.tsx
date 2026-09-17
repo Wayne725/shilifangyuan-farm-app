@@ -1,5 +1,6 @@
 import {
   CalendarBlank,
+  CalendarCheck,
   HandHeart,
   IdentificationCard,
   NotePencil,
@@ -10,7 +11,8 @@ import { Link } from "@tanstack/react-router";
 const items = [
   { to: "/social" as const, label: "社務首頁", icon: UsersThree },
   { to: "/activities" as const, label: "社員活動", icon: CalendarBlank },
-  { to: "/governance" as const, label: "提案議事", icon: NotePencil },
+  { to: "/governance" as const, label: "社員提案", icon: NotePencil },
+  { to: "/meetings" as const, label: "社員會議", icon: CalendarCheck },
   { to: "/wishes" as const, label: "社員願望", icon: HandHeart },
   { to: "/directory" as const, label: "社員名錄", icon: IdentificationCard },
 ];

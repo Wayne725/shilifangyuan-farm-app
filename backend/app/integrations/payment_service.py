@@ -594,6 +594,15 @@ async def create_payment_attempt(
         }:
             raise PaymentApplicationError("請先完成物流門市或地址選擇")
 
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        if order.meal_event is None:
+            raise PaymentApplicationError("便當訂單缺少場次資料")
+        if (
+            order.meal_event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}
+            or not (_aware(order.meal_event.ordering_starts_at) <= current < _aware(order.meal_event.ordering_ends_at))
+        ):
+            raise PaymentApplicationError("便當目前未開放預購或已截止")
+
     for existing in sorted(
         order.payment_attempts, key=lambda item: item.created_at, reverse=True
     ):
@@ -627,13 +636,6 @@ async def create_payment_attempt(
     await session.flush()
 
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
-        if order.meal_event is None:
-            raise PaymentApplicationError("便當訂單缺少場次資料")
-        if (
-            order.meal_event.status != MealEventStatus.PUBLISHED
-            or current >= _aware(order.meal_event.ordering_ends_at)
-        ):
-            raise PaymentApplicationError("便當預購已截止")
         for item in order.items:
             if item.source_meal_offering_id is None:
                 raise PaymentApplicationError("便當訂單品項資料不完整")

@@ -130,6 +130,12 @@ const governanceRoute = createRoute({
   component: page("./pages/GovernancePage", "GovernancePage"),
 });
 
+const meetingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/meetings",
+  component: page("./pages/MeetingsPage", "MeetingsPage"),
+});
+
 const proposalDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/proposals/$proposalId",
@@ -291,6 +297,7 @@ const routeTree = rootRoute.addChildren([
   socialRoute,
   activitiesRoute,
   governanceRoute,
+  meetingsRoute,
   proposalDetailRoute,
   wishesRoute,
   directoryRoute,

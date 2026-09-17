@@ -68,7 +68,7 @@ export function ProposalDetailPage() {
   return (
     <section className="social-page-shell proposal-detail-page">
       <SocialNav />
-      <Link className="back-link" to="/governance"><ArrowLeft size={17} />返回提案議事</Link>
+      <Link className="back-link" to="/governance"><ArrowLeft size={17} />返回社員提案</Link>
       <article className="proposal-detail">
         <header>
           <div><span className={`status-chip ${item.status}`}>{proposalStatusLabel(item.status)}</span><small>{item.proposal_type === "resolution" ? "決議表決" : "選項表決"}</small></div>

@@ -12,7 +12,7 @@ if (!['127.0.0.1', 'localhost'].includes(testUrl.hostname)
 const base = testUrl.origin;
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const tabs = [
-  { name: '便當預購', heading: '預約一份剛好的便當' },
+  { name: '便當預購', heading: '預約一份剛好的午餐與晚餐' },
   { name: '共同團購', heading: '把需求聚在一起' },
   { name: '日常選品', heading: '合作社選品' },
 ];
@@ -56,7 +56,7 @@ for (const width of [1440, 390]) {
     const selected = tabList.getByRole('tab', { selected: true });
     assert.equal(await selected.innerText(), '便當預購');
     await page.getByRole('tabpanel', { name: '便當預購', exact: true })
-      .getByRole('heading', { name: '預約一份剛好的便當', exact: true }).waitFor();
+      .getByRole('heading', { name: '預約一份剛好的午餐與晚餐', exact: true }).waitFor();
     assert.deepEqual(await tabList.getByRole('tab').allTextContents(), tabs.map(({ name }) => name));
     const positions = await tabList.getByRole('tab').evaluateAll((elements) => elements.map((element) => {
       const { x, y, width, height } = element.getBoundingClientRect();
@@ -77,7 +77,7 @@ for (const width of [1440, 390]) {
     await tabList.waitFor();
     assert.equal(await selected.innerText(), '便當預購');
     await page.getByRole('tabpanel', { name: '便當預購', exact: true })
-      .getByRole('heading', { name: '預約一份剛好的便當', exact: true }).waitFor();
+      .getByRole('heading', { name: '預約一份剛好的午餐與晚餐', exact: true }).waitFor();
     assert.equal(await page.getByRole('tabpanel').count(), 1);
     assert.deepEqual(unknownApi, []);
     assert.deepEqual(mutations, []);

@@ -18,6 +18,7 @@ from app.integrations.payment_service import (
     ensure_payment_runtime_enabled,
 )
 from app.integrations.invoice_service import invoice_context_from_settings
+from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.models import (
     FulfillmentMethod,
     Meal,
@@ -29,9 +30,7 @@ from app.models import (
     MembershipApplicationStatus,
     MembershipCharge,
     MembershipChargeKind,
-    MembershipDocument,
-    MembershipDocumentStatus,
-    MembershipDocumentType,
+    MemberProfile,
     MembershipFeeSchedule,
     MembershipType,
     Order,
@@ -262,14 +261,18 @@ async def test_old_nonmeal_raygate_refresh_still_confirms_provider_query_result(
 
 @pytest.mark.asyncio
 async def test_private_document_intake_blocked_without_initializing_disabled_storage(database_session):
+    applicant = User(email="intake-scope@example.com", display_name="隔離測試申請人", password_hash="test")
+    database_session.add(applicant)
+    await database_session.commit()
+    headers = auth_headers(applicant)
     async with api_test_context(
         database_session, [membership.membership_router], settings=meal_scope_settings()
     ) as client:
-        upload = await client.post("/v1/membership/documents/upload-url", json={
+        upload = await client.post("/v1/membership/documents/upload-url", headers=headers, json={
             "document_type": "id_front", "content_type": "application/pdf",
             "size_bytes": 100, "checksum_sha256": "a" * 64,
         })
-        confirm = await client.post("/v1/membership/documents/existing/confirm", json={
+        confirm = await client.post("/v1/membership/documents/existing/confirm", headers=headers, json={
             "checksum_sha256": "a" * 64,
         })
     assert upload.status_code == confirm.status_code == 409
@@ -425,22 +428,33 @@ async def test_production_stale_invoice_context_blocks_new_charge_without_rebind
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["meals_only", "all"])
 async def test_membership_approval_cannot_create_new_charges_during_meal_launch(database_session, scope):
+    settings = meal_production_settings() if scope == "meals_only" else make_test_settings(
+        pii_encryption_keys_json=meal_production_settings().pii_encryption_keys_json,
+    )
     admin = User(email="admin-scope@example.com", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
     applicant = User(email="applicant-scope@example.com", display_name="申請人", password_hash="test")
     application = MembershipApplication(
         user=applicant, status=MembershipApplicationStatus.SUBMITTED,
-        documents=[MembershipDocument(
-            document_type=kind, status=MembershipDocumentStatus.CONFIRMED,
-            object_key=f"scope-test/{kind.value}", content_type="application/pdf", size_bytes=100,
-        ) for kind in MembershipDocumentType],
     )
     database_session.add_all([admin, application])
+    await database_session.flush()
+    cipher = pii_cipher_from_settings(settings)
+    encrypted = {
+        f"{field}_encrypted": cipher.encrypt_text(value, associated_data=f"member-profile:{applicant.id}")
+        for field, value in {
+            "legal_name": "隔離測試申請人", "phone": "0900000000", "birth_date": "1995-01-01",
+            "address": "隔離測試地址", "emergency_contact": "隔離測試聯絡人",
+        }.items()
+    }
+    profile = MemberProfile(
+        user=applicant, **encrypted, consent_version="test", consented_at=datetime.now(timezone.utc),
+    )
+    database_session.add(profile)
     database_session.add_all([
         MembershipFeeSchedule(charge_kind=kind, amount=10, effective_from=date(2020, 1, 1))
         for kind in MembershipChargeKind
     ])
     await database_session.commit()
-    settings = meal_production_settings() if scope == "meals_only" else make_test_settings()
     token = create_token(admin, "access", timedelta(minutes=5), settings=settings)
     async with api_test_context(database_session, [membership.membership_router], settings=settings) as client:
         result = await client.post(

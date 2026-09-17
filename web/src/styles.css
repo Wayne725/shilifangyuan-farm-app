@@ -3610,7 +3610,7 @@ p {
 
 .social-feature-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 60px;
   border: 1px solid var(--line);
 }
@@ -4182,8 +4182,7 @@ p {
 }
 
 .meeting-panel {
-  padding-left: 30px;
-  border-left: 1px solid var(--line);
+  min-width: 0;
 }
 
 .meeting-list article {
@@ -5859,6 +5858,13 @@ p {
   position: relative;
 }
 
+.meal-event-admin-card > .admin-master-form,
+.meal-event-admin-card > .form-actions,
+.meal-event-admin-card > .meal-event-pickup-orders {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .meal-redeem-panel {
   display: grid;
   grid-column: 1 / -1;
@@ -5956,6 +5962,8 @@ p {
 }
 
 .meal-pickup-info > div:last-child {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
   border-right: 0;
 }
 
@@ -6570,6 +6578,10 @@ p {
     border-bottom: 0;
   }
 
+  .meal-pickup-info > div:last-child {
+    border-top: 0;
+  }
+
   .group-vote-list > a {
     grid-template-columns: 1fr auto;
   }
@@ -7122,8 +7134,7 @@ p {
     border-right: 0;
   }
 
-  .social-feature:last-child {
-    grid-column: 1 / -1;
+  .social-feature:nth-child(n + 3) {
     border-top: 1px solid var(--line);
   }
 

@@ -645,6 +645,12 @@ class MembershipDocument(Base):
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    deletion_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    deletion_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    deletion_error: Mapped[Optional[str]] = mapped_column(String(80))
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -1544,14 +1550,20 @@ class MealEvent(Base):
             name="pickup_range_valid",
         ),
         CheckConstraint(
-            "pickup_starts_at >= ordering_ends_at",
-            name="pickup_after_ordering",
+            "ordering_ends_at < pickup_ends_at",
+            name="ordering_before_pickup_end",
         ),
+        UniqueConstraint("schedule_template_id", "service_date", name="uq_meal_event_schedule_date"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(160))
     location: Mapped[str] = mapped_column(String(240))
+    schedule_template_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("meal_schedule_templates.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    meal_period: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     ordering_starts_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True
     )
@@ -1586,6 +1598,32 @@ class MealEvent(Base):
         back_populates="event", cascade="all, delete-orphan"
     )
     orders: Mapped[List["Order"]] = relationship(back_populates="meal_event")
+
+
+class MealScheduleTemplate(Base):
+    __tablename__ = "meal_schedule_templates"
+    __table_args__ = (
+        CheckConstraint("advance_days BETWEEN 1 AND 30", name="advance_days_valid"),
+        CheckConstraint("cutoff_days_before >= 0 AND cutoff_days_before < advance_days", name="cutoff_days_valid"),
+        CheckConstraint("meal_period IN ('lunch', 'dinner')", name="meal_period_valid"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    title: Mapped[str] = mapped_column(String(140))
+    location: Mapped[str] = mapped_column(String(240))
+    meal_period: Mapped[str] = mapped_column(String(12))
+    pickup_start_time: Mapped[str] = mapped_column(String(5))
+    pickup_end_time: Mapped[str] = mapped_column(String(5))
+    cutoff_time: Mapped[str] = mapped_column(String(5))
+    cutoff_days_before: Mapped[int] = mapped_column(Integer, default=0)
+    advance_days: Mapped[int] = mapped_column(Integer, default=7)
+    weekdays: Mapped[list[int]] = mapped_column(JSON)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False)
+    offerings: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class MealEventOffering(Base):
@@ -1828,6 +1866,9 @@ class OrderFulfillment(Base):
         DateTime(timezone=True), nullable=True
     )
     pickup_ends_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    pickup_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     pickup_code: Mapped[Optional[str]] = mapped_column(

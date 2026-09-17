@@ -40,8 +40,21 @@ test("管理工作台保留六個營運模組", () => {
   for (const endpoint of ["shipping-rates", "admin/refund", "points/adjustments", "surplus/dry-run", "tax-ledger.csv", "suppliers", "pickup-locations"]) assert.match(source, new RegExp(endpoint.replaceAll("/", "\\/")));
 });
 
-test("社務流程與入社文件仍由正式後端支援", () => {
-  for (const marker of ["membership/application", "membership/documents", "member-proposals", "activities", "members/directory", "meetings", "wishes", "notifications"]) assert.match(source, new RegExp(marker.replaceAll("/", "\\/")));
+test("社務流程由正式後端支援，入社不再收新證件", () => {
+  for (const marker of ["membership/application", "member-proposals", "activities", "members/directory", "meetings", "wishes", "notifications"]) assert.match(source, new RegExp(marker.replaceAll("/", "\\/")));
+  assert.doesNotMatch(source, /membership\/documents\/upload-url/);
+});
+
+test("社員提案與會議有獨立路由", async () => {
+  const proposals = await readFile(new URL("../web/src/pages/GovernancePage.tsx", import.meta.url), "utf8");
+  const meetings = await readFile(new URL("../web/src/pages/MeetingsPage.tsx", import.meta.url), "utf8");
+  const social = await readFile(new URL("../web/src/pages/SocialPage.tsx", import.meta.url), "utf8");
+  assert.match(router, /path: "\/meetings"/);
+  assert.match(proposals, /\/v1\/member-proposals/);
+  assert.doesNotMatch(proposals, /\/v1\/meetings/);
+  assert.match(meetings, /\/v1\/meetings/);
+  assert.doesNotMatch(meetings, /\/v1\/member-proposals/);
+  assert.doesNotMatch(social, /share_count|share_capital_amount|share_certificate_number/);
 });
 
 test("正式 Web 採路由分包且不含 React Native 或行內樣式", () => {

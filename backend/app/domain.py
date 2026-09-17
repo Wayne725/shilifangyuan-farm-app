@@ -11,6 +11,7 @@ from .models import (
     GroupCampaign,
     GroupDecisionStatus,
     GroupIntakeStatus,
+    MealEventStatus,
     MembershipType,
     Order,
     OrderKind,
@@ -233,6 +234,15 @@ def confirm_campaign(
         campaign.intake_status = GroupIntakeStatus.CLOSED
 
 
+def meal_payment_window_open(order: Order, now: datetime) -> bool:
+    event = order.__dict__.get("meal_event")
+    return (
+        event is not None
+        and event.status in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}
+        and aware(event.ordering_starts_at) <= now < aware(event.ordering_ends_at)
+    )
+
+
 def order_available_actions(
     order: Order,
     viewer_is_admin: bool = False,
@@ -240,8 +250,20 @@ def order_available_actions(
 ) -> List[str]:
     current = now or utcnow()
     actions: List[str] = []
+    fulfillment = order.__dict__.get("fulfillment")
+    is_meal = order.sales_channel == SalesChannel.MEAL_PREORDER
+    meal_fulfillment_closed = is_meal and (
+        order.cancelled_at is not None
+        or order_fulfillment_is_irreversible(order)
+        or order.fulfillment_status in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
+        or (
+            fulfillment is not None
+            and fulfillment.status in {
+                FulfillmentState.PICKED_UP, FulfillmentState.NO_SHOW, FulfillmentState.CANCELLED,
+            }
+        )
+    )
     if order.payment_status == PaymentStatus.PENDING:
-        fulfillment = order.__dict__.get("fulfillment")
         shipment = (
             fulfillment.__dict__.get("shipment")
             if fulfillment is not None
@@ -255,15 +277,20 @@ def order_available_actions(
                 in {ShipmentStatus.READY_TO_CREATE, ShipmentStatus.CREATED}
             )
         )
-        if payment_ready:
+        if payment_ready and (
+            not is_meal
+            or (not meal_fulfillment_closed and meal_payment_window_open(order, current))
+        ):
             actions.append("pay")
-        actions.append("cancel")
+        if not meal_fulfillment_closed:
+            actions.append("cancel")
     elif order.payment_status == PaymentStatus.PAID:
         if order.sales_channel == SalesChannel.MEAL_PREORDER:
             if (
                 order.meal_event is not None
+                and order.meal_event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}
+                and not meal_fulfillment_closed
                 and order.paid_at is not None
-                and not order_fulfillment_is_irreversible(order)
                 and current
                 <= min(
                     aware(order.paid_at)

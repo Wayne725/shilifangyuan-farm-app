@@ -110,6 +110,7 @@ async function fixture(t) {
     return route.continue();
   });
   const page = await context.newPage();
+  await page.clock.install({ time: new Date('2026-09-12T01:05:00Z') });
   page.setDefaultTimeout(10000);
   return { page, state };
 }
@@ -128,16 +129,19 @@ test('390px 正式 UUID 場次顯示完整臺灣時段，一次預訂只建立�
   await page.getByRole('heading', { name: eventTitle, exact: true }).waitFor();
   const content = page.locator('.meal-offer-page');
   const details = content.locator('.offer-copy dl');
-  for (const [label, time] of [['預訂截止', '10:25'], ['開始取餐', '11:10'], ['取餐結束', '11:55']]) {
+  for (const [label, time] of [['開放預訂', '09:00'], ['預訂截止', '10:25']]) {
     const field = details.locator('div').filter({ has: page.getByText(label, { exact: true }) });
     assert.match(await field.locator('dd').innerText(), new RegExp(`9/12.*${time}`));
   }
+  const pickupDetails = details.locator('div').filter({ has: page.getByText('取餐時段', { exact: true }) });
+  assert.match(await pickupDetails.locator('dd').innerText(), /9\/12.*11:10.*至.*9\/12.*11:55/);
   const pickupWindow = await content.locator('.pickup-window').innerText();
   assert.match(pickupWindow, /9\/12.*11:10.*至.*9\/12.*11:55/);
   await page.getByRole('heading', { name: mealName, exact: true }).waitFor();
   await verifyMobileOnlineOnly(page, state, content);
   assert.deepEqual(state.mutations, []);
   await page.getByRole('button', { name: `增加${mealName}`, exact: true }).click();
+  await page.getByLabel('預計取餐時間（台灣時間）', { exact: true }).selectOption('2026-09-12T11:10');
   await content.locator('.offer-total dd').getByText('$1', { exact: true }).waitFor();
   await verifyMobileOnlineOnly(page, state, content);
   await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
@@ -148,6 +152,7 @@ test('390px 正式 UUID 場次顯示完整臺灣時段，一次預訂只建立�
   assert.equal(state.mutations[0].body.contact_email, 'buyer@example.test');
   assert.equal(state.mutations[0].body.invoice_buyer_type, 'personal');
   assert.equal(state.mutations[0].body.invoice_carrier_type, 'cloud');
+  assert.equal(state.mutations[0].body.pickup_at, new Date(mealEvent.pickup_starts_at).toISOString());
   assert.equal('payment_method' in state.mutations[0].body, false);
   assert.ok(state.quotes.length >= 1);
   assert.deepEqual(state.quotes.at(-1).items, orderItems);

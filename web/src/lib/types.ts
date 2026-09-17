@@ -318,6 +318,11 @@ export interface MembershipDocument {
   size_bytes: number;
   checksum_sha256?: string | null;
   confirmed_at?: string | null;
+  expires_at?: string | null;
+  retention_expired?: boolean;
+  deleted_at?: string | null;
+  deletion_error?: string | null;
+  deletion_retry_at?: string | null;
 }
 
 export interface MembershipApplication {
@@ -337,7 +342,6 @@ export interface MembershipApplication {
     emergency_contact: string;
     consent_version: string;
     consented_at: string;
-    identity_number?: string | null;
     gender?: string | null;
     place_of_origin?: string | null;
     occupation?: string | null;
@@ -439,6 +443,10 @@ export interface MealOptionSelection {
 
 export interface MealEvent {
   id: string;
+  can_edit?: boolean;
+  service_date?: string | null;
+  meal_period?: "lunch" | "dinner" | null;
+  schedule_template_id?: string | null;
   title: string;
   location: string;
   pickup_starts_at: string;
@@ -475,6 +483,30 @@ export interface Meal {
   option_groups: MealOptionGroup[];
 }
 
+export interface MealSchedule {
+  id: string;
+  title: string;
+  location: string;
+  meal_period: "lunch" | "dinner";
+  timezone: string;
+  pickup_start_time: string;
+  pickup_end_time: string;
+  cutoff_time: string;
+  cutoff_days_before: number;
+  advance_days: number;
+  weekdays: number[];
+  enabled: boolean;
+  auto_publish: boolean;
+  offerings: Array<{
+    meal_id: string;
+    price: number;
+    capacity: number;
+    position: number;
+  }>;
+  created_at: string;
+  updated_at?: string;
+}
+
 export interface MealOrder {
   id: string;
   order_number: string;
@@ -485,6 +517,7 @@ export interface MealOrder {
   venue_name: string;
   pickup_start: string;
   pickup_end: string;
+  pickup_at?: string | null;
   pickup_code?: string | null;
   pickup_qr_payload?: string | null;
   payment_status: string;
@@ -612,11 +645,6 @@ export interface MembershipSummary {
     status?: string;
     member_number?: string | null;
     trainee_number?: string | null;
-    share_certificate_number?: string | null;
-    share_capital_amount?: number;
-    share_count?: number;
-    share_subscribed_on?: string | null;
-    share_paid_on?: string | null;
   } | null;
   directory?: {
     nickname?: string;

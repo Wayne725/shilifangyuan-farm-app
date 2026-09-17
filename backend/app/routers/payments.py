@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..domain import meal_payment_window_open
 from ..integrations.common import IntegrationError
 from ..integrations.ecpay import (
     CheckoutForm,
@@ -43,6 +44,7 @@ from ..models import (
     Order,
     PaymentAttempt,
     PaymentStatus,
+    SalesChannel,
     User,
 )
 from ..rate_limit import PAYMENT_REFRESH_RULE, enforce
@@ -288,7 +290,11 @@ async def payment_checkout(
         order = await session.scalar(
             select(Order)
             .where(Order.id == attempt.order_id)
-            .options(selectinload(Order.items), selectinload(Order.fulfillment))
+            .options(
+                selectinload(Order.items),
+                selectinload(Order.fulfillment),
+                selectinload(Order.meal_event),
+            )
         )
     try:
         if order is not None:
@@ -302,6 +308,13 @@ async def payment_checkout(
             ensure_payment_runtime_enabled(settings, amount=attempt.amount)
     except PaymentApplicationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    now = datetime.now(timezone.utc)
+    if (
+        order is not None
+        and order.sales_channel == SalesChannel.MEAL_PREORDER
+        and not meal_payment_window_open(order, now)
+    ):
+        raise HTTPException(status_code=410, detail="便當目前未開放預購或已截止，付款頁已失效")
     expires_at = attempt.expires_at
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
@@ -311,7 +324,7 @@ async def payment_checkout(
             and (order.cancelled_at is not None or order.fulfillment_status == FulfillmentStatus.CANCELLED)
         )
         or attempt.status != PaymentStatus.PENDING
-        or expires_at <= datetime.now(timezone.utc)
+        or expires_at <= now
     ):
         raise HTTPException(status_code=410, detail="付款頁已失效")
     if not attempt.checkout_payload:

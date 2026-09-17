@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime, time, timezone
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -130,6 +130,33 @@ class MemberRosterEntryRead(ApiModel):
     is_active: bool
     claimed: bool
     claimed_at: Optional[datetime] = None
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def aware_updated_at(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class MemberSharesUpdate(AdminActionReason):
+    model_config = ConfigDict(extra="forbid")
+    share_capital_amount: int = Field(strict=True, ge=0, le=2147483647)
+    share_count: int = Field(strict=True, ge=0, le=2147483647)
+    expected_updated_at: datetime
+
+    @field_validator("expected_updated_at", mode="before")
+    @classmethod
+    def require_version_datetime(cls, value: Any) -> Any:
+        if not isinstance(value, (str, datetime)):
+            raise ValueError("資料更新時間必須為含時區的 ISO 日期時間")
+        return value
+
+    @field_validator("expected_updated_at")
+    @classmethod
+    def require_version_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("資料更新時間必須包含時區")
+        return value.astimezone(timezone.utc)
 
 
 class VerifyEmailRequest(BaseModel):
@@ -733,7 +760,6 @@ class MembershipProfileInput(BaseModel):
     address: str = Field(min_length=1, max_length=500)
     emergency_contact: str = Field(min_length=1, max_length=240)
     consent_version: str = Field(min_length=1, max_length=40)
-    identity_number: Optional[str] = Field(default=None, min_length=6, max_length=20)
     gender: Optional[str] = Field(default=None, max_length=40)
     place_of_origin: Optional[str] = Field(default=None, max_length=120)
     occupation: Optional[str] = Field(default=None, max_length=120)
@@ -741,6 +767,13 @@ class MembershipProfileInput(BaseModel):
     correspondence_address: Optional[str] = Field(default=None, max_length=500)
     landline_phone: Optional[str] = Field(default=None, max_length=40)
     line_id: Optional[str] = Field(default=None, max_length=120)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_identity_number(cls, data: Any) -> Any:
+        if isinstance(data, dict) and str(data.get("identity_number") or "").strip():
+            raise ValueError("合作社不再收集身分證字號，請移除後送出")
+        return data
 
 
 class MembershipApplicationSubmit(MembershipProfileInput):
@@ -759,7 +792,6 @@ class MembershipProfileRead(BaseModel):
     emergency_contact: str
     consent_version: str
     consented_at: datetime
-    identity_number: Optional[str] = None
     gender: Optional[str] = None
     place_of_origin: Optional[str] = None
     occupation: Optional[str] = None
@@ -777,6 +809,11 @@ class MembershipDocumentRead(ApiModel):
     size_bytes: int
     checksum_sha256: Optional[str]
     confirmed_at: Optional[datetime]
+    expires_at: Optional[datetime] = None
+    retention_expired: bool = False
+    deleted_at: Optional[datetime] = None
+    deletion_error: Optional[str] = None
+    deletion_retry_at: Optional[datetime] = None
 
 
 class MembershipApplicationRead(ApiModel):
@@ -826,6 +863,24 @@ class MembershipRead(ApiModel):
     share_count: int = 0
     share_subscribed_on: Optional[date] = None
     share_paid_on: Optional[date] = None
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def aware_updated_at(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class MembershipPublicRead(ApiModel):
+    id: str
+    user_id: str
+    member_number: Optional[str]
+    trainee_number: Optional[str]
+    status: MembershipStatus
+    activated_at: Optional[datetime]
+    suspended_at: Optional[datetime]
+    ended_at: Optional[datetime]
+    status_reason: Optional[str]
 
 
 class MembershipChargeRead(ApiModel):
@@ -870,7 +925,7 @@ class MemberDirectoryRead(ApiModel):
 
 class MembershipMeRead(BaseModel):
     membership_type: MembershipType
-    membership: Optional[MembershipRead]
+    membership: Optional[MembershipPublicRead]
     directory: Optional[MemberDirectoryRead]
 
 
@@ -1130,13 +1185,55 @@ class MealEventCreate(BaseModel):
     def validate_timeline(self) -> "MealEventCreate":
         if self.ordering_ends_at <= self.ordering_starts_at:
             raise ValueError("訂購截止必須晚於開賣時間")
-        if self.pickup_starts_at < self.ordering_ends_at:
-            raise ValueError("取餐開始不得早於訂購截止")
         if self.pickup_ends_at <= self.pickup_starts_at:
             raise ValueError("取餐結束必須晚於取餐開始")
+        if self.ordering_ends_at >= self.pickup_ends_at:
+            raise ValueError("訂購截止必須早於取餐結束")
         if len({item.meal_id for item in self.offerings}) != len(self.offerings):
             raise ValueError("同一場次不可重複餐點")
         return self
+
+
+class MealScheduleInput(BaseModel):
+    title: str = Field(min_length=1, max_length=140)
+    location: str = Field(min_length=1, max_length=240)
+    meal_period: Literal["lunch", "dinner"]
+    pickup_start_time: time
+    pickup_end_time: time
+    cutoff_time: time
+    cutoff_days_before: int = Field(default=0, ge=0, le=29)
+    advance_days: int = Field(default=7, ge=1, le=30)
+    weekdays: List[int] = Field(default_factory=lambda: list(range(6)), min_length=1, max_length=7)
+    enabled: bool = False
+    auto_publish: bool = False
+    offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> "MealScheduleInput":
+        for clock in (self.pickup_start_time, self.pickup_end_time, self.cutoff_time):
+            if clock.tzinfo is not None or clock.second or clock.microsecond:
+                raise ValueError("每日時間請使用台灣時間，精確至分鐘")
+        if self.pickup_start_time == self.pickup_end_time:
+            raise ValueError("取餐開始與結束時間不可相同")
+        pickup_end_minute = self.pickup_end_time.hour * 60 + self.pickup_end_time.minute
+        if self.pickup_end_time < self.pickup_start_time:
+            pickup_end_minute += 24 * 60
+        cutoff_minute = self.cutoff_time.hour * 60 + self.cutoff_time.minute - self.cutoff_days_before * 24 * 60
+        if cutoff_minute >= pickup_end_minute:
+            raise ValueError("訂購截止必須早於取餐結束")
+        if self.advance_days <= self.cutoff_days_before:
+            raise ValueError("預開天數必須大於提前截單天數")
+        if len(set(self.weekdays)) != len(self.weekdays) or any(day < 0 or day > 6 for day in self.weekdays):
+            raise ValueError("供餐星期必須為不重複的 0 至 6")
+        if len({item.meal_id for item in self.offerings}) != len(self.offerings):
+            raise ValueError("每日菜單不可重複餐點")
+        return self
+
+
+class MealScheduleRead(MealScheduleInput, ApiModel):
+    id: str
+    timezone: Literal["Asia/Taipei"] = "Asia/Taipei"
+    created_at: datetime
 
 
 class MealOfferingRead(ApiModel):
@@ -1168,6 +1265,10 @@ class MealEventRead(MealEventSummary):
     ordering_ends_at: datetime
     status: MealEventStatus
     offerings: List[MealOfferingRead] = Field(default_factory=list)
+    service_date: date
+    meal_period: Literal["lunch", "dinner"]
+    schedule_template_id: Optional[str] = None
+    can_edit: bool = False
 
 
 class MealOrderLineInput(BaseModel):
@@ -1179,6 +1280,14 @@ class MealOrderLineInput(BaseModel):
 class MealOrderCreate(InvoicePreferenceInput):
     items: List[MealOrderLineInput] = Field(min_length=1, max_length=20)
     contact_email: EmailStr
+    pickup_at: Optional[datetime] = None
+
+    @field_validator("pickup_at")
+    @classmethod
+    def validate_pickup_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("取餐時間必須包含時區")
+        return value
 
 
 class MealOptionSelectionRead(ApiModel):
@@ -1214,6 +1323,7 @@ class MealOrderQuoteRead(ApiModel):
     items: List[MealOrderQuoteItemRead]
     amount_total: int
     pickup: MealPickupWindowRead
+    pickup_at: datetime
 
 
 class MealOrderItemRead(ApiModel):
@@ -1238,6 +1348,7 @@ class MealOrderRead(ApiModel):
     venue_name: str
     pickup_start: datetime
     pickup_end: datetime
+    pickup_at: Optional[datetime] = None
     pickup_code: Optional[str]
     pickup_qr_payload: Optional[str]
     payment_status: PaymentStatus
@@ -1293,6 +1404,7 @@ class OrderFulfillmentRead(ApiModel):
     pickup_location: Optional[str]
     pickup_starts_at: Optional[datetime]
     pickup_ends_at: Optional[datetime]
+    pickup_at: Optional[datetime] = None
     pickup_code: Optional[str]
     fulfilled_at: Optional[datetime]
 

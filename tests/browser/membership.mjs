@@ -50,6 +50,7 @@ async function membership_browser(run) {
           const doc = state.application.documents.find(doc => doc.id === id);
           assert.equal(request.postDataJSON().checksum_sha256, doc.checksum_sha256);
           doc.status = "confirmed";
+          doc.expires_at = new Date(Date.now() + 14 * 86400000).toISOString();
           json = doc;
         }
         if (url.pathname.startsWith("/v1/membership/documents/") && request.method() === "DELETE") {
@@ -81,68 +82,36 @@ async function membership_browser(run) {
   }
 }
 
-test("入社證件超過 8MB 在瀏覽器拒絕，不讀取或上傳大檔", async () => {
+test("入社申請不收身分證字號或證件，不發出上傳請求", async () => {
   await membership_browser(async (page, state) => {
-    await page.locator('input[type="file"]').first().setInputFiles({
-      name: "oversized-test.pdf", mimeType: "application/pdf", buffer: Buffer.alloc(8 * 1024 * 1024 + 1),
-    });
-    await page.getByText("檔案大小須為 1 byte 至 8MB，請重新選擇", { exact: true }).waitFor({ timeout: 2500 });
-    assert.equal(state.tickets.length, 0);
-    assert.equal(state.uploads.length, 0);
+    assert.equal(await page.getByLabel("身分證字號", { exact: true }).count(), 0);
+    assert.equal(await page.locator('input[type="file"]').count(), 0);
+    assert.equal(await page.getByRole("heading", { name: "身分證件", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: "送出申請", exact: true }).isEnabled(), true);
+    assert.deepEqual(state.tickets, []);
+    assert.deepEqual(state.uploads, []);
   });
 });
 
-test("不支援的證件格式在瀏覽器拒絕，不送出上傳", async () => {
-  await membership_browser(async (page, state) => {
-    await page.locator('input[type="file"]').first().setInputFiles({
-      name: "test.html", mimeType: "text/html", buffer: Buffer.from("<h1>非證件測試檔</h1>"),
-    });
-    await page.getByText("僅支援 JPEG、PNG 或 PDF 檔案", { exact: true }).waitFor({ timeout: 2500 });
-    assert.equal(state.tickets.length, 0);
-    assert.equal(state.uploads.length, 0);
-  });
-});
-
-test("入社三份假證件上傳、補件重送與撤回保持正確畫面狀態", async () => {
+test("入社基本資料送出、補件重送與撤回不需要證件", async () => {
   await membership_browser(async (page, state) => {
     await page.getByLabel("現居地址", { exact: true }).fill("更新後的隔離測試地址");
     await page.getByRole("button", { name: "儲存基本資料", exact: true }).click();
     await page.getByText("基本資料已儲存。", { exact: true }).waitFor();
     assert.equal(state.application.profile.address, "更新後的隔離測試地址");
-    const submit = page.getByRole("button", { name: "送出申請", exact: true });
-    assert.equal(await submit.isDisabled(), true);
-    for (const [index, label] of ["身分證正面", "身分證反面", "第二證件"].entries()) {
-      const slot = page.locator(".document-grid article").filter({ has: page.getByRole("heading", { name: label, exact: true }) });
-      await slot.locator('input[type="file"]').setInputFiles({
-        name: `test-${index}.pdf`, mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nTEST ONLY - NOT AN ID DOCUMENT"),
-      });
-      await slot.getByText("已確認", { exact: true }).waitFor();
-      if (index < 2) assert.equal(await submit.isDisabled(), true);
-    }
-    assert.deepEqual(state.tickets.map(ticket => ticket.document_type), ["id_front", "id_back", "secondary"]);
-    assert.deepEqual(state.uploads, ["PUT", "PUT", "PUT"]);
-    await submit.click();
+    assert.equal("identity_number" in state.application.profile, false);
+    await page.getByRole("button", { name: "送出申請", exact: true }).click();
     await page.getByRole("heading", { name: "合作社正在審核", exact: true }).waitFor();
-    assert.equal(await page.locator('input[type="file"]').count(), 0);
     assert.equal(await page.getByRole("link", { name: "查看社員款項", exact: true }).count(), 1);
-
-    // Simulate the response of a separately tested administrator API.
     state.application.status = "needs_supplement";
-    state.application.review_reason = "請更新第二證件";
+    state.application.review_reason = "請更新聯絡地址";
     await page.reload();
-    await page.getByText("請更新第二證件", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "刪除第二證件", exact: true }).click();
-    const resubmit = page.getByRole("button", { name: "重新送件", exact: true });
-    await page.getByText("2/3", { exact: true }).waitFor();
-    assert.equal(await resubmit.isDisabled(), true);
-    const test_only = page.getByLabel("我確認本次只會上傳測試檔案");
-    if (await test_only.count()) await test_only.check();
-    const slot = page.locator(".document-grid article").filter({ has: page.getByRole("heading", { name: "第二證件", exact: true }) });
-    await slot.locator('input[type="file"]').setInputFiles({ name: "replacement.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nREPLACEMENT TEST ONLY") });
-    await slot.getByText("已確認", { exact: true }).waitFor();
-    await resubmit.click();
+    await page.getByText("請更新聯絡地址", { exact: true }).waitFor();
+    assert.equal(await page.locator('input[type="file"]').count(), 0);
+    await page.getByRole("button", { name: "重新送件", exact: true }).click();
     await page.getByRole("heading", { name: "合作社正在審核", exact: true }).waitFor();
     assert.deepEqual(state.submissions, ["/v1/membership/application/submit", "/v1/membership/application/supplement"]);
+    assert.deepEqual(state.tickets, []);
     await page.getByRole("button", { name: "撤回申請", exact: true }).click();
     await page.getByRole("heading", { name: "申請已撤回", exact: true }).waitFor();
     assert.equal(await page.getByRole("link", { name: "查看社員款項", exact: true }).count(), 0);
@@ -150,17 +119,28 @@ test("入社三份假證件上傳、補件重送與撤回保持正確畫面狀�
   });
 });
 
-test("證件儲存失敗不會確認成功或開放送件，並允許重選同一檔案", async () => {
+test("歷史證件不顯示，也不阻擋基本資料送件", async () => {
   await membership_browser(async (page, state) => {
-    const file = { name: "test.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\nTEST ONLY") };
-    state.reject_upload = true;
-    await page.locator('input[type="file"]').first().setInputFiles(file);
-    await page.getByText("證件上傳失敗，請重新選擇檔案", { exact: true }).waitFor();
+    state.application.documents = ["id_front", "id_back", "secondary"].map((type, index) => ({
+      id: 'test-' + type, document_type: type, status: index === 2 ? "deleted" : "confirmed",
+      expires_at: new Date(Date.now() - 1000).toISOString(), retention_expired: true,
+      deletion_error: index === 1 ? "storage_delete_failed" : null,
+      deleted_at: index === 2 ? new Date().toISOString() : null,
+    }));
+    await page.reload();
+    await page.getByRole("heading", { name: "入社申請", exact: true }).waitFor();
+    assert.equal(await page.locator('.document-section').count(), 0);
+    assert.equal(await page.getByRole("button", { name: "送出申請", exact: true }).isEnabled(), true);
+    assert.equal(state.application.documents.length, 3);
+  });
+});
+
+test("未儲存基本資料前仍不允許送件", async () => {
+  await membership_browser(async (page, state) => {
+    state.application.profile = null;
+    await page.reload();
+    await page.getByRole("heading", { name: "入社申請", exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: "送出申請", exact: true }).isDisabled(), true);
-    assert.equal(state.application.documents[0].status, "pending_upload");
-    state.reject_upload = false;
-    await page.locator('input[type="file"]').first().setInputFiles(file);
-    await page.getByText("1/3", { exact: true }).waitFor();
-    assert.equal(state.application.documents[0].status, "confirmed");
+    assert.equal(await page.getByRole("button", { name: "儲存基本資料", exact: true }).isDisabled(), true);
   });
 });

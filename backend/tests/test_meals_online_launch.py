@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.auth import create_token
-from app.models import Meal, MealEvent, MealEventOffering, MealEventStatus, PaymentAttempt, Refund, TaxType, User, UserRole
+from app.models import FulfillmentState, Meal, MealEvent, MealEventOffering, MealEventStatus, OrderFulfillment, PaymentAttempt, Refund, TaxType, User, UserRole
 from app.routers.meals import meals_router
 from app.routers.payments import payments_router
 from app.sales_scope import DEMO_MEAL_EVENT_IDS
@@ -13,7 +13,7 @@ from tests.test_meals_production_configuration import meal_production_settings
 from tests.test_payment_return import payment_settings, successful_result
 
 
-async def seed_meal_event(session, *, event_id=None):
+async def seed_meal_event(session, *, event_id=None, pickup_active=False):
     now = datetime.now(timezone.utc)
     admin = User(email="launch-admin@example.com", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
     buyer = User(email="launch-buyer@example.com", display_name="買家", password_hash="test")
@@ -22,7 +22,8 @@ async def seed_meal_event(session, *, event_id=None):
     await session.flush()
     event = MealEvent(title="線上便當場次", location="合作社",
         ordering_starts_at=now-timedelta(hours=1), ordering_ends_at=now+timedelta(hours=1),
-        pickup_starts_at=now+timedelta(hours=2), pickup_ends_at=now+timedelta(hours=3),
+        pickup_starts_at=now-timedelta(minutes=10) if pickup_active else now+timedelta(hours=2),
+        pickup_ends_at=now+timedelta(hours=3),
         status=MealEventStatus.PUBLISHED, created_by_id=admin.id,
         offerings=[MealEventOffering(meal=meal, price=120, capacity=2)])
     if event_id is not None:
@@ -33,9 +34,10 @@ async def seed_meal_event(session, *, event_id=None):
 
 
 @pytest.mark.asyncio
-async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(database_session):
+@pytest.mark.parametrize("legacy_status_only", [False, True])
+async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(database_session, legacy_status_only):
     session = database_session
-    admin, buyer, event = await seed_meal_event(session)
+    admin, buyer, event = await seed_meal_event(session, pickup_active=True)
     await session.refresh(event, ["offerings"])
     event_id, offering_id = event.id, event.offerings[0].id
     buyer_headers, admin_headers = auth_headers(buyer), auth_headers(admin)
@@ -50,18 +52,22 @@ async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(dat
         attempt = await session.get(PaymentAttempt, started.json()["id"])
         paid = await client.post("/webhooks/ecpay/payment", data=successful_result(attempt))
         assert paid.status_code == 200 and paid.text == "1|OK", paid.text
-        opened = await client.post(f"/v1/admin/meal-events/{event_id}/open-pickup", headers=admin_headers, json={"reason": "提早完成交付驗收"})
+        opened = await client.post(f"/v1/admin/meal-events/{event_id}/open-pickup", headers=admin_headers, json={"reason": "取餐時段交付驗收"})
         assert opened.status_code == 200, opened.text
         credential = await client.get(f"/v1/meal-orders/{order_id}/pickup-credential", headers=buyer_headers)
         assert credential.status_code == 200
         redeemed = await client.post(f"/v1/admin/meal-events/{event_id}/redeem", headers=admin_headers, json={"qr_token": credential.json()["qr_token"]})
         assert redeemed.status_code == 200, redeemed.text
+        if legacy_status_only:
+            fulfillment = await session.scalar(select(OrderFulfillment).where(OrderFulfillment.order_id == order_id))
+            fulfillment.status = FulfillmentState.PREPARING
+            await session.commit()
         session.expunge_all()
         cancelled = await client.post(f"/v1/meal-orders/{order_id}/cancel", headers=buyer_headers, json={"reason": "已領餐仍嘗試取消"})
         assert cancelled.status_code == 409, cancelled.text
         detail = await client.get(f"/v1/meal-orders/{order_id}", headers=buyer_headers)
         assert detail.json()["payment_status"] == "paid"
-        assert detail.json()["fulfillment_status"] == "picked_up"
+        assert detail.json()["fulfillment_status"] == ("pending" if legacy_status_only else "picked_up")
         assert detail.json()["cancelled_at"] is None
         assert "cancel" not in detail.json()["available_actions"]
         assert await session.scalar(select(func.count(Refund.id)).where(Refund.order_id == order_id)) == 0
