@@ -1068,8 +1068,8 @@ p {
   cursor: not-allowed;
 }
 
-.meal-date-button:not(:disabled):hover,
-.meal-period-options button:not(:disabled):hover {
+.meal-date-button:not(:disabled):not([aria-pressed="true"]):hover,
+.meal-period-options button:not(:disabled):not([aria-pressed="true"]):hover {
   background: var(--paper-deep);
   border-color: var(--moss);
 }

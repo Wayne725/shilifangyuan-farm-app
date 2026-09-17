@@ -112,6 +112,43 @@ for (const width of [1440, 390]) {
   });
 }
 
+for (const width of [1440, 390]) {
+  test(`${width}px 已選日期與餐別滑過時保持深綠底與清楚文字`, { timeout: 20000 }, async (t) => {
+    const { page, unknownApi } = await fixture(t, width);
+    await page.addStyleTag({ content: '.meal-date-navigation button { transition: none !important; }' });
+    const targets = [
+      page.getByRole('group', { name: '取餐日期', exact: true }).getByRole('button', { name: /今天 9\/17/ }),
+      page.getByRole('group', { name: '餐別', exact: true }).getByRole('button', { name: /午餐，可預訂/ }),
+    ];
+    for (const target of targets) {
+      await target.click();
+      await target.hover();
+      const colors = await target.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const rgb = (value) => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const luminance = (channels) => channels.map((channel) => {
+          const value = channel / 255;
+          return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+        }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+        const background = rgb(style.backgroundColor);
+        const foreground = rgb(style.color);
+        const expected = getComputedStyle(document.documentElement).getPropertyValue('--moss-dark').trim();
+        const expectedRgb = expected.slice(1).match(/../g).map((part) => parseInt(part, 16));
+        const light = Math.max(luminance(background), luminance(foreground));
+        const dark = Math.min(luminance(background), luminance(foreground));
+        return { background, expectedRgb, contrast: (light + 0.05) / (dark + 0.05),
+          selected: element.getAttribute('aria-pressed'), hover: element.matches(':hover') };
+      });
+      t.diagnostic(JSON.stringify(colors));
+      assert.equal(colors.selected, 'true');
+      assert.equal(colors.hover, true);
+      assert.deepEqual(colors.background, colors.expectedRgb, '滑過已選按鈕不能覆蓋深綠底');
+      assert.ok(colors.contrast >= 4.5, '已選按鈕文字對比必須足夠清楚');
+    }
+    assert.deepEqual(unknownApi, []);
+  });
+}
+
 test('無場次日期不可選，週日手動場與超過七天手動場仍可選且不受餐別影響', { timeout: 20000 }, async (t) => {
   const events = [...defaultEvents, mealEvent('週日午餐', '2026-09-20'), mealEvent('跨週晚餐', '2026-09-27', 'dinner')];
   const { page, unknownApi } = await fixture(t, 390, { events });
