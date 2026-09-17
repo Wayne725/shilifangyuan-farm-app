@@ -54,6 +54,17 @@ export function mealOrderingOpen(event: MealEvent, now = Date.now()): boolean {
     && new Date(event.ordering_ends_at).getTime() > now;
 }
 
+export function mealBookingStatus(event: MealEvent, now = Date.now()): string {
+  if (event.status === "ordering_closed" || new Date(event.ordering_ends_at).getTime() <= now
+    || new Date(event.pickup_ends_at).getTime() <= now) return "已截止";
+  if (!mealOrderingOpen(event, now)) return "尚未開放";
+  const menu = event.offerings.filter((offering) => offering.is_active);
+  if (!menu.length) return "菜單待公告";
+  if (!menu.some((offering) => offering.available_quantity > 0)) return "已售完";
+  if (!pickupTimeOptions(event, now).length) return "已截止";
+  return "可預訂";
+}
+
 export function pickupTimeOptions(event: MealEvent, now = Date.now()): Array<{ value: string; label: string }> {
   const options = [];
   const end = new Date(event.pickup_ends_at).getTime();

@@ -5,10 +5,10 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
+import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
 import { apiFetch, formatDate, replaceBrokenAsset, resolveAsset } from "../lib/api";
-import { mealEventStatusLabel } from "../lib/labels";
-import { formatMealDateTime, mealPeriod, mealServiceDate, shiftMealDate, taipeiDate } from "../lib/meal-time";
+import { formatMealDateTime, mealBookingStatus, mealPeriod, mealServiceDate, taipeiDate } from "../lib/meal-time";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
@@ -42,12 +42,13 @@ export function ShopPage() {
     queryFn: () => apiFetch<MealEvent[]>("/v1/meal-events"),
     refetchInterval: 60000,
   });
-  const visibleMeals = meals.data?.filter((meal) =>
-    mealServiceDate(meal) === mealDate
-      && (period === "all" || mealPeriod(meal) === period)
-      && !["draft", "cancelled", "completed"].includes(meal.status)
+  const upcomingMeals = meals.data?.filter((meal) =>
+    !["draft", "cancelled", "completed"].includes(meal.status)
       && new Date(meal.pickup_ends_at).getTime() > now,
   ) || [];
+  const visibleMeals = upcomingMeals.filter((meal) =>
+    mealServiceDate(meal) === mealDate && (period === "all" || mealPeriod(meal) === period),
+  );
 
   return (
     <>
@@ -145,16 +146,11 @@ export function ShopPage() {
             title="預約一份剛好的午餐與晚餐"
             description="選擇取餐日期與餐別，可提早預訂已開放的未來場次；所有時間皆為台灣時間。"
           />
-          <div className="market-subnav"><Link className="button button-quiet" to="/meal-orders"><BowlFood size={17} />我的取餐憑證</Link></div>
-          <div className="field-grid two-columns">
-            <label className="field"><span>取餐日期</span><input type="date" min={today} value={mealDate} onChange={(event) => { if (event.target.value) setMealDate(event.target.value); }} /></label>
-            <label className="field"><span>餐別</span><select aria-label="餐別" value={period} onChange={(event) => setPeriod(event.target.value)}><option value="all">午餐與晚餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option></select></label>
+          <div className="meal-booking-toolbar">
+            <Link className="button button-quiet" to="/meal-orders"><BowlFood size={17} />我的取餐憑證</Link>
           </div>
-          <div className="market-subnav">
-            <button className="button button-quiet" type="button" disabled={mealDate <= today} onClick={() => setMealDate(shiftMealDate(mealDate, -1))}>前一天</button>
-            <button className="button button-quiet" type="button" onClick={() => setMealDate(today)}>今天</button>
-            <button className="button button-quiet" type="button" onClick={() => setMealDate(shiftMealDate(mealDate, 1))}>後一天</button>
-          </div>
+          {meals.isSuccess && <MealDateNavigation events={upcomingMeals} selectedDate={mealDate}
+            onDateChange={setMealDate} period={period} onPeriodChange={setPeriod} now={now} />}
           {meals.isPending && <LoadingLines count={2} />}
           {meals.isError && (
             <DataState
@@ -170,7 +166,7 @@ export function ShopPage() {
               <Link key={meal.id} className="meal-card" to="/meals/$eventId" params={{ eventId: meal.id }}>
                 <img src={resolveAsset(meal.offerings[0]?.image_url || "/assets/meals/taiwanese-lunchbox.webp")} alt={meal.title} onError={replaceBrokenAsset} />
                 <div>
-                  <span>{mealPeriod(meal) === "lunch" ? "午餐" : "晚餐"} · {mealEventStatusLabel(meal.status)}</span>
+                  <span>{mealPeriod(meal) === "lunch" ? "午餐" : "晚餐"} · {mealBookingStatus(meal, now)}</span>
                   <h3>{meal.title}</h3>
                   <p>{meal.offerings.map((offering) => offering.meal_name).join("、") || "供餐內容與取餐時段由合作社公告。"}</p>
                   <small>取餐 {formatMealDateTime(meal.pickup_starts_at)} 至 {formatMealDateTime(meal.pickup_ends_at)}</small>

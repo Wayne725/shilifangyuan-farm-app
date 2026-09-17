@@ -976,6 +976,172 @@ p {
   color: var(--harbor-dark);
 }
 
+.meal-booking-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 28px;
+}
+
+.meal-date-navigation {
+  display: grid;
+  min-width: 0;
+  gap: 24px;
+  margin: 0 0 32px;
+  padding: 28px 0 32px;
+  border-block: 1px solid var(--line);
+}
+
+.meal-date-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 20px;
+}
+
+.meal-date-navigation h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.meal-date-heading p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.meal-date-strip {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 4px 12px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sage) transparent;
+}
+
+.meal-date-button {
+  display: flex;
+  flex: 0 0 112px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 124px;
+  padding: 16px 12px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  cursor: pointer;
+  scroll-snap-align: start;
+  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+}
+
+.meal-date-button strong {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.meal-date-weekday,
+.meal-date-status {
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.meal-date-status {
+  color: var(--ink-soft);
+}
+
+.meal-date-button:disabled {
+  color: var(--ink-soft);
+  border-color: var(--line);
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
+.meal-date-button:not(:disabled):hover,
+.meal-period-options button:not(:disabled):hover {
+  background: var(--paper-deep);
+  border-color: var(--moss);
+}
+
+.meal-date-button[aria-pressed="true"]:not(:disabled),
+.meal-period-options button[aria-pressed="true"] {
+  color: var(--paper-light);
+  background: var(--moss-dark);
+  border-color: var(--moss-dark);
+}
+
+.meal-date-button[aria-pressed="true"]:not(:disabled) .meal-date-status,
+.meal-period-options button[aria-pressed="true"] small {
+  color: var(--paper-light);
+}
+
+.meal-period-filter {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.meal-period-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.meal-period-options button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-height: 48px;
+  padding: 12px 20px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+}
+
+.meal-period-options small {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.meal-period-options button:disabled {
+  color: var(--ink-soft);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+
+@media (max-width: 620px) {
+  .meal-date-button {
+    flex-basis: 104px;
+  }
+
+  .meal-period-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .meal-period-options button {
+    flex-direction: column;
+    padding: 12px 6px;
+  }
+}
+
 .meal-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
