@@ -56,6 +56,6 @@ export const invoiceStatusLabel = createLabeler({
   pending: "等待開立",
   issued: "已開立",
   failed: "開立失敗",
-  void_pending: "等待作廢",
+  void_pending: "作廢處理中",
   voided: "已作廢",
 });

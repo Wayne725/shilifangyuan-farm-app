@@ -21,11 +21,13 @@ from .domain import apply_proposal_clock, remove_paid_quantity
 from .meal_schedules import generate_scheduled_meal_events
 from .integrations.common import IntegrationError
 from .integrations.invoice_service import (
+    InvoiceApplicationError,
     enqueue_invoice_adjustment_after_refund,
     enqueue_invoice_issue,
     invoice_adapter_from_settings,
     issue_paid_order_invoice,
 )
+from .integrations.invoice_void import void_refunded_order_invoice
 from .integrations.notifications import (
     NotificationCommand,
     NotificationService,
@@ -54,6 +56,7 @@ from .models import (
     GroupCampaign,
     GroupDecisionStatus,
     GroupIntakeStatus,
+    Invoice,
     InvoiceStatus,
     MealEvent,
     MealEventStatus,
@@ -1002,6 +1005,7 @@ async def _process_outbox(
                     event.status = OutboxStatus.FAILED
                     _redact_auth_credential(event)
                     await _notify_refund_terminal_failure(session, event)
+                    await _notify_invoice_void_terminal_failure(session, event)
                 else:
                     event.status = OutboxStatus.PENDING
                     event.available_at = datetime.now(timezone.utc) + timedelta(
@@ -1058,6 +1062,32 @@ async def _notify_refund_terminal_failure(
         )
 
 
+async def _notify_invoice_void_terminal_failure(
+    session: AsyncSession,
+    event: OutboxEvent,
+) -> None:
+    if event.event_type != "invoice.adjustment_required" or not event.payload.get("auto_void"):
+        return
+    invoice = await session.get(Invoice, str(event.payload.get("invoice_id")))
+    if invoice is None or invoice.status == InvoiceStatus.VOIDED:
+        return
+    admins = list(await session.scalars(select(User).where(User.user_role == UserRole.ADMIN)))
+    service = NotificationService(SQLAlchemyNotificationRepository(session))
+    for admin in admins:
+        await service.publish(NotificationCommand(
+            user_id=admin.id,
+            event_type="invoice_void_manual_review_required",
+            title="發票作廢需要人工確認",
+            body="全額退款已完成，發票自動作廢仍未確認。請至訂單管理核對原票與供應商狀態；已送出的作廢不會重送。",
+            data={
+                "invoice_id": invoice.id,
+                "order_id": invoice.order_id,
+                "outbox_event_id": event.id,
+            },
+            dedupe_key=f"invoice-void-review:{invoice.id}:{admin.id}",
+        ))
+
+
 def _redact_auth_credential(event: OutboxEvent) -> None:
     if event.event_type not in {
         "auth.email_verification_requested",
@@ -1088,6 +1118,12 @@ async def _dispatch_outbox_event(
         "issue_invoice",
     }:
         await _process_invoice_event(session, settings, event)
+    elif (
+        event.event_type == "invoice.adjustment_required"
+        and event.payload.get("auto_void") is True
+        and event.payload.get("adjustment") == "void"
+    ):
+        await _process_invoice_void_event(session, settings, event)
     elif event.event_type in {
         "auth.email_verification_requested",
         "auth.password_reset_requested",
@@ -1460,6 +1496,33 @@ async def _process_invoice_event(
         )
     )
     await session.commit()
+
+
+async def _process_invoice_void_event(
+    session: AsyncSession,
+    settings: Settings,
+    event: OutboxEvent,
+) -> None:
+    order_id = str(event.payload.get("order_id"))
+    refund = await session.get(Refund, str(event.payload.get("refund_id")))
+    invoice = await session.get(Invoice, str(event.payload.get("invoice_id")))
+    if (
+        refund is None or refund.status != RefundStatus.COMPLETED
+        or refund.order_id != order_id
+        or invoice is None or invoice.order_id != order_id
+    ):
+        raise InvoiceApplicationError("發票自動作廢缺少原訂單或已完成退款紀錄")
+    invoice = await void_refunded_order_invoice(
+        session,
+        order_id,
+        invoice_adapter_from_settings(settings),
+        reason=(refund.reason.strip() or "全額退款自動作廢")[:20],
+        actor_id=refund.requested_by_id,
+        trigger="automatic_refund",
+        refund_id=refund.id,
+    )
+    if invoice.status != InvoiceStatus.VOIDED:
+        raise InvoiceApplicationError("發票作廢結果尚未確認，背景工作將繼續查詢，不會重送作廢")
 
 
 async def _process_email_event(

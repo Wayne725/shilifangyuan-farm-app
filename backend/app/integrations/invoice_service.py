@@ -195,6 +195,7 @@ def enqueue_invoice_adjustment_after_refund(
                 "amount": refund.amount,
                 "reason": refund.reason,
                 "provider_status_uncertain": not bool(invoice.invoice_number),
+                "auto_void": full_refund and invoice.provider == "fanyu",
             },
         )
     )
