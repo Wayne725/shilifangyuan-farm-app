@@ -1,23 +1,6 @@
-"""External service adapters used by the sandbox backend."""
+"""External service adapters.
 
-from .ecpay import (
-    ECPayAIOAdapter,
-    ECPayAIOSettings,
-    LocalSandboxRefundAdapter,
-    build_check_mac_value,
-    verify_check_mac_value,
-)
-from .invoice import ECPayInvoiceAdapter, ECPayInvoiceSettings
-from .sendgrid import SendGridAdapter, SendGridSettings
-
-__all__ = [
-    "ECPayAIOAdapter",
-    "ECPayAIOSettings",
-    "ECPayInvoiceAdapter",
-    "ECPayInvoiceSettings",
-    "LocalSandboxRefundAdapter",
-    "SendGridAdapter",
-    "SendGridSettings",
-    "build_check_mac_value",
-    "verify_check_mac_value",
-]
+Import adapters from their defining modules. Keeping this package initializer
+side-effect free prevents unrelated SDKs from loading during focused jobs such
+as invoice reconciliation and contract tests.
+"""

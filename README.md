@@ -1,38 +1,42 @@
-# 十里方圓｜農產品與共同購買 App
+# 十里方圓｜生活消費與社務系統
 
-「十里方圓」是為臺灣城鄉永續生活消費合作社設計的跨平台 App，涵蓋一般農產品購物、社員／非社員雙價格、共同購買投票、正式團購、訂單管理、綠界測試金流、電子發票與通知。
+「十里方圓」是為臺灣城鄉永續生活消費合作社設計的響應式網站，介面分成兩個工作區：
 
-同一套 Expo 程式可在 iOS、Android 與 Web 執行；FastAPI 與 PostgreSQL 負責身分、價格、投票、團購、訂單、付款與發票狀態。
+- `生活消費`：農產、共同購買、便當預購、訂單、現場取貨、宅配與超商物流。
+- `社務系統`：入社申請、社員資料、名錄、活動、積點、願望、會議與治理提案。
+
+目前只有一套正式前端：`web/`。所有真實資料、資格、價格、容量、付款、履約與稽核均以 FastAPI 與 PostgreSQL 為準。
 
 ## 技術
 
-- 前端：Expo SDK 57、React Native、TypeScript、Expo Router、TanStack Query
+- 前端：Vite、React 19、TypeScript、TanStack Router／Query、Radix UI
 - 後端：Python 3.12、FastAPI、SQLAlchemy、Alembic
-- 資料庫：PostgreSQL；本機可使用 SQLite
-- 金流：綠界 AIO Stage，信用卡一次付清
-- 發票：綠界 B2C 電子發票 Stage
-- 通知：App 通知中心、SendGrid Email
+- 資料庫：PostgreSQL；本機測試可使用 SQLite
+- 金流：雷門（設定範本預設）／綠界可切換 adapter；物流：綠界 Stage；發票：汎宇／綠界可切換 adapter
+- Email：Resend，MailerSend 備援
+- 私密證件：Cloudflare R2 私有 Bucket與短效簽名 URL
 - 部署：Render Static Site、Web Service、PostgreSQL
 
-## 前端啟動
+## 本機啟動
+
+明天展示時，在專案根目錄執行：
+
+```bash
+pnpm demo
+```
+
+開啟 `http://127.0.0.1:4173`；按 `Control-C` 可同時關閉前後端。
+
+若需要分開啟動，前端：
 
 ```bash
 pnpm install
-pnpm start
+pnpm dev
 ```
 
-可按 `w` 開啟 Web。此專案使用 Expo SDK 57；目前 Android 裝置與模擬器可安裝對應版本的 Expo Go，iOS 模擬器亦可，但 App Store 版 Expo Go 只支援目前上架的 SDK，因此實體 iPhone 建議使用 Web 或另建 development build。
+開啟 `http://127.0.0.1:4173`。Vite 會把 `/v1` 代理到 `http://127.0.0.1:8000`。
 
-```bash
-pnpm web
-pnpm typecheck
-pnpm test
-pnpm export:web
-```
-
-未設定 `EXPO_PUBLIC_API_URL` 時，App 會使用內建展示資料；一旦設定 API，所有讀寫都以後端資料與錯誤狀態為準。
-
-## 後端啟動
+後端：
 
 ```bash
 python3.12 -m venv .venv
@@ -44,64 +48,63 @@ cd backend
 ../.venv/bin/uvicorn app.main:app --reload
 ```
 
-API 文件：
+API 文件位於 `http://127.0.0.1:8000/docs`，健康檢查位於 `/health`。
 
-- `http://localhost:8000/docs`
-- `http://localhost:8000/health`
-
-本機預設展示帳號：
+## 展示帳號
 
 | 身分 | Email | 密碼 |
 | --- | --- | --- |
-| 社員 | `member@shilifangyuan.tw` | `member123` |
-| 非社員 | `customer@shilifangyuan.tw` | `customer123` |
+| 正式社員 | `member@shilifangyuan.tw` | `member123` |
+| 一般買家 | `customer@shilifangyuan.tw` | `customer123` |
 | 管理員 | `admin@shilifangyuan.tw` | `admin123` |
+| 補件申請人 | `supplement@shilifangyuan.tw` | `customer123` |
+| 待付款申請人 | `pending@shilifangyuan.tw` | `customer123` |
 
-內建資料模式可使用上表快速登入。部署連接後端時，請務必用 `DEMO_ADMIN_PASSWORD`、`DEMO_MEMBER_PASSWORD`、`DEMO_NONMEMBER_PASSWORD` 覆寫成不同的強密碼；公開 Web 不應沿用範例管理員密碼。
+這些只供本機 Sandbox。公開部署必須以環境變數改成不同的強密碼。
 
-本機內建資料的重設確認碼為 `RESET`。Render Sandbox 必須另設至少 8 字元的 `DEMO_RESET_CONFIRMATION`；管理員在後台輸入正確確認碼後才能重設資料。
+## 已整合流程
 
-## 核心流程
-
-### 一般購物
-
-1. 訪客瀏覽商品，登入社員或非社員帳號。
-2. 後端依社員資格重新計價。
-3. 建立訂單與 15 分鐘庫存保留。
-4. 前往綠界 Stage 付款。
-5. 管理員推進備貨、可取貨、已取貨。
-6. 完成取貨後開立 B2C 測試電子發票。
-
-### 共同購買
-
-1. 買家針對既有商品或團購套組發起投票。
-2. 管理員審核後開放投票；預設 10 人、7 天。
-3. 管理員可把達標投票轉成正式團購，也可直接開團。
-4. 買家付款後才計入成團件數。
-5. 達標後暫停新加入，等待管理員確認。
-6. 確認成團後可募集到截止或滿額，最後公布取貨時間。
-7. 未成團、拒絕或取消時，後端完成 Sandbox 退款狀態與庫存釋放。
+- 商品與供應者管理、取貨點、庫存、稅別及配送能力
+- 一般購物、社員價、購物車、後端試算與訂單中心
+- 宅配與 7-ELEVEN／全家／萊爾富選擇、運費表、物流建單與貨態
+- 商品需求投票、團購提案、正式開團、成團確認與退款
+- 便當菜單、場次、容量、預購、六位取餐碼、QR 與工作人員核銷
+- 入社、會籍、社員名錄、活動、治理提案、積點、願望、會議與結餘
+- 管理總覽、三類身分銷售比例、訂單履約、退款與財務報表匯出
+- 雷門／綠界付款、後端查單確認、全額退款工作、綠界物流 Stage、汎宇雲端發票 adapter、Email Outbox 與 reconciliation
 
 ## 專案結構
 
 ```text
-app/                 Expo Router 頁面
-src/                 元件、狀態、API client 與展示資料
+web/                 唯一正式 React Web 前端
+assets/              新版 Web 使用的商品與活動素材
 backend/app/         FastAPI、領域模型、外部服務與背景工作
-backend/alembic/     PostgreSQL migration
+backend/alembic/     PostgreSQL migrations
 backend/tests/       後端測試
-docs/                架構、部署與展示文件
+tests/               Web API 與功能契約測試
+docs/                架構、資料對照、部署與待決策文件
 render.yaml          Render Blueprint
-.github/workflows/   CI 與每 10 分鐘 reconciliation
+.github/workflows/   CI 與定期 reconciliation
 ```
 
-## Sandbox 限制
+## 驗證
 
-- 綠界 AIO Stage 不動真實款項。
-- AIO Stage 沒有實際信用卡退款 API；退款完成只代表本系統狀態、庫存與通知已完成。
-- 綠界發票 Stage 不會送財政部，也不會寄官方發票信；App 另外以 SendGrid 寄開立通知。
-- Expo Go 的付款流程由使用者手動切回 App，再向後端查詢結果；正式安裝版已預留 `shilifangyuan://`。
-- Expo SDK 57 目前無法直接由實體 iPhone 的 App Store 版 Expo Go 開啟；現場以 Web 為主，或事先準備 development build。
-- 商品正式稅別、社員資料來源、配送與出貨規則仍需合作社確認。
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+cd backend && ../.venv/bin/pytest -q
+```
 
-部署及展示前檢查請見 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，系統設計請見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+API 路由表存於 `web/src/lib/api.routes.json`。後端路由變更後執行：
+
+```bash
+cd backend
+../.venv/bin/python -m scripts.export_openapi_paths ../web/src/lib/api.routes.json
+```
+
+## 正式上線前
+
+設定範本支援雷門，但未內建任何商店憑證或服務網址；填妥資料並完成協定確認前，線上付款會維持停用。雷門已確認沒有主動付款通知，因此正式流程採回跳立即查單、前端短暫補查與背景 reconciliation。正式營運仍需驗收狀態／退款語意、排程監控、Email 網域、R2 與個資政策、資料庫備份及真實低額端到端流程。
+
+詳見 [雷門金流流程](docs/PAYMENT_FLOW.md)、[雷門 Sandbox 驗收清單](docs/RAYGATE_SANDBOX_ACCEPTANCE.md)、[部署手冊](docs/DEPLOYMENT.md)、[系統架構](docs/ARCHITECTURE.md)、[汎宇發票流程](docs/INVOICE_FLOW.md)、[真實資料對照](docs/REAL_DATA_MAPPING.md) 與 [待確認事項](docs/UNRESOLVED.md)。

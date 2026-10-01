@@ -1,20 +1,22 @@
 databases:
   - name: shilifangyuan-db
-    plan: free
     region: singapore
     databaseName: shilifangyuan
     user: shilifangyuan
+    ipAllowList: []
 
 services:
   - type: web
     name: shilifangyuan-api
+    branch: codex/v2-social-commerce
+    autoDeployTrigger: checksPass
     runtime: python
     plan: free
     region: singapore
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    startCommand: python -m app.startup prepare && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /ready
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
@@ -23,11 +25,27 @@ services:
           name: shilifangyuan-db
           property: connectionString
       - key: APP_ENV
-        value: sandbox
+        value: preview
+      - key: DATABASE_POOL_SIZE
+        value: "5"
+      - key: DATABASE_MAX_OVERFLOW
+        value: "5"
+      - key: DATABASE_POOL_TIMEOUT_SECONDS
+        value: "10"
+      - key: DATABASE_POOL_RECYCLE_SECONDS
+        value: "300"
+      - key: DATABASE_CONNECT_TIMEOUT_SECONDS
+        value: "10"
+      - key: DATABASE_READINESS_TIMEOUT_SECONDS
+        value: "3"
+      - key: STARTUP_MIGRATION_ATTEMPTS
+        value: "5"
+      - key: STARTUP_MIGRATION_RETRY_SECONDS
+        value: "2"
       - key: APP_BASE_URL
-        sync: false
+        value: https://shilifangyuan-api.onrender.com
       - key: WEB_BASE_URL
-        sync: false
+        value: https://shilifangyuan-web.onrender.com
       - key: JWT_SECRET
         generateValue: true
       - key: RECONCILE_SECRET
@@ -38,42 +56,97 @@ services:
         sync: false
       - key: DEMO_NONMEMBER_PASSWORD
         sync: false
-      - key: DEMO_RESET_CONFIRMATION
+      - key: PAYMENT_PROVIDER
+        value: raygate
+      - key: RAYGATE_PAYMENT_STORE_IDENTIFIER
         sync: false
-      - key: ECPAY_PAYMENT_MERCHANT_ID
+      - key: RAYGATE_PAYMENT_KEY_HEX
         sync: false
-      - key: ECPAY_PAYMENT_HASH_KEY
+      - key: RAYGATE_PAYMENT_IV_HEX
         sync: false
-      - key: ECPAY_PAYMENT_HASH_IV
+      - key: RAYGATE_PAYMENT_MERCHANT_ID
         sync: false
-      - key: ECPAY_PAYMENT_STAGE
+      - key: RAYGATE_PAYMENT_TERMINAL_ID
+        sync: false
+      - key: RAYGATE_PAYMENT_BASE_URL
+        sync: false
+      - key: RAYGATE_PAYMENT_ALLOWED_HOSTNAME
+        sync: false
+      - key: RAYGATE_PAYMENT_STAGE
+        value: "false"
+      - key: RAYGATE_PAYMENT_CONTRACT_VERIFIED
+        value: "false"
+      - key: RAYGATE_PAYMENT_RECONCILE_HOURS
+        value: "24"
+      - key: RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID
+        sync: false
+      - key: RAYGATE_PAYMENT_ACCEPTANCE_SKU
+        sync: false
+      - key: INVOICE_PROVIDER
+        value: fanyu
+      - key: FANYU_INVOICE_COMPANY_ID
+        sync: false
+      - key: FANYU_INVOICE_USER_ID
+        sync: false
+      - key: FANYU_INVOICE_AUTH_PASSWORD
+        sync: false
+      - key: FANYU_INVOICE_API_KEY
+        sync: false
+      - key: FANYU_INVOICE_SELLER_ID
+        sync: false
+      - key: FANYU_INVOICE_STAGE
         value: "true"
-      - key: ECPAY_INVOICE_MERCHANT_ID
-        sync: false
-      - key: ECPAY_INVOICE_HASH_KEY
-        sync: false
-      - key: ECPAY_INVOICE_HASH_IV
-        sync: false
-      - key: ECPAY_INVOICE_STAGE
+      - key: FANYU_INVOICE_BASE_URL
+        value: https://webtest.einvoice.com.tw/einv
+      - key: FANYU_INVOICE_SIGNATURE_VERIFIED
         value: "true"
-      - key: SENDGRID_API_KEY
+      - key: RESEND_API_KEY
         sync: false
-      - key: SENDGRID_FROM_EMAIL
+      - key: EMAIL_FROM_EMAIL
         sync: false
-      - key: SENDGRID_FROM_NAME
+      - key: EMAIL_FROM_NAME
         value: 十里方圓
 
   - type: web
     name: shilifangyuan-web
+    branch: codex/v2-social-commerce
+    autoDeployTrigger: checksPass
     runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm export:web
-    staticPublishPath: ./dist
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: ./web/dist
     envVars:
-      - key: EXPO_PUBLIC_API_URL
-        sync: false
-      - key: EXPO_PUBLIC_APP_ENV
-        value: sandbox
+      - key: VITE_API_BASE_URL
+        value: ""
+      - key: VITE_APP_ENV
+        value: preview
+      - key: VITE_LOGISTICS_ENABLED
+        value: "false"
     routes:
+      - type: rewrite
+        source: /v1/*
+        destination: https://shilifangyuan-api.onrender.com/v1/*
       - type: rewrite
         source: /*
         destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=(), payment=(self)
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - path: /*
+        name: X-Permitted-Cross-Domain-Policies
+        value: none
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; upgrade-insecure-requests; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://shilifangyuan-api.onrender.com https://*.r2.cloudflarestorage.com"

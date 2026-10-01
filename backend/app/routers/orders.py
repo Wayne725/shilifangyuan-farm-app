@@ -9,31 +9,50 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..auth import get_current_user, require_admin
+from ..auth import (
+    get_current_user,
+    membership_type_for_user,
+    require_admin,
+)
 from ..database import get_session
+from ..config import Settings, get_settings
+from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled, meals_test_product_pairs
+from ..sales_scope import require_sales_scope_allows
 from ..domain import (
     DomainError,
     ensure_self_cancel_allowed,
+    included_tax_amount,
     order_available_actions,
+    order_fulfillment_is_irreversible,
     price_for_membership,
     remove_paid_quantity,
 )
+from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
+from ..integrations.payment_service import (
+    PaymentApplicationError,
+    create_provider_aware_refund,
+)
 from ..models import (
     AdminAudit,
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
+    GroupCampaign,
     GroupDecisionStatus,
     InventoryReservation,
-    InvoiceStatus,
+    MealEventOffering,
     Notification,
     Order,
+    OrderFulfillment,
     OrderItem,
     OrderKind,
     OutboxEvent,
     PaymentStatus,
+    PickupLocation,
     Product,
-    Refund,
-    RefundStatus,
     ReservationStatus,
+    SalesChannel,
+    ShipmentStatus,
     User,
     UserRole,
 )
@@ -58,14 +77,28 @@ def make_order_number() -> str:
 
 
 def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
+    fulfillment = order.__dict__.get("fulfillment")
+    shipment = (
+        fulfillment.shipment
+        if fulfillment is not None
+        else None
+    )
     return OrderRead(
         id=order.id,
         order_number=order.order_number,
         order_kind=order.order_kind,
+        sales_channel=order.sales_channel,
+        fulfillment_method=order.fulfillment_method,
         group_campaign_id=order.group_campaign_id,
+        meal_event_id=order.meal_event_id,
         membership_type_snapshot=order.membership_type_snapshot,
         amount_total=order.amount_total,
+        tax_amount=order.tax_amount,
         contact_email=order.contact_email,
+        invoice_buyer_type=order.invoice_buyer_type,
+        invoice_buyer_tax_id=order.invoice_buyer_tax_id,
+        invoice_buyer_name=order.invoice_buyer_name,
+        invoice_buyer_email=order.invoice_buyer_email,
         invoice_carrier_type=order.invoice_carrier_type,
         fulfillment_status=order.fulfillment_status,
         payment_status=order.payment_status,
@@ -75,6 +108,10 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         created_at=order.created_at,
         available_actions=order_available_actions(order, viewer_is_admin),
         items=order.items,
+        fulfillment=fulfillment,
+        shipment=shipment,
+        meal_event=order.meal_event,
+        invoice=order.__dict__.get("invoice"),
     )
 
 
@@ -109,10 +146,11 @@ async def quote_products(
                 status_code=409,
                 detail=f"{product.name} 庫存不足，目前剩餘 {product.stock_quantity}",
             )
+        membership_type = membership_type_for_user(user)
         unit_price = price_for_membership(
             product.member_price,
             product.nonmember_price,
-            user.membership_type,
+            membership_type,
         )
         lines.append(
             OrderQuoteLine(
@@ -126,7 +164,7 @@ async def quote_products(
             )
         )
     return OrderQuoteRead(
-        membership_type=user.membership_type,
+        membership_type=membership_type_for_user(user),
         amount_total=sum(line.subtotal for line in lines),
         items=lines,
     )
@@ -142,6 +180,11 @@ async def load_order(
             selectinload(Order.items),
             selectinload(Order.group_campaign),
             selectinload(Order.reservations),
+            selectinload(Order.invoice),
+            selectinload(Order.meal_event),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
         )
     )
     if lock:
@@ -172,19 +215,77 @@ async def create_order(
     body: OrderCreate,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> OrderRead:
+    controlled_product = meals_test_product_enabled(settings)
+    if not controlled_product:
+        require_sales_scope_allows(settings)
+    elif (
+        len(body.items) != 1
+        or body.items[0].product_id not in meals_test_product_pairs(settings)
+        or body.items[0].quantity != 1
+        or body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP
+    ):
+        require_sales_scope_allows(settings)
+    if body.fulfillment_method not in {
+        FulfillmentMethod.COOPERATIVE_PICKUP,
+        FulfillmentMethod.ECPAY_LOGISTICS,
+    }:
+        raise HTTPException(status_code=422, detail="一般訂單不支援此履約方式")
     quote = await quote_products(
         session, consolidate_lines(body.items), user, lock=True
     )
+    pickup_location = None
+    if body.pickup_location_id is not None:
+        if body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP:
+            raise HTTPException(
+                status_code=422,
+                detail="只有合作社取貨可選擇領取地點",
+            )
+        pickup_location = await session.scalar(
+            select(PickupLocation).where(
+                PickupLocation.id == body.pickup_location_id,
+                PickupLocation.is_active.is_(True),
+            )
+        )
+        if pickup_location is None:
+            raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.REGULAR,
+        invoice_provider_context=invoice_context_from_settings(settings),
+        sales_channel=SalesChannel.REGULAR,
+        fulfillment_method=body.fulfillment_method,
         user_id=user.id,
-        membership_type_snapshot=user.membership_type,
+        membership_type_snapshot=membership_type_for_user(user),
         amount_total=quote.amount_total,
+        tax_amount=sum(
+            included_tax_amount(line.subtotal, line.tax_type)
+            for line in quote.items
+        ),
         contact_email=body.contact_email.lower(),
+        invoice_buyer_type=body.invoice_buyer_type,
+        invoice_buyer_tax_id=(
+            body.invoice_buyer_tax_id.strip()
+            if body.invoice_buyer_tax_id
+            else None
+        ),
+        invoice_buyer_name=(
+            body.invoice_buyer_name.strip()
+            if body.invoice_buyer_name
+            else None
+        ),
+        invoice_buyer_email=(
+            str(body.invoice_buyer_email).lower()
+            if body.invoice_buyer_email
+            else None
+        ),
         invoice_carrier_type=body.invoice_carrier_type,
-        invoice_carrier_value=body.invoice_carrier_value,
+        invoice_carrier_value=(
+            body.invoice_carrier_value.strip().upper()
+            if body.invoice_carrier_value
+            else None
+        ),
         items=[
             OrderItem(
                 source_product_id=line.product_id,
@@ -197,7 +298,19 @@ async def create_order(
             )
             for line in quote.items
         ],
+        fulfillment=OrderFulfillment(
+            method=body.fulfillment_method,
+            status=FulfillmentState.PENDING_CONFIRMATION,
+            pickup_location_id=(
+                pickup_location.id if pickup_location is not None else None
+            ),
+            pickup_location=(
+                pickup_location.name if pickup_location is not None else None
+            ),
+        ),
     )
+    if controlled_product and not await is_meals_test_product_order(session, settings, order):
+        require_sales_scope_allows(settings)
     session.add(order)
     await session.commit()
     order = await load_order(session, order.id)
@@ -212,6 +325,11 @@ async def list_orders(
     query = select(Order).options(
         selectinload(Order.items),
         selectinload(Order.group_campaign),
+        selectinload(Order.meal_event),
+        selectinload(Order.invoice),
+        selectinload(Order.fulfillment).selectinload(
+            OrderFulfillment.shipment
+        ),
     )
     if user.user_role != UserRole.ADMIN:
         query = query.where(Order.user_id == user.id)
@@ -245,17 +363,43 @@ async def release_active_reservations(
         reservation.status = ReservationStatus.RELEASED
         reservation.released_at = now
         if (
-            order.group_campaign is not None
+            reservation.group_campaign_id is not None
             and reservation.group_campaign_id == order.group_campaign_id
         ):
-            order.group_campaign.reserved_quantity = max(
+            campaign = await session.scalar(
+                select(GroupCampaign)
+                .where(GroupCampaign.id == reservation.group_campaign_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if campaign is None:
+                continue
+            campaign.reserved_quantity = max(
                 0,
-                order.group_campaign.reserved_quantity - reservation.quantity,
+                campaign.reserved_quantity - reservation.quantity,
             )
         elif reservation.source_product_id is not None:
-            product = await session.get(Product, reservation.source_product_id)
+            product = await session.scalar(
+                select(Product)
+                .where(Product.id == reservation.source_product_id)
+                .with_for_update()
+            )
             if product is not None:
                 product.stock_quantity += reservation.quantity
+        elif reservation.source_meal_offering_id is not None:
+            offering = await session.scalar(
+                select(MealEventOffering)
+                .where(
+                    MealEventOffering.id
+                    == reservation.source_meal_offering_id
+                )
+                .with_for_update()
+            )
+            if offering is not None:
+                offering.reserved_quantity = max(
+                    0,
+                    offering.reserved_quantity - reservation.quantity,
+                )
 
 
 async def request_order_refund(
@@ -264,11 +408,26 @@ async def request_order_refund(
     actor: User,
     reason: str,
 ) -> None:
-    if order.fulfillment_status == FulfillmentStatus.PICKED_UP:
-        raise HTTPException(status_code=409, detail="完成取貨後不可退款")
+    if order_fulfillment_is_irreversible(order):
+        raise HTTPException(
+            status_code=409,
+            detail="物流已建立或商品已交付，請先完成人工攔截／退回再退款",
+        )
     if order.payment_status != PaymentStatus.PAID:
         raise HTTPException(status_code=409, detail="只有已付款訂單可退款")
     now = datetime.now(timezone.utc)
+    try:
+        refund, _ = await create_provider_aware_refund(
+            session,
+            order=order,
+            amount=order.amount_total,
+            reason=reason,
+            requested_by_id=actor.id,
+            defer_completion=True,
+            now=now,
+        )
+    except PaymentApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     group_release_quantity = 0
     for reservation in order.reservations:
         if reservation.status == ReservationStatus.ACTIVE:
@@ -283,39 +442,58 @@ async def request_order_refund(
         ):
             group_release_quantity += reservation.quantity
         elif reservation.source_product_id is not None:
-            product = await session.get(Product, reservation.source_product_id)
+            product = await session.scalar(
+                select(Product)
+                .where(Product.id == reservation.source_product_id)
+                .with_for_update()
+            )
             if product is not None:
                 product.stock_quantity += reservation.quantity
+        elif reservation.source_meal_offering_id is not None:
+            offering = await session.scalar(
+                select(MealEventOffering)
+                .where(
+                    MealEventOffering.id
+                    == reservation.source_meal_offering_id
+                )
+                .with_for_update()
+            )
+            if offering is not None:
+                offering.paid_quantity = max(
+                    0,
+                    offering.paid_quantity - reservation.quantity,
+                )
         reservation.status = ReservationStatus.RELEASED
         reservation.released_at = now
     if (
         group_release_quantity
-        and order.group_campaign is not None
+        and order.group_campaign_id is not None
     ):
+        campaign = await session.scalar(
+            select(GroupCampaign)
+            .where(GroupCampaign.id == order.group_campaign_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if campaign is None:
+            raise HTTPException(status_code=409, detail="找不到團購資料")
         remove_paid_quantity(
-            order.group_campaign, group_release_quantity, now
+            campaign, group_release_quantity, now
         )
     order.payment_status = PaymentStatus.REFUND_PENDING
     order.fulfillment_status = FulfillmentStatus.CANCELLED
+    fulfillment = order.__dict__.get("fulfillment")
+    if fulfillment is not None:
+        fulfillment.status = FulfillmentState.CANCELLED
+        shipment = fulfillment.__dict__.get("shipment")
+        if shipment is not None and shipment.status in {
+            ShipmentStatus.DRAFT,
+            ShipmentStatus.SELECTION_PENDING,
+            ShipmentStatus.READY_TO_CREATE,
+        }:
+            shipment.status = ShipmentStatus.CANCELLED
     order.cancelled_at = now
     order.cancellation_reason = reason
-    refund = Refund(
-        order=order,
-        amount=order.amount_total,
-        status=RefundStatus.PENDING,
-        reason=reason,
-        requested_by_id=actor.id,
-    )
-    session.add(refund)
-    await session.flush()
-    session.add(
-        OutboxEvent(
-            event_type="refund.requested",
-            aggregate_type="order",
-            aggregate_id=order.id,
-            payload={"refund_id": refund.id, "amount": refund.amount},
-        )
-    )
 
 
 @orders_router.post("/{order_id}/cancel", response_model=OrderRead)
@@ -338,6 +516,9 @@ async def cancel_order(
         await release_active_reservations(session, order)
         order.payment_status = PaymentStatus.EXPIRED
         order.fulfillment_status = FulfillmentStatus.CANCELLED
+        fulfillment = order.__dict__.get("fulfillment")
+        if fulfillment is not None:
+            fulfillment.status = FulfillmentState.CANCELLED
         order.cancelled_at = datetime.now(timezone.utc)
         order.cancellation_reason = body.reason
     session.add(
@@ -388,6 +569,19 @@ async def update_fulfillment(
     if order.payment_status != PaymentStatus.PAID:
         raise HTTPException(status_code=409, detail="未付款訂單無法出貨")
     if (
+        order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
+        and body.status != FulfillmentStatus.PREPARING
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="物流訂單只能先由後台標記為備貨中，後續請由物流模組推進",
+        )
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        raise HTTPException(
+            status_code=409,
+            detail="便當訂單請由便當場次取餐流程推進",
+        )
+    if (
         order.order_kind == OrderKind.GROUP
         and order.group_campaign is not None
         and order.group_campaign.decision_status != GroupDecisionStatus.CONFIRMED
@@ -401,15 +595,30 @@ async def update_fulfillment(
     if allowed.get(order.fulfillment_status) != body.status:
         raise HTTPException(status_code=409, detail="訂單履約狀態不可跳級")
     order.fulfillment_status = body.status
+    fulfillment = order.__dict__.get("fulfillment")
+    if fulfillment is not None:
+        state_map = {
+            FulfillmentStatus.PENDING_CONFIRMATION: (
+                FulfillmentState.PENDING_CONFIRMATION
+            ),
+            FulfillmentStatus.PREPARING: FulfillmentState.PREPARING,
+            FulfillmentStatus.READY_FOR_PICKUP: (
+                FulfillmentState.READY_FOR_PICKUP
+            ),
+            FulfillmentStatus.PICKED_UP: FulfillmentState.PICKED_UP,
+            FulfillmentStatus.CANCELLED: FulfillmentState.CANCELLED,
+        }
+        fulfillment.status = state_map[body.status]
+        if body.pickup_starts_at is not None:
+            fulfillment.pickup_starts_at = body.pickup_starts_at
+            fulfillment.pickup_ends_at = body.pickup_ends_at
+        if body.status == FulfillmentStatus.PICKED_UP:
+            fulfillment.fulfilled_at = datetime.now(timezone.utc)
     if body.status == FulfillmentStatus.PICKED_UP:
-        order.invoice_status = InvoiceStatus.PENDING
-        session.add(
-            OutboxEvent(
-                event_type="invoice.issue",
-                aggregate_type="order",
-                aggregate_id=order.id,
-                payload={"order_id": order.id},
-            )
+        enqueue_invoice_issue(
+            session,
+            order,
+            trigger="legacy_fulfillment_completed",
         )
     session.add_all(
         [

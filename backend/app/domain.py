@@ -5,16 +5,22 @@ from typing import List, Optional
 
 from .config import get_settings
 from .models import (
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     GroupCampaign,
     GroupDecisionStatus,
     GroupIntakeStatus,
+    MealEventStatus,
     MembershipType,
     Order,
     OrderKind,
     PaymentStatus,
     Product,
     ProposalStatus,
+    SalesChannel,
+    ShipmentStatus,
+    TaxType,
     VoteProposal,
 )
 
@@ -38,9 +44,19 @@ def price_for_membership(
     nonmember_price: int,
     membership_type: MembershipType,
 ) -> int:
-    if membership_type == MembershipType.MEMBER:
+    if membership_type in {
+        MembershipType.MEMBER,
+        MembershipType.TRAINEE,
+    }:
         return member_price
     return nonmember_price
+
+
+def included_tax_amount(subtotal: int, tax_type: TaxType) -> int:
+    """Return the 5% tax included in a tax-inclusive TWD subtotal."""
+    if tax_type == TaxType.TAX_EXEMPT:
+        return 0
+    return subtotal * 5 // 105
 
 
 def product_price(product: Product, membership_type: MembershipType) -> int:
@@ -185,8 +201,9 @@ def remove_paid_quantity(
             campaign.intake_status = GroupIntakeStatus.OPEN
             campaign.confirmation_deadline = None
         else:
-            campaign.decision_status = GroupDecisionStatus.FAILED_UNMET
-            campaign.intake_status = GroupIntakeStatus.CLOSED
+            campaign.decision_status = GroupDecisionStatus.RECRUITING
+            campaign.intake_status = GroupIntakeStatus.SETTLING
+            campaign.confirmation_deadline = None
 
 
 def confirm_campaign(
@@ -217,6 +234,15 @@ def confirm_campaign(
         campaign.intake_status = GroupIntakeStatus.CLOSED
 
 
+def meal_payment_window_open(order: Order, now: datetime) -> bool:
+    event = order.__dict__.get("meal_event")
+    return (
+        event is not None
+        and event.status in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}
+        and aware(event.ordering_starts_at) <= now < aware(event.ordering_ends_at)
+    )
+
+
 def order_available_actions(
     order: Order,
     viewer_is_admin: bool = False,
@@ -224,10 +250,58 @@ def order_available_actions(
 ) -> List[str]:
     current = now or utcnow()
     actions: List[str] = []
+    fulfillment = order.__dict__.get("fulfillment")
+    is_meal = order.sales_channel == SalesChannel.MEAL_PREORDER
+    meal_fulfillment_closed = is_meal and (
+        order.cancelled_at is not None
+        or order_fulfillment_is_irreversible(order)
+        or order.fulfillment_status in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
+        or (
+            fulfillment is not None
+            and fulfillment.status in {
+                FulfillmentState.PICKED_UP, FulfillmentState.NO_SHOW, FulfillmentState.CANCELLED,
+            }
+        )
+    )
     if order.payment_status == PaymentStatus.PENDING:
-        actions.extend(["pay", "cancel"])
+        shipment = (
+            fulfillment.__dict__.get("shipment")
+            if fulfillment is not None
+            else None
+        )
+        payment_ready = (
+            order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
+            or (
+                shipment is not None
+                and shipment.status
+                in {ShipmentStatus.READY_TO_CREATE, ShipmentStatus.CREATED}
+            )
+        )
+        if payment_ready and (
+            not is_meal
+            or (not meal_fulfillment_closed and meal_payment_window_open(order, current))
+        ):
+            actions.append("pay")
+        if not meal_fulfillment_closed:
+            actions.append("cancel")
     elif order.payment_status == PaymentStatus.PAID:
-        if order.order_kind == OrderKind.REGULAR:
+        if order.sales_channel == SalesChannel.MEAL_PREORDER:
+            if (
+                order.meal_event is not None
+                and order.meal_event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}
+                and not meal_fulfillment_closed
+                and order.paid_at is not None
+                and current
+                <= min(
+                    aware(order.paid_at)
+                    + timedelta(
+                        minutes=get_settings().post_confirmation_cancel_minutes
+                    ),
+                    aware(order.meal_event.ordering_ends_at),
+                )
+            ):
+                actions.append("cancel")
+        elif order.order_kind == OrderKind.REGULAR:
             if order.fulfillment_status == FulfillmentStatus.PENDING_CONFIRMATION:
                 actions.append("cancel")
         elif order.group_campaign is not None:
@@ -248,17 +322,101 @@ def order_available_actions(
     if viewer_is_admin:
         if (
             order.payment_status == PaymentStatus.PAID
-            and order.fulfillment_status != FulfillmentStatus.PICKED_UP
+            and not order_fulfillment_is_irreversible(order)
         ):
             actions.append("refund")
-        if order.payment_status == PaymentStatus.PAID:
-            if order.fulfillment_status == FulfillmentStatus.PENDING_CONFIRMATION:
-                actions.append("start_preparing")
-            elif order.fulfillment_status == FulfillmentStatus.PREPARING:
+        campaign_ready = (
+            order.order_kind != OrderKind.GROUP
+            or (
+                order.group_campaign is not None
+                and order.group_campaign.decision_status
+                == GroupDecisionStatus.CONFIRMED
+            )
+        )
+        fulfillment_allowed = (
+            order.sales_channel != SalesChannel.MEAL_PREORDER
+            and campaign_ready
+        )
+        manual_fulfillment_allowed = (
+            fulfillment_allowed
+            and order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
+        )
+        if (
+            order.payment_status == PaymentStatus.PAID
+            and fulfillment_allowed
+            and order.fulfillment_status
+            == FulfillmentStatus.PENDING_CONFIRMATION
+        ):
+            actions.append("start_preparing")
+        if (
+            order.payment_status == PaymentStatus.PAID
+            and manual_fulfillment_allowed
+        ):
+            if order.fulfillment_status == FulfillmentStatus.PREPARING:
                 actions.append("mark_ready")
             elif order.fulfillment_status == FulfillmentStatus.READY_FOR_PICKUP:
                 actions.append("mark_picked_up")
+        fulfillment = order.__dict__.get("fulfillment")
+        shipment = (
+            fulfillment.__dict__.get("shipment")
+            if fulfillment is not None
+            else None
+        )
+        if (
+            order.payment_status == PaymentStatus.PAID
+            and order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
+            and campaign_ready
+            and order.fulfillment_status == FulfillmentStatus.PREPARING
+            and fulfillment is not None
+            and fulfillment.status == FulfillmentState.PREPARING
+            and shipment is not None
+            and shipment.status == ShipmentStatus.READY_TO_CREATE
+        ):
+            actions.append("create_shipment")
+        if (
+            get_settings().environment.strip().lower()
+            in {"development", "sandbox", "test"}
+            and shipment is not None
+            and shipment.status
+            in {
+                ShipmentStatus.CREATED,
+                ShipmentStatus.IN_TRANSIT,
+                ShipmentStatus.EXCEPTION,
+            }
+        ):
+            actions.append("advance_shipment")
     return list(dict.fromkeys(actions))
+
+
+def order_fulfillment_is_irreversible(order: Order) -> bool:
+    fulfillment = order.__dict__.get("fulfillment")
+    shipment = (
+        fulfillment.__dict__.get("shipment")
+        if fulfillment is not None
+        else None
+    )
+    return (
+        order.fulfillment_status == FulfillmentStatus.PICKED_UP
+        or (
+            fulfillment is not None
+            and fulfillment.status
+            in {
+                FulfillmentState.PICKED_UP,
+                FulfillmentState.SHIPPED,
+                FulfillmentState.DELIVERED,
+            }
+        )
+        or (
+            shipment is not None
+            and shipment.status
+            in {
+                ShipmentStatus.CREATED,
+                ShipmentStatus.IN_TRANSIT,
+                ShipmentStatus.DELIVERED,
+                ShipmentStatus.EXCEPTION,
+            }
+        )
+    )
 
 
 def ensure_self_cancel_allowed(
