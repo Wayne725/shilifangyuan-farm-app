@@ -19,7 +19,7 @@ export function AdminNav() {
           key={item.to}
           to={item.to}
           activeProps={{ className: "active" }}
-          activeOptions={{ exact: item.exact }}
+          activeOptions={{ exact: item.exact, includeSearch: false }}
         >
           {item.label}
         </Link>

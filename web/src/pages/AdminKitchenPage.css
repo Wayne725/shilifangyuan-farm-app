@@ -1,5 +1,4 @@
 .meal-kitchen-page { font-size: 18px; line-height: 1.7; }
-.meal-kitchen-page .eyebrow { font-size: 16px; letter-spacing: 0; }
 .meal-kitchen-filters, .meal-kitchen-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin: 24px 0; }
 .meal-kitchen-page input, .meal-kitchen-page select, .meal-kitchen-page .button, .meal-kitchen-print-controls .button { min-height: 48px; font-size: 18px; }
 .meal-kitchen-page :is(button, a, input, select):focus-visible, .meal-kitchen-print-dialog :is(button, input):focus-visible { outline: 3px solid var(--moss); outline-offset: 4px; }

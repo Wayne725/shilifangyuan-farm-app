@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,7 +21,7 @@ from ..sales_scope import require_sales_scope_allows
 from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationError
-from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..integrations.pii_crypto import VersionedPIICipher, pii_cipher_from_settings
 from ..integrations.r2_storage import r2_document_storage_from_settings
 from ..integrations.notifications import (
     NotificationCommand,
@@ -42,6 +43,10 @@ from ..member_claims import (
     verified_roster_entry,
 )
 from ..member_shares import MemberSharesError, update_member_shares
+from ..roster_csv import (
+    MAX_CSV_BYTES, RosterCsvEntry, RosterCsvImport, RosterCsvImported,
+    RosterCsvPreview, duplicate_numbers, parse_roster_csv,
+)
 from ..models import (
     AdminAudit,
     MemberDirectoryEntry,
@@ -1482,35 +1487,8 @@ async def create_member_roster_entry(
     if len(phone) < 8:
         raise HTTPException(status_code=422, detail="手機格式不正確")
 
-    entry_id = new_id()
     cipher = _cipher(settings)
-    aad = roster_aad(entry_id)
-    entry = MemberRosterEntry(
-        id=entry_id,
-        member_number=member_number,
-        legal_name_encrypted=cipher.encrypt_text(
-            body.legal_name.strip(),
-            associated_data=aad,
-        ),
-        email_encrypted=cipher.encrypt_text(
-            normalize_email(str(body.email)),
-            associated_data=aad,
-        ),
-        phone_encrypted=cipher.encrypt_text(
-            phone,
-            associated_data=aad,
-        ),
-        encryption_key_version=cipher.current_version,
-        share_certificate_number=(
-            body.share_certificate_number.strip()
-            if body.share_certificate_number
-            else None
-        ),
-        share_capital_amount=body.share_capital_amount,
-        share_count=body.share_count,
-        share_subscribed_on=body.share_subscribed_on,
-        share_paid_on=body.share_paid_on,
-    )
+    entry = _new_roster_entry(body, cipher)
     session.add(entry)
     session.add(
         AdminAudit(
@@ -1523,6 +1501,98 @@ async def create_member_roster_entry(
     )
     await session.commit()
     return _roster_response(entry, cipher)
+
+
+def _new_roster_entry(body: MemberRosterEntryCreate | RosterCsvEntry, cipher: VersionedPIICipher) -> MemberRosterEntry:
+    entry_id = new_id()
+    aad = roster_aad(entry_id)
+    certificate = getattr(body, "share_certificate_number", None)
+    return MemberRosterEntry(
+        id=entry_id,
+        member_number=normalize_member_number(body.member_number),
+        legal_name_encrypted=cipher.encrypt_text(
+            body.legal_name.strip(),
+            associated_data=aad,
+        ),
+        email_encrypted=cipher.encrypt_text(
+            normalize_email(str(body.email)),
+            associated_data=aad,
+        ),
+        phone_encrypted=cipher.encrypt_text(
+            normalize_phone(body.phone),
+            associated_data=aad,
+        ),
+        encryption_key_version=cipher.current_version,
+        share_certificate_number=certificate.strip() if certificate else None,
+        share_capital_amount=body.share_capital_amount,
+        share_count=body.share_count,
+        share_subscribed_on=getattr(body, "share_subscribed_on", None),
+        share_paid_on=getattr(body, "share_paid_on", None),
+    )
+
+
+async def _existing_roster_numbers(session: AsyncSession, numbers: list[str]) -> set[str]:
+    roster = await session.scalars(select(MemberRosterEntry.member_number).where(MemberRosterEntry.member_number.in_(numbers)))
+    members = await session.scalars(select(Membership.member_number).where(Membership.member_number.in_(numbers)))
+    return set(roster.all()) | set(members.all())
+
+
+@membership_router.post("/v1/admin/member-roster/import/preview", response_model=RosterCsvPreview)
+async def preview_member_roster_csv(
+    request: Request,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> RosterCsvPreview:
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_CSV_BYTES:
+            raise HTTPException(status_code=413, detail="CSV 檔案不可超過 2 MB")
+    try:
+        rows = parse_roster_csv(bytes(content))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    existing = await _existing_roster_numbers(session, [row.member_number for row in rows])
+    for row in rows:
+        if row.member_number in existing:
+            row.errors.append("社員編號已存在於名冊或會籍")
+        if row.errors:
+            row.entry = None
+    valid_count = sum(not row.errors for row in rows)
+    return RosterCsvPreview(rows=rows, valid_count=valid_count, error_count=len(rows) - valid_count)
+
+
+@membership_router.post("/v1/admin/member-roster/import", response_model=RosterCsvImported, status_code=201)
+async def import_member_roster_csv(
+    body: RosterCsvImport,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> RosterCsvImported:
+    if duplicate_numbers(body.rows):
+        raise HTTPException(status_code=422, detail="社員編號在匯入資料中重複")
+    existing = await _existing_roster_numbers(session, [row.member_number for row in body.rows])
+    if existing:
+        raise HTTPException(status_code=409, detail="社員編號已存在，請重新選擇 CSV 檢查")
+    cipher = _cipher(settings)
+    entries = [_new_roster_entry(row, cipher) for row in body.rows]
+    session.add_all(entries)
+    session.add(
+        AdminAudit(
+            actor_id=admin.id,
+            action="member_roster.imported",
+            aggregate_type="member_roster_import",
+            aggregate_id=new_id(),
+            reason="CSV 社員名冊匯入",
+            data={"imported_count": len(entries), "member_numbers": [entry.member_number for entry in entries]},
+        )
+    )
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="名冊已有異動，請重新選擇 CSV 檢查") from exc
+    return RosterCsvImported(imported_count=len(entries))
 
 
 @membership_router.get(

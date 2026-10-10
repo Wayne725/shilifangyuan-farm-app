@@ -1,9 +1,8 @@
 .meal-finance-page { font-size: 18px; line-height: 1.7; }
-.meal-finance-page .eyebrow { font-size: 16px; letter-spacing: 0; }
 .meal-finance-presets, .meal-finance-result-heading, .meal-finance-result-heading > div { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .meal-finance-presets { margin: 24px 0 16px; }
 .meal-finance-filters { display: grid; grid-template-columns: 1fr 1fr 2fr auto; gap: 16px; align-items: end; }
-.meal-finance-page input, .meal-finance-page select, .meal-finance-page .button, .meal-finance-page .tab-list button { min-height: 48px; font-size: 18px; letter-spacing: 0; }
+.meal-finance-page input, .meal-finance-page select, .meal-finance-page .button { min-height: 48px; font-size: 18px; letter-spacing: 0; }
 .meal-finance-page :is(input, select, button, a, summary):focus-visible { outline: 3px solid var(--moss); outline-offset: 4px; }
 .meal-finance-result-heading { justify-content: space-between; margin: 20px 0; }
 .meal-finance-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }

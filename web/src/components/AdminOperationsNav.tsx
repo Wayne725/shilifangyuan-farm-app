@@ -10,7 +10,7 @@ const items: Array<{ section: Section; label: string }> = [
 ];
 
 export function AdminOperationsNav({ section }: { section: Section }) {
-  return <nav className="admin-operation-nav" aria-label="訂單營運子頁面">
-    {items.map((item) => <Link key={item.section} to="/admin" search={{ section: item.section }} className={section === item.section ? "active" : undefined} aria-current={section === item.section ? "page" : undefined}>{item.label}</Link>)}
+  return <nav className="tab-list admin-operation-nav" aria-label="訂單營運子頁面">
+    {items.map((item) => <Link key={item.section} to="/admin" search={{ section: item.section }} data-state={section === item.section ? "active" : "inactive"} aria-current={section === item.section ? "page" : undefined}>{item.label}</Link>)}
   </nav>;
 }

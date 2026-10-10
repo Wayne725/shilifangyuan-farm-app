@@ -1,28 +1,13 @@
 .admin-financial-orders { grid-template-columns: minmax(0, 1fr); }
 .admin-operation-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 22px 0 0;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
+  justify-content: center;
+  margin: 32px clamp(24px, 6vw, 96px) 0;
 }
 .admin-operation-nav a {
-  display: inline-flex;
-  min-height: 46px;
-  align-items: center;
-  padding: 9px 16px;
-  border: 1px solid var(--line);
-  color: var(--ink-soft);
-  font-size: 15px;
-  text-decoration: none;
+  flex: 1 1 0;
+  max-width: 300px;
 }
-.admin-operation-nav a.active {
-  border-color: var(--moss-dark);
-  background: var(--moss-dark);
-  color: var(--paper-light);
-}
-.admin-operation-page { max-width: 1240px; }
+.admin-operation-page { max-width: none; }
 .admin-operation-page .data-row { grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.9fr) minmax(130px, 0.9fr) minmax(90px, 0.6fr); gap: 16px; font-size: 15px; }
 .admin-operation-page .data-head { font-size: 14px; }
 .admin-operation-page .data-row strong { font-size: 17px; }
@@ -68,8 +53,8 @@
 .invoice-summary-card strong { font-size: 19px; }
 .invoice-summary-card dl > div { gap: 12px; }
 @media (max-width: 680px) {
-  .admin-operation-nav { display: grid; grid-template-columns: 1fr 1fr; }
-  .admin-operation-nav a { justify-content: center; padding-inline: 8px; font-size: 14px; text-align: center; }
+  .admin-operation-nav { justify-content: flex-start; margin-inline: 22px; overflow-x: auto; }
+  .admin-operation-nav a { flex: 0 0 auto; max-width: none; white-space: nowrap; }
   .admin-operation-page .data-row { grid-template-columns: minmax(0, 1fr) minmax(80px, 0.7fr); gap: 8px; }
   .admin-operation-page .data-head { display: none; }
   .admin-operation-page .data-row > *:nth-child(2)::before { content: "編號："; color: var(--ink-soft); }

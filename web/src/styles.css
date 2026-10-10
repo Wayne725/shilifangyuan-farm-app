@@ -898,7 +898,8 @@ p {
   border-bottom: 1px solid var(--line-strong);
 }
 
-.tab-list button {
+.tab-list button,
+.tab-list a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -909,10 +910,13 @@ p {
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
+  font-size: 16px;
+  text-decoration: none;
   cursor: pointer;
 }
 
-.tab-list button[data-state="active"] {
+.tab-list button[data-state="active"],
+.tab-list a[data-state="active"] {
   color: var(--moss-dark);
   border-bottom-color: var(--moss-dark);
 }
@@ -4769,16 +4773,22 @@ p {
 /* Administrative social operations */
 .admin-workspace-links {
   display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 0;
   padding: 0 clamp(24px, 6vw, 96px);
   border-bottom: 1px solid var(--line);
 }
 
 .admin-workspace-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
   padding: 16px 18px 14px;
   color: var(--ink-soft);
   border-bottom: 2px solid transparent;
-  font-size: 10px;
+  font-size: 16px;
 }
 
 .admin-workspace-links a.active {
@@ -6697,6 +6707,12 @@ p {
     min-width: max-content;
   }
 
+  .admin-workspace-links {
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
   .admin-record-grid,
   .meal-choice-grid,
   .product-detail-prices,
@@ -6993,7 +7009,8 @@ p {
     overflow-x: auto;
   }
 
-  .tab-list button {
+  .tab-list button,
+  .tab-list a {
     min-width: 125px;
     padding-inline: 12px;
   }
@@ -7986,8 +8003,8 @@ p {
   line-height: 1.4;
 }
 
-.meal-shop-intro p,
-.meal-booking-content .section-heading p,
+.meal-shop-intro p:not(.eyebrow),
+.meal-booking-content .section-description,
 .meal-booking-content .meal-date-navigation h3,
 .meal-booking-content .meal-date-heading p,
 .meal-booking-content .meal-date-weekday,
@@ -7995,7 +8012,7 @@ p {
 .meal-booking-content .meal-period-options small,
 .meal-event-row p,
 .meal-event-row small,
-.meal-orders-page p,
+.meal-orders-page p:not(.eyebrow),
 .meal-orders-page small,
 .meal-orders-page .order-index span,
 .meal-orders-page .order-state,
@@ -8003,7 +8020,7 @@ p {
 .meal-orders-page .order-detail-head span,
 .meal-orders-page .meal-pickup-info span,
 .meal-orders-page .invoice-summary-card span,
-.meal-help-page p,
+.meal-help-page p:not(.eyebrow),
 .meal-help-page .text-link {
   font-size: 16px;
   line-height: 1.7;

@@ -1,0 +1,12 @@
+.roster-csv-import { margin: 0 0 48px; min-width: 0; }
+.roster-csv-import .form-heading { align-items: center; flex-wrap: wrap; }
+.roster-csv-file { max-width: 560px; }
+.roster-csv-file input { width: 100%; min-height: 48px; padding: 12px; font-size: 16px; }
+.roster-csv-import .roster-csv-format { font-size: 15px; line-height: 1.7; color: var(--ink-soft); margin: 8px 0; }
+.roster-csv-success { color: var(--moss-dark); }
+.roster-csv-preview { max-height: 420px; overflow: auto; margin-top: 24px; border: 1px solid var(--line-strong); }
+.roster-csv-preview table { width: 100%; min-width: 960px; border-collapse: collapse; font-size: 16px; line-height: 1.5; }
+.roster-csv-preview th, .roster-csv-preview td { text-align: left; padding: 14px 16px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.roster-csv-preview th { position: sticky; top: 0; background: var(--paper); font-weight: 600; white-space: nowrap; }
+.roster-csv-preview td { max-width: 260px; }
+.roster-csv-preview .form-error { margin: 0; }
