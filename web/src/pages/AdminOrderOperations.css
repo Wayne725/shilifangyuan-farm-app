@@ -1,1 +1,89 @@
 .admin-financial-orders { grid-template-columns: minmax(0, 1fr); }
+.admin-operation-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 22px 0 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.admin-operation-nav a {
+  display: inline-flex;
+  min-height: 46px;
+  align-items: center;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 15px;
+  text-decoration: none;
+}
+.admin-operation-nav a.active {
+  border-color: var(--moss-dark);
+  background: var(--moss-dark);
+  color: var(--paper-light);
+}
+.admin-operation-page { max-width: 1240px; }
+.admin-operation-page .data-row { grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.9fr) minmax(130px, 0.9fr) minmax(90px, 0.6fr); gap: 16px; font-size: 15px; }
+.admin-operation-page .data-head { font-size: 14px; }
+.admin-operation-page .data-row strong { font-size: 17px; }
+.admin-operation-page .status-active,
+.admin-operation-page .status-pending { font-size: 14px; }
+.admin-operation-page .location-list article { font-size: 16px; }
+.admin-operation-page .location-list small { font-size: 14px; }
+.admin-operation-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.admin-operation-heading .section-heading { margin-bottom: 0; }
+.admin-issues-panel .admin-failure-panel { margin-top: 28px; }
+.operations-list > article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  padding: 22px 0;
+}
+.operation-title span,
+.operation-title small { font-size: 14px; }
+.operation-title strong { font-size: 20px; }
+.operation-state { gap: 8px; }
+.operation-state span { padding: 8px 10px; font-size: 14px; }
+.operation-actions > button,
+.operation-refund button,
+.operation-invoice-query button { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+.operation-invoice-query { grid-template-columns: minmax(240px, 1fr) auto; align-items: end; }
+.operation-invoice-query label { font-size: 14px; }
+.operation-invoice-query input { min-height: 46px; font-size: 16px; }
+.invoice-summary-card {
+  grid-template-columns: auto minmax(0, 1fr) minmax(150px, 220px);
+  gap: 18px;
+  margin: 0;
+  padding: 18px;
+}
+.invoice-summary-card small,
+.invoice-summary-card span,
+.invoice-summary-card dl { font-size: 14px; line-height: 1.55; }
+.invoice-summary-card strong { font-size: 19px; }
+.invoice-summary-card dl > div { gap: 12px; }
+@media (max-width: 680px) {
+  .admin-operation-nav { display: grid; grid-template-columns: 1fr 1fr; }
+  .admin-operation-nav a { justify-content: center; padding-inline: 8px; font-size: 14px; text-align: center; }
+  .admin-operation-page .data-row { grid-template-columns: minmax(0, 1fr) minmax(80px, 0.7fr); gap: 8px; }
+  .admin-operation-page .data-head { display: none; }
+  .admin-operation-page .data-row > *:nth-child(2)::before { content: "編號："; color: var(--ink-soft); }
+  .admin-operation-page .data-row > *:nth-child(3)::before { content: "認可日期："; color: var(--ink-soft); }
+  .invoice-summary-card { grid-template-columns: auto minmax(0, 1fr); }
+  .invoice-summary-card dl { grid-column: 2; width: 100%; }
+  .operation-invoice-query { grid-template-columns: 1fr; }
+}
+.admin-issues-panel .admin-failure-panel {
+  max-width: none;
+  margin: 28px 0 0;
+  padding: 0;
+}
+.admin-failure-panel h2 { font-size: 24px; }
+.failed-job strong { font-size: 16px; }
+.failed-job p { font-size: 15px; line-height: 1.6; }
+.failed-job .admin-order-search label { font-size: 14px; }

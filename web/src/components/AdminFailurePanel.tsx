@@ -12,7 +12,6 @@ export function AdminFailurePanel() {
   const query = useQuery({ queryKey: ["admin-failed-jobs", offset], queryFn: () => apiFetch<{ items: FailedJob[]; total: number }>(`/v1/admin/failed-jobs?limit=10&offset=${offset}`), refetchInterval: 30000 });
   return <section className="admin-failure-panel">
     <h2>失敗工作</h2>
-    <p>發票由汎宇寄送。開票重試會先查銷貨單；過期驗證信不在這裡重寄。</p>
     {query.isError && <p className="form-error">{query.error.message}</p>}
     {query.isPending && <p>讀取中…</p>}
     {query.data?.items.map((job) => <FailedJobRow key={job.id} job={job} />)}

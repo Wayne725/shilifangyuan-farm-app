@@ -26,7 +26,6 @@ export function MealDateNavigation({ events, selectedDate, onDateChange, period,
   return <section className="meal-date-navigation" aria-label="便當日期與餐別">
     <div className="meal-date-heading">
       <h3>選擇取餐日期</h3>
-      <p>只能提前一天預訂，今天可訂明天。所有時間皆為台灣時間。</p>
     </div>
     <div className="meal-date-strip" role="group" aria-label="取餐日期">
       {dates.map((date) => {

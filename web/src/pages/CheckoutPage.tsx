@@ -375,7 +375,7 @@ export function CheckoutPage() {
                       memberTaxExempt={quote.data.member_tax_exempt}
                       shippingFee={estimatedShippingFee || 0}
                       taxAmount={quote.data.tax_amount}
-                      taxAmountLabel={estimatedShippingFee ? "商品稅額（內含）" : "稅額（內含）"}
+                      taxAmountLabel={estimatedShippingFee ? "商品稅額" : "稅額"}
                     />}
                     {logisticsEnabled && checkoutMethod === "shipping" && (
                       <div className="summary-shipping">

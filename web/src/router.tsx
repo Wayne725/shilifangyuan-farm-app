@@ -205,8 +205,9 @@ const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
   component: page("./pages/AdminPage", "AdminPage"),
-  validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { q?: string; section?: "orders" | "issues" | "suppliers" | "locations" } => ({
     q: typeof search.q === "string" ? search.q.trim().slice(0, 100) : undefined,
+    section: search.section === "issues" || search.section === "suppliers" || search.section === "locations" ? search.section : "orders",
   }),
 });
 
@@ -267,6 +268,9 @@ const mealOrdersRoute = createRoute({
 const adminCatalogRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/catalog",
+  validateSearch: (search: Record<string, unknown>): { tab?: "products" | "suppliers" | "locations" } => ({
+    tab: search.tab === "suppliers" || search.tab === "locations" ? search.tab : "products",
+  }),
   component: page("./pages/AdminCatalogPage", "AdminCatalogPage"),
 });
 

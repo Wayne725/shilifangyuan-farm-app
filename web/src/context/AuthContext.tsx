@@ -114,9 +114,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               <X size={20} weight="light" />
             </Dialog.Close>
             <Dialog.Title>登入訂餐</Dialog.Title>
-            <Dialog.Description>
-              使用Email帳號登入訂餐。社員資格由合作社核對。
-            </Dialog.Description>
             <label className="login-preference"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span>保持登入</span></label>
             <form className="login-form" onSubmit={login}>
               <label>
@@ -124,7 +121,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 <input name="email" type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} />
               </label>
               <label className="login-preference"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span>記住登入帳號</span></label>
-              <p className="login-preference-help">密碼可由瀏覽器的密碼管理功能記住並自動填入。共用裝置請取消保持登入，使用完畢後登出。</p>
               <label>
                 密碼
                 <input

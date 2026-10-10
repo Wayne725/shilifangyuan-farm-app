@@ -6,7 +6,7 @@ import {
   SealCheck,
 } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
 import { AdminNav } from "../components/AdminNav";
@@ -107,6 +107,9 @@ const emptySupplier: SupplierDraft = {
 
 export function AdminCatalogPage() {
   const { user, openLogin } = useAuth();
+  const routeSearch = useSearch({ from: "/admin/catalog" });
+  const navigate = useNavigate({ from: "/admin/catalog" });
+  const selectedTab = routeSearch.tab || "products";
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
   const [products, suppliers, locations] = useQueries({
@@ -135,12 +138,11 @@ export function AdminCatalogPage() {
   return (
     <section className="admin-module-page">
       <header className="workspace-heading">
-        <div><p className="eyebrow">CATALOG OPERATIONS / 商品供應</p><h1>商品、供應者與取貨點</h1></div>
-        <p>以正式編號、SKU、審認紀錄與物流條件維護營運主檔。</p>
+        <div><p className="eyebrow">商品供應</p><h1>商品、供應者與取貨點</h1></div>
       </header>
       <AdminNav />
 
-      <Tabs.Root className="admin-social-tabs" defaultValue="products">
+      <Tabs.Root className="admin-social-tabs" value={selectedTab} onValueChange={(tab) => navigate({ search: (previous) => ({ ...previous, tab: tab === "products" ? undefined : tab as "suppliers" | "locations" }) })}>
         <Tabs.List className="tab-list" aria-label="商品供應分類">
           <Tabs.Trigger value="products">商品主檔</Tabs.Trigger>
           <Tabs.Trigger value="suppliers">供應者</Tabs.Trigger>
