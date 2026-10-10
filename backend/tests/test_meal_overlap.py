@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from app.integrations.payment_service import PaymentApplicationError, SQLAlchemyPaymentCallbackRepository, create_payment_attempt
 from app.jobs import _reconcile_meal_events
-from app.models import FulfillmentState, FulfillmentStatus, Meal, MealEvent, MealEventOffering, MealEventStatus, Order, PaymentAttempt, PaymentStatus, Refund, User, UserRole
+from app.models import FulfillmentMethod, FulfillmentState, FulfillmentStatus, Meal, MealEvent, MealEventOffering, MealEventStatus, MembershipType, Order, OrderFulfillment, OrderItem, OrderKind, PaymentAttempt, PaymentStatus, Refund, SalesChannel, TaxType, User, UserRole
 from app.routers.meals import meals_router
 from app.schemas import MealEventCreate, MealScheduleInput
 from tests.support import api_test_context, auth_headers, make_test_settings
@@ -72,44 +72,44 @@ async def overlap_context(database_session):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event_status", [MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN])
-async def test_can_quote_order_and_pay_during_pickup_before_cutoff(overlap_context, fake_payment, event_status):
+async def test_new_same_day_orders_are_blocked_but_legacy_orders_can_pay_before_cutoff(overlap_context, fake_payment, event_status):
     client, session, _admin, buyer, event, body, now = overlap_context
     event.status = event_status
     await session.commit()
     quote = await client.post(f"/v1/meal-events/{event.id}/quote", json=body)
-    assert quote.status_code == 200, quote.text
+    assert quote.status_code == 409, quote.text
     created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
-    assert created.status_code == 201, created.text
-    attempt = await create_payment_attempt(session, created.json()["id"], buyer, payment_settings(), now=now)
+    assert created.status_code == 409, created.text
+    assert await session.scalar(select(func.count(Order.id))) == 0
+    order = await seed_legacy_order(session, buyer, event)
+    attempt = await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
     assert attempt.status == PaymentStatus.PENDING
-    repeated = await create_payment_attempt(session, created.json()["id"], buyer, payment_settings(), now=now)
+    repeated = await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
     assert repeated.id == attempt.id
     assert await session.scalar(select(func.count(PaymentAttempt.id))) == 1
 
 
 @pytest.mark.asyncio
-async def test_legacy_client_gets_future_pickup_time_inside_running_window(overlap_context):
+async def test_omitting_pickup_time_cannot_bypass_previous_day_rule(overlap_context):
     client, _session, _admin, buyer, event, body, now = overlap_context
     body.pop("pickup_at")
     created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
-    assert created.status_code == 201, created.text
-    selected = datetime.fromisoformat(created.json()["pickup_at"].replace("Z", "+00:00"))
-    assert now < selected < event.pickup_ends_at
+    assert created.status_code == 409, created.text
+    assert "提前一天" in created.json()["detail"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event_status", [MealEventStatus.ORDERING_CLOSED, MealEventStatus.CANCELLED, MealEventStatus.COMPLETED])
 async def test_closed_states_never_allow_orders_or_new_payments(overlap_context, fake_payment, event_status):
     client, session, _admin, buyer, event, body, now = overlap_context
-    created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
-    assert created.status_code == 201
+    order = await seed_legacy_order(session, buyer, event)
     event.status = event_status
     await session.commit()
     for path in ("quote", "orders"):
         denied = await client.post(f"/v1/meal-events/{event.id}/{path}", json=body, headers=auth_headers(buyer))
         assert denied.status_code == 409
     with pytest.raises(PaymentApplicationError):
-        await create_payment_attempt(session, created.json()["id"], buyer, payment_settings(), now=now)
+        await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
     assert await session.scalar(select(func.count(PaymentAttempt.id))) == 0
 
 
@@ -118,28 +118,27 @@ async def test_pickup_open_cutoff_blocks_orders_and_pending_attempt_reuse(overla
     client, session, _admin, buyer, event, body, now = overlap_context
     event.status = MealEventStatus.PICKUP_OPEN
     await session.commit()
-    created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
-    assert created.status_code == 201
-    attempt = await create_payment_attempt(session, created.json()["id"], buyer, payment_settings(), now=now)
+    order = await seed_legacy_order(session, buyer, event)
+    attempt = await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
     event.ordering_ends_at = now - timedelta(seconds=1)
     await session.commit()
     for path in ("quote", "orders"):
         denied = await client.post(f"/v1/meal-events/{event.id}/{path}", json=body, headers=auth_headers(buyer))
         assert denied.status_code == 409
     with pytest.raises(PaymentApplicationError):
-        await create_payment_attempt(session, created.json()["id"], buyer, payment_settings(), now=now)
+        await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
     assert await session.scalar(select(func.count(PaymentAttempt.id))) == 1
     assert attempt.status == PaymentStatus.PENDING
 
 
 @pytest.mark.asyncio
-async def test_reconcile_automatically_opens_pickup_and_keeps_orders_open_until_cutoff(overlap_context):
+async def test_reconcile_preserves_legacy_event_window_but_new_same_day_order_is_rejected(overlap_context):
     client, session, _admin, buyer, event, body, now = overlap_context
     cutoff = event.ordering_ends_at
     assert await _reconcile_meal_events(session, now, 100) == 1
     assert event.status == MealEventStatus.PICKUP_OPEN
     assert event.ordering_ends_at == cutoff
-    assert (await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))).status_code == 201
+    assert (await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))).status_code == 409
     assert await _reconcile_meal_events(session, now, 100) == 0
     assert await _reconcile_meal_events(session, cutoff, 100) == 0
     assert event.status == MealEventStatus.PICKUP_OPEN
@@ -181,9 +180,7 @@ async def test_manual_open_and_redemption_cannot_bypass_pickup_window(overlap_co
 @pytest.mark.asyncio
 async def test_paid_redeemed_order_cannot_cancel_while_cutoff_is_still_future(overlap_context):
     client, session, admin, buyer, event, body, now = overlap_context
-    created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
-    assert created.status_code == 201
-    order = await session.get(Order, created.json()["id"])
+    order = await seed_legacy_order(session, buyer, event)
     order.payment_status = PaymentStatus.PAID
     order.paid_at = now
     await session.commit()
@@ -204,9 +201,7 @@ async def test_paid_redeemed_order_cannot_cancel_while_cutoff_is_still_future(ov
 async def test_payment_after_pickup_opens_is_redeemable_without_another_state_transition(overlap_context, fake_payment):
     client, session, admin, buyer, event, body, now = overlap_context
     assert await _reconcile_meal_events(session, now, 100) == 1
-    created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
-    assert created.status_code == 201
-    order = await session.get(Order, created.json()["id"])
+    order = await seed_legacy_order(session, buyer, event)
     attempt = await create_payment_attempt(session, order.id, buyer, payment_settings(), now=now)
     result = await SQLAlchemyPaymentCallbackRepository(session).apply_ecpay_payment_callback(
         "overlap-payment-during-pickup", successful_callback(attempt, now + timedelta(seconds=1), "OVERLAP-PAID-TRADE"),
@@ -220,3 +215,23 @@ async def test_payment_after_pickup_opens_is_redeemable_without_another_state_tr
     redeemed = await client.post(f"/v1/admin/meal-events/{event.id}/redeem", json={"pickup_code": detail.json()["pickup_code"]}, headers=auth_headers(admin))
     assert redeemed.status_code == 200, redeemed.text
     assert order.payment_status == PaymentStatus.PAID
+
+
+async def seed_legacy_order(session, buyer, event):
+    offering = event.offerings[0]
+    order = Order(
+        order_number="LEGACY-OVERLAP-001", order_kind=OrderKind.REGULAR,
+        sales_channel=SalesChannel.MEAL_PREORDER, fulfillment_method=FulfillmentMethod.EVENT_PICKUP,
+        user=buyer, meal_event=event, membership_type_snapshot=MembershipType.NONMEMBER,
+        amount_total=100, contact_email=buyer.email, payment_status=PaymentStatus.PENDING,
+        fulfillment_status=FulfillmentStatus.PENDING_CONFIRMATION,
+        items=[OrderItem(source_meal_offering_id=offering.id, product_name="舊制便當", unit_label="份", quantity=1, unit_price=100, subtotal=100, tax_type=TaxType.TAXABLE)],
+        fulfillment=OrderFulfillment(
+            method=FulfillmentMethod.EVENT_PICKUP, status=FulfillmentState.PENDING_CONFIRMATION,
+            pickup_location=event.location, pickup_starts_at=event.pickup_starts_at,
+            pickup_ends_at=event.pickup_ends_at, pickup_code="123456", pickup_qr_token_hash="legacy-overlap-credential",
+        ),
+    )
+    session.add(order)
+    await session.commit()
+    return order

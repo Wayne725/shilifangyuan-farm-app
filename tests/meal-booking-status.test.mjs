@@ -11,46 +11,127 @@ const compiled = ts.transpileModule(source, {
 });
 assert.deepEqual(compiled.diagnostics.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error), []);
 const {
-  mealBookingStatus, mealServiceDate, pickupTimeOptions, taipeiDate, shiftMealDate, formatMealDateTime,
+  mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions,
+  validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime,
 } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
 
-const NOON = Date.parse("2026-09-17T12:00:00+08:00");
+const NOW = Date.parse("2026-09-17T12:00:00+08:00");
 
 function mealEvent(overrides = {}) {
   return {
     id: "isolated-lunch", title: "午餐", location: "隔離測試取餐區", status: "published",
-    service_date: "2026-09-17", meal_period: "lunch", schedule_template_id: null,
-    ordering_starts_at: "2026-09-16T00:00:00+08:00", ordering_ends_at: "2026-09-17T13:00:00+08:00",
-    pickup_starts_at: "2026-09-17T11:00:00+08:00", pickup_ends_at: "2026-09-17T14:00:00+08:00",
+    service_date: "2026-09-18", meal_period: "lunch", schedule_template_id: null,
+    ordering_starts_at: "2026-09-17T00:00:00+08:00", ordering_ends_at: "2026-09-18T00:00:00+08:00",
+    pickup_starts_at: "2026-09-18T11:00:00+08:00", pickup_ends_at: "2026-09-18T13:30:00+08:00",
     offerings: [{ id: "offering", is_active: true, available_quantity: 10 }],
     ...overrides,
   };
 }
 
+test("台灣今天只能訂明天，今日及後天場次均不接受預訂", () => {
+  assert.equal(mealBookingStatus(mealEvent(), NOW), "可預訂");
+  for (const date of ["2026-09-17", "2026-09-19", "2026-10-04"]) {
+    const event = mealEvent({ service_date: date,
+      ordering_starts_at: "2026-09-01T00:00:00+08:00", ordering_ends_at: "2026-10-10T00:00:00+08:00",
+      pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00` });
+    assert.equal(mealOrderingOpen(event, NOW), false);
+    assert.deepEqual(pickupTimeOptions(event, NOW), []);
+    assert.equal(mealBookingStatus(event, NOW), date === "2026-09-17" ? "已截止" : "尚未開放");
+  }
+});
+
+test("縮短供餐窗口後，後端時段與舊最後時段都不能超過核銷結束", () => {
+  for (const pickup_slots of [undefined, ["2026-09-18T11:00:00+08:00", "2026-09-18T11:30:00+08:00", "2026-09-18T12:00:00+08:00", "2026-09-18T12:30:00+08:00", "2026-09-18T13:00:00+08:00"]]) {
+    const event = mealEvent({ pickup_slot_ends_at: "2026-09-18T13:00:00+08:00", pickup_ends_at: "2026-09-18T12:00:00+08:00", pickup_slots });
+    assert.deepEqual(pickupTimeOptions(event, NOW).map(({ label }) => label), ["11:00", "11:30"]);
+  }
+});
+
+test("午餐固定五個半小時時段，包含13:00，不提供13:30", () => {
+  const options = pickupTimeOptions(mealEvent(), NOW);
+  assert.deepEqual(options.map((option) => option.label), ["11:00", "11:30", "12:00", "12:30", "13:00"]);
+  assert.equal(validPickupTime("2026-09-18T13:00", mealEvent(), NOW), true);
+  for (const value of ["2026-09-18T11:10", "2026-09-18T12:15", "2026-09-18T13:30", "bad", ""]) {
+    assert.equal(validPickupTime(value, mealEvent(), NOW), false);
+  }
+});
+
+test("晚餐使用相同邏輯，四個時段包含18:00", () => {
+  const event = mealEvent({ meal_period: "dinner", pickup_starts_at: "2026-09-18T16:30:00+08:00", pickup_ends_at: "2026-09-18T18:30:00+08:00" });
+  assert.deepEqual(pickupTimeOptions(event, NOW).map((option) => option.label), ["16:30", "17:00", "17:30", "18:00"]);
+  assert.equal(validPickupTime("2026-09-18T18:00", event, NOW), true);
+  assert.equal(validPickupTime("2026-09-18T18:30", event, NOW), false);
+});
+
+test("時段與既有場次窗口取交集，不從11:10錯排半小時", () => {
+  const event = mealEvent({ pickup_starts_at: "2026-09-18T11:10:00+08:00", pickup_ends_at: "2026-09-18T12:30:00+08:00" });
+  assert.deepEqual(pickupTimeOptions(event, NOW).map((option) => option.label), ["11:30", "12:00"]);
+});
+
+for (const [period, start, close, expected] of [
+  ["lunch", "11:00", "13:00", ["11:00", "11:30", "12:00", "12:30"]],
+  ["dinner", "16:30", "18:00", ["16:30", "17:00", "17:30"]],
+]) {
+  test(`${period} 舊場次的實際結束時間不提供為可選時段`, () => {
+    const event = mealEvent({ meal_period: period, pickup_starts_at: `2026-09-18T${start}:00+08:00`, pickup_ends_at: `2026-09-18T${close}:00+08:00`, pickup_slot_ends_at: null });
+    assert.deepEqual(pickupTimeOptions(event, NOW).map((option) => option.label), expected);
+    assert.equal(validPickupTime(`2026-09-18T${close}`, event, NOW), false);
+    event.pickup_slots = [`2026-09-18T${close}:00+08:00`];
+    assert.deepEqual(pickupTimeOptions(event, NOW), []);
+  });
+}
+
+test("官方最後取餐時段可包含端點，並限制前端備援時段", () => {
+  const event = mealEvent({ pickup_slot_ends_at: "2026-09-18T13:00:00+08:00" });
+  assert.equal(validPickupTime("2026-09-18T13:00", event, NOW), true);
+  event.pickup_slot_ends_at = "2026-09-18T12:30:00+08:00";
+  assert.deepEqual(pickupTimeOptions(event, NOW).map((option) => option.label), ["11:00", "11:30", "12:00", "12:30"]);
+  assert.equal(validPickupTime("2026-09-18T13:00", event, NOW), false);
+});
+
+test("優先使用後端公布時段，空清單不擅自補出可預訂時段", () => {
+  const event = mealEvent({ pickup_slots: ["2026-09-18T04:00:00Z", "2026-09-18T03:30:00Z", "2026-09-18T03:30:00Z", "2026-09-18T03:10:00Z"] });
+  assert.deepEqual(pickupTimeOptions(event, NOW).map((option) => option.label), ["11:30", "12:00"]);
+  assert.deepEqual(pickupTimeOptions(mealEvent({ pickup_slots: [] }), NOW), []);
+  assert.equal(mealBookingStatus(mealEvent({ pickup_slots: [] }), NOW), "已截止");
+});
+
+test("跨午夜舊場次保留服務日但不提供超出固定餐別的時段", () => {
+  const event = mealEvent({ service_date: "2026-09-18", meal_period: "dinner", pickup_starts_at: "2026-09-18T23:30:00+08:00", pickup_ends_at: "2026-09-19T00:30:00+08:00" });
+  assert.equal(mealServiceDate(event), "2026-09-18");
+  assert.equal(mealServiceDate({ ...event, service_date: null }), "2026-09-18");
+  assert.deepEqual(pickupTimeOptions(event, NOW), []);
+  assert.equal(mealBookingStatus(event, NOW), "已截止");
+});
+
 test("已發布但尚未開始接單，不能標可預訂", () => {
-  const event = mealEvent({ ordering_starts_at: "2026-09-17T12:00:00.001+08:00" });
-  assert.equal(mealBookingStatus(event, NOON), "尚未開放");
-  assert.equal(mealBookingStatus(event, NOON + 1), "可預訂");
+  const event = mealEvent({ booking_starts_at: "2026-09-17T12:00:00.001+08:00" });
+  assert.equal(mealBookingStatus(event, NOW), "尚未開放");
+  assert.equal(mealBookingStatus(event, NOW + 1), "可預訂");
 });
 
 for (const status of ["published", "pickup_open"]) {
-  test(`${status} 在 13:00 截單前可預訂，精確到點立即已截止`, () => {
-    const event = mealEvent({ status });
-    const cutoff = Date.parse(event.ordering_ends_at);
-    assert.equal(mealBookingStatus(event, NOON), "可預訂");
+  test(`${status} 精確到有效截單時刻立即關閉`, () => {
+    const event = mealEvent({ status, booking_ends_at: "2026-09-17T13:00:00+08:00" });
+    const cutoff = Date.parse(event.booking_ends_at);
+    assert.equal(mealBookingStatus(event, NOW), "可預訂");
     assert.equal(mealBookingStatus(event, cutoff - 1), "可預訂");
     assert.equal(mealBookingStatus(event, cutoff), "已截止");
     assert.equal(mealBookingStatus(event, cutoff + 1), "已截止");
   });
 }
 
-test("手動停止接單不會因時間仍在窗口內而顯示可預訂", () => {
-  assert.equal(mealBookingStatus(mealEvent({ status: "ordering_closed" }), NOON), "已截止");
+test("台灣午夜切換日期後，前一天的草稿時段與預訂資格立即失效", () => {
+  const midnight = Date.parse("2026-09-17T16:00:00Z");
+  const event = mealEvent({ ordering_ends_at: "2026-09-18T14:00:00+08:00" });
+  assert.equal(mealOrderingOpen(event, midnight - 1), true);
+  assert.equal(mealOrderingOpen(event, midnight), false);
+  assert.deepEqual(pickupTimeOptions(event, midnight), []);
+  assert.equal(mealBookingStatus(event, midnight), "已截止");
 });
 
-test("取餐結束即使收到過時場次狀態，也顯示已截止", () => {
-  const event = mealEvent();
-  assert.equal(mealBookingStatus(event, Date.parse(event.pickup_ends_at)), "已截止");
+test("手動停止接單不會因時間仍在窗口內而顯示可預訂", () => {
+  assert.equal(mealBookingStatus(mealEvent({ status: "ordering_closed" }), NOW), "已截止");
 });
 
 test("全部有效餐點暫無份數才顯示已售完，仍有一款可售就可預訂", () => {
@@ -58,16 +139,16 @@ test("全部有效餐點暫無份數才顯示已售完，仍有一款可售就�
     { id: "sold-a", is_active: true, available_quantity: 0 },
     { id: "sold-b", is_active: true, available_quantity: 0 },
   ] });
-  assert.equal(mealBookingStatus(event, NOON), "已售完");
+  assert.equal(mealBookingStatus(event, NOW), "已售完");
   event.offerings[1].available_quantity = 1;
-  assert.equal(mealBookingStatus(event, NOON), "可預訂");
+  assert.equal(mealBookingStatus(event, NOW), "可預訂");
 });
 
 test("空菜單與所有餐點停用都是菜單待公告，不是已售完", () => {
-  assert.equal(mealBookingStatus(mealEvent({ offerings: [] }), NOON), "菜單待公告");
+  assert.equal(mealBookingStatus(mealEvent({ offerings: [] }), NOW), "菜單待公告");
   assert.equal(mealBookingStatus(mealEvent({ offerings: [
     { id: "inactive", is_active: false, available_quantity: 99 },
-  ] }), NOON), "菜單待公告");
+  ] }), NOW), "菜單待公告");
 });
 
 test("停用餐點尚有份數不會讓已售完場次重新標示可預訂", () => {
@@ -75,55 +156,17 @@ test("停用餐點尚有份數不會讓已售完場次重新標示可預訂", ()
     { id: "inactive", is_active: false, available_quantity: 99 },
     { id: "sold", is_active: true, available_quantity: 0 },
   ] });
-  assert.equal(mealBookingStatus(event, NOON), "已售完");
+  assert.equal(mealBookingStatus(event, NOW), "已售完");
 });
 
-test("沒有未來十分鐘取餐選項時，即使尚未截單有庫存也不可標可預訂", () => {
-  const event = mealEvent({ ordering_ends_at: "2026-09-17T13:55:00+08:00" });
-  const lastSlot = Date.parse("2026-09-17T13:50:00+08:00");
-  assert.equal(mealBookingStatus(event, lastSlot - 1), "可預訂");
-  assert.equal(pickupTimeOptions(event, lastSlot).length, 0);
-  assert.equal(mealBookingStatus(event, lastSlot), "已截止");
-  assert.equal(mealBookingStatus(event, lastSlot + 1), "已截止");
-});
-
-test("截止判斷優先於售完與空菜單，不把截止場次誤標尚有預購窗口", () => {
+test("截止判斷優先於售完與空菜單", () => {
   for (const offerings of [[], [{ id: "sold", is_active: true, available_quantity: 0 }]]) {
     const event = mealEvent({ offerings });
     assert.equal(mealBookingStatus(event, Date.parse(event.ordering_ends_at)), "已截止");
   }
 });
 
-test("週日手動場次與超過七天的場次，不因日期而限制可預訂", () => {
-  for (const date of ["2026-09-20", "2026-10-04"]) {
-    const event = mealEvent({
-      service_date: date,
-      ordering_ends_at: `${date}T13:00:00+08:00`,
-      pickup_starts_at: `${date}T11:00:00+08:00`,
-      pickup_ends_at: `${date}T14:00:00+08:00`,
-    });
-    assert.equal(mealServiceDate(event), date);
-    assert.equal(mealBookingStatus(event, NOON), "可預訂");
-  }
-});
-
-test("跨午夜餐次保留前一日服務日期，次日可取餐時刻仍可預訂", () => {
-  const event = mealEvent({
-    service_date: "2026-09-19", meal_period: "dinner", status: "pickup_open",
-    ordering_ends_at: "2026-09-20T00:10:00+08:00",
-    pickup_starts_at: "2026-09-19T23:30:00+08:00", pickup_ends_at: "2026-09-20T00:30:00+08:00",
-  });
-  const now = Date.parse("2026-09-20T00:01:00+08:00");
-  assert.equal(taipeiDate(now), "2026-09-20");
-  assert.equal(mealServiceDate(event), "2026-09-19");
-  assert.equal(mealServiceDate({ ...event, service_date: null }), "2026-09-19");
-  assert.equal(mealBookingStatus(event, now), "可預訂");
-  const options = pickupTimeOptions(event, now);
-  assert.deepEqual(options.map((option) => option.value), ["2026-09-20T00:10", "2026-09-20T00:20"]);
-  assert.ok(options.every((option) => option.label.startsWith("次日 ")));
-});
-
-test("台灣日期與星期不受 UTC 前一日影響，跨月位移保持台灣日曆", () => {
+test("台灣日期與星期不受UTC前一日影響，跨月位移保持台灣日曆", () => {
   const earlySunday = "2026-09-19T16:10:00Z";
   assert.equal(taipeiDate(earlySunday), "2026-09-20");
   assert.ok(formatMealDateTime(earlySunday).includes("週日"));

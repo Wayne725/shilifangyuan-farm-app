@@ -84,11 +84,13 @@ def _set_refresh_cookie(
     response: Response,
     refresh_token: str,
     settings: Settings,
+    *,
+    remember_me: bool = True,
 ) -> None:
     response.set_cookie(
         key=settings.refresh_cookie_name,
         value=refresh_token,
-        max_age=settings.refresh_token_days * 24 * 60 * 60,
+        max_age=settings.refresh_token_days * 24 * 60 * 60 if remember_me else None,
         path="/v1/auth",
         secure=settings.refresh_cookie_secure,
         httponly=True,
@@ -124,8 +126,10 @@ def token_response(
     response: Response,
     settings: Settings,
     pair: dict[str, str],
+    *,
+    remember_me: bool = True,
 ) -> TokenResponse:
-    _set_refresh_cookie(response, pair["refresh_token"], settings)
+    _set_refresh_cookie(response, pair["refresh_token"], settings, remember_me=remember_me)
     return TokenResponse(
         access_token=pair["access_token"],
         token_type=pair["token_type"],
@@ -136,8 +140,10 @@ def token_response(
 def _new_token_pair_and_session(
     user: User,
     settings: Settings,
+    *,
+    remember_me: bool = True,
 ) -> tuple[dict[str, str], RefreshSession]:
-    pair = make_token_pair(user, settings)
+    pair = make_token_pair(user, settings, remember_me=remember_me)
     payload = decode_token(pair["refresh_token"], "refresh", settings)
     return pair, RefreshSession(
         id=str(payload["jti"]),
@@ -590,11 +596,11 @@ async def login(
         )
         .execution_options(synchronize_session=False)
     )
-    pair, refresh_session = _new_token_pair_and_session(user, settings)
+    pair, refresh_session = _new_token_pair_and_session(user, settings, remember_me=body.remember_me)
     session.add(refresh_session)
     await session.commit()
     reset(account_key)
-    return token_response(user, response, settings, pair)
+    return token_response(user, response, settings, pair, remember_me=body.remember_me)
 
 
 @auth_router.post("/refresh", response_model=TokenResponse)
@@ -653,13 +659,14 @@ async def refresh(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="登入工作階段已失效，請重新登入",
         )
-    pair, replacement = _new_token_pair_and_session(user, settings)
+    remember_me = bool(payload.get("remember_me", True))
+    pair, replacement = _new_token_pair_and_session(user, settings, remember_me=remember_me)
     session.add(replacement)
     await session.flush()
     stored_session.revoked_at = now
     stored_session.replaced_by_id = replacement.id
     await session.commit()
-    return token_response(user, response, settings, pair)
+    return token_response(user, response, settings, pair, remember_me=remember_me)
 
 
 @auth_router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

@@ -47,10 +47,12 @@ test("呼叫端取消請求時保留原本的 AbortError", async () => {
   await assert.rejects(request, { name: "AbortError" });
 });
 
-test("商店錯誤狀態提供重試，商品與便當圖片都有壞圖備援", () => {
+test("商店錯誤狀態提供重試，商品有壞圖備援而便當使用條列", () => {
   assert.match(shared, /onAction\?: \(\) => void/);
   assert.match(shop, /onAction=\{\(\) => products\.refetch\(\)\}/);
   assert.match(shop, /onAction=\{\(\) => campaigns\.refetch\(\)\}/);
   assert.match(shop, /onAction=\{\(\) => meals\.refetch\(\)\}/);
-  assert.match(shop, /onError=\{replaceBrokenAsset\}/);
+  assert.match(shared, /onError=\{replaceBrokenAsset\}/);
+  assert.match(shop, /className="meal-event-row"/);
+  assert.doesNotMatch(shop, /<img/);
 });

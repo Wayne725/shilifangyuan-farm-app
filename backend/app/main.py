@@ -23,6 +23,8 @@ from .jobs import (
     should_reconcile_now,
 )
 from .routers import ALL_ROUTERS
+from .routers.meal_finance import meal_finance_router
+from .routers.meal_kitchen import meal_kitchen_router
 from .seed import seed_demo_data
 
 
@@ -93,6 +95,8 @@ def create_app() -> FastAPI:
     )
     for router in ALL_ROUTERS:
         application.include_router(router)
+    application.include_router(meal_finance_router)
+    application.include_router(meal_kitchen_router)
     application.include_router(jobs_router)
 
     @application.middleware("http")

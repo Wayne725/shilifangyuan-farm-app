@@ -5,8 +5,11 @@ import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 import { AdminNav } from "../components/AdminNav";
+import { AdminMealCancellations } from "../components/AdminMealCancellations";
+import { AdminMealOrderSearch } from "../components/AdminMealOrderSearch";
 import { MealScheduleSettings } from "../components/MealScheduleSettings";
 import { DataState, LoadingLines } from "../components/Shared";
+import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatMoney } from "../lib/api";
 import { mealEventStatusLabel } from "../lib/labels";
@@ -27,6 +30,8 @@ export function AdminMealsPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState("orders");
+  const [cancellationSearch, setCancellationSearch] = useState("");
   const [meals, events] = useQueries({
     queries: [
       { queryKey: ["admin-meals"], queryFn: () => apiFetch<Meal[]>("/v1/admin/meals"), enabled: isAdmin },
@@ -44,14 +49,19 @@ export function AdminMealsPage() {
     queryClient.invalidateQueries({ queryKey: ["admin-meal-event-orders"] });
     queryClient.invalidateQueries({ queryKey: ["meal-events"] });
     queryClient.invalidateQueries({ queryKey: ["meal-event"] });
+    queryClient.invalidateQueries({ queryKey: ["admin-meal-orders"] });
+    queryClient.invalidateQueries({ queryKey: ["admin-meal-operations-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["admin-meal-cancellations"] });
   };
 
   return (
-    <section className="admin-module-page">
-      <header className="workspace-heading"><div><p className="eyebrow">MEAL OPERATIONS / 共煮預訂</p><h1>餐點、場次與現場核銷</h1></div><p>從餐點建檔、發布場次到 QR／六位碼核銷，都集中在同一個工作區。</p></header>
+    <section className="admin-module-page admin-meals-workspace">
+      <header className="workspace-heading"><div><p className="eyebrow">便當營運管理</p><h1>訂單查詢、退單與取餐</h1></div><p>先查詢訂單及營運待辦，再進入退單審核或場次核銷。</p></header>
       <AdminNav />
-      <Tabs.Root className="admin-social-tabs" defaultValue="events">
-        <Tabs.List className="tab-list" aria-label="便當營運分類"><Tabs.Trigger value="events">場次與核銷</Tabs.Trigger><Tabs.Trigger value="schedules">每日午晚餐排程</Tabs.Trigger><Tabs.Trigger value="meals">餐點主檔</Tabs.Trigger></Tabs.List>
+      <Tabs.Root className="admin-social-tabs" value={activeTab} onValueChange={setActiveTab}>
+        <Tabs.List className="tab-list" aria-label="便當營運分類"><Tabs.Trigger value="orders">訂單查詢與待辦</Tabs.Trigger><Tabs.Trigger value="cancellations">退單審核</Tabs.Trigger><Tabs.Trigger value="events">場次與核銷</Tabs.Trigger><Tabs.Trigger value="schedules">每日午晚餐排程</Tabs.Trigger><Tabs.Trigger value="meals">餐點主檔</Tabs.Trigger></Tabs.List>
+        <Tabs.Content className="tab-content" value="orders"><AdminMealOrderSearch onReviewOrder={(orderNumber) => { setCancellationSearch(orderNumber); setActiveTab("cancellations"); }} /></Tabs.Content>
+        <Tabs.Content className="tab-content" value="cancellations"><AdminMealCancellations key={cancellationSearch} initialSearch={cancellationSearch} /></Tabs.Content>
         <Tabs.Content className="tab-content" value="events">
           <EventCreateForm meals={meals.data || []} onDone={refreshEvents} />
           {events.isPending && <LoadingLines count={4} />}
@@ -143,9 +153,11 @@ function EventPickupOrders({ eventId }: { eventId: string }) {
       {orders.data?.length === 0 && <p>本場目前沒有訂單。</p>}
       <div className="admin-review-list">{orders.data?.map((order) => <article className="admin-record-card" key={order.id}>
         <h4 className="order-number">{order.order_number}</h4>
+        {order.cancellation_request && <p className="meal-cancellation-reason"><strong>{order.cancellation_request.status === "pending" ? "退單待審，訂單尚未取消" : order.cancellation_request.status === "approved" ? "退單已核准" : "退單未核准"}</strong>：{order.cancellation_request.reason}</p>}
         <p>預計取餐：{order.pickup_at ? formatMealDateTime(order.pickup_at) : "未指定，依場次供餐時段"}</p>
         <p>{order.items.map((item) => `${item.meal_name} × ${item.quantity}`).join("、")}</p>
-        <p>{({ paid: "已付款", pending: "待付款", refunded: "已退款", refund_pending: "退款中", expired: "付款逾期", failed: "付款失敗" } as Record<string, string>)[order.payment_status] || order.payment_status} · {order.cancelled_at ? "已取消" : order.fulfillment_status === "picked_up" ? "已取餐" : order.fulfillment_status === "no_show" ? "逾時未取" : "尚未取餐"}</p>
+        <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} taxAmount={order.tax_amount} />
+        <p>{({ paid: "已付款", pending: "待付款", refunded: "已退款", refund_pending: "退款中", late_paid_refund_required: "付款晚到，退款處理中", expired: "付款逾期", failed: "付款失敗" } as Record<string, string>)[order.payment_status] || order.payment_status} · {order.cancelled_at ? "已取消" : order.fulfillment_status === "picked_up" ? "已取餐" : order.fulfillment_status === "no_show" ? "逾時未取" : "尚未取餐"}</p>
       </article>)}</div>
     </section>}
   </div>;

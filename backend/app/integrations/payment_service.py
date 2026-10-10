@@ -15,6 +15,7 @@ from ..controlled_product_payments import is_meals_test_product_order
 from ..sales_scope import SalesScopeError, ensure_sales_scope_allows
 from ..domain import (
     apply_paid_quantity,
+    meal_payment_window_open,
     order_fulfillment_is_irreversible,
     remove_paid_quantity,
 )
@@ -597,10 +598,7 @@ async def create_payment_attempt(
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
         if order.meal_event is None:
             raise PaymentApplicationError("便當訂單缺少場次資料")
-        if (
-            order.meal_event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}
-            or not (_aware(order.meal_event.ordering_starts_at) <= current < _aware(order.meal_event.ordering_ends_at))
-        ):
+        if not meal_payment_window_open(order, current):
             raise PaymentApplicationError("便當目前未開放預購或已截止")
 
     for existing in sorted(
@@ -624,6 +622,12 @@ async def create_payment_attempt(
     expires_at = current + timedelta(
         minutes=settings.payment_reservation_minutes
     )
+    if (
+        order.sales_channel == SalesChannel.MEAL_PREORDER
+        and order.fulfillment is not None
+        and order.fulfillment.meal_ordering_ends_at is not None
+    ):
+        expires_at = min(expires_at, _aware(order.fulfillment.meal_ordering_ends_at))
     attempt = PaymentAttempt(
         order=order,
         provider=settings.payment_provider,
@@ -757,6 +761,7 @@ async def create_membership_payment_attempt(
 ) -> PaymentAttempt:
     ensure_payment_runtime_enabled(settings)
     current = now or datetime.now(timezone.utc)
+    await session.scalar(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
     charge = await session.scalar(
         select(MembershipCharge)
         .where(
@@ -1749,6 +1754,13 @@ class SQLAlchemyPaymentCallbackRepository:
         order = attempt.order
         if order is None:
             return
+        fulfillment = order.__dict__.get("fulfillment")
+        if (
+            order.sales_channel == SalesChannel.MEAL_PREORDER
+            and fulfillment is not None
+            and fulfillment.meal_capacity_retained
+        ):
+            return
         group_release_quantity = 0
         for reservation in attempt.reservations:
             if reservation.status != ReservationStatus.CONSUMED:
@@ -1891,6 +1903,12 @@ class SQLAlchemyPaymentCallbackRepository:
         if order is None or order.meal_event is None:
             return False
         payment_time = _provider_payment_time(payload) or current
+        if (
+            order.fulfillment is not None
+            and order.fulfillment.meal_ordering_ends_at is not None
+            and payment_time >= _aware(order.fulfillment.meal_ordering_ends_at)
+        ):
+            return False
         originally_in_window = payment_time <= _aware(attempt.expires_at)
         if payment_time > _aware(attempt.expires_at):
             await release_attempt_reservations(self.session, attempt)

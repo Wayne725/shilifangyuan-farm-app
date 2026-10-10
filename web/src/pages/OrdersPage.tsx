@@ -15,9 +15,11 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { ApiError, apiFetch, formatDate, formatMoney } from "../lib/api";
+import { taxTypeLabel } from "../lib/invoice-tax";
 import {
   createOrderPayment,
   refreshPaymentAttempt,
@@ -249,6 +251,8 @@ export function OrdersPage() {
                 />
               </div>
 
+              <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} shippingFee={selected.shipment?.shipping_fee} taxAmount={selected.tax_amount} />
+
               {selected.invoice_status !== "not_eligible" && (
                 <div className="invoice-summary-card">
                   <FileText size={25} weight="light" />
@@ -290,7 +294,7 @@ export function OrdersPage() {
                   <div key={item.id || `${item.product_name}-${index}`}>
                     <span>{String(index + 1).padStart(2, "0")}</span>
                     <strong>{item.product_name}</strong>
-                    <small>{item.quantity} {item.unit_label} × {formatMoney(item.unit_price)}</small>
+                    <small>{item.quantity} {item.unit_label} × {formatMoney(item.unit_price)} · {taxTypeLabel(item.tax_type)}</small>
                     <b>{formatMoney(item.subtotal)}</b>
                   </div>
                 ))}

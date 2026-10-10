@@ -205,6 +205,9 @@ const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
   component: page("./pages/AdminPage", "AdminPage"),
+  validateSearch: (search: Record<string, unknown>): { q?: string } => ({
+    q: typeof search.q === "string" ? search.q.trim().slice(0, 100) : undefined,
+  }),
 });
 
 const adminSocialRoute = createRoute({
@@ -285,6 +288,18 @@ const adminFinanceRoute = createRoute({
   component: page("./pages/AdminFinancePage", "AdminFinancePage"),
 });
 
+const adminKitchenRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/kitchen",
+  component: page("./pages/AdminKitchenPage", "AdminKitchenPage"),
+});
+
+const adminUsersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/users",
+  component: page("./pages/AdminUsersPage", "AdminUsersPage"),
+});
+
 const routeTree = rootRoute.addChildren([
   homeRoute,
   registerRoute,
@@ -316,6 +331,8 @@ const routeTree = rootRoute.addChildren([
   adminGroupsRoute,
   adminMealsRoute,
   adminFinanceRoute,
+  adminKitchenRoute,
+  adminUsersRoute,
   adminSocialRoute,
   accountRoute,
 ]);

@@ -22,10 +22,12 @@ from ..domain import (
     DomainError,
     ensure_self_cancel_allowed,
     included_tax_amount,
+    member_sale_is_tax_exempt,
     order_available_actions,
     order_fulfillment_is_irreversible,
     price_for_membership,
     remove_paid_quantity,
+    sale_tax_type,
 )
 from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
 from ..integrations.payment_service import (
@@ -40,6 +42,7 @@ from ..models import (
     GroupCampaign,
     GroupDecisionStatus,
     InventoryReservation,
+    InvoiceBuyerType,
     MealEventOffering,
     Notification,
     Order,
@@ -92,6 +95,7 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         group_campaign_id=order.group_campaign_id,
         meal_event_id=order.meal_event_id,
         membership_type_snapshot=order.membership_type_snapshot,
+        member_tax_exempt_snapshot=order.member_tax_exempt_snapshot,
         amount_total=order.amount_total,
         tax_amount=order.tax_amount,
         contact_email=order.contact_email,
@@ -129,6 +133,7 @@ async def quote_products(
     quantities: Dict[str, int],
     user: User,
     lock: bool = False,
+    invoice_buyer_type: InvoiceBuyerType = InvoiceBuyerType.PERSONAL,
 ) -> OrderQuoteRead:
     query = select(Product).where(
         Product.id.in_(quantities.keys()), Product.is_active.is_(True)
@@ -139,6 +144,7 @@ async def quote_products(
     if len(products) != len(quantities):
         raise HTTPException(status_code=422, detail="購物車包含不存在的商品")
     lines: List[OrderQuoteLine] = []
+    membership_type = membership_type_for_user(user)
     for product in sorted(products, key=lambda item: item.name):
         quantity = quantities[product.id]
         if product.stock_quantity < quantity:
@@ -146,7 +152,6 @@ async def quote_products(
                 status_code=409,
                 detail=f"{product.name} 庫存不足，目前剩餘 {product.stock_quantity}",
             )
-        membership_type = membership_type_for_user(user)
         unit_price = price_for_membership(
             product.member_price,
             product.nonmember_price,
@@ -160,11 +165,20 @@ async def quote_products(
                 quantity=quantity,
                 unit_price=unit_price,
                 subtotal=unit_price * quantity,
-                tax_type=product.tax_type,
+                tax_type=sale_tax_type(
+                    product.tax_type, membership_type, invoice_buyer_type
+                ),
             )
         )
     return OrderQuoteRead(
-        membership_type=membership_type_for_user(user),
+        membership_type=membership_type,
+        member_tax_exempt=member_sale_is_tax_exempt(
+            membership_type, invoice_buyer_type
+        ),
+        tax_amount=sum(
+            included_tax_amount(line.subtotal, line.tax_type)
+            for line in lines
+        ),
         amount_total=sum(line.subtotal for line in lines),
         items=lines,
     )
@@ -202,7 +216,8 @@ async def quote_order(
     session: AsyncSession = Depends(get_session),
 ) -> OrderQuoteRead:
     return await quote_products(
-        session, consolidate_lines(body.items), user, lock=False
+        session, consolidate_lines(body.items), user, lock=False,
+        invoice_buyer_type=body.invoice_buyer_type,
     )
 
 
@@ -233,7 +248,8 @@ async def create_order(
     }:
         raise HTTPException(status_code=422, detail="一般訂單不支援此履約方式")
     quote = await quote_products(
-        session, consolidate_lines(body.items), user, lock=True
+        session, consolidate_lines(body.items), user, lock=True,
+        invoice_buyer_type=body.invoice_buyer_type,
     )
     pickup_location = None
     if body.pickup_location_id is not None:
@@ -257,12 +273,10 @@ async def create_order(
         sales_channel=SalesChannel.REGULAR,
         fulfillment_method=body.fulfillment_method,
         user_id=user.id,
-        membership_type_snapshot=membership_type_for_user(user),
+        membership_type_snapshot=quote.membership_type,
+        member_tax_exempt_snapshot=quote.member_tax_exempt,
         amount_total=quote.amount_total,
-        tax_amount=sum(
-            included_tax_amount(line.subtotal, line.tax_type)
-            for line in quote.items
-        ),
+        tax_amount=quote.tax_amount,
         contact_email=body.contact_email.lower(),
         invoice_buyer_type=body.invoice_buyer_type,
         invoice_buyer_tax_id=(
@@ -541,6 +555,8 @@ async def refund_order(
     session: AsyncSession = Depends(get_session),
 ) -> OrderRead:
     order = await load_order(session, order_id, lock=True)
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        raise HTTPException(status_code=409, detail="便當退款請由便當退單審核流程處理")
     await request_order_refund(session, order, admin, body.reason)
     session.add(
         AdminAudit(

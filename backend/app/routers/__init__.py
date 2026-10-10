@@ -1,4 +1,5 @@
 from .auth import auth_router
+from .admin_users import admin_users_router
 from .catalog import catalog_router
 from .community import community_router
 from .cooperative import cooperative_router
@@ -15,6 +16,7 @@ from .proposals import proposals_router
 
 ALL_ROUTERS = [
     auth_router,
+    admin_users_router,
     catalog_router,
     membership_router,
     community_router,

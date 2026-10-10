@@ -20,6 +20,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1574,6 +1576,9 @@ class MealEvent(Base):
         DateTime(timezone=True), index=True
     )
     pickup_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    pickup_slot_ends_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     status: Mapped[MealEventStatus] = mapped_column(
         enum_type(MealEventStatus, "meal_event_status"),
         default=MealEventStatus.DRAFT,
@@ -1697,6 +1702,9 @@ class Order(Base):
     membership_type_snapshot: Mapped[MembershipType] = mapped_column(
         enum_type(MembershipType, "order_membership_type")
     )
+    member_tax_exempt_snapshot: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     amount_total: Mapped[int] = mapped_column(Integer)
     tax_amount: Mapped[int] = mapped_column(Integer, default=0)
     contact_email: Mapped[str] = mapped_column(String(320))
@@ -1776,6 +1784,36 @@ class Order(Base):
     fulfillment: Mapped[Optional["OrderFulfillment"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", uselist=False
     )
+    cancellation_requests: Mapped[List["MealCancellationRequest"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
+
+
+class MealCancellationRequest(Base):
+    __tablename__ = "meal_cancellation_requests"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="status_valid"),
+        CheckConstraint(
+            "(status = 'pending' AND reviewed_at IS NULL AND reviewed_by_id IS NULL AND review_reason IS NULL) "
+            "OR (status <> 'pending' AND reviewed_at IS NOT NULL AND reviewed_by_id IS NOT NULL AND review_reason IS NOT NULL)",
+            name="review_consistent",
+        ),
+        Index("uq_meal_cancellation_pending_order", "order_id", unique=True,
+              sqlite_where=text("status = 'pending'"), postgresql_where=text("status = 'pending'")),
+        Index("ix_meal_cancellation_status_requested", "status", "requested_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)
+    requested_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    order: Mapped["Order"] = relationship(back_populates="cancellation_requests")
+    requested_by: Mapped["User"] = relationship(foreign_keys=[requested_by_id])
 
 
 class OrderItem(Base):
@@ -1858,6 +1896,10 @@ class OrderFulfillment(Base):
         enum_type(FulfillmentState, "order_fulfillment_state"),
         default=FulfillmentState.PENDING_CONFIRMATION,
         index=True,
+    )
+    meal_capacity_retained: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    meal_ordering_ends_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     pickup_location: Mapped[Optional[str]] = mapped_column(
         String(240), nullable=True

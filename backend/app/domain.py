@@ -11,6 +11,7 @@ from .models import (
     GroupCampaign,
     GroupDecisionStatus,
     GroupIntakeStatus,
+    InvoiceBuyerType,
     MealEventStatus,
     MembershipType,
     Order,
@@ -57,6 +58,41 @@ def included_tax_amount(subtotal: int, tax_type: TaxType) -> int:
     if tax_type == TaxType.TAX_EXEMPT:
         return 0
     return subtotal * 5 // 105
+
+
+def member_sale_is_tax_exempt(
+    membership_type: MembershipType,
+    invoice_buyer_type: InvoiceBuyerType,
+) -> bool:
+    return (
+        membership_type == MembershipType.MEMBER
+        and invoice_buyer_type == InvoiceBuyerType.PERSONAL
+    )
+
+
+def sale_tax_type(
+    product_tax_type: TaxType,
+    membership_type: MembershipType,
+    invoice_buyer_type: InvoiceBuyerType,
+) -> TaxType:
+    if member_sale_is_tax_exempt(membership_type, invoice_buyer_type):
+        return TaxType.TAX_EXEMPT
+    return product_tax_type
+
+
+def order_shipping_tax_type(order: Order) -> TaxType:
+    return (
+        TaxType.TAX_EXEMPT
+        if order.member_tax_exempt_snapshot
+        else TaxType.TAXABLE
+    )
+
+
+def order_tax_amount(order: Order, shipping_fee: int = 0) -> int:
+    return sum(
+        included_tax_amount(item.subtotal, item.tax_type)
+        for item in order.items
+    ) + included_tax_amount(shipping_fee, order_shipping_tax_type(order))
 
 
 def product_price(product: Product, membership_type: MembershipType) -> int:
@@ -236,10 +272,30 @@ def confirm_campaign(
 
 def meal_payment_window_open(order: Order, now: datetime) -> bool:
     event = order.__dict__.get("meal_event")
+    fulfillment = order.__dict__.get("fulfillment")
+    booking_deadline = fulfillment.meal_ordering_ends_at if fulfillment is not None else None
     return (
         event is not None
         and event.status in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}
         and aware(event.ordering_starts_at) <= now < aware(event.ordering_ends_at)
+        and (booking_deadline is None or now < aware(booking_deadline))
+    )
+
+
+def meal_cancellation_request_allowed(order: Order, now: Optional[datetime] = None) -> bool:
+    current = now or utcnow()
+    event = order.__dict__.get("meal_event")
+    fulfillment = order.__dict__.get("fulfillment")
+    return (
+        order.sales_channel == SalesChannel.MEAL_PREORDER
+        and order.payment_status in {PaymentStatus.PENDING, PaymentStatus.PAID}
+        and order.cancelled_at is None
+        and order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
+        and fulfillment is not None
+        and fulfillment.status not in {FulfillmentState.PICKED_UP, FulfillmentState.NO_SHOW, FulfillmentState.CANCELLED}
+        and event is not None
+        and event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}
+        and current < aware(event.pickup_ends_at)
     )
 
 
@@ -254,7 +310,6 @@ def order_available_actions(
     is_meal = order.sales_channel == SalesChannel.MEAL_PREORDER
     meal_fulfillment_closed = is_meal and (
         order.cancelled_at is not None
-        or order_fulfillment_is_irreversible(order)
         or order.fulfillment_status in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
         or (
             fulfillment is not None
@@ -282,29 +337,13 @@ def order_available_actions(
             or (not meal_fulfillment_closed and meal_payment_window_open(order, current))
         ):
             actions.append("pay")
-        if not meal_fulfillment_closed:
+        if not is_meal and not meal_fulfillment_closed:
             actions.append("cancel")
     elif order.payment_status == PaymentStatus.PAID:
-        if order.sales_channel == SalesChannel.MEAL_PREORDER:
-            if (
-                order.meal_event is not None
-                and order.meal_event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}
-                and not meal_fulfillment_closed
-                and order.paid_at is not None
-                and current
-                <= min(
-                    aware(order.paid_at)
-                    + timedelta(
-                        minutes=get_settings().post_confirmation_cancel_minutes
-                    ),
-                    aware(order.meal_event.ordering_ends_at),
-                )
-            ):
-                actions.append("cancel")
-        elif order.order_kind == OrderKind.REGULAR:
+        if not is_meal and order.order_kind == OrderKind.REGULAR:
             if order.fulfillment_status == FulfillmentStatus.PENDING_CONFIRMATION:
                 actions.append("cancel")
-        elif order.group_campaign is not None:
+        elif not is_meal and order.group_campaign is not None:
             campaign = order.group_campaign
             if campaign.decision_status != GroupDecisionStatus.CONFIRMED:
                 actions.append("cancel")
@@ -319,6 +358,10 @@ def order_available_actions(
                 )
             ):
                 actions.append("cancel")
+    if is_meal and meal_cancellation_request_allowed(order, current) and not any(
+        request.status == "pending" for request in order.__dict__.get("cancellation_requests", [])
+    ):
+        actions.append("request_cancellation")
     if viewer_is_admin:
         if (
             order.payment_status == PaymentStatus.PAID

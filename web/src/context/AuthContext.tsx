@@ -17,6 +17,8 @@ import {
   saveSession,
 } from "../lib/api";
 import type { AuthResponse, User } from "../lib/types";
+import { rememberedLoginEmail, rememberLoginEmail } from "../lib/login-preferences";
+import "../styles/auth-options.css";
 
 interface AuthContextValue {
   user: User | null;
@@ -38,6 +40,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [email, setEmail] = useState(rememberedLoginEmail);
+  const [rememberAccount, setRememberAccount] = useState(() => Boolean(rememberedLoginEmail()));
+  const [rememberMe, setRememberMe] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -69,11 +74,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({
           email: form.get("email"),
           password: form.get("password"),
+          remember_me: rememberMe,
         }),
       });
       saveSession(session);
+      rememberLoginEmail(email, rememberAccount);
       queryClient.clear();
       setUser(session.user);
+      setIsAuthReady(true);
+      setSessionError("");
       setOpen(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "登入失敗");
@@ -104,16 +113,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             <Dialog.Close className="icon-button dialog-close" aria-label="關閉">
               <X size={20} weight="light" />
             </Dialog.Close>
-            <p className="eyebrow">ACCOUNT ACCESS</p>
-            <Dialog.Title>回到合作生活</Dialog.Title>
+            <Dialog.Title>登入訂餐</Dialog.Title>
             <Dialog.Description>
-              社員與一般消費者都使用合作社帳號登入。
+              使用Email帳號登入訂餐。社員資格由合作社核對。
             </Dialog.Description>
+            <label className="login-preference"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span>保持登入</span></label>
             <form className="login-form" onSubmit={login}>
               <label>
                 電子信箱
-                <input name="email" type="email" autoComplete="email" required />
+                <input name="email" type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} />
               </label>
+              <label className="login-preference"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span>記住登入帳號</span></label>
+              <p className="login-preference-help">密碼可由瀏覽器的密碼管理功能記住並自動填入。共用裝置請取消保持登入，使用完畢後登出。</p>
               <label>
                 密碼
                 <input

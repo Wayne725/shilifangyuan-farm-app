@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..config import Settings
+from ..domain import order_shipping_tax_type
 from ..models import (
     Invoice,
     InvoiceCarrierType,
@@ -118,7 +119,9 @@ def invoice_request_from_order(
                 quantity=1,
                 unit_price=shipment.shipping_fee,
                 unit="筆",
-                tax_type="1",
+                tax_type=(
+                    "3" if order_shipping_tax_type(order) == TaxType.TAX_EXEMPT else "1"
+                ),
             )
         )
     if sum(line.amount for line in lines) != order.amount_total:

@@ -1029,6 +1029,7 @@ async def claim_existing_membership(
 ) -> MembershipPublicRead:
     if user.email_verified_at is None:
         raise HTTPException(status_code=403, detail="請先完成帳號 Email 驗證，再認領社員資格")
+    await session.scalar(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
     try:
         entry = await verified_roster_entry(
             session,
@@ -1742,6 +1743,11 @@ async def return_share_capital(
     if not body.reason:
         raise HTTPException(status_code=422, detail="請填寫返還原因")
     membership = await session.get(Membership, membership_id)
+    if membership is not None:
+        await session.scalar(
+            select(User.id).where(User.id == membership.user_id).with_for_update(key_share=True)
+        )
+        await session.refresh(membership)
     if (
         membership is None
         or membership.status != MembershipStatus.RESIGNED

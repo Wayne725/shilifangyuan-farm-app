@@ -132,6 +132,7 @@ export interface Order {
   group_campaign_id?: string | null;
   meal_event_id?: string | null;
   membership_type_snapshot: string;
+  member_tax_exempt_snapshot?: boolean;
   amount_total: number;
   tax_amount: number;
   contact_email: string;
@@ -451,6 +452,10 @@ export interface MealEvent {
   location: string;
   pickup_starts_at: string;
   pickup_ends_at: string;
+  pickup_slot_ends_at?: string | null;
+  pickup_slots?: string[];
+  booking_starts_at?: string;
+  booking_ends_at?: string;
   ordering_starts_at: string;
   ordering_ends_at: string;
   status: string;
@@ -507,6 +512,54 @@ export interface MealSchedule {
   updated_at?: string;
 }
 
+export interface MealCancellationRequest {
+  id: string;
+  order_id: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected";
+  requested_at: string;
+  reviewed_by_id?: string | null;
+  reviewed_at?: string | null;
+  review_reason?: string | null;
+}
+
+export interface MealCancellationQueueItem {
+  request: MealCancellationRequest;
+  order: MealOrder;
+  customer_name: string;
+  customer_email: string;
+  can_approve: boolean;
+}
+
+export interface MealCancellationQueue {
+  items: MealCancellationQueueItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MealOperationsSummary {
+  today: string;
+  pending_cancellation: number;
+  refund_attention: number;
+  invoice_attention: number;
+  today_pickup: number;
+}
+
+export interface MealAdminOrderItem {
+  order: MealOrder;
+  customer_name: string;
+  customer_email: string;
+  meal_period?: string | null;
+}
+
+export interface MealAdminOrderPage {
+  items: MealAdminOrderItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface MealOrder {
   id: string;
   order_number: string;
@@ -527,7 +580,10 @@ export interface MealOrder {
   fulfillment_status: string;
   paid_at?: string | null;
   cancelled_at?: string | null;
+  cancellation_request?: MealCancellationRequest | null;
   amount_total: number;
+  member_tax_exempt_snapshot?: boolean;
+  tax_amount?: number;
   created_at: string;
   available_actions: string[];
   items: Array<{
@@ -539,6 +595,7 @@ export interface MealOrder {
     option_price: number;
     unit_price: number;
     subtotal: number;
+    tax_type?: string;
     selections: MealOptionSelection[];
   }>;
 }
@@ -710,6 +767,8 @@ export interface CartItem {
 
 export interface OrderQuote {
   membership_type: string;
+  member_tax_exempt?: boolean;
+  tax_amount?: number;
   amount_total: number;
   items: Array<{
     product_id: string;

@@ -7,8 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
 import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
-import { apiFetch, formatDate, replaceBrokenAsset, resolveAsset } from "../lib/api";
-import { formatMealDateTime, mealBookingStatus, mealPeriod, mealServiceDate, taipeiDate } from "../lib/meal-time";
+import { apiFetch, formatDate } from "../lib/api";
+import { formatMealDateTime, mealBookingStatus, mealPeriod, mealServiceDate, pickupTimeOptions, shiftMealDate, taipeiDate } from "../lib/meal-time";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
@@ -16,7 +16,7 @@ export function ShopPage() {
   const [now, setNow] = useState(Date.now);
   const today = taipeiDate(now);
   const previousToday = useRef(today);
-  const [mealDate, setMealDate] = useState(today);
+  const [mealDate, setMealDate] = useState(() => shiftMealDate(today, 1));
   const [period, setPeriod] = useState("all");
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
@@ -24,8 +24,7 @@ export function ShopPage() {
   }, []);
   useEffect(() => {
     if (previousToday.current !== today) {
-      const priorDate = previousToday.current;
-      setMealDate((current) => current === priorDate ? today : current);
+      setMealDate(shiftMealDate(today, 1));
       previousToday.current = today;
     }
   }, [today]);
@@ -52,17 +51,12 @@ export function ShopPage() {
 
   return (
     <>
-      <section className="page-intro shop-intro">
+      <section className="page-intro shop-intro meal-shop-intro">
         <div>
-          <p className="eyebrow">LIVING MARKET / 生活消費</p>
-          <h1>每一次選擇，<br /><em>都知道從哪裡來。</em></h1>
+          <h1>我要訂餐</h1>
+          <p>選明天的午餐或晚餐，完成付款後到現場取餐。</p>
         </div>
-        <div className="intro-aside">
-          <p>
-            REGULAR GOODS · GROUP ORDERS · MEAL PRE-ORDER
-          </p>
-          <span>商品編號、SKU、供應者與稅別皆由合作社後台維護。</span>
-        </div>
+        <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link><Link className="button button-quiet" to="/help">需要幫忙</Link></nav>
       </section>
 
       <Tabs.Root className="market-tabs" defaultValue="meals">
@@ -140,15 +134,12 @@ export function ShopPage() {
           </div>
         </Tabs.Content>
 
-        <Tabs.Content value="meals" className="tab-content">
+        <Tabs.Content value="meals" className="tab-content meal-booking-content">
           <SectionHeading
-            eyebrow="MEALS ON SCHEDULE"
-            title="預約一份剛好的午餐與晚餐"
-            description="選擇取餐日期與餐別，可提早預訂已開放的未來場次；所有時間皆為台灣時間。"
+            eyebrow="便當預訂"
+            title="選日期與餐別"
+            description="只能提前一天預訂。午餐、晚餐都以每 30 分鐘為一個取餐時段。"
           />
-          <div className="meal-booking-toolbar">
-            <Link className="button button-quiet" to="/meal-orders"><BowlFood size={17} />我的取餐憑證</Link>
-          </div>
           {meals.isSuccess && <MealDateNavigation events={upcomingMeals} selectedDate={mealDate}
             onDateChange={setMealDate} period={period} onPeriodChange={setPeriod} now={now} />}
           {meals.isPending && <LoadingLines count={2} />}
@@ -160,20 +151,23 @@ export function ShopPage() {
               onAction={() => meals.refetch()}
             />
           )}
-          {meals.isSuccess && visibleMeals.length === 0 && <DataState title="這一天尚無符合的供餐場次" detail="請選擇其他日期或餐別；場次由合作社排程更新，尚未發布的餐點不會開放訂購。" />}
-          <div className="meal-grid">
-            {visibleMeals.map((meal) => (
-              <Link key={meal.id} className="meal-card" to="/meals/$eventId" params={{ eventId: meal.id }}>
-                <img src={resolveAsset(meal.offerings[0]?.image_url || "/assets/meals/taiwanese-lunchbox.webp")} alt={meal.title} onError={replaceBrokenAsset} />
+          {meals.isSuccess && visibleMeals.length === 0 && <DataState title="明天尚無符合的供餐場次" detail="可切換午餐或晚餐查看。場次及菜單尚未公告時，暫時無法預訂；如需確認供餐，請洽管理員。" />}
+          <div className="meal-event-list">
+            {visibleMeals.map((meal) => {
+              const status = mealBookingStatus(meal, now);
+              const pickupOptions = pickupTimeOptions(meal, now);
+              return <article key={meal.id} className="meal-event-row">
                 <div>
-                  <span>{mealPeriod(meal) === "lunch" ? "午餐" : "晚餐"} · {mealBookingStatus(meal, now)}</span>
+                  <span>{mealPeriod(meal) === "lunch" ? "午餐" : "晚餐"} · {status}</span>
                   <h3>{meal.title}</h3>
-                  <p>{meal.offerings.map((offering) => offering.meal_name).join("、") || "供餐內容與取餐時段由合作社公告。"}</p>
-                  <small>取餐 {formatMealDateTime(meal.pickup_starts_at)} 至 {formatMealDateTime(meal.pickup_ends_at)}</small>
-                  <small>預訂截止 {formatMealDateTime(meal.ordering_ends_at)}</small>
+                  <p>{meal.offerings.filter((offering) => offering.is_active).map((offering) => offering.meal_name).join("、") || "菜單待公告"}</p>
+                  <small>可選取餐時間：{pickupOptions.length ? `${pickupOptions[0].label}–${pickupOptions[pickupOptions.length - 1].label}` : "時段尚未開放"}</small>
+                  <small>預訂截止 {formatMealDateTime(meal.booking_ends_at || meal.ordering_ends_at)}</small>
                 </div>
-              </Link>
-            ))}
+                {status === "可預訂" ? <Link className="button button-system" to="/meals/$eventId" params={{ eventId: meal.id }}>選餐與份數 <ArrowRight size={18} /></Link>
+                  : <span className="meal-event-unavailable">{status}</span>}
+              </article>;
+            })}
           </div>
         </Tabs.Content>
       </Tabs.Root>

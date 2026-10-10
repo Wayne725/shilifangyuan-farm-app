@@ -64,10 +64,12 @@ from app.routers.auth import auth_router
 from app.routers.community import community_router
 from app.routers.invoices import invoices_router
 from app.routers.meals import meals_router
+from app.routers import meals as meals_module
 from app.routers.membership import membership_router
 from app.routers.orders import orders_router
 from app.schemas import InvoicePreferenceInput
 from tests.support import (
+    tomorrow_meal_timeline,
     fanyu_test_context,
     api_test_context,
     auth_headers,
@@ -2016,6 +2018,7 @@ async def test_community_activity_waitlist_and_named_vote_update(
 @pytest.mark.asyncio
 async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     v2_context,
+    monkeypatch,
 ) -> None:
     client = v2_context["client"]
     session = v2_context["session"]
@@ -2040,12 +2043,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         json={
             "title": "校園週三午餐預購",
             "location": "大學校門口十里方圓攤位",
-            "ordering_starts_at": (
-                now - timedelta(hours=1)
-            ).isoformat(),
-            "ordering_ends_at": (now + timedelta(hours=1)).isoformat(),
-            "pickup_starts_at": (now - timedelta(minutes=10)).isoformat(),
-            "pickup_ends_at": (now + timedelta(hours=3)).isoformat(),
+            **{key: value.isoformat() for key, value in tomorrow_meal_timeline(now).items()},
             "offerings": [
                 {
                     "meal_id": meal.json()["id"],
@@ -2126,7 +2124,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     assert created_order.json()["paid_at"] is None
     assert created_order.json()["pickup_code"] is None
     assert created_order.json()["pickup_qr_payload"] is None
-    assert created_order.json()["available_actions"] == ["pay", "cancel"]
+    assert created_order.json()["available_actions"] == ["pay", "request_cancellation"]
 
     pending_order = await client.get(
         f"/v1/meal-orders/{created_order.json()['id']}",
@@ -2177,12 +2175,19 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         json={"reason": "行程異動"},
         headers=auth_headers(applicant),
     )
-    assert cancelled.status_code == 200
-    assert cancelled.json() == {
-        "id": created_order.json()["id"],
-        "payment_status": "expired",
-        "fulfillment_status": "cancelled",
-    }
+    assert cancelled.status_code == 201
+    assert cancelled.json()["status"] == "pending"
+    assert offering.reserved_quantity == 1
+    approved = await client.post(
+        f"/v1/admin/meal-cancellation-requests/{cancelled.json()['id']}/review",
+        json={"decision": "approve", "reason": "未製作，可取消"},
+        headers=auth_headers(admin),
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+    await session.refresh(stored_order)
+    assert stored_order.payment_status == PaymentStatus.EXPIRED
+    assert stored_order.fulfillment_status == FulfillmentStatus.CANCELLED
     await session.refresh(offering)
     await session.refresh(reservation)
     assert offering.reserved_quantity == 0
@@ -2257,6 +2262,13 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         headers=auth_headers(admin),
     )
     assert invalid_cancel.status_code == 422
+
+    pickup_now = tomorrow_meal_timeline(now)["pickup_starts_at"] + timedelta(minutes=5)
+    class PickupTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return pickup_now.astimezone(tz) if tz else pickup_now.replace(tzinfo=None)
+    monkeypatch.setattr(meals_module, "datetime", PickupTime)
 
     pickup_open = await client.post(
         f"/v1/admin/meal-events/{event_id}/open-pickup",
@@ -2372,10 +2384,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
             json={
                 "title": f"{label}場次",
                 "location": "校門口攤位",
-                "ordering_starts_at": (now - timedelta(hours=1)).isoformat(),
-                "ordering_ends_at": (now + timedelta(hours=1)).isoformat(),
-                "pickup_starts_at": (now + timedelta(hours=2)).isoformat(),
-                "pickup_ends_at": (now + timedelta(hours=3)).isoformat(),
+                **{key: value.isoformat() for key, value in tomorrow_meal_timeline(now).items()},
                 "offerings": [
                     {
                         "meal_id": meal.json()["id"],
@@ -2430,8 +2439,16 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
         json={"reason": "臨時有事"},
         headers=auth_headers(applicant),
     )
-    assert buyer_cancel.status_code == 200
-    assert buyer_cancel.json()["payment_status"] == "refunded"
+    assert buyer_cancel.status_code == 201
+    assert buyer_cancel.json()["status"] == "pending"
+    assert buyer_order.payment_status == PaymentStatus.PAID
+    approved = await client.post(
+        f"/v1/admin/meal-cancellation-requests/{buyer_cancel.json()['id']}/review",
+        json={"decision": "approve", "reason": "核對後同意退單"},
+        headers=auth_headers(admin),
+    )
+    assert approved.status_code == 200
+    assert buyer_order.payment_status == PaymentStatus.REFUNDED
     await session.refresh(buyer_offering)
     await session.refresh(buyer_reservation)
     assert buyer_offering.paid_quantity == 0
@@ -2449,6 +2466,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
         select(OutboxEvent).where(
             OutboxEvent.aggregate_id == applicant.id,
             OutboxEvent.event_type == "send_email",
+            OutboxEvent.payload["event_type"].as_string() == "refund_completed",
         )
     )
     assert buyer_refund is not None
@@ -2730,10 +2748,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
         json={
             "title": "每日客製餐盒",
             "location": "清華大學",
-            "ordering_starts_at": (now - timedelta(hours=1)).isoformat(),
-            "ordering_ends_at": (now + timedelta(hours=1)).isoformat(),
-            "pickup_starts_at": (now + timedelta(hours=2)).isoformat(),
-            "pickup_ends_at": (now + timedelta(hours=3)).isoformat(),
+            **{key: value.isoformat() for key, value in tomorrow_meal_timeline(now).items()},
             "offerings": [
                 {
                     "meal_id": meal.json()["id"],

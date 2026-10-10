@@ -6,9 +6,10 @@ from sqlalchemy import func, select
 from app.auth import create_token
 from app.models import FulfillmentState, Meal, MealEvent, MealEventOffering, MealEventStatus, OrderFulfillment, PaymentAttempt, Refund, TaxType, User, UserRole
 from app.routers.meals import meals_router
+from app.routers import meals as meals_module
 from app.routers.payments import payments_router
 from app.sales_scope import DEMO_MEAL_EVENT_IDS
-from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.support import api_test_context, auth_headers, make_test_settings, tomorrow_meal_timeline
 from tests.test_meals_production_configuration import meal_production_settings
 from tests.test_payment_return import payment_settings, successful_result
 
@@ -21,9 +22,7 @@ async def seed_meal_event(session, *, event_id=None, pickup_active=False):
     session.add_all([admin, buyer, meal])
     await session.flush()
     event = MealEvent(title="線上便當場次", location="合作社",
-        ordering_starts_at=now-timedelta(hours=1), ordering_ends_at=now+timedelta(hours=1),
-        pickup_starts_at=now-timedelta(minutes=10) if pickup_active else now+timedelta(hours=2),
-        pickup_ends_at=now+timedelta(hours=3),
+        **tomorrow_meal_timeline(now),
         status=MealEventStatus.PUBLISHED, created_by_id=admin.id,
         offerings=[MealEventOffering(meal=meal, price=120, capacity=2)])
     if event_id is not None:
@@ -35,7 +34,7 @@ async def seed_meal_event(session, *, event_id=None, pickup_active=False):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_status_only", [False, True])
-async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(database_session, legacy_status_only):
+async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(database_session, legacy_status_only, monkeypatch):
     session = database_session
     admin, buyer, event = await seed_meal_event(session, pickup_active=True)
     await session.refresh(event, ["offerings"])
@@ -52,6 +51,12 @@ async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(dat
         attempt = await session.get(PaymentAttempt, started.json()["id"])
         paid = await client.post("/webhooks/ecpay/payment", data=successful_result(attempt))
         assert paid.status_code == 200 and paid.text == "1|OK", paid.text
+        pickup_now = tomorrow_meal_timeline(datetime.now(timezone.utc))["pickup_starts_at"] + timedelta(minutes=5)
+        class PickupTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return pickup_now.astimezone(tz) if tz else pickup_now.replace(tzinfo=None)
+        monkeypatch.setattr(meals_module, "datetime", PickupTime)
         opened = await client.post(f"/v1/admin/meal-events/{event_id}/open-pickup", headers=admin_headers, json={"reason": "取餐時段交付驗收"})
         assert opened.status_code == 200, opened.text
         credential = await client.get(f"/v1/meal-orders/{order_id}/pickup-credential", headers=buyer_headers)
@@ -67,7 +72,7 @@ async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(dat
         assert cancelled.status_code == 409, cancelled.text
         detail = await client.get(f"/v1/meal-orders/{order_id}", headers=buyer_headers)
         assert detail.json()["payment_status"] == "paid"
-        assert detail.json()["fulfillment_status"] == ("pending" if legacy_status_only else "picked_up")
+        assert detail.json()["fulfillment_status"] == ("preparing" if legacy_status_only else "picked_up")
         assert detail.json()["cancelled_at"] is None
         assert "cancel" not in detail.json()["available_actions"]
         assert await session.scalar(select(func.count(Refund.id)).where(Refund.order_id == order_id)) == 0

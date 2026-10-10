@@ -15,6 +15,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import {
   defaultInvoicePreference,
   InvoicePreferenceFields,
@@ -25,6 +26,7 @@ import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
+import { taxTypeLabel } from "../lib/invoice-tax";
 import {
   beginCheckout,
   shippingChannelLabels,
@@ -78,11 +80,11 @@ export function CheckoutPage() {
     enabled: logisticsEnabled,
   });
   const quote = useQuery({
-    queryKey: ["order-quote", itemKey, user?.id],
+    queryKey: ["order-quote", itemKey, user?.id, invoicePreference.buyerType],
     queryFn: () =>
       apiFetch<OrderQuote>("/v1/orders/quote", {
         method: "POST",
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ items, invoice_buyer_type: invoicePreference.buyerType }),
       }),
     enabled: Boolean(user && items.length),
   });
@@ -173,7 +175,7 @@ export function CheckoutPage() {
       estimatedShippingFee !== null,
   );
   const canSubmit = Boolean(
-    quote.data &&
+    quote.data && !quote.isFetching && !quote.isError &&
       invoicePreferenceIsValid(invoicePreference) &&
       (checkoutMethod === "shipping" ? shippingReady : pickupLocationId),
   );
@@ -359,7 +361,7 @@ export function CheckoutPage() {
                   <dl className="summary-lines">
                     {quote.data?.items.map((item) => (
                       <div key={item.product_id}>
-                        <dt>{item.product_name} × {item.quantity}</dt>
+                        <dt>{item.product_name} × {item.quantity} · {taxTypeLabel(item.tax_type)}</dt>
                         <dd>{formatMoney(item.subtotal)}</dd>
                       </div>
                     ))}
@@ -368,6 +370,13 @@ export function CheckoutPage() {
                       <dd>{checkoutMethod === "shipping" ? "綠界物流" : "合作社取貨"}</dd>
                     </div>
                     <InvoicePreferenceSummary value={invoicePreference} />
+                    {quote.data && <InvoiceTaxSummary
+                      items={quote.data.items}
+                      memberTaxExempt={quote.data.member_tax_exempt}
+                      shippingFee={estimatedShippingFee || 0}
+                      taxAmount={quote.data.tax_amount}
+                      taxAmountLabel={estimatedShippingFee ? "商品稅額（內含）" : "稅額（內含）"}
+                    />}
                     {logisticsEnabled && checkoutMethod === "shipping" && (
                       <div className="summary-shipping">
                         <dt>預估運費</dt>

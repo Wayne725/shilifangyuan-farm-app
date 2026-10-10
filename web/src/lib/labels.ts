@@ -35,6 +35,9 @@ export const paymentStatusLabel = createLabeler({
 export const adminPaymentStatusLabel = createLabeler({
   pending: "待付款",
   paid: "已付款",
+  refund_pending: "退款處理中",
+  late_paid_refund_required: "付款晚到，退款處理中",
+  failed: "付款失敗",
   refunded: "已退款",
   expired: "已取消",
 });

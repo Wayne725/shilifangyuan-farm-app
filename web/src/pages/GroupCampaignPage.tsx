@@ -13,6 +13,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import {
   defaultInvoicePreference,
   InvoicePreferenceFields,
@@ -31,6 +32,9 @@ import type { GroupCampaign, PickupLocation, ShippingChannel } from "../lib/type
 
 interface GroupQuote {
   membership_type: string;
+  member_tax_exempt?: boolean;
+  tax_amount?: number;
+  tax_type?: "taxable" | "tax_exempt";
   quantity: number;
   unit_price: number;
   product_subtotal: number;
@@ -62,11 +66,12 @@ export function GroupCampaignPage() {
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
   });
   const quote = useQuery({
-    queryKey: ["group-quote", campaignId, quantity, method, shippingChannel, user?.id],
+    queryKey: ["group-quote", campaignId, quantity, method, shippingChannel, user?.id, invoicePreference.buyerType],
     queryFn: () => apiFetch<GroupQuote>(`/v1/group-campaigns/${campaignId}/quote`, {
       method: "POST",
       body: JSON.stringify({
         quantity,
+        invoice_buyer_type: invoicePreference.buyerType,
         fulfillment_method: method === "shipping" ? "ecpay_logistics" : "cooperative_pickup",
         shipping_channel: method === "shipping" ? shippingChannel : null,
       }),
@@ -135,7 +140,7 @@ export function GroupCampaignPage() {
   const item = campaign.data;
   const shippingReady = Boolean(shippingChannel && recipientName.trim() && recipientPhone.trim() && shippingAddress.trim());
   const submitReady = Boolean(
-    quote.data &&
+    quote.data && !quote.isFetching && !quote.isError &&
       invoicePreferenceIsValid(invoicePreference) &&
       (method === "pickup" ? pickupLocationId : shippingReady),
   );
@@ -225,6 +230,7 @@ export function GroupCampaignPage() {
                 <div><dt>商品小計</dt><dd>{formatMoney(quote.data?.product_subtotal || 0)}</dd></div>
                 {logisticsEnabled && <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>}
                 <InvoicePreferenceSummary value={invoicePreference} />
+                {quote.data && <InvoiceTaxSummary items={[{ tax_type: quote.data.tax_type }]} memberTaxExempt={quote.data.member_tax_exempt} shippingFee={quote.data.shipping_fee} taxAmount={quote.data.tax_amount} />}
                 <div className="offer-total"><dt>合計</dt><dd>{formatMoney(quote.data?.amount_total || 0)}</dd></div>
               </dl>
               {checkout.isError && <p className="form-error">{checkout.error.message}</p>}

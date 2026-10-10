@@ -290,11 +290,7 @@ async def payment_checkout(
         order = await session.scalar(
             select(Order)
             .where(Order.id == attempt.order_id)
-            .options(
-                selectinload(Order.items),
-                selectinload(Order.fulfillment),
-                selectinload(Order.meal_event),
-            )
+            .options(selectinload(Order.items), selectinload(Order.meal_event), selectinload(Order.fulfillment))
         )
     try:
         if order is not None:

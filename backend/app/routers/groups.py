@@ -24,8 +24,10 @@ from ..domain import (
     campaign_available_quantity,
     confirm_campaign,
     included_tax_amount,
+    member_sale_is_tax_exempt,
     order_fulfillment_is_irreversible,
     price_for_membership,
+    sale_tax_type,
     validate_campaign_schedule,
     validate_group_join,
 )
@@ -438,8 +440,26 @@ async def quote_group_join(
             raise HTTPException(status_code=422, detail="找不到適用的物流費率")
         if product_subtotal < rate.free_shipping_threshold:
             shipping_fee = rate.fee
+    _, _, product_tax_type, _, _ = await target_order_snapshot(
+        session, campaign.target_type, campaign.target_id
+    )
+    tax_type = sale_tax_type(
+        product_tax_type, membership_type, body.invoice_buyer_type
+    )
+    member_tax_exempt = member_sale_is_tax_exempt(
+        membership_type, body.invoice_buyer_type
+    )
     return GroupJoinQuoteRead(
         membership_type=membership_type,
+        member_tax_exempt=member_tax_exempt,
+        tax_type=tax_type,
+        tax_amount=(
+            included_tax_amount(product_subtotal, tax_type)
+            + included_tax_amount(
+                shipping_fee,
+                TaxType.TAX_EXEMPT if member_tax_exempt else TaxType.TAXABLE,
+            )
+        ),
         quantity=body.quantity,
         unit_price=unit_price,
         product_subtotal=product_subtotal,
@@ -482,6 +502,7 @@ async def join_campaign(
         session, campaign.target_type, campaign.target_id
     )
     membership_type = membership_type_for_user(user)
+    tax_type = sale_tax_type(tax_type, membership_type, body.invoice_buyer_type)
     unit_price = price_for_membership(
         campaign.member_price,
         campaign.nonmember_price,
@@ -517,6 +538,9 @@ async def join_campaign(
         user_id=user.id,
         group_campaign=campaign,
         membership_type_snapshot=membership_type,
+        member_tax_exempt_snapshot=member_sale_is_tax_exempt(
+            membership_type, body.invoice_buyer_type
+        ),
         amount_total=unit_price * body.quantity,
         tax_amount=included_tax_amount(unit_price * body.quantity, tax_type),
         contact_email=body.contact_email.lower(),

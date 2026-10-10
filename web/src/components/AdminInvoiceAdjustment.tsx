@@ -8,7 +8,7 @@ export function AdminInvoiceAdjustment({ order }: { order: Order }) {
   const client = useQueryClient();
   const cancel = useMutation({
     mutationFn: () => apiFetch<{ status: string; message: string }>(`/v1/admin/orders/${order.id}/invoice/void`, { method: "POST", body: JSON.stringify({ reason }) }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["admin-orders"] }),
+    onSuccess: () => Promise.all(["admin-orders", "admin-meal-orders", "admin-meal-operations-summary", "meal-sales-report"].map((key) => client.invalidateQueries({ queryKey: [key] }))),
   });
   if (order.payment_status !== "refunded" || order.invoice?.provider !== "fanyu" || order.invoice.status === "voided") return null;
   return <div className="operation-invoice-query">

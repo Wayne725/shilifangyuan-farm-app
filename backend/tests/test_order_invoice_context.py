@@ -6,7 +6,7 @@ from app.models import GroupCampaign, Meal, MealEvent, MealEventOffering, MealEv
 from app.routers.groups import groups_router
 from app.routers.meals import meals_router
 from app.routers.orders import orders_router
-from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings
+from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings, tomorrow_meal_timeline
 from tests.test_integrations import make_regular_order
 
 
@@ -35,8 +35,7 @@ async def test_each_checkout_persists_server_invoice_context_before_payment(data
     else:
         event = MealEvent(
             title="隔離便當", location="測試取餐點", status=MealEventStatus.PUBLISHED,
-            ordering_starts_at=now - timedelta(days=1), ordering_ends_at=now + timedelta(days=1),
-            pickup_starts_at=now + timedelta(days=2), pickup_ends_at=now + timedelta(days=3),
+            **tomorrow_meal_timeline(now),
             created_by_id=user.id,
         )
         offering = MealEventOffering(

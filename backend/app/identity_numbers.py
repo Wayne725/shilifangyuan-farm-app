@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import zlib
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,8 @@ async def next_identity_number(
     column: Any,
     prefix: str,
     now: Optional[datetime] = None,
+    *,
+    reserved_columns: Sequence[Any] = (),
 ) -> str:
     current = now or datetime.now(timezone.utc)
     year_prefix = f"{prefix}-{current.year}-"
@@ -22,11 +24,11 @@ async def next_identity_number(
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": zlib.crc32(year_prefix.encode("utf-8"))},
         )
-    values = list(
-        await session.scalars(
-            select(column).where(column.like(f"{year_prefix}%"))
-        )
-    )
+    values = []
+    for number_column in (column, *reserved_columns):
+        values.extend(await session.scalars(
+            select(number_column).where(number_column.like(f"{year_prefix}%"))
+        ))
     sequences = [
         int(value.removeprefix(year_prefix))
         for value in values

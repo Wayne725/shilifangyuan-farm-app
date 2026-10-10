@@ -10,7 +10,7 @@ from app.meal_schedules import TAIPEI, generate_scheduled_meal_events
 from app.models import Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User, UserRole
 from app.routers.meals import meals_router
 from app.schemas import MealScheduleInput
-from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.support import api_test_context, auth_headers, make_test_settings, tomorrow_meal_timeline
 
 
 def schedule_body(meal_id: str, **overrides):
@@ -102,10 +102,11 @@ async def test_generation_uses_taipei_dates_cross_midnight_and_does_not_reopen_c
     now = datetime(2027, 1, 1, 16, 5, tzinfo=timezone.utc)
     created_ids = await generate_scheduled_meal_events(session, now)
     events = list(await session.scalars(select(MealEvent).order_by(MealEvent.pickup_starts_at)))
-    assert len(created_ids) == 4
-    assert events[0].service_date.isoformat() == "2027-01-02"
-    assert events[0].pickup_starts_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-02T23:30:00+08:00"
-    assert events[0].pickup_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-03T00:30:00+08:00"
+    assert len(created_ids) == 3
+    assert events[0].service_date.isoformat() == "2027-01-03"
+    assert events[0].pickup_starts_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-03T23:30:00+08:00"
+    assert events[0].pickup_slot_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-04T00:30:00+08:00"
+    assert events[0].pickup_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-04T01:00:00+08:00"
     events[0].status = MealEventStatus.CANCELLED
     await session.commit()
     assert await generate_scheduled_meal_events(session, now) == []
@@ -127,7 +128,7 @@ async def test_weekly_schedule_defaults_monday_to_saturday_and_never_drifts(sche
     await generate_scheduled_meal_events(session, monday)
     await generate_scheduled_meal_events(session, monday + timedelta(days=7))
     events = list(await session.scalars(select(MealEvent)))
-    assert len(events) == 13
+    assert len(events) == 12
     assert all(event.service_date.weekday() != 6 for event in events)
     assert {event.service_date.weekday() for event in events} == set(range(6))
 
@@ -165,9 +166,8 @@ async def preorder_context(schedule_context):
     client, session, admin, buyer, meal = schedule_context
     now = datetime.now(timezone.utc)
     event = MealEvent(
-        title="可提前預訂", location="取餐區", ordering_starts_at=now - timedelta(days=1),
-        ordering_ends_at=now + timedelta(days=2), pickup_starts_at=now + timedelta(days=2, hours=1),
-        pickup_ends_at=now + timedelta(days=2, hours=2), status=MealEventStatus.PUBLISHED,
+        title="可提前預訂", location="取餐區", **tomorrow_meal_timeline(now),
+        status=MealEventStatus.PUBLISHED,
         created_by_id=admin.id, offerings=[MealEventOffering(meal_id=meal.id, price=100, capacity=10)],
     )
     session.add(event)
@@ -179,7 +179,7 @@ async def preorder_context(schedule_context):
 @pytest.mark.asyncio
 async def test_selected_pickup_time_is_saved_and_visible_to_buyer_and_admin(preorder_context):
     client, session, admin, buyer, event, body = preorder_context
-    selected = event.pickup_starts_at + timedelta(minutes=20)
+    selected = event.pickup_starts_at + timedelta(minutes=30)
     body["pickup_at"] = selected.isoformat()
     quote = await client.post(f"/v1/meal-events/{event.id}/quote", json=body)
     assert quote.status_code == 200, quote.text
@@ -280,7 +280,12 @@ async def test_any_existing_order_prevents_event_update(preorder_context):
     for cancel_first in (False, True):
         if cancel_first:
             cancel = await client.post(f"/v1/meal-orders/{created.json()['id']}/cancel", json={"reason": "測試取消"}, headers=auth_headers(buyer))
-            assert cancel.status_code == 200
+            assert cancel.status_code == 201
+            approved = await client.post(
+                f"/v1/admin/meal-cancellation-requests/{cancel.json()['id']}/review",
+                json={"decision": "approve", "reason": "同意測試退單"}, headers=auth_headers(admin),
+            )
+            assert approved.status_code == 200
         response = await client.put(f"/v1/admin/meal-events/{event.id}", json=update, headers=auth_headers(admin))
         assert response.status_code == 409
     detail = await client.get(f"/v1/meal-events/{event.id}")

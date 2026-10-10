@@ -1,0 +1,97 @@
+.login-dialog { font-size: 1.125rem; line-height: 1.65; }
+.login-dialog .login-form .login-preference { display: flex; align-items: center; gap: .75rem; min-height: 3rem; }
+.login-dialog .login-preference input { width: 1.4rem; min-height: 1.4rem; height: 1.4rem; flex-shrink: 0; margin: 0; }
+.login-dialog .login-preference-help, .login-dialog .dialog-footnote { font-size: 1rem; line-height: 1.65; }
+.login-dialog .login-form input:not([type="checkbox"]), .login-dialog .button { min-height: 3rem; font-size: 1.125rem; }
+
+.line-membership-intent,
+.line-callback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.line-membership-intent button {
+  flex: 1;
+  min-height: 48px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--ink);
+  background: var(--paper-light);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.line-membership-intent button[aria-pressed="true"] {
+  color: var(--paper-light);
+  background: var(--moss-dark);
+}
+
+.line-login-entry .line-login-button {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid #087f3c;
+  background: #06c755;
+  color: #062a13;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.line-login-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.line-login-entry p,
+.line-login-alternative,
+.line-account-link p,
+.line-callback-page p {
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.line-account-link {
+  margin: 24px 0;
+  padding: 24px 0;
+  border-block: 1px solid var(--line);
+}
+
+.line-account-link .line-login-entry {
+  max-width: 400px;
+}
+
+.line-account-link h2,
+.line-callback-page h2 {
+  font-size: 24px;
+}
+
+.line-callback-page {
+  max-width: 680px;
+  margin: 40px auto;
+  padding: 24px;
+}
+
+.line-callback-page h1 {
+  font-size: 36px;
+}
+
+.line-callback-page input,
+.line-callback-page .button {
+  min-height: 48px;
+  font-size: 18px;
+}
+
+.line-callback-page form {
+  display: grid;
+  gap: 20px;
+}
+
+.line-membership-intent button:focus-visible,
+.line-login-button:focus-visible,
+.line-callback-page button:focus-visible,
+.line-callback-page a:focus-visible {
+  outline: 3px solid var(--moss-dark);
+  outline-offset: 3px;
+}

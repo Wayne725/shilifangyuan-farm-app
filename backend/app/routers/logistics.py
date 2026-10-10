@@ -29,7 +29,7 @@ from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
 from ..sales_scope import require_sales_scope_allows
 from ..database import get_session
-from ..domain import DomainError
+from ..domain import DomainError, order_tax_amount
 from ..integrations.common import IntegrationError
 from ..integrations.ecpay_logistics import (
     LogisticsSelectionRequest as ECPaySelectionRequest,
@@ -647,6 +647,7 @@ async def create_logistics_selection(
     shipment.status = ShipmentStatus.SELECTION_PENDING
     # The buyer pays subtotal + shipping; keep the order total authoritative.
     order.amount_total = subtotal + shipping_fee
+    order.tax_amount = order_tax_amount(order, shipping_fee)
     await session.commit()
     return LogisticsSelectionRead(
         shipment=_shipment_read(shipment),
@@ -858,6 +859,7 @@ async def receive_logistics_selection_result(
     shipment.temperature = actual_temperature
     shipment.shipping_fee = shipping_fee
     order.amount_total = subtotal + shipping_fee
+    order.tax_amount = order_tax_amount(order, shipping_fee)
     _update_shipment_provider_data(shipment, data)
     shipment.status = ShipmentStatus.READY_TO_CREATE
     # One-time use: the picker has done its job for this shipment.

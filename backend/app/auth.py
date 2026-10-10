@@ -77,6 +77,8 @@ def verify_and_update_password(
     password: str,
     encoded: str,
 ) -> tuple[bool, Optional[str]]:
+    if encoded == "!line-only":
+        return False, None
     if encoded.startswith("pbkdf2_sha256$"):
         verified = _verify_legacy_password(password, encoded)
         return verified, hash_password(password) if verified else None
@@ -96,6 +98,8 @@ def create_token(
     token_type: str,
     expires_delta: timedelta,
     settings: Optional[Settings] = None,
+    *,
+    remember_me: bool = True,
 ) -> str:
     active_settings = settings or get_settings()
     now = datetime.now(timezone.utc)
@@ -121,6 +125,8 @@ def create_token(
         "exp": int((now + expires_delta).timestamp()),
         "jti": str(uuid4()),
     }
+    if token_type == "refresh":
+        payload["remember_me"] = remember_me
     return jwt.encode(
         payload,
         active_settings.jwt_secret,
@@ -158,7 +164,7 @@ def decode_token(
 
 
 def make_token_pair(
-    user: User, settings: Optional[Settings] = None
+    user: User, settings: Optional[Settings] = None, *, remember_me: bool = True
 ) -> Dict[str, str]:
     active_settings = settings or get_settings()
     return {
@@ -173,6 +179,7 @@ def make_token_pair(
             "refresh",
             timedelta(days=active_settings.refresh_token_days),
             active_settings,
+            remember_me=remember_me,
         ),
         "token_type": "bearer",
     }

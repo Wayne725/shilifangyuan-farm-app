@@ -20,24 +20,21 @@ function summary(events: MealEvent[], now: number): string {
 export function MealDateNavigation({ events, selectedDate, onDateChange, period, onPeriodChange, now }: Props) {
   const today = taipeiDate(now);
   const tomorrow = shiftMealDate(today, 1);
-  const dates = [...new Set([
-    ...Array.from({ length: 8 }, (_, index) => shiftMealDate(today, index)),
-    ...events.map(mealServiceDate),
-  ])].sort();
+  const dates = [tomorrow];
   const selectedEvents = events.filter((event) => mealServiceDate(event) === selectedDate);
 
   return <section className="meal-date-navigation" aria-label="便當日期與餐別">
     <div className="meal-date-heading">
       <h3>選擇取餐日期</h3>
-      <p>台灣時間 · 日期可左右滑動</p>
+      <p>只能提前一天預訂，今天可訂明天。所有時間皆為台灣時間。</p>
     </div>
     <div className="meal-date-strip" role="group" aria-label="取餐日期">
       {dates.map((date) => {
         const day = new Date(`${date}T12:00:00+08:00`).getUTCDay();
-        const relative = date === today ? "今天" : date === tomorrow ? "明天" : "";
+        const relative = "明天";
         const monthDay = `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
         const dateEvents = events.filter((event) => mealServiceDate(event) === date);
-        const status = !dateEvents.length && day === 0 ? "休息" : summary(dateEvents, now);
+        const status = !dateEvents.length ? "菜單待公告" : summary(dateEvents, now);
         return <button key={date} type="button" className="meal-date-button"
           aria-label={`${relative ? `${relative} ` : ""}${monthDay}（${weekdays[day]}），${status}`}
           aria-pressed={selectedDate === date} disabled={!dateEvents.length}
@@ -59,7 +56,7 @@ export function MealDateNavigation({ events, selectedDate, onDateChange, period,
           return <button key={value} type="button" aria-label={`${label}，${status}`}
             aria-pressed={period === value} disabled={!periodEvents.length}
             onClick={() => onPeriodChange(value)}>
-            <span>{label}</span><small>{status}</small>
+            <span>{label}</span><small>{value === "lunch" ? "11:00–13:00" : "16:30–18:00"} · {status}</small>
           </button>;
         })}
       </div>

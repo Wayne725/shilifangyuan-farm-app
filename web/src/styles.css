@@ -7484,3 +7484,757 @@ p {
 .admin-pagination { align-items: center; justify-content: space-between; }
 .admin-failure-panel { margin: 24px auto; padding: 24px; max-width: 1440px; }
 .failed-job { padding: 16px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+
+.meal-offer-page .meal-offer-hero {
+  display: block;
+  min-height: 0;
+}
+
+.meal-offer-page .offer-copy {
+  padding: clamp(24px, 4vw, 44px);
+}
+
+.meal-offer-page .offer-copy h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.4;
+}
+
+.meal-offer-page .offer-copy .meal-event-status {
+  align-self: start;
+  margin-bottom: 12px;
+  padding: 6px 12px;
+  color: var(--moss-dark);
+  background: var(--harbor-pale);
+}
+
+.meal-offer-page .offer-copy dl {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.meal-offer-page .offer-copy dd,
+.meal-offer-page .offer-copy > p:not(.eyebrow),
+.meal-offer-page .meal-offering-copy p {
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.meal-offer-page .text-link,
+.meal-offer-page .offer-copy dt,
+.meal-offer-page .field,
+.meal-offer-page .field-help,
+.meal-offer-page .form-error,
+.meal-offer-page .meal-selection-notice,
+.meal-offer-page .meal-offering-copy small,
+.meal-offer-page .meal-option-group legend small,
+.meal-offer-page .meal-option-list button small,
+.meal-offer-page .meal-option-error,
+.meal-offer-page .pickup-window small,
+.meal-offer-page .pickup-note,
+.meal-offer-page .meal-quote-line dt small,
+.meal-offer-page .invoice-type-switch small,
+.meal-offer-page .invoice-carrier-options small,
+.meal-offer-page .invoice-preference-panel p {
+  font-size: 16px;
+  line-height: 1.6;
+  letter-spacing: 0;
+}
+
+.meal-offer-page .field select,
+.meal-offer-page .invoice-preference input {
+  min-height: 48px;
+  font-size: 18px;
+}
+
+.meal-offer-page .invoice-preference input[type="radio"] {
+  min-height: 0;
+}
+
+.meal-offer-page .invoice-preference-panel label,
+.meal-offer-page .invoice-type-switch strong,
+.meal-offer-page .invoice-carrier-options strong,
+.meal-offer-page .meal-option-group legend,
+.meal-offer-page .meal-summary dt,
+.meal-offer-page .meal-summary dd,
+.meal-offer-page .meal-quote-line dt strong,
+.meal-offer-page .pickup-window strong {
+  font-size: 18px;
+}
+
+.meal-offer-page .meal-checkout {
+  gap: 32px;
+  padding-top: 32px;
+}
+
+.meal-offer-page .meal-offering-summary {
+  grid-template-columns: 80px minmax(0, 1fr) auto;
+  gap: 16px;
+}
+
+.meal-offer-page .meal-offering-summary img {
+  width: 80px;
+  height: 80px;
+}
+
+.meal-offer-page .meal-offering-copy h3 {
+  font-size: 22px;
+}
+
+.meal-offer-page .meal-offering-copy strong {
+  font-size: 22px;
+}
+
+.meal-offer-page .quantity-control {
+  gap: 8px;
+  width: fit-content;
+  padding: 4px;
+}
+
+.meal-offer-page .quantity-control button {
+  width: 48px;
+  height: 48px;
+}
+
+.meal-offer-page .quantity-control button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.meal-offer-page .quantity-control span {
+  min-width: 24px;
+  font-size: 22px;
+}
+
+.meal-offer-page .meal-option-groups {
+  margin-left: 96px;
+}
+
+.meal-offer-page .meal-option-list button,
+.meal-offer-page .button {
+  min-height: 48px;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.meal-offer-page .meal-summary {
+  min-width: 0;
+  padding: 24px;
+  scroll-margin-top: 32px;
+}
+
+.meal-offer-page .meal-summary dl > div {
+  gap: 12px;
+}
+
+.meal-offer-page .meal-quote-line dt {
+  min-width: 0;
+}
+
+.meal-offer-page .meal-quote-line dd,
+.meal-offer-page .offer-total dd {
+  flex-shrink: 0;
+}
+
+.meal-offer-page .offer-total dd {
+  font-size: 28px;
+}
+
+.meal-summary-shortcut {
+  display: none;
+}
+
+.meal-offer-page .meal-draft-reset {
+  margin-bottom: 12px;
+  padding: 12px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.meal-cancellation-card {
+  margin: 20px 0;
+  padding: 24px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-light);
+  overflow-wrap: anywhere;
+}
+
+.meal-cancellation-card h3 {
+  font-size: 22px;
+}
+
+.meal-cancellation-card p,
+.meal-cancellation-card li,
+.meal-cancellation-management > p,
+.meal-cancellation-management .admin-order-search,
+.meal-orders-page .inline-confirm {
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.meal-cancellation-reason {
+  white-space: pre-wrap;
+}
+
+.meal-cancellation-review {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.meal-cancellation-review textarea,
+.meal-orders-page .inline-confirm textarea,
+.meal-cancellation-management select {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px;
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  font-size: 18px;
+}
+
+.meal-cancellation-card .button,
+.meal-cancellation-management .button,
+.meal-orders-page .inline-confirm .button {
+  min-height: 48px;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+@media (max-width: 1180px) {
+  body:has(.meal-offer-page) {
+    padding-bottom: calc(110px + env(safe-area-inset-bottom));
+  }
+
+  .meal-offer-page .meal-offering-summary {
+    grid-template-columns: 80px minmax(0, 1fr);
+  }
+
+  .meal-offer-page .meal-offering-list .quantity-control {
+    grid-column: 2;
+  }
+
+  .meal-offer-page .meal-option-groups {
+    margin-left: 0;
+  }
+
+  .meal-summary-shortcut {
+    position: fixed;
+    z-index: 20;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px clamp(16px, 4vw, 40px) calc(12px + env(safe-area-inset-bottom));
+    background: var(--paper-light);
+    border-top: 1px solid var(--line-strong);
+  }
+
+  .meal-summary-shortcut > div {
+    min-width: 0;
+  }
+
+  .meal-summary-shortcut span,
+  .meal-summary-shortcut strong {
+    display: block;
+  }
+
+  .meal-summary-shortcut span {
+    font-size: 16px;
+  }
+
+  .meal-summary-shortcut strong {
+    font-size: 24px;
+  }
+
+  .meal-summary-shortcut .button {
+    flex-shrink: 0;
+    padding: 12px 16px;
+  }
+}
+
+@media (max-width: 620px) {
+  .meal-offer-page .offer-copy dl {
+    grid-template-columns: 1fr;
+  }
+
+  .meal-offer-page .meal-offering-summary {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .meal-offer-page .meal-offering-summary img {
+    width: 64px;
+    height: 64px;
+  }
+
+  .meal-offer-page .meal-offering-list .quantity-control {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .meal-offer-page .meal-summary {
+    padding: 20px;
+  }
+
+  .meal-offer-page .offer-total dd {
+    font-size: 24px;
+  }
+}
+
+
+.meal-order-search-heading,
+.meal-operation-order > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.meal-order-management h2 {
+  font-size: clamp(24px, 3vw, 32px);
+  line-height: 1.4;
+}
+
+.meal-order-management p,
+.meal-order-management li,
+.meal-order-management .field > span {
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.meal-operation-tasks {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 24px 0 12px;
+}
+
+.meal-operation-tasks > button {
+  display: grid;
+  gap: 8px;
+  padding: 20px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  transition: background-color 150ms, border-color 150ms;
+}
+
+.meal-operation-tasks > button:hover,
+.meal-operation-tasks > button[aria-pressed="true"] {
+  background: var(--harbor-pale);
+  border-color: var(--moss-dark);
+}
+
+.meal-operation-tasks span {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.meal-operation-tasks strong {
+  font-size: 32px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.meal-operation-tasks small {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.meal-order-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  padding: 24px 0;
+  margin: 20px 0;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.meal-order-search-field,
+.meal-order-filters .form-actions,
+.meal-order-filters .form-error {
+  grid-column: 1 / -1;
+}
+
+.meal-order-filters input,
+.meal-order-filters select {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 12px;
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  font-size: 18px;
+}
+
+.meal-order-management .button,
+.meal-operation-order summary {
+  min-height: 48px;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.meal-order-management button:focus-visible,
+.meal-order-management input:focus-visible,
+.meal-order-management select:focus-visible,
+.meal-order-management a:focus-visible,
+.meal-operation-order summary:focus-visible {
+  outline: 2px solid var(--moss-dark);
+  outline-offset: 3px;
+}
+
+.meal-order-active-queue,
+.meal-order-review-status {
+  padding: 12px 16px;
+  background: var(--harbor-pale);
+  color: var(--moss-dark);
+  font-weight: 600;
+}
+
+.meal-operation-order {
+  padding: 28px 0;
+  border-bottom: 1px solid var(--line-strong);
+  overflow-wrap: anywhere;
+}
+
+.meal-operation-order h3 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.5;
+}
+
+.meal-operation-order > header > strong {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.meal-operation-order p {
+  margin: 8px 0;
+}
+
+.meal-operation-order summary {
+  padding: 12px 0;
+  cursor: pointer;
+  color: var(--moss-dark);
+  font-weight: 600;
+}
+
+.meal-operation-order details {
+  margin: 16px 0;
+}
+
+.meal-order-result-count {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .meal-operation-tasks,
+  .meal-order-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .meal-operation-tasks,
+  .meal-order-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .meal-operation-order .button {
+    width: 100%;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.5;
+  }
+}
+
+
+.admin-meals-workspace > .admin-social-tabs > .tab-list {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-meals-workspace > .admin-social-tabs > .tab-list button {
+  min-height: 48px;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.admin-meals-workspace > .admin-social-tabs > .tab-list button:focus-visible {
+  outline: 2px solid var(--moss-dark);
+  outline-offset: 3px;
+}
+
+.meal-shop-intro {
+  min-height: 0;
+  padding-block: 32px;
+  align-items: center;
+}
+
+.meal-shop-intro h1,
+.meal-orders-page .workspace-heading h1,
+.meal-help-page header h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.4;
+}
+
+.meal-shop-intro p,
+.meal-booking-content .section-heading p,
+.meal-booking-content .meal-date-navigation h3,
+.meal-booking-content .meal-date-heading p,
+.meal-booking-content .meal-date-weekday,
+.meal-booking-content .meal-date-status,
+.meal-booking-content .meal-period-options small,
+.meal-event-row p,
+.meal-event-row small,
+.meal-orders-page p,
+.meal-orders-page small,
+.meal-orders-page .order-index span,
+.meal-orders-page .order-state,
+.meal-orders-page .text-link,
+.meal-orders-page .order-detail-head span,
+.meal-orders-page .meal-pickup-info span,
+.meal-orders-page .invoice-summary-card span,
+.meal-help-page p,
+.meal-help-page .text-link {
+  font-size: 16px;
+  line-height: 1.7;
+  letter-spacing: 0;
+}
+
+.meal-shop-actions,
+.meal-help-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.meal-event-list {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.meal-event-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.meal-event-row > div {
+  min-width: 0;
+}
+
+.meal-event-row h3 {
+  margin: 8px 0;
+  font-size: 24px;
+  line-height: 1.5;
+}
+
+.meal-event-row small {
+  display: block;
+}
+
+.meal-event-row > .button,
+.meal-event-unavailable {
+  flex-shrink: 0;
+}
+
+.meal-event-unavailable {
+  color: var(--ink-soft);
+  font-size: 18px;
+}
+
+.meal-booking-content .meal-period-options button,
+.meal-shop-actions .button,
+.meal-event-row .button,
+.meal-orders-page .button,
+.meal-help-page .button {
+  min-height: 48px;
+  font-size: 18px;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+.meal-offer-page .meal-offering-summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.meal-offer-page .meal-option-groups {
+  margin-left: 0;
+}
+
+.meal-selected-date,
+.meal-pickup-selection {
+  margin-bottom: 32px;
+}
+
+.meal-selected-date > p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+  font-size: 18px;
+}
+
+.meal-pickup-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.meal-pickup-options button {
+  min-width: 90px;
+  min-height: 52px;
+  padding: 12px 20px;
+  color: var(--ink);
+  background: var(--paper-light);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.meal-pickup-options button[aria-pressed="true"] {
+  color: var(--paper-light);
+  background: var(--moss-dark);
+  border-color: var(--moss-dark);
+}
+
+.meal-pickup-options button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.meal-pickup-confirmation {
+  color: var(--moss-dark);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.meal-orders-page .order-index button {
+  min-height: 140px;
+  padding: 20px;
+}
+
+.meal-orders-page .order-index strong,
+.meal-orders-page .meal-pickup-info strong,
+.meal-orders-page .invoice-summary-card strong {
+  font-size: 20px;
+  line-height: 1.6;
+}
+
+.meal-orders-page .order-lines strong,
+.meal-orders-page .order-lines b {
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.meal-orders-page .order-lines em {
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.meal-orders-page .inline-confirm .icon-button {
+  width: 48px;
+  height: 48px;
+}
+
+.meal-orders-page .pickup-ticket > strong {
+  font-size: clamp(36px, 8vw, 52px);
+}
+
+.meal-help-page .help-list h2,
+.meal-order-lines h3 {
+  font-size: 22px;
+  line-height: 1.5;
+}
+
+.meal-help-actions {
+  margin-bottom: 28px;
+}
+
+.meal-faq {
+  margin-top: 40px;
+}
+
+.meal-faq details {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.meal-faq summary {
+  min-height: 48px;
+  padding-block: 12px;
+  font-size: 18px;
+  line-height: 1.6;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.meal-faq details p {
+  padding: 8px 0 12px;
+}
+
+.meal-booking-content button:focus-visible,
+.meal-booking-content a:focus-visible,
+.meal-offer-page button:focus-visible,
+.meal-offer-page a:focus-visible,
+.meal-orders-page button:focus-visible,
+.meal-orders-page a:focus-visible,
+.meal-help-page a:focus-visible,
+.meal-faq summary:focus-visible {
+  outline: 3px solid var(--moss-dark);
+  outline-offset: 3px;
+}
+
+@media (max-width: 620px) {
+  .meal-event-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .meal-event-row .button,
+  .meal-shop-actions .button,
+  .meal-help-actions .button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .meal-shop-actions,
+  .meal-help-actions {
+    width: 100%;
+  }
+
+  .meal-offer-page .meal-offering-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .meal-offer-page .meal-offering-list .quantity-control {
+    justify-self: start;
+    grid-column: 1;
+  }
+
+  .meal-help-page .help-list article {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .meal-help-page .help-list article > svg {
+    display: none;
+  }
+}

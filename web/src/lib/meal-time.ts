@@ -41,21 +41,19 @@ export function formatMealDateTime(value?: string | null): string {
 }
 
 export function validPickupTime(value: string, event: MealEvent, now = Date.now()): boolean {
-  if (!value) return false;
-  const timestamp = new Date(`${value}:00+08:00`).getTime();
-  return timestamp >= new Date(event.pickup_starts_at).getTime()
-    && timestamp < new Date(event.pickup_ends_at).getTime()
-    && timestamp > now;
+  return pickupTimeOptions(event, now).some((option) => option.value === value);
 }
 
 export function mealOrderingOpen(event: MealEvent, now = Date.now()): boolean {
   return ["published", "pickup_open"].includes(event.status)
-    && new Date(event.ordering_starts_at).getTime() <= now
-    && new Date(event.ordering_ends_at).getTime() > now;
+    && mealServiceDate(event) === shiftMealDate(taipeiDate(now), 1)
+    && new Date(event.booking_starts_at || event.ordering_starts_at).getTime() <= now
+    && new Date(event.booking_ends_at || event.ordering_ends_at).getTime() > now;
 }
 
 export function mealBookingStatus(event: MealEvent, now = Date.now()): string {
-  if (event.status === "ordering_closed" || new Date(event.ordering_ends_at).getTime() <= now
+  if (mealServiceDate(event) <= taipeiDate(now) || event.status === "ordering_closed"
+    || new Date(event.booking_ends_at || event.ordering_ends_at).getTime() <= now
     || new Date(event.pickup_ends_at).getTime() <= now) return "已截止";
   if (!mealOrderingOpen(event, now)) return "尚未開放";
   const menu = event.offerings.filter((offering) => offering.is_active);
@@ -66,16 +64,22 @@ export function mealBookingStatus(event: MealEvent, now = Date.now()): string {
 }
 
 export function pickupTimeOptions(event: MealEvent, now = Date.now()): Array<{ value: string; label: string }> {
-  const options = [];
-  const end = new Date(event.pickup_ends_at).getTime();
-  const first = Math.ceil(new Date(event.pickup_starts_at).getTime() / 60000) * 60000;
+  if (mealServiceDate(event) !== shiftMealDate(taipeiDate(now), 1)) return [];
+  const start = new Date(event.pickup_starts_at).getTime();
+  const endInclusive = event.pickup_slot_ends_at != null;
+  const end = new Date(event.pickup_slot_ends_at ?? event.pickup_ends_at).getTime();
   const serviceDate = mealServiceDate(event);
-  for (let timestamp = first; timestamp < end; timestamp += 10 * 60000) {
-    if (timestamp <= now) continue;
-    options.push({
-      value: taipeiDateTimeInput(timestamp),
-      label: `${taipeiDate(timestamp) !== serviceDate ? "次日 " : ""}${formatMealDateTime(new Date(timestamp).toISOString())}`,
-    });
-  }
-  return options;
+  const clocks = mealPeriod(event) === "lunch"
+    ? ["11:00", "11:30", "12:00", "12:30", "13:00"]
+    : ["16:30", "17:00", "17:30", "18:00"];
+  const allowed = new Set(clocks.map((clock) => `${serviceDate}T${clock}`));
+  const slots = event.pickup_slots ?? clocks.map((clock) => `${serviceDate}T${clock}:00+08:00`);
+  return [...new Set(slots.map((slot) => taipeiDateTimeInput(slot)))]
+    .filter((value) => {
+      const timestamp = new Date(`${value}:00+08:00`).getTime();
+      const withinEnd = endInclusive ? timestamp <= end : timestamp < end;
+      return allowed.has(value) && timestamp >= start && timestamp < new Date(event.pickup_ends_at).getTime() && withinEnd && timestamp > now;
+    })
+    .sort()
+    .map((value) => ({ value, label: value.slice(11) }));
 }

@@ -180,6 +180,7 @@ class ResetPasswordRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    remember_me: bool = True
 
 
 class TokenResponse(ApiModel):
@@ -576,6 +577,7 @@ class InvoicePreferenceInput(BaseModel):
 
 class OrderQuoteRequest(BaseModel):
     items: List[OrderLineInput] = Field(min_length=1, max_length=100)
+    invoice_buyer_type: InvoiceBuyerType = InvoiceBuyerType.PERSONAL
 
 
 class OrderQuoteLine(ApiModel):
@@ -590,6 +592,8 @@ class OrderQuoteLine(ApiModel):
 
 class OrderQuoteRead(ApiModel):
     membership_type: MembershipType
+    member_tax_exempt: bool = False
+    tax_amount: int = 0
     amount_total: int
     items: List[OrderQuoteLine]
 
@@ -625,6 +629,7 @@ class GroupJoinRequest(InvoicePreferenceInput):
 
 class GroupJoinQuoteRequest(BaseModel):
     quantity: int = Field(ge=1, le=999)
+    invoice_buyer_type: InvoiceBuyerType = InvoiceBuyerType.PERSONAL
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
     shipping_channel: Optional[ShippingChannel] = None
 
@@ -645,6 +650,9 @@ class GroupJoinQuoteRequest(BaseModel):
 
 class GroupJoinQuoteRead(ApiModel):
     membership_type: MembershipType
+    member_tax_exempt: bool = False
+    tax_type: TaxType
+    tax_amount: int = 0
     quantity: int
     unit_price: int
     product_subtotal: int
@@ -695,6 +703,7 @@ class OrderRead(ApiModel):
     group_campaign_id: Optional[str]
     meal_event_id: Optional[str] = None
     membership_type_snapshot: MembershipType
+    member_tax_exempt_snapshot: bool = False
     amount_total: int
     tax_amount: int = 0
     contact_email: EmailStr
@@ -1198,15 +1207,22 @@ class MealScheduleInput(BaseModel):
     title: str = Field(min_length=1, max_length=140)
     location: str = Field(min_length=1, max_length=240)
     meal_period: Literal["lunch", "dinner"]
-    pickup_start_time: time
-    pickup_end_time: time
-    cutoff_time: time
+    pickup_start_time: time = time(11)
+    pickup_end_time: time = time(13)
+    cutoff_time: time = time.min
     cutoff_days_before: int = Field(default=0, ge=0, le=29)
     advance_days: int = Field(default=7, ge=1, le=30)
     weekdays: List[int] = Field(default_factory=lambda: list(range(6)), min_length=1, max_length=7)
     enabled: bool = False
     auto_publish: bool = False
     offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_period_times(cls, values):
+        if isinstance(values, dict) and values.get("meal_period") == "dinner":
+            return {"pickup_start_time": time(16, 30), "pickup_end_time": time(18), **values}
+        return values
 
     @model_validator(mode="after")
     def validate_schedule(self) -> "MealScheduleInput":
@@ -1269,6 +1285,10 @@ class MealEventRead(MealEventSummary):
     meal_period: Literal["lunch", "dinner"]
     schedule_template_id: Optional[str] = None
     can_edit: bool = False
+    pickup_slot_ends_at: Optional[datetime] = None
+    pickup_slots: List[datetime] = Field(default_factory=list)
+    booking_starts_at: datetime
+    booking_ends_at: datetime
 
 
 class MealOrderLineInput(BaseModel):
@@ -1320,6 +1340,9 @@ class MealPickupWindowRead(ApiModel):
 class MealOrderQuoteRead(ApiModel):
     sales_channel: SalesChannel
     fulfillment_method: FulfillmentMethod
+    membership_type: MembershipType = MembershipType.NONMEMBER
+    member_tax_exempt: bool = False
+    tax_amount: int = 0
     items: List[MealOrderQuoteItemRead]
     amount_total: int
     pickup: MealPickupWindowRead
@@ -1335,7 +1358,34 @@ class MealOrderItemRead(ApiModel):
     option_price: int
     unit_price: int
     subtotal: int
+    tax_type: TaxType
     selections: List[MealOptionSelectionRead] = Field(default_factory=list)
+
+
+class MealCancellationRequestCreate(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_required(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("請填寫退單原因")
+        return value.strip()
+
+
+class MealCancellationReview(MealCancellationRequestCreate):
+    decision: Literal["approve", "reject"]
+
+
+class MealCancellationRequestRead(ApiModel):
+    id: str
+    order_id: str
+    reason: str
+    status: Literal["pending", "approved", "rejected"]
+    requested_at: datetime
+    reviewed_by_id: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    review_reason: Optional[str] = None
 
 
 class MealOrderRead(ApiModel):
@@ -1359,9 +1409,70 @@ class MealOrderRead(ApiModel):
     paid_at: Optional[datetime]
     cancelled_at: Optional[datetime]
     amount_total: int
+    member_tax_exempt_snapshot: bool = False
+    tax_amount: int = 0
     created_at: datetime
     available_actions: List[str]
     items: List[MealOrderItemRead]
+    cancellation_request: Optional[MealCancellationRequestRead] = None
+
+
+class MealCancellationQueueItem(ApiModel):
+    request: MealCancellationRequestRead
+    order: MealOrderRead
+    customer_name: str
+    customer_email: str
+    can_approve: bool
+
+
+class MealCancellationQueueRead(ApiModel):
+    items: List[MealCancellationQueueItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class MealOrderSearchFilters(BaseModel):
+    search: str = Field(default="", max_length=100)
+    date_from: Optional[date] = Field(default=None, ge=date(2, 1, 1), le=date(9998, 12, 31))
+    date_to: Optional[date] = Field(default=None, ge=date(2, 1, 1), le=date(9998, 12, 31))
+    meal_period: Literal["all", "lunch", "dinner", "unspecified"] = "all"
+    pickup_time: Optional[str] = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    payment_status: Optional[PaymentStatus] = None
+    fulfillment_status: Optional[FulfillmentState] = None
+    invoice_status: Optional[InvoiceStatus] = None
+    review_status: Literal["all", "none", "pending", "approved", "rejected"] = "all"
+    work_queue: Literal["all", "pending_cancellation", "refund_attention", "invoice_attention", "today_pickup"] = "all"
+    limit: int = Field(default=30, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> "MealOrderSearchFilters":
+        if self.date_from and self.date_to and self.date_to < self.date_from:
+            raise ValueError("結束日期不能早於開始日期")
+        return self
+
+
+class MealAdminOrderItem(ApiModel):
+    order: MealOrderRead
+    customer_name: str
+    customer_email: str
+    meal_period: Optional[str] = None
+
+
+class MealAdminOrderPage(ApiModel):
+    items: List[MealAdminOrderItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class MealOperationsSummary(ApiModel):
+    today: date
+    pending_cancellation: int
+    refund_attention: int
+    invoice_attention: int
+    today_pickup: int
 
 
 class MealPickupCredentialRead(ApiModel):

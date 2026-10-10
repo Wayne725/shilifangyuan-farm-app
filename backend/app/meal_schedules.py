@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate
-
-
-TAIPEI = ZoneInfo("Asia/Taipei")
+from .meal_booking import TAIPEI
 
 
 async def generate_scheduled_meal_events(
@@ -56,9 +53,10 @@ async def generate_scheduled_meal_events(
                 time.fromisoformat(template.cutoff_time),
                 TAIPEI,
             )
-            if cutoff <= current:
+            cutoff = min(cutoff, datetime.combine(service_date, time.min, TAIPEI))
+            ordering_start = datetime.combine(service_date - timedelta(days=1), time.min, TAIPEI)
+            if cutoff <= current or cutoff <= ordering_start:
                 continue
-            ordering_start = datetime.combine(service_date - timedelta(days=template.advance_days), time.min, TAIPEI)
             event = MealEvent(
                 title=f"{template.title} {service_date.isoformat()}",
                 location=template.location,
@@ -68,7 +66,8 @@ async def generate_scheduled_meal_events(
                 ordering_starts_at=ordering_start.astimezone(timezone.utc),
                 ordering_ends_at=cutoff.astimezone(timezone.utc),
                 pickup_starts_at=pickup_start.astimezone(timezone.utc),
-                pickup_ends_at=pickup_end.astimezone(timezone.utc),
+                pickup_slot_ends_at=pickup_end.astimezone(timezone.utc),
+                pickup_ends_at=(pickup_end + timedelta(minutes=30)).astimezone(timezone.utc),
                 status=MealEventStatus.PUBLISHED if template.auto_publish else MealEventStatus.DRAFT,
                 created_by_id=template.created_by_id,
                 offerings=[MealEventOffering(**item) for item in template.offerings],

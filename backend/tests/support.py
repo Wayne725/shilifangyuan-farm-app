@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from decimal import Decimal
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -18,6 +20,17 @@ from app.integrations.invoice import (
     PreparedInvoiceLine,
 )
 from app.models import User
+
+
+def tomorrow_meal_timeline(now: datetime) -> dict[str, datetime]:
+    taipei = ZoneInfo("Asia/Taipei")
+    tomorrow = now.astimezone(taipei).date() + timedelta(days=1)
+    return {
+        "ordering_starts_at": datetime.combine(tomorrow - timedelta(days=1), time.min, taipei).astimezone(timezone.utc),
+        "ordering_ends_at": datetime.combine(tomorrow, time.min, taipei).astimezone(timezone.utc),
+        "pickup_starts_at": datetime.combine(tomorrow, time(11), taipei).astimezone(timezone.utc),
+        "pickup_ends_at": datetime.combine(tomorrow, time(13, 30), taipei).astimezone(timezone.utc),
+    }
 
 
 def fanyu_test_context() -> dict:

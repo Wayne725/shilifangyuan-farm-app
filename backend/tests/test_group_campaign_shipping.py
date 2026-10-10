@@ -191,6 +191,9 @@ async def test_group_quote_uses_server_membership_and_shipping_rate(
     assert quoted.status_code == 200, quoted.text
     assert quoted.json() == {
         "membership_type": "nonmember",
+        "member_tax_exempt": False,
+        "tax_type": "tax_exempt",
+        "tax_amount": 7,
         "quantity": 2,
         "unit_price": 520,
         "product_subtotal": 1040,

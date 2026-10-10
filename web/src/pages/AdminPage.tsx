@@ -10,16 +10,18 @@ import {
   UsersThree,
 } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { Link, useSearch } from "@tanstack/react-router";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminNav } from "../components/AdminNav";
 import { AdminFailurePanel } from "../components/AdminFailurePanel";
 import { AdminInvoiceAdjustment } from "../components/AdminInvoiceAdjustment";
+import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
+import "./AdminOrderOperations.css";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
-import { shippingChannelLabels, temperatureLabels } from "../lib/commerce";
+import { shippingChannelLabels } from "../lib/commerce";
 import {
   adminPaymentStatusLabel,
   fulfillmentStatusLabel,
@@ -30,7 +32,6 @@ import type {
   Order,
   PickupLocation,
   Product,
-  ShippingRate,
   Supplier,
 } from "../lib/types";
 
@@ -50,10 +51,16 @@ export function AdminPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
-  const [orderSearchInput, setOrderSearchInput] = useState("");
-  const [orderSearch, setOrderSearch] = useState("");
+  const routeSearch = useSearch({ from: "/admin" });
+  const [orderSearchInput, setOrderSearchInput] = useState(routeSearch.q || "");
+  const [orderSearch, setOrderSearch] = useState(routeSearch.q || "");
   const [orderOffset, setOrderOffset] = useState(0);
-  const [supplierQuery, locationQuery, productQuery, memberQuery, orderQuery, rateQuery] = useQueries({
+  useEffect(() => {
+    setOrderSearchInput(routeSearch.q || "");
+    setOrderSearch(routeSearch.q || "");
+    setOrderOffset(0);
+  }, [routeSearch.q]);
+  const [supplierQuery, locationQuery, productQuery, memberQuery, orderQuery] = useQueries({
     queries: [
       {
         queryKey: ["admin-suppliers"],
@@ -80,11 +87,6 @@ export function AdminPage() {
         queryFn: () => apiFetch<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12`),
         enabled: isAdmin,
       },
-      {
-        queryKey: ["admin-shipping-rates"],
-        queryFn: () => apiFetch<ShippingRate[]>("/v1/admin/shipping-rates?include_inactive=true"),
-        enabled: isAdmin,
-      },
     ],
   });
   const updateFulfillment = useMutation({
@@ -108,9 +110,10 @@ export function AdminPage() {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
+  const refreshFinancialOrders = () => Promise.all(["admin-orders", "admin-meal-orders", "admin-meal-operations-summary", "meal-sales-report"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   const refundOrder = useMutation({
     mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) => apiFetch<Order>(`/v1/orders/${orderId}/admin/refund`, { method: "POST", body: JSON.stringify({ reason }) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
+    onSuccess: refreshFinancialOrders,
   });
   const queryInvoice = useMutation({
     mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) =>
@@ -118,7 +121,7 @@ export function AdminPage() {
         method: "POST",
         body: JSON.stringify({ reason }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
+    onSuccess: refreshFinancialOrders,
   });
 
   if (!isAdmin) {
@@ -212,12 +215,12 @@ export function AdminPage() {
         </aside>
       </section>
 
-      <section className="admin-commerce content-section">
+      <section className="admin-commerce content-section admin-financial-orders">
         <div className="admin-orders-panel">
           <SectionHeading
-            eyebrow="PAYMENT & LOGISTICS"
-            title="訂單、付款與配送"
-            description="依序處理付款、備貨、物流建立與配送進度。"
+            eyebrow="訂單營運"
+            title="訂單、付款與發票"
+            description="使用訂單編號查詢，核對付款、退單及電子發票。便當現場取餐不收運費。"
           />
           {orderQuery.isPending && <LoadingLines count={4} />}
           {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
@@ -237,8 +240,9 @@ export function AdminPage() {
                   <span><CreditCard size={16} />{adminPaymentStatusLabel(order.payment_status)}</span>
                   <span><Package size={16} />{fulfillmentStatusLabel(order.fulfillment_status)}</span>
                   <span><FileText size={16} />{invoiceStatusLabel(order.invoice_status)}</span>
-                  {order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {order.shipment.status}</span>}
+                  {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {order.shipment.status}</span>}
                 </div>
+                <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} />
                 <AdminOrderAction
                   order={order}
                   busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending || refundOrder.isPending || queryInvoice.isPending}
@@ -267,12 +271,6 @@ export function AdminPage() {
           )}
         </div>
 
-        <aside className="shipping-rate-panel">
-          <p className="eyebrow">RATE TABLE</p>
-          <h2>現行運費</h2>
-          {rateQuery.isPending && <LoadingLines count={4} />}
-          <ShippingRateManager rates={rateQuery.data || []} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-shipping-rates"] })} />
-        </aside>
       </section>
     </>
   );
@@ -285,7 +283,7 @@ function AdminPaymentQuery({ orderId }: { orderId: string }) {
     mutationFn: () => apiFetch<{ message: string }>(`/v1/admin/orders/${orderId}/payment/query`, {
       method: "POST", body: JSON.stringify({ reason: reason.trim() }),
     }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
+    onSuccess: () => Promise.all(["admin-orders", "admin-meal-orders", "admin-meal-operations-summary", "meal-sales-report"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))),
   });
   return <form className="operation-invoice-query" onSubmit={(event) => { event.preventDefault(); if (reason.trim()) query.mutate(); }}>
     <label>金流查詢原因<input required maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
@@ -336,6 +334,9 @@ function AdminOrderAction({
       </button>
     </div>
   );
+  if (order.sales_channel === "meal_preorder") {
+    return <div className="operation-actions"><Link className="button button-quiet" to="/admin/meals">便當取餐與退單審核</Link>{invoiceControl}</div>;
+  }
   if (order.payment_status !== "paid") {
     return (
       <div className="operation-actions">
@@ -367,20 +368,6 @@ function AdminOrderAction({
       {invoiceControl}
     </div>
   );
-}
-
-function ShippingRateManager({ rates, onDone }: { rates: ShippingRate[]; onDone: () => void }) {
-  const [channel, setChannel] = useState<ShippingRate["channel"]>("home_delivery");
-  const [temperature, setTemperature] = useState<ShippingRate["temperature"]>("ambient");
-  const [fee, setFee] = useState(160);
-  const [threshold, setThreshold] = useState(1500);
-  const [effectiveFrom, setEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
-  const [editingId, setEditingId] = useState("");
-  const create = useMutation({ mutationFn: () => apiFetch<ShippingRate>("/v1/admin/shipping-rates", { method: "POST", body: JSON.stringify({ channel, temperature, fee, free_shipping_threshold: threshold, effective_from: effectiveFrom }) }), onSuccess: onDone });
-  const update = useMutation({ mutationFn: (rate: ShippingRate) => apiFetch<ShippingRate>(`/v1/admin/shipping-rates/${rate.id}`, { method: "PATCH", body: JSON.stringify({ fee, free_shipping_threshold: threshold, is_active: true }) }), onSuccess: () => { setEditingId(""); onDone(); } });
-  const deactivate = useMutation({ mutationFn: (rateId: string) => apiFetch<void>(`/v1/admin/shipping-rates/${rateId}`, { method: "DELETE" }), onSuccess: onDone });
-  const beginEdit = (rate: ShippingRate) => { setEditingId(rate.id); setFee(rate.fee); setThreshold(rate.free_shipping_threshold); };
-  return <><div className="rate-list">{rates.map((rate) => <article className={rate.is_active ? "" : "inactive"} key={rate.id}><div><strong>{shippingChannelLabels[rate.channel]}</strong><small>{temperatureLabels[rate.temperature]} · {rate.is_active ? "啟用" : "停用"}</small></div>{editingId === rate.id ? <div className="rate-inline-edit"><input aria-label="運費" min={0} type="number" value={fee} onChange={(event) => setFee(Number(event.target.value))} /><input aria-label="免運門檻" min={0} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /><button type="button" disabled={update.isPending} onClick={() => update.mutate(rate)}>儲存</button></div> : <><span>{formatMoney(rate.fee)}</span><small>滿 {formatMoney(rate.free_shipping_threshold)} 免運</small><div className="rate-actions"><button type="button" onClick={() => beginEdit(rate)}>編輯</button>{rate.is_active && <button type="button" disabled={deactivate.isPending} onClick={() => deactivate.mutate(rate.id)}>停用</button>}</div></>}</article>)}</div><form className="rate-create" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><strong>新增運費</strong><select value={channel} onChange={(event) => setChannel(event.target.value as typeof channel)}>{Object.entries(shippingChannelLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={temperature} onChange={(event) => setTemperature(event.target.value as typeof temperature)}>{Object.entries(temperatureLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input aria-label="運費" min={0} type="number" value={fee} onChange={(event) => setFee(Number(event.target.value))} /><input aria-label="免運門檻" min={0} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /><input aria-label="生效日期" type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} /><button className="button button-system" disabled={create.isPending}>新增費率</button></form>{(create.isError || update.isError || deactivate.isError) && <p className="form-error">{create.error?.message || update.error?.message || deactivate.error?.message}</p>}<p className="rate-note">結帳時依通路、溫層與生效日期套用費率。</p></>;
 }
 
 function Metric({

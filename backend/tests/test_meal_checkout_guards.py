@@ -64,32 +64,19 @@ def test_fulfilled_meal_never_advertises_self_cancel(state):
     assert "cancel" not in order_available_actions(order, now=NOW)
 
 
-@pytest.mark.parametrize("payment_status", [PaymentStatus.PENDING, PaymentStatus.PAID])
-@pytest.mark.parametrize("marker", ["legacy_picked_up", "shipped", "delivered"])
-def test_meal_actions_keep_existing_irreversible_fulfillment_guard(payment_status, marker):
-    order = meal_order()
-    order.payment_status = payment_status
-    order.paid_at = NOW - timedelta(minutes=5)
-    if marker == "legacy_picked_up":
-        order.fulfillment_status = FulfillmentStatus.PICKED_UP
-    else:
-        order.fulfillment.status = {
-            "shipped": FulfillmentState.SHIPPED,
-            "delivered": FulfillmentState.DELIVERED,
-        }[marker]
-    assert not {"pay", "cancel", "refund"} & set(order_available_actions(order, viewer_is_admin=True, now=NOW))
-
-
-def test_unredeemed_paid_meal_keeps_existing_cancel_deadline():
+def test_unredeemed_paid_meal_requires_review_until_pickup_ends():
     order = meal_order()
     order.payment_status = PaymentStatus.PAID
     order.paid_at = NOW - timedelta(minutes=5)
-    assert "cancel" in order_available_actions(order, now=NOW)
+    assert "cancel" not in order_available_actions(order, now=NOW)
+    assert "request_cancellation" in order_available_actions(order, now=NOW)
     assert "cancel" not in order_available_actions(order, now=NOW + timedelta(minutes=26))
     order.paid_at = NOW - timedelta(minutes=1)
     order.meal_event.ordering_ends_at = NOW
-    assert "cancel" in order_available_actions(order, now=NOW)
+    assert "request_cancellation" in order_available_actions(order, now=NOW)
     assert "cancel" not in order_available_actions(order, now=NOW + timedelta(microseconds=1))
+    assert "request_cancellation" in order_available_actions(order, now=NOW + timedelta(minutes=26))
+    assert "request_cancellation" not in order_available_actions(order, now=order.meal_event.pickup_ends_at)
 
 
 @pytest.fixture

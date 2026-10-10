@@ -53,8 +53,9 @@ def test_meal_overlap_migration_preserves_data_and_protects_downgrade(tmp_path, 
         text("SELECT id, order_number, amount_total, meal_event_id FROM orders"),
     ]
     try:
-        command.upgrade(config, "0016_meal_daily_schedules")
+        command.upgrade(config, "head")
         asyncio.run(seed())
+        command.downgrade(config, "0016_meal_daily_schedules")
         with engine.connect() as connection:
             before = [connection.execute(query).all() for query in snapshots]
         command.upgrade(config, "head")

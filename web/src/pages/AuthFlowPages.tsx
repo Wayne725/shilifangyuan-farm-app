@@ -158,7 +158,7 @@ export function RegisterPage() {
             <Link className="registration-choice-card customer" to="/register" search={{ intent: "nonmember" }}>
               <ShoppingBag size={30} weight="light" />
               <span>GENERAL CUSTOMER</span>
-              <h3>非社員註冊</h3>
+              <h3>我不是社員</h3>
               <p>建立一般買家帳號，可購物、結帳及查詢訂單；之後仍可另外提出入社申請。</p>
               <strong>建立非社員帳號 <ArrowRight size={18} /></strong>
             </Link>

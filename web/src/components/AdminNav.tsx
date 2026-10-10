@@ -5,6 +5,8 @@ const adminSections = [
   { to: "/admin/catalog" as const, label: "商品供應" },
   { to: "/admin/groups" as const, label: "團購管理" },
   { to: "/admin/meals" as const, label: "便當管理" },
+  { to: "/admin/kitchen" as const, label: "廚房出單" },
+  { to: "/admin/users" as const, label: "會員管理" },
   { to: "/admin/finance" as const, label: "財務報表" },
   { to: "/admin/social" as const, label: "社務管理" },
 ];
