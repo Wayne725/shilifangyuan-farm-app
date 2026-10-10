@@ -523,7 +523,7 @@ async def issue_paid_order_invoice(
         else invoice_relate_number(order.order_number),
     )
     prepared = adapter.prepare_invoice(request)
-    invoice, prepared = await _ensure_invoice_record(
+    invoice, _ = await _ensure_invoice_record(
         session,
         order,
         adapter,
@@ -560,7 +560,7 @@ async def issue_paid_order_invoice(
     if order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以開立發票")
     _ensure_provider_binding(order, adapter)
-    invoice, prepared = await _ensure_invoice_record(
+    invoice, _ = await _ensure_invoice_record(
         session,
         order,
         adapter,
@@ -586,6 +586,11 @@ async def issue_paid_order_invoice(
             await session.commit()
             return existing
 
+        invoice.provider_request = dict(prepared.provider_request)
+        invoice.sales_amount = int(prepared.sales_amount)
+        invoice.tax_amount = int(prepared.tax_amount)
+        invoice.total_amount = int(prepared.total_amount)
+        await session.commit()
         result = await adapter.issue_prepared_invoice(prepared)
         if not result.invoice_number.strip():
             raise InvoiceApplicationError("發票服務成功回應缺少發票號碼")

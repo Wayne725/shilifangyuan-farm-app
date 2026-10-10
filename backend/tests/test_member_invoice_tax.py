@@ -497,3 +497,50 @@ async def test_invoice_worker_persists_exempt_provider_request_and_items(databas
     assert invoice.tax_amount == 0
     assert invoice.total_amount == 105
     assert [item.tax_type for item in invoice.items] == ["3"]
+
+
+async def test_invoice_retry_replaces_stale_exempt_tax_rate_after_provider_query(
+    database_session,
+):
+    context = await checkout_context(database_session, "meal")
+    async with api_test_context(database_session, ROUTERS, settings=tax_settings()) as client:
+        _quote, created = await quote_and_create(client, context)
+    order = await stored_order(database_session, created["id"])
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.FAILED
+    order.paid_at = datetime.now(timezone.utc)
+    request = invoice_request_from_order(order, "INVTAXRETRY01")
+    stale_provider_request = invoice_adapter().build_issue_data(request)
+    stale_provider_request["taxrate"] = "0.05"
+    database_session.add(
+        Invoice(
+            order=order,
+            relate_number=request.relate_number,
+            provider="fanyu",
+            provider_context=order.invoice_provider_context,
+            status=InvoiceStatus.FAILED,
+            provider_request=stale_provider_request,
+        )
+    )
+    await database_session.commit()
+    sent_payloads = []
+
+    async def transport(url, payload, *_args):
+        if url.endswith("/queryInvoice"):
+            return HTTPResponse(200, '{"statusCode":"3","statusDesc":"查無資料","respData":{}}', {})
+        sent_payloads.append(payload["reqData"])
+        return HTTPResponse(
+            200,
+            '{"statusCode":"0","respData":{"invNo":"AB12345679",'
+            '"invDate":"20261007","randomNumber":"2469"}}',
+            {},
+        )
+
+    await issue_paid_order_invoice(database_session, order.id, invoice_adapter(transport))
+    invoice = await database_session.scalar(
+        select(Invoice).where(Invoice.order_id == order.id)
+    )
+
+    assert sent_payloads[0]["taxrate"] == "0"
+    assert invoice.provider_request["taxrate"] == "0"
+    assert invoice.status == InvoiceStatus.ISSUED
