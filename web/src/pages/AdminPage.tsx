@@ -9,6 +9,7 @@ import {
   Truck,
   UsersThree,
 } from "@phosphor-icons/react";
+import * as Tabs from "@radix-ui/react-tabs";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
@@ -143,11 +144,11 @@ export function AdminPage() {
   const activeMembers = memberQuery.data?.filter((member) => member.status === "active").length;
 
   return (
-    <>
+    <main className="admin-operations-page">
       <section className="admin-intro">
         <div>
-          <p className="eyebrow">OPERATIONS / 管理工作台</p>
-          <h1>把真實營運資料，<br />整理成可行動的工作。</h1>
+          <p className="eyebrow">管理工作台</p>
+          <h1>訂單營運</h1>
         </div>
         <div className="admin-intro-meta">
           <span>登入身分</span>
@@ -157,8 +158,6 @@ export function AdminPage() {
       </section>
 
       <AdminNav />
-      <AdminFailurePanel />
-
       <section className="admin-metrics">
         <Metric icon={Package} label="上架商品" value={activeProducts} />
         <Metric icon={SealCheck} label="有效供應者" value={activeSuppliers} />
@@ -166,61 +165,68 @@ export function AdminPage() {
         <Metric icon={UsersThree} label="有效社員" value={activeMembers} />
       </section>
 
-      <section className="admin-layout content-section">
-        <div className="admin-table-panel">
-          <SectionHeading
-            eyebrow="SUPPLIER ACCREDITATION"
-            title="供應者與審核狀態"
-            description="個人與帳務資料僅在授權操作中顯示。"
-          />
-          {supplierQuery.isPending && <LoadingLines count={4} />}
-          {supplierQuery.isError && (
-            <DataState kind="error" title="供應者資料無法讀取" detail={supplierQuery.error.message} />
-          )}
-          <div className="data-table" role="table" aria-label="供應者清單">
-            <div className="data-row data-head" role="row">
-              <span>供應者</span><span>編號</span><span>認可日期</span><span>狀態</span>
-            </div>
-            {supplierQuery.data?.map((supplier) => (
-              <div className="data-row" role="row" key={supplier.id}>
-                <strong>{supplier.business_name}</strong>
-                <span>{supplier.supplier_number || "待審核"}</span>
-                <span>{supplier.accredited_on ? formatDate(supplier.accredited_on) : "—"}</span>
-                <span className={supplier.is_active ? "status-active" : "status-pending"}>
-                  {supplier.is_active ? "有效" : "未啟用"}
-                </span>
+      <Tabs.Root className="admin-operations-tabs" defaultValue="orders">
+        <Tabs.List className="tab-list" aria-label="訂單營運子頁">
+          <Tabs.Trigger value="issues">問題回報</Tabs.Trigger>
+          <Tabs.Trigger value="suppliers">供應者與審核狀態</Tabs.Trigger>
+          <Tabs.Trigger value="locations">取貨點維護</Tabs.Trigger>
+          <Tabs.Trigger value="orders">訂單、付款與發票</Tabs.Trigger>
+        </Tabs.List>
+        <Tabs.Content value="issues" className="admin-operations-content">
+          <AdminFailurePanel />
+        </Tabs.Content>
+
+        <Tabs.Content value="suppliers" className="admin-operations-content">
+          <section className="admin-table-panel content-section">
+            <SectionHeading eyebrow="供應者管理" title="供應者與審核狀態" />
+            {supplierQuery.isPending && <LoadingLines count={4} />}
+            {supplierQuery.isError && (
+              <DataState kind="error" title="供應者資料無法讀取" detail={supplierQuery.error.message} />
+            )}
+            <div className="data-table" role="table" aria-label="供應者清單">
+              <div className="data-row data-head" role="row">
+                <span>供應者</span><span>編號</span><span>認可日期</span><span>狀態</span>
               </div>
-            ))}
-          </div>
-        </div>
+              {supplierQuery.data?.map((supplier) => (
+                <div className="data-row" role="row" key={supplier.id}>
+                  <strong>{supplier.business_name}</strong>
+                  <span>{supplier.supplier_number || "待審核"}</span>
+                  <span>{supplier.accredited_on ? formatDate(supplier.accredited_on) : "—"}</span>
+                  <span className={supplier.is_active ? "status-active" : "status-pending"}>
+                    {supplier.is_active ? "有效" : "未啟用"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        </Tabs.Content>
 
-        <aside className="admin-side-panel">
-          <p className="eyebrow">PICKUP NETWORK</p>
-          <h2>取貨點維護</h2>
-          {locationQuery.isPending && <LoadingLines count={3} />}
-          <div className="location-list">
-            {locationQuery.data?.map((location) => (
-              <article key={location.id}>
-                <MapPin size={19} weight="light" />
-                <div><strong>{location.name}</strong><small>{location.code}</small></div>
-                <span>{location.is_active ? "啟用" : "停用"}</span>
-              </article>
-            ))}
-          </div>
-          <div className="admin-next">
-            <span>社務管理</span>
-            <p>處理入社、活動、社員提案、願望與會議。</p>
-            <Link to="/admin/social">進入管理 <ArrowRight size={21} weight="light" /></Link>
-          </div>
-        </aside>
-      </section>
+        <Tabs.Content value="locations" className="admin-operations-content">
+          <section className="admin-side-panel content-section admin-locations-page">
+            <p className="eyebrow">取貨網絡</p>
+            <h2>取貨點維護</h2>
+            {locationQuery.isPending && <LoadingLines count={3} />}
+            {locationQuery.isError && (
+              <DataState kind="error" title="取貨點資料無法讀取" detail={locationQuery.error.message} />
+            )}
+            <div className="location-list">
+              {locationQuery.data?.map((location) => (
+                <article key={location.id}>
+                  <MapPin size={19} weight="light" />
+                  <div><strong>{location.name}</strong><small>{location.code}</small></div>
+                  <span>{location.is_active ? "啟用" : "停用"}</span>
+                </article>
+              ))}
+            </div>
+          </section>
+        </Tabs.Content>
 
+        <Tabs.Content value="orders" className="admin-operations-content">
       <section className="admin-commerce content-section admin-financial-orders">
         <div className="admin-orders-panel">
           <SectionHeading
             eyebrow="訂單營運"
             title="訂單、付款與發票"
-            description="使用訂單編號查詢，核對付款、退單及電子發票。便當現場取餐不收運費。"
           />
           {orderQuery.isPending && <LoadingLines count={4} />}
           {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
@@ -272,7 +278,9 @@ export function AdminPage() {
         </div>
 
       </section>
-    </>
+        </Tabs.Content>
+      </Tabs.Root>
+    </main>
   );
 }
 

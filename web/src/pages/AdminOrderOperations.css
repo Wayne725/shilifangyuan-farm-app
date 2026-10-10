@@ -1,1 +1,199 @@
 .admin-financial-orders { grid-template-columns: minmax(0, 1fr); }
+
+.admin-operations-page {
+  padding-bottom: 72px;
+}
+
+.admin-operations-page > .admin-intro {
+  align-items: center;
+}
+
+.admin-operations-page > .admin-intro h1 {
+  font-size: clamp(38px, 4.2vw, 58px);
+  line-height: 1.2;
+}
+
+.admin-operations-page .admin-intro-meta span,
+.admin-operations-page .admin-intro-meta small,
+.admin-operations-page .admin-metrics span,
+.admin-operations-page .admin-metrics small {
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.admin-operations-page .admin-metrics strong {
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-operation-tabs > .tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 clamp(24px, 6vw, 96px) 24px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-operation-tabs > .tab-list button {
+  min-height: 52px;
+  padding: 10px 18px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.admin-operation-tabs > .tab-list button[data-state="active"] {
+  color: var(--paper-light);
+  background: var(--harbor-dark);
+  border-color: var(--harbor-dark);
+}
+
+.admin-operation-tabs > .tab-list button:focus-visible,
+.admin-operations-page button:focus-visible,
+.admin-operations-page a:focus-visible,
+.admin-operations-page input:focus-visible {
+  outline: 3px solid var(--brass);
+  outline-offset: 3px;
+}
+
+.admin-operations-content {
+  min-height: 280px;
+  padding: 0 clamp(24px, 6vw, 96px);
+}
+
+.admin-operations-content > .content-section {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px 0 48px;
+}
+
+.admin-operations-content .section-heading h2,
+.admin-operations-content .admin-side-panel h2,
+.admin-operations-content .admin-failure-panel h2 {
+  font-size: clamp(28px, 3vw, 40px);
+  line-height: 1.25;
+}
+
+.admin-operations-page .data-row {
+  min-height: 60px;
+  font-size: 16px;
+}
+
+.admin-operations-page .data-head {
+  font-size: 14px;
+}
+
+.admin-operations-page .data-row strong,
+.admin-operations-page .location-list strong {
+  font-size: 17px;
+}
+
+.admin-operations-page .location-list small,
+.admin-operations-page .location-list span,
+.admin-operations-page .status-active,
+.admin-operations-page .status-pending {
+  font-size: 14px;
+}
+
+.admin-operations-page .admin-order-search label,
+.admin-operations-page .operation-invoice-query label {
+  font-size: 16px;
+}
+
+.admin-operations-page .admin-order-search input,
+.admin-operations-page .operation-invoice-query input,
+.admin-operations-page .admin-order-search button,
+.admin-operations-page .operation-invoice-query button,
+.admin-operations-page .operations-list > article > button {
+  min-height: 48px;
+  font-size: 16px;
+}
+
+.admin-operations-page .operation-title span,
+.admin-operations-page .operation-title small {
+  font-size: 15px;
+}
+
+.admin-operations-page .operation-title strong {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-operations-page .operation-state span,
+.admin-operations-page .no-action {
+  font-size: 14px;
+}
+
+.admin-operations-page .operations-list > article {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 16px;
+  padding: 24px 0;
+}
+
+.admin-operations-page .invoice-summary-card {
+  grid-template-columns: auto minmax(0, 1fr) minmax(160px, auto);
+}
+
+.admin-operations-page .invoice-summary-card small,
+.admin-operations-page .invoice-summary-card span,
+.admin-operations-page .invoice-summary-card dl {
+  font-size: 15px;
+}
+
+.admin-operations-page .invoice-summary-card strong {
+  font-size: 19px;
+}
+
+.admin-locations-page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding-left: 0;
+  border-left: 0;
+}
+
+.operation-help {
+  margin: 0 0 16px;
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.operation-help summary {
+  width: fit-content;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.operation-help p {
+  max-width: 68ch;
+  margin: 10px 0 0;
+}
+
+@media (max-width: 700px) {
+  .admin-operation-tabs > .tab-list {
+    margin-inline: 20px;
+  }
+
+  .admin-operation-tabs > .tab-list button {
+    flex: 1 1 calc(50% - 8px);
+    padding-inline: 10px;
+    font-size: 15px;
+  }
+
+  .admin-operations-content {
+    padding-inline: 20px;
+  }
+
+  .admin-operations-page .invoice-summary-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .admin-operations-page .invoice-summary-card dl {
+    grid-column: 2;
+  }
+}

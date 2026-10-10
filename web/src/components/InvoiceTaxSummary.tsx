@@ -17,11 +17,12 @@ export function InvoiceTaxSummary({
   memberTaxExempt,
   shippingFee,
   taxAmount,
-  taxAmountLabel = "稅額（內含）",
+  taxAmountLabel,
   variant = "rows",
 }: InvoiceTaxSummaryProps) {
   const summary = invoiceTaxSummary({ items, memberTaxExempt, shippingFee });
-  const amount = typeof taxAmount === "number" && <div><dt>{taxAmountLabel}</dt><dd>{formatMoney(taxAmount)}</dd></div>;
+  const resolvedTaxAmountLabel = taxAmountLabel || (summary.label === "免稅" ? "免稅稅額" : "稅額（內含）");
+  const amount = typeof taxAmount === "number" && <div><dt>{resolvedTaxAmountLabel}</dt><dd>{formatMoney(taxAmount)}</dd></div>;
   if (variant === "card") {
     return <section className="invoice-summary-card" aria-label="訂單稅別">
       <Receipt size={25} weight="light" />

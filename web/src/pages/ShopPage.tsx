@@ -54,7 +54,6 @@ export function ShopPage() {
       <section className="page-intro shop-intro meal-shop-intro">
         <div>
           <h1>我要訂餐</h1>
-          <p>選明天的午餐或晚餐，完成付款後到現場取餐。</p>
         </div>
         <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link><Link className="button button-quiet" to="/help">需要幫忙</Link></nav>
       </section>
@@ -79,7 +78,6 @@ export function ShopPage() {
           <SectionHeading
             eyebrow="CURATED PROVISIONS"
             title="合作社選品"
-            description="價格、庫存與供應批次會隨當期上架內容更新。"
           />
           {products.isPending && <LoadingLines count={4} />}
           {products.isError && (
@@ -104,7 +102,6 @@ export function ShopPage() {
           <SectionHeading
             eyebrow="BUYING TOGETHER"
             title="把需求聚在一起"
-            description="集結社員需求，依成團數量與供應上限共同採購。"
           />
           <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的團購需求 <ArrowRight size={17} /></Link></div>
           {campaigns.isPending && <LoadingLines count={3} />}
@@ -123,7 +120,7 @@ export function ShopPage() {
                 <div>
                   <span>{campaign.intake_status || "進行中"}</span>
                   <h3>{campaign.title || "共同採購"}</h3>
-                  <p>{campaign.description || "供應與達標資訊以系統紀錄為準。"}</p>
+                  {campaign.description && <p>{campaign.description}</p>}
                 </div>
                 <Link className="editorial-end" to="/groups/$campaignId" params={{ campaignId: campaign.id }}>
                   <small>截止 {formatDate(campaign.deadline)}</small>
@@ -138,7 +135,6 @@ export function ShopPage() {
           <SectionHeading
             eyebrow="便當預訂"
             title="選日期與餐別"
-            description="只能提前一天預訂。午餐、晚餐都以每 30 分鐘為一個取餐時段。"
           />
           {meals.isSuccess && <MealDateNavigation events={upcomingMeals} selectedDate={mealDate}
             onDateChange={setMealDate} period={period} onPeriodChange={setPeriod} now={now} />}
