@@ -258,7 +258,7 @@ class FanyuInvoiceAdapter:
             "freetaxSalesamount": str(exempt_amount),
             "zerotaxSalesamount": "0",
             "taxType": tax_type,
-            "taxrate": "0.05",
+            "taxrate": "0.05" if taxable_lines else "0",
             "taxAmount": str(tax_amount),
             "totalAmount": str(total_amount),
             "notifyEmail": request.customer_email[:80],

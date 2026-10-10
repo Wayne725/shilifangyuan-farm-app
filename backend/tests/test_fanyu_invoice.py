@@ -75,6 +75,7 @@ def test_fanyu_builds_cloud_personal_invoice_without_paper() -> None:
     assert data["salesAmount"] == "200"
     assert data["taxAmount"] == "0"
     assert data["totalAmount"] == "200"
+    assert data["taxrate"] == "0.05"
     assert data["Details"][0] == {
         "description": "白米",
         "quantity": "2",
@@ -85,6 +86,32 @@ def test_fanyu_builds_cloud_personal_invoice_without_paper() -> None:
         "remark": "",
         "taxType": "1",
     }
+
+
+def test_fanyu_uses_zero_tax_rate_for_exempt_invoice() -> None:
+    adapter = FanyuInvoiceAdapter(fanyu_settings())
+    request = InvoiceIssueRequest(
+        relate_number="INVSLF0009",
+        customer_email="member@example.test",
+        customer_id="USER0009",
+        buyer_type="personal",
+        items=[
+            InvoiceLine(
+                name="便當",
+                quantity=1,
+                unit_price=10,
+                tax_type="3",
+            )
+        ],
+        carrier_type="cloud",
+    )
+
+    data = adapter.build_issue_data(request)
+
+    assert data["taxType"] == "3"
+    assert data["taxrate"] == "0"
+    assert data["taxAmount"] == "0"
+    assert data["freetaxSalesamount"] == "10"
 
 
 def test_fanyu_builds_member_cloud_carrier_from_customer_email() -> None:
@@ -191,6 +218,7 @@ def test_fanyu_builds_company_invoice_with_untaxed_line_amounts() -> None:
     assert data["carrierID2"] == "/AB12+-."
     assert data["notifyEmail"] == "accounting@example.test"
     assert data["taxType"] == "9"
+    assert data["taxrate"] == "0.05"
     assert data["salesAmount"] == "200"
     assert data["freetaxSalesamount"] == "80"
     assert data["taxAmount"] == "10"
