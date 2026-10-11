@@ -172,7 +172,7 @@ export function OrdersPage() {
     return (
       <section className="account-gate">
         <Basket size={45} weight="light" />
-        <p className="eyebrow">訂單紀錄</p>
+        <p className="eyebrow">ORDER HISTORY / 訂單紀錄</p>
         <h1>登入後查看訂單進度。</h1>
         <p>物流選店、線上付款或配送中斷時，都能從這裡安全地繼續。</p>
         <button className="button button-primary" type="button" onClick={openLogin}>帳號登入</button>
@@ -184,7 +184,7 @@ export function OrdersPage() {
     <section className="orders-page">
       <header className="workspace-heading">
         <div>
-          <p className="eyebrow">訂單中心</p>
+          <p className="eyebrow">ORDERS / 訂單中心</p>
           <h1>每筆交易，<br />都看得見下一步。</h1>
         </div>
         <p>付款、備貨與配送進度會集中顯示在這裡。</p>
@@ -233,7 +233,7 @@ export function OrdersPage() {
             <article className="order-detail">
               <div className="order-detail-head">
                 <div>
-                  <p className="eyebrow">{salesChannelLabel(selected.sales_channel)}</p>
+                  <p className="eyebrow">{selected.sales_channel === "meal_preorder" ? "MEAL PREORDER" : selected.sales_channel === "group" ? "GROUP ORDER" : "DAILY PROVISIONS"} / {salesChannelLabel(selected.sales_channel)}</p>
                   <h2 className="order-number order-number-large">{selected.order_number}</h2>
                   <span>{formatDate(selected.created_at)} 建立</span>
                 </div>

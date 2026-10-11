@@ -187,7 +187,7 @@ export function CheckoutPage() {
           <ArrowLeft size={17} weight="light" />
           回到生活消費
         </Link>
-        <p className="eyebrow">結帳</p>
+        <p className="eyebrow">CHECKOUT / 結帳</p>
         <h1>把今天的選擇，<br />安排進生活裡。</h1>
       </div>
 
@@ -346,7 +346,7 @@ export function CheckoutPage() {
 
           <aside className="order-summary">
             <div className="summary-bezel">
-              <p className="eyebrow">訂單摘要</p>
+              <p className="eyebrow">ORDER SUMMARY / 訂單摘要</p>
               <h2>訂單摘要</h2>
               {!user ? (
                 <div className="login-required">

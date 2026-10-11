@@ -154,7 +154,7 @@ export function GroupCampaignPage() {
           <span>{item.intake_status}</span>
         </div>
         <div className="offer-copy">
-          <p className="eyebrow">共同團購</p>
+          <p className="eyebrow">BUYING TOGETHER / 共同團購</p>
           <h1>{item.title}</h1>
           <p>{item.description}</p>
           <dl>
@@ -217,7 +217,7 @@ export function GroupCampaignPage() {
 
         <aside className="offer-summary">
           <UsersThree size={28} weight="light" />
-          <p className="eyebrow">團購訂單</p>
+          <p className="eyebrow">GROUP ORDER / 團購訂單</p>
           <h2>團購摘要</h2>
           {!user ? (
             <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後取得正式價格</button>

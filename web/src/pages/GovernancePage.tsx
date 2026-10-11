@@ -54,7 +54,7 @@ export function GovernancePage() {
   return (
     <section className="social-page-shell">
       <header className="social-page-heading">
-        <div><p className="eyebrow">社員提案</p><h1>社員提案</h1></div>
+        <div><p className="eyebrow">PROPOSALS / 社員提案</p><h1>社員提案</h1></div>
         {canAccess && <button className="button button-system" type="button" onClick={() => setShowForm((value) => !value)}><Plus size={18} />提出提案</button>}
       </header>
       <SocialNav />
@@ -67,7 +67,7 @@ export function GovernancePage() {
         <>
           {showForm && (
             <form className="social-form" onSubmit={submit}>
-              <div className="form-heading"><div><p className="eyebrow">新增提案</p><h2>提出社員提案</h2></div><span>送出後由管理員安排討論與表決</span></div>
+              <div className="form-heading"><div><p className="eyebrow">NEW PROPOSAL / 新增提案</p><h2>提出社員提案</h2></div><span>送出後由管理員安排討論與表決</span></div>
               <div className="field-grid two-columns">
                 <label className="field wide"><span>提案主旨</span><input required maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
                 <label className="field"><span>表決方式</span><select value={form.proposal_type} onChange={(event) => setForm({ ...form, proposal_type: event.target.value as Proposal["proposal_type"] })}><option value="resolution">贊成／反對／棄權</option><option value="multiple_choice">多選項表決</option></select></label>
@@ -81,7 +81,7 @@ export function GovernancePage() {
 
           <div className="proposals-layout">
             <section className="governance-proposals">
-              <div className="section-title-row"><div><p className="eyebrow">社員提案</p><h2>社員提案</h2></div><span>{proposals.data?.length ?? 0} 件</span></div>
+              <div className="section-title-row"><div><p className="eyebrow">PROPOSALS / 社員提案</p><h2>社員提案</h2></div><span>{proposals.data?.length ?? 0} 件</span></div>
               {proposals.isPending && <LoadingLines count={4} />}
               {proposals.isError && <DataState kind="error" title="提案暫時無法讀取" detail={proposals.error.message} />}
               {proposals.data?.length === 0 && <DataState title="目前沒有提案" detail="正式社員可提出合作社議題送交審核。" />}

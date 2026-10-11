@@ -72,7 +72,7 @@ export function ShopPage() {
 
         <Tabs.Content value="products" className="tab-content">
           <SectionHeading
-            eyebrow="合作社選品"
+            eyebrow="CURATED PROVISIONS / 合作社選品"
             title="合作社選品"
           />
           {products.isPending && <LoadingLines count={4} />}
@@ -96,7 +96,7 @@ export function ShopPage() {
 
         <Tabs.Content value="groups" className="tab-content">
           <SectionHeading
-            eyebrow="共同團購"
+            eyebrow="BUYING TOGETHER / 共同團購"
             title="把需求聚在一起"
           />
           <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的團購需求 <ArrowRight size={17} /></Link></div>
@@ -129,7 +129,7 @@ export function ShopPage() {
 
         <Tabs.Content value="meals" className="tab-content meal-booking-content">
           <SectionHeading
-            eyebrow="便當預訂"
+            eyebrow="MEAL PREORDER / 便當預訂"
             title="選取餐時間"
           />
           {meals.isSuccess && <MealDateNavigation events={upcomingMeals} selectedDate={mealDate}

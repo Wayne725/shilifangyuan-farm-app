@@ -56,7 +56,7 @@ export function WishesPage() {
   return (
     <section className="social-page-shell">
       <header className="social-page-heading">
-        <div><p className="eyebrow">社員願望</p><h1>社員願望</h1></div>
+        <div><p className="eyebrow">COLLECTIVE WISHLIST / 社員願望</p><h1>社員願望</h1></div>
         {canAccess && <button className="button button-system" type="button" onClick={() => setShowForm((value) => !value)}><Plus size={18} />提出願望</button>}
       </header>
       <SocialNav />
@@ -69,7 +69,7 @@ export function WishesPage() {
         <>
           {showForm && (
             <form className="social-form" onSubmit={submit}>
-              <div className="form-heading"><div><p className="eyebrow">新增願望</p><h2>想找什麼商品？</h2></div></div>
+              <div className="form-heading"><div><p className="eyebrow">NEW WISH / 新增願望</p><h2>想找什麼商品？</h2></div></div>
               <div className="field-grid two-columns">
                 <label className="field wide"><span>商品或服務名稱</span><input required maxLength={160} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
                 <label className="field"><span>期望價格</span><input min={0} inputMode="numeric" type="number" value={form.expected_price} onChange={(event) => setForm({ ...form, expected_price: event.target.value })} /></label>

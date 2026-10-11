@@ -66,7 +66,7 @@ export function ActivitiesPage() {
   return (
     <section className="social-page-shell">
       <header className="social-page-heading">
-        <div><p className="eyebrow">社員活動</p><h1>社員活動</h1></div>
+        <div><p className="eyebrow">MEMBER ACTIVITIES / 社員活動</p><h1>社員活動</h1></div>
         {canAccess && <button className="button button-system" type="button" onClick={() => setShowForm((value) => !value)}><Plus size={18} />發起活動</button>}
       </header>
       <SocialNav />
@@ -79,7 +79,7 @@ export function ActivitiesPage() {
         <>
           {showForm && (
             <form className="social-form" onSubmit={submit}>
-              <div className="form-heading"><div><p className="eyebrow">新增活動</p><h2>發起社員活動</h2></div><span>送出後由管理員審核</span></div>
+              <div className="form-heading"><div><p className="eyebrow">NEW ACTIVITY / 新增活動</p><h2>發起社員活動</h2></div><span>送出後由管理員審核</span></div>
               <div className="field-grid two-columns">
                 <label className="field wide"><span>活動名稱</span><input required maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
                 <label className="field"><span>地點</span><input required maxLength={240} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label>

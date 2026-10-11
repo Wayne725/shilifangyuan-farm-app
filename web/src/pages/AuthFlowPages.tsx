@@ -65,7 +65,7 @@ function AuthResult({
   return (
     <div className="auth-result" aria-live="polite">
       <CheckCircle size={34} weight="light" />
-      <p className="eyebrow">已完成</p>
+      <p className="eyebrow">COMPLETE / 已完成</p>
       <h2>{title}</h2>
       <p>{message}</p>
       {token && (
@@ -136,14 +136,14 @@ export function RegisterPage() {
   if (!intent) {
     return (
       <AuthLayout
-        eyebrow="註冊帳號"
+        eyebrow="CHOOSE YOUR PATH / 註冊帳號"
         title="選擇註冊方式"
         description="現實中已是社員可直接認領；其他使用者先建立非社員帳號。"
         icon={<UserPlus size={29} weight="light" />}
       >
         <div className="registration-choice">
           <div className="registration-choice-heading">
-            <p className="eyebrow">帳號類型</p>
+            <p className="eyebrow">ACCOUNT TYPE / 帳號類型</p>
             <h2>你想如何參與？</h2>
             <p>社員資格以合作社既有名冊為準，不能由註冊者自行選擇。</p>
           </div>
@@ -175,7 +175,7 @@ export function RegisterPage() {
 
   return (
     <AuthLayout
-      eyebrow={isExistingMember ? "社員帳號認領" : "一般使用者註冊"}
+      eyebrow={isExistingMember ? "EXISTING MEMBER CLAIM / 社員帳號認領" : "CREATE ACCOUNT / 一般使用者註冊"}
       title={isExistingMember ? "既有社員註冊" : "非社員註冊"}
       description={isExistingMember
         ? "核對合作社名冊並驗證 Email，完成後直接取得既有正式社員資格。"
@@ -201,7 +201,7 @@ export function RegisterPage() {
           <Link className="registration-back" to="/register" search={{ intent: undefined }}>
             重新選擇註冊方式
           </Link>
-          <p className="eyebrow">帳號資料</p>
+          <p className="eyebrow">ACCOUNT DETAILS / 帳號資料</p>
           <h2>{isExistingMember ? "認領社員帳號" : "建立非社員帳號"}</h2>
           {isExistingMember && (
             <p className="registration-notice">資料必須與合作社名冊一致；若名冊 Email 或手機已更換，請先聯絡合作社更新。</p>
@@ -369,7 +369,7 @@ export function VerifyEmailPage() {
 
   return (
     <AuthLayout
-      eyebrow="驗證信箱"
+      eyebrow="VERIFY EMAIL / 驗證信箱"
       title="驗證電子信箱"
       description="輸入信件中的六位數驗證碼。驗證碼有效時間為 10 分鐘。"
       icon={<EnvelopeSimple size={29} weight="light" />}
@@ -387,7 +387,7 @@ export function VerifyEmailPage() {
         </AuthResult>
       ) : (
         <div className="auth-card">
-          <p className="eyebrow">驗證碼</p>
+          <p className="eyebrow">VERIFICATION CODE / 驗證碼</p>
           <h2>輸入驗證碼</h2>
           <form className="auth-form" onSubmit={verify}>
             <label className="field">
@@ -461,7 +461,7 @@ export function ForgotPasswordPage() {
 
   return (
     <AuthLayout
-      eyebrow="忘記密碼"
+      eyebrow="PASSWORD HELP / 忘記密碼"
       title="重設登入密碼"
       description="我們會將限時重設連結寄到你的帳號信箱。"
       icon={<Key size={29} weight="light" />}
@@ -488,7 +488,7 @@ export function ForgotPasswordPage() {
         </AuthResult>
       ) : (
         <div className="auth-card">
-          <p className="eyebrow">帳號信箱</p>
+          <p className="eyebrow">ACCOUNT EMAIL / 帳號信箱</p>
           <h2>找回帳號</h2>
           <form className="auth-form" onSubmit={submit}>
             <label className="field">
@@ -548,7 +548,7 @@ export function ResetPasswordPage() {
 
   return (
     <AuthLayout
-      eyebrow="重設密碼"
+      eyebrow="NEW PASSWORD / 重設密碼"
       title="設定新的密碼"
       description="重設連結有效時間為一小時，完成後請使用新密碼登入。"
       icon={<LockKey size={29} weight="light" />}
@@ -561,7 +561,7 @@ export function ResetPasswordPage() {
         </AuthResult>
       ) : (
         <div className="auth-card">
-          <p className="eyebrow">帳號安全</p>
+          <p className="eyebrow">SECURE ACCOUNT / 帳號安全</p>
           <h2>更新密碼</h2>
           <form className="auth-form" onSubmit={submit}>
             {!search.token && (

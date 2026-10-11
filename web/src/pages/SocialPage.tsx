@@ -48,7 +48,7 @@ export function SocialPage() {
     <>
       <section className="page-intro social-intro compact-intro">
         <div>
-          <p className="eyebrow">社務系統</p>
+          <p className="eyebrow">CO-OP COMMONS / 社務系統</p>
           <h1>一起參與，<br /><em>一起決定。</em></h1>
         </div>
         <div className="intro-aside">
@@ -69,7 +69,7 @@ export function SocialPage() {
       ) : !isMember ? (
         <section className="social-access-card membership-access">
           <IdentificationCard size={38} weight="light" />
-          <p className="eyebrow">社員資格</p>
+          <p className="eyebrow">MEMBERSHIP / 社員資格</p>
           <h2>{membership.data?.membership_type === "trainee" ? "實習社員資格已啟用" : "開始入社程序"}</h2>
           <p>
             {membership.data?.membership_type === "trainee"
@@ -123,7 +123,7 @@ export function SocialPage() {
 
             <div className="social-feed-grid">
               <section className="social-feed">
-                <header><div><p className="eyebrow">近期活動</p><h2>近期活動</h2></div><Link className="text-link" to="/activities">查看全部</Link></header>
+                <header><div><p className="eyebrow">UPCOMING / 近期活動</p><h2>近期活動</h2></div><Link className="text-link" to="/activities">查看全部</Link></header>
                 {activities.isPending && <LoadingLines count={2} />}
                 {activities.data?.slice(0, 3).map((activity) => (
                   <article key={activity.id}>
@@ -136,7 +136,7 @@ export function SocialPage() {
               </section>
 
               <section className="social-feed governance-feed">
-                <header><div><p className="eyebrow">社員提案</p><h2>提案進度</h2></div><Link className="text-link" to="/governance">查看提案</Link></header>
+                <header><div><p className="eyebrow">PROPOSALS / 社員提案</p><h2>提案進度</h2></div><Link className="text-link" to="/governance">查看提案</Link></header>
                 {proposals.data?.slice(0, 3).map((proposal) => (
                   <Link key={proposal.id} to="/proposals/$proposalId" params={{ proposalId: proposal.id }}>
                     <span>{proposalStatusLabel(proposal.status)}</span>
@@ -146,7 +146,7 @@ export function SocialPage() {
                 ))}
               </section>
               <section className="social-feed">
-                <header><div><p className="eyebrow">社員會議</p><h2>社員會議</h2></div><Link className="text-link" to="/meetings">查看會議</Link></header>
+                <header><div><p className="eyebrow">MEMBER MEETINGS / 社員會議</p><h2>社員會議</h2></div><Link className="text-link" to="/meetings">查看會議</Link></header>
                 {meetings.isPending && <LoadingLines count={2} />}
                 {meetings.isError && <DataState kind="error" title="會議暫時無法讀取" detail={meetings.error.message} />}
                 {meetings.data?.length === 0 && <DataState title="目前沒有會議紀錄" detail="合作社公告後會顯示在這裡。" />}

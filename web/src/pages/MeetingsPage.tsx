@@ -25,7 +25,7 @@ export function MeetingsPage() {
   return (
     <section className="social-page-shell">
       <header className="social-page-heading">
-        <div><p className="eyebrow">社員會議</p><h1>社員會議</h1></div>
+        <div><p className="eyebrow">MEMBER MEETINGS / 社員會議</p><h1>社員會議</h1></div>
       </header>
       <SocialNav />
       {!user ? (
@@ -44,7 +44,7 @@ export function MeetingsPage() {
         </div>
       ) : (
         <section className="meeting-panel">
-          <div className="section-title-row"><div><p className="eyebrow">社員會議</p><h2>會議與紀錄</h2></div><CalendarCheck size={27} weight="light" /></div>
+          <div className="section-title-row"><div><p className="eyebrow">MEMBER MEETINGS / 社員會議</p><h2>會議與紀錄</h2></div><CalendarCheck size={27} weight="light" /></div>
           {meetings.isPending && <LoadingLines count={3} />}
           {meetings.isError && <DataState kind="error" title="會議暫時無法讀取" detail={meetings.error.message} />}
           {meetings.data?.length === 0 && <DataState title="目前沒有會議紀錄" detail="合作社公告會議後會顯示在這裡。" />}

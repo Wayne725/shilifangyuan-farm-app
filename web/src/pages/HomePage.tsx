@@ -31,7 +31,7 @@ export function HomePage() {
           <small>COOPERATIVE DAILY LIFE</small>
         </div>
         <div className="hero-copy">
-          <p className="eyebrow">共同所有的合作社</p>
+          <p className="eyebrow">A CO-OP, HELD IN COMMON / 共同所有的合作社</p>
           <h1>
             <span>讓一日三餐，</span>
             <em>成為共同生活。</em>
@@ -93,7 +93,7 @@ export function HomePage() {
 
       <section className="content-section" id="daily-selection">
         <SectionHeading
-          eyebrow="日常選品"
+          eyebrow="DAILY PROVISIONS / 日常選品"
           title="今天，從這裡開始。"
           description="當期商品、即時庫存與社員價格，以結帳時狀態為準。"
           action={{ label: "瀏覽全部選品", to: "/shop" }}
@@ -119,7 +119,7 @@ export function HomePage() {
 
       <section className="workspace-passage">
         <div className="passage-copy">
-          <p className="eyebrow">合作生活</p>
+          <p className="eyebrow">ONE IDENTITY, TWO WORKSPACES / 合作生活</p>
           <h2>不是多一個平台，<br />是把彼此連回來。</h2>
           <p>
             購買紀錄、社員身分、活動參與與共同決策，都集中在同一個合作社帳號。
@@ -139,7 +139,7 @@ export function HomePage() {
 
       <section className="content-section community-preview">
         <SectionHeading
-          eyebrow="共同參與"
+          eyebrow="COMMON AGENDA / 共同參與"
           title="共同生活，正在發生。"
           action={{ label: "進入社務系統", to: "/social" }}
         />

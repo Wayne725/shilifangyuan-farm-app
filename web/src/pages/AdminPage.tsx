@@ -121,7 +121,7 @@ export function AdminPage() {
   }
 
   const orderContent = <section className="admin-orders-panel">
-    <SectionHeading eyebrow="訂單營運" title="訂單、付款與發票" />
+    <SectionHeading eyebrow="ORDER OPERATIONS / 訂單營運" title="訂單、付款與發票" />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>
@@ -170,7 +170,7 @@ export function AdminPage() {
   </section>;
 
   const supplierContent = <section className="admin-table-panel">
-    <div className="admin-operation-heading"><SectionHeading eyebrow="供應者" title="供應者與審核狀態" /><Link className="button button-quiet" to="/admin/catalog" search={{ tab: "suppliers" }}>管理供應者</Link></div>
+    <div className="admin-operation-heading"><SectionHeading eyebrow="SUPPLIERS / 供應者" title="供應者與審核狀態" /><Link className="button button-quiet" to="/admin/catalog" search={{ tab: "suppliers" }}>管理供應者</Link></div>
     {supplierQuery.isPending && <LoadingLines count={4} />}
     {supplierQuery.isError && <DataState kind="error" title="供應者資料無法讀取" detail={supplierQuery.error.message} />}
     <div className="data-table" role="table" aria-label="供應者清單">
@@ -186,7 +186,7 @@ export function AdminPage() {
   </section>;
 
   const locationContent = <section className="admin-table-panel">
-    <div className="admin-operation-heading"><SectionHeading eyebrow="取貨網絡" title="取貨點維護" /><Link className="button button-quiet" to="/admin/catalog" search={{ tab: "locations" }}>管理取貨點</Link></div>
+    <div className="admin-operation-heading"><SectionHeading eyebrow="PICKUP NETWORK / 取貨網絡" title="取貨點維護" /><Link className="button button-quiet" to="/admin/catalog" search={{ tab: "locations" }}>管理取貨點</Link></div>
     {locationQuery.isPending && <LoadingLines count={3} />}
     {locationQuery.isError && <DataState kind="error" title="取貨點資料無法讀取" detail={locationQuery.error.message} />}
     <div className="location-list">
@@ -200,12 +200,12 @@ export function AdminPage() {
   </section>;
 
   const content = section === "orders" ? orderContent
-    : section === "issues" ? <section className="admin-issues-panel"><SectionHeading eyebrow="系統狀態" title="問題回報" /><AdminFailurePanel /></section>
+    : section === "issues" ? <section className="admin-issues-panel"><SectionHeading eyebrow="SYSTEM STATUS / 系統狀態" title="問題回報" /><AdminFailurePanel /></section>
       : section === "suppliers" ? supplierContent : locationContent;
 
   return <>
     <section className="admin-intro admin-operations-intro">
-      <div><p className="eyebrow">訂單營運</p><h1>{section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
+      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
       <div className="admin-intro-meta"><span>管理者</span><strong>{user.display_name}</strong></div>
     </section>
     <AdminNav />

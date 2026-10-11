@@ -32,5 +32,5 @@ export function HelpPage() {
 }
 
 export function NotFoundPage() {
-  return <section className="not-found-page"><span>404</span><p className="eyebrow">找不到頁面</p><h1>這一頁不存在。</h1><p>網址可能已更新，或內容已經下架。</p><Link className="button button-primary" to="/">回到首頁</Link></section>;
+  return <section className="not-found-page"><span>404</span><p className="eyebrow">PAGE NOT FOUND / 找不到頁面</p><h1>這一頁不存在。</h1><p>網址可能已更新，或內容已經下架。</p><Link className="button button-primary" to="/">回到首頁</Link></section>;
 }

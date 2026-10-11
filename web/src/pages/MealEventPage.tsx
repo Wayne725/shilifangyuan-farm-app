@@ -237,7 +237,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       <div className="offer-hero meal-offer-hero">
         <div className="offer-copy">
           <p className="meal-event-status">{mealBookingStatus(mealEvent, now)}</p>
-          <p className="eyebrow">便當預訂</p>
+          <p className="eyebrow">MEAL PREORDER / 便當預訂</p>
           <h1>選餐點與份數</h1>
           <dl>
             <div><dt>取餐日期</dt><dd>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}</dd></div>

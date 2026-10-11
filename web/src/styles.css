@@ -8259,7 +8259,7 @@ p {
 
 html { font-size: 16px; }
 html[data-text-size="large"] { font-size: 20px; }
-.eyebrow { font-family: var(--sans); font-size: 1rem; letter-spacing: .08em; line-height: 1.6; }
+.eyebrow { font-family: "Manrope", "Noto Sans TC", sans-serif; font-size: 1rem; font-weight: 600; letter-spacing: .24em; line-height: 1.6; overflow-wrap: anywhere; }
 .reading-controls { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px clamp(18px, 4vw, 72px); border-bottom: 1px solid var(--line); font-size: 1rem; }
 .reading-controls button { min-height: 44px; padding: 6px 14px; background: transparent; border: 1px solid var(--line); cursor: pointer; }
 .reading-controls button[aria-pressed="true"] { border-color: var(--moss-dark); color: var(--moss-dark); font-weight: 600; }

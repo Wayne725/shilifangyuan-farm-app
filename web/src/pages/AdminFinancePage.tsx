@@ -44,7 +44,7 @@ export function AdminFinancePage() {
     setDraft(next); setFilters(next); setOffset(0); setFormError("");
   };
   return <section className="admin-module-page meal-finance-page">
-    <header className="workspace-heading"><div><p className="eyebrow">財務報表</p><h1>銷售明細與統整</h1></div></header>
+    <header className="workspace-heading"><div><p className="eyebrow">SALES REPORT / 財務報表</p><h1>銷售明細與統整</h1></div></header>
     <AdminNav />
     <div className="meal-finance-presets" aria-label="常用查詢期間">{(["today", "week", "month"] as const).map((mode) => <button key={mode} type="button" className="button button-quiet" onClick={() => applyPreset(mode)}>{{ today: "今天", week: "本週", month: "本月" }[mode]}</button>)}</div>
     <form className="meal-finance-filters" onSubmit={(event) => {
