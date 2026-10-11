@@ -286,6 +286,10 @@ const adminGroupsRoute = createRoute({
 const adminMealsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/meals",
+  validateSearch: (search: Record<string, unknown>): { tab?: string; q?: string } => ({
+    tab: typeof search.tab === "string" && ["orders", "cancellations", "events", "schedules", "meals"].includes(search.tab) ? search.tab : undefined,
+    q: typeof search.q === "string" ? search.q.slice(0, 100) : undefined,
+  }),
   component: page("./pages/AdminMealsPage", "AdminMealsPage"),
 });
 

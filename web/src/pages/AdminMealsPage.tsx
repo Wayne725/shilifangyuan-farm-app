@@ -1,7 +1,7 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { BowlFood, Buildings, CalendarPlus, Copy, QrCode, SealCheck } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 import { AdminNav } from "../components/AdminNav";
@@ -30,8 +30,9 @@ export function AdminMealsPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState("orders");
-  const [cancellationSearch, setCancellationSearch] = useState("");
+  const routeSearch = useSearch({ from: "/admin/meals" });
+  const navigate = useNavigate({ from: "/admin/meals" });
+  const activeTab = routeSearch.tab || "orders";
   const [meals, events] = useQueries({
     queries: [
       { queryKey: ["admin-meals"], queryFn: () => apiFetch<Meal[]>("/v1/admin/meals"), enabled: isAdmin },
@@ -56,12 +57,12 @@ export function AdminMealsPage() {
 
   return (
     <section className="admin-module-page admin-meals-workspace">
-      <header className="workspace-heading"><div><p className="eyebrow">MEAL OPERATIONS / 便當營運管理</p><h1>訂單查詢、退單與取餐</h1></div><p>先查詢訂單及營運待辦，再進入退單審核或場次核銷。</p></header>
+      <header className="workspace-heading"><div><p className="eyebrow">MEAL OPERATIONS / 便當營運管理</p><h1>訂單查詢、退單與取餐</h1></div></header>
       <AdminNav />
-      <Tabs.Root className="admin-social-tabs" value={activeTab} onValueChange={setActiveTab}>
+      <Tabs.Root className="admin-social-tabs" value={activeTab} onValueChange={(tab) => void navigate({ search: { tab } })}>
         <Tabs.List className="tab-list" aria-label="便當營運分類"><Tabs.Trigger value="orders">訂單查詢與待辦</Tabs.Trigger><Tabs.Trigger value="cancellations">退單審核</Tabs.Trigger><Tabs.Trigger value="events">場次與核銷</Tabs.Trigger><Tabs.Trigger value="schedules">每日午晚餐排程</Tabs.Trigger><Tabs.Trigger value="meals">餐點主檔</Tabs.Trigger></Tabs.List>
-        <Tabs.Content className="tab-content" value="orders"><AdminMealOrderSearch onReviewOrder={(orderNumber) => { setCancellationSearch(orderNumber); setActiveTab("cancellations"); }} /></Tabs.Content>
-        <Tabs.Content className="tab-content" value="cancellations"><AdminMealCancellations key={cancellationSearch} initialSearch={cancellationSearch} /></Tabs.Content>
+        <Tabs.Content className="tab-content" value="orders"><AdminMealOrderSearch key={routeSearch.q || "all"} initialSearch={routeSearch.q} onReviewOrder={(q) => void navigate({ search: { tab: "cancellations", q } })} /></Tabs.Content>
+        <Tabs.Content className="tab-content" value="cancellations"><AdminMealCancellations key={routeSearch.q || "all"} initialSearch={routeSearch.q} /></Tabs.Content>
         <Tabs.Content className="tab-content" value="events">
           <EventCreateForm meals={meals.data || []} onDone={refreshEvents} />
           {events.isPending && <LoadingLines count={4} />}

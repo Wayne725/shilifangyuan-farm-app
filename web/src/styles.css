@@ -8260,6 +8260,29 @@ p {
 html { font-size: 16px; }
 html[data-text-size="large"] { font-size: 20px; }
 .eyebrow { font-family: "Manrope", "Noto Sans TC", sans-serif; font-size: 1rem; font-weight: 600; letter-spacing: .24em; line-height: 1.6; overflow-wrap: anywhere; }
+.admin-quick-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+.admin-quick-buttons .button { min-height: 48px; padding: 10px 18px; font-size: 1rem; letter-spacing: 0; white-space: normal; }
+.admin-quick-buttons .button[aria-pressed="true"] { background: var(--moss-dark); border-color: var(--moss-dark); color: var(--paper-light); }
+.admin-quick-buttons .button[aria-pressed="true"]:hover { background: var(--moss-dark); color: var(--paper-light); }
+.admin-reason-choices { min-width: 0; margin: 0; padding: 0; border: 0; font-size: 1rem; }
+.admin-reason-choices legend { padding: 0; font-weight: 600; }
+.admin-selected-reason { margin: 8px 0; color: var(--ink-soft); overflow-wrap: anywhere; }
+.meal-cancellation-card { display: block; }
+.meal-cancellation-card > p { min-height: 0; margin: 8px 0; }
+.meal-cancellation-card > ul { margin: 8px 0; }
+.meal-cancellation-review { margin-top: 14px; padding-top: 14px; }
+.meal-cancellation-review > p { margin: 8px 0; }
+.admin-reason-choices textarea { width: 100%; min-height: 72px; font-size: 1rem; }
+.meal-order-filters { grid-template-columns: minmax(0, 1fr); }
+.meal-order-advanced-filters { grid-column: 1 / -1; }
+.meal-order-filter-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+.meal-order-advanced-filters summary, .admin-extra-actions summary { padding: 12px 0; min-height: 48px; font-size: 1rem; color: var(--moss-dark); font-weight: 600; cursor: pointer; }
+.admin-extra-actions { min-width: 0; width: 100%; }
+.admin-extra-actions > .operation-invoice-query { margin: 0; padding: 14px 0; }
+.operation-refund { grid-template-columns: minmax(0, 1fr); }
+.admin-reason-choices :is(button, textarea):focus-visible, .admin-extra-actions summary:focus-visible, .meal-order-advanced-filters summary:focus-visible { outline: 2px solid var(--moss-dark); outline-offset: 3px; }
+@media (max-width: 900px) { .meal-order-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .meal-order-filters, .meal-order-filter-fields { grid-template-columns: minmax(0, 1fr); } .meal-operation-tasks { grid-template-columns: repeat(2, minmax(0, 1fr)); } .meal-operation-tasks > button { padding: 14px; gap: 6px; } }
 .reading-controls { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px clamp(18px, 4vw, 72px); border-bottom: 1px solid var(--line); font-size: 1rem; }
 .reading-controls button { min-height: 44px; padding: 6px 14px; background: transparent; border: 1px solid var(--line); cursor: pointer; }
 .reading-controls button[aria-pressed="true"] { border-color: var(--moss-dark); color: var(--moss-dark); font-weight: 600; }
