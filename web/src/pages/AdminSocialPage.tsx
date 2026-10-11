@@ -60,7 +60,7 @@ export function AdminSocialPage() {
   ] });
 
   if (!isAdmin) {
-    return <section className="admin-gate"><div className="admin-gate-mark"><UsersThree size={38} weight="light" /></div><p className="eyebrow">SOCIAL OPERATIONS</p><h1>社務管理只向管理者開放。</h1><p>請使用管理者帳號登入。</p>{!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button> : <Link className="button button-quiet" to="/social">返回社務系統</Link>}</section>;
+    return <section className="admin-gate"><div className="admin-gate-mark"><UsersThree size={38} weight="light" /></div><p className="eyebrow">社務管理</p><h1>社務管理只向管理者開放。</h1><p>請使用管理者帳號登入。</p>{!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button> : <Link className="button button-quiet" to="/social">返回社務系統</Link>}</section>;
   }
 
   const pendingActivities = activities.data?.filter((item) => item.status === "pending_review") || [];
@@ -71,7 +71,7 @@ export function AdminSocialPage() {
   return (
     <section className="admin-social-page">
       <header className="workspace-heading">
-        <div><p className="eyebrow">SOCIAL OPERATIONS / 社務管理</p><h1>審核、排程與社員服務</h1></div>
+        <div><p className="eyebrow">社務管理</p><h1>審核、排程與社員服務</h1></div>
         <p>{pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length} 件待處理事項</p>
       </header>
       <AdminNav />
@@ -124,7 +124,7 @@ export function AdminSocialPage() {
 }
 
 function AdminReviewSection({ icon: Icon, title, count, pending, error, empty, children }: { icon: typeof CalendarBlank; title: string; count: number; pending: boolean; error?: string; empty: string; children: React.ReactNode }) {
-  return <section className="admin-review-section"><div className="section-title-row"><div><p className="eyebrow">WORK QUEUE</p><h2>{title}</h2></div><span><Icon size={20} />{count}</span></div>{pending && <LoadingLines count={2} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && <DataState title={empty} detail="新的項目送出後會出現在這裡。" />}<div className="admin-review-list">{children}</div></section>;
+  return <section className="admin-review-section"><div className="section-title-row"><div><p className="eyebrow">待辦事項</p><h2>{title}</h2></div><span><Icon size={20} />{count}</span></div>{pending && <LoadingLines count={2} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && <DataState title={empty} detail="新的項目送出後會出現在這裡。" />}<div className="admin-review-list">{children}</div></section>;
 }
 
 function RosterEntryCard({ entry }: { entry: MemberRosterEntry }) {
@@ -391,7 +391,7 @@ function MeetingCreateForm({ onDone }: { onDone: () => void }) {
   const [form, setForm] = useState({ meeting_type: "affairs", title: "", agenda: "", starts_at: "", location: "" });
   const create = useMutation({ mutationFn: () => apiFetch("/v1/admin/meetings", { method: "POST", body: JSON.stringify({ ...form, starts_at: new Date(form.starts_at).toISOString(), agenda: form.agenda.split("\n").map((title) => title.trim()).filter(Boolean).map((title) => ({ title })) }) }), onSuccess: () => { setOpen(false); setForm({ meeting_type: "affairs", title: "", agenda: "", starts_at: "", location: "" }); onDone(); } });
   function submit(event: FormEvent) { event.preventDefault(); create.mutate(); }
-  return <section className="meeting-create-section"><button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />建立會議</button>{open && <form className="social-form" onSubmit={submit}><div className="form-heading"><div><p className="eyebrow">NEW MEETING</p><h2>建立社員會議</h2></div></div><div className="field-grid two-columns"><label className="field"><span>會議類型</span><select value={form.meeting_type} onChange={(event) => setForm({ ...form, meeting_type: event.target.value })}><option value="affairs">社務會議</option><option value="general_assembly">社員大會</option></select></label><label className="field"><span>會議名稱</span><input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label className="field"><span>開始時間</span><input required type="datetime-local" value={form.starts_at} onChange={(event) => setForm({ ...form, starts_at: event.target.value })} /></label><label className="field"><span>地點</span><input required value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label><label className="field wide"><span>議程（每行一項）</span><textarea rows={5} value={form.agenda} onChange={(event) => setForm({ ...form, agenda: event.target.value })} /></label></div>{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={create.isPending}>建立會議</button></div></form>}</section>;
+  return <section className="meeting-create-section"><button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />建立會議</button>{open && <form className="social-form" onSubmit={submit}><div className="form-heading"><div><p className="eyebrow">新增會議</p><h2>建立社員會議</h2></div></div><div className="field-grid two-columns"><label className="field"><span>會議類型</span><select value={form.meeting_type} onChange={(event) => setForm({ ...form, meeting_type: event.target.value })}><option value="affairs">社務會議</option><option value="general_assembly">社員大會</option></select></label><label className="field"><span>會議名稱</span><input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label className="field"><span>開始時間</span><input required type="datetime-local" value={form.starts_at} onChange={(event) => setForm({ ...form, starts_at: event.target.value })} /></label><label className="field"><span>地點</span><input required value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label><label className="field wide"><span>議程（每行一項）</span><textarea rows={5} value={form.agenda} onChange={(event) => setForm({ ...form, agenda: event.target.value })} /></label></div>{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={create.isPending}>建立會議</button></div></form>}</section>;
 }
 
 function activityAdminStatus(status: string) {

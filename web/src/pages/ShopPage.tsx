@@ -8,7 +8,7 @@ import { DataState, LoadingLines, ProductCard, SectionHeading } from "../compone
 import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
 import { apiFetch, formatDate } from "../lib/api";
-import { formatMealDateTime, mealBookingStatus, mealPeriod, mealServiceDate, pickupTimeOptions, shiftMealDate, taipeiDate } from "../lib/meal-time";
+import { shiftMealDate, taipeiDate } from "../lib/meal-time";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
@@ -17,7 +17,6 @@ export function ShopPage() {
   const today = taipeiDate(now);
   const previousToday = useRef(today);
   const [mealDate, setMealDate] = useState(() => shiftMealDate(today, 1));
-  const [period, setPeriod] = useState("all");
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
     return () => window.clearInterval(timer);
@@ -45,9 +44,6 @@ export function ShopPage() {
     !["draft", "cancelled", "completed"].includes(meal.status)
       && new Date(meal.pickup_ends_at).getTime() > now,
   ) || [];
-  const visibleMeals = upcomingMeals.filter((meal) =>
-    mealServiceDate(meal) === mealDate && (period === "all" || mealPeriod(meal) === period),
-  );
 
   return (
     <>
@@ -76,7 +72,7 @@ export function ShopPage() {
 
         <Tabs.Content value="products" className="tab-content">
           <SectionHeading
-            eyebrow="CURATED PROVISIONS"
+            eyebrow="合作社選品"
             title="合作社選品"
           />
           {products.isPending && <LoadingLines count={4} />}
@@ -100,7 +96,7 @@ export function ShopPage() {
 
         <Tabs.Content value="groups" className="tab-content">
           <SectionHeading
-            eyebrow="BUYING TOGETHER"
+            eyebrow="共同團購"
             title="把需求聚在一起"
           />
           <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的團購需求 <ArrowRight size={17} /></Link></div>
@@ -134,10 +130,10 @@ export function ShopPage() {
         <Tabs.Content value="meals" className="tab-content meal-booking-content">
           <SectionHeading
             eyebrow="便當預訂"
-            title="選日期與餐別"
+            title="選取餐時間"
           />
           {meals.isSuccess && <MealDateNavigation events={upcomingMeals} selectedDate={mealDate}
-            onDateChange={setMealDate} period={period} onPeriodChange={setPeriod} now={now} />}
+            onDateChange={setMealDate} now={now} />}
           {meals.isPending && <LoadingLines count={2} />}
           {meals.isError && (
             <DataState
@@ -147,24 +143,6 @@ export function ShopPage() {
               onAction={() => meals.refetch()}
             />
           )}
-          {meals.isSuccess && visibleMeals.length === 0 && <DataState title="明天尚無符合的供餐場次" detail="可切換午餐或晚餐查看。場次及菜單尚未公告時，暫時無法預訂；如需確認供餐，請洽管理員。" />}
-          <div className="meal-event-list">
-            {visibleMeals.map((meal) => {
-              const status = mealBookingStatus(meal, now);
-              const pickupOptions = pickupTimeOptions(meal, now);
-              return <article key={meal.id} className="meal-event-row">
-                <div>
-                  <span>{mealPeriod(meal) === "lunch" ? "午餐" : "晚餐"} · {status}</span>
-                  <h3>{meal.title}</h3>
-                  <p>{meal.offerings.filter((offering) => offering.is_active).map((offering) => offering.meal_name).join("、") || "菜單待公告"}</p>
-                  <small>可選取餐時間：{pickupOptions.length ? `${pickupOptions[0].label}–${pickupOptions[pickupOptions.length - 1].label}` : "時段尚未開放"}</small>
-                  <small>預訂截止 {formatMealDateTime(meal.booking_ends_at || meal.ordering_ends_at)}</small>
-                </div>
-                {status === "可預訂" ? <Link className="button button-system" to="/meals/$eventId" params={{ eventId: meal.id }}>選餐與份數 <ArrowRight size={18} /></Link>
-                  : <span className="meal-event-unavailable">{status}</span>}
-              </article>;
-            })}
-          </div>
         </Tabs.Content>
       </Tabs.Root>
 

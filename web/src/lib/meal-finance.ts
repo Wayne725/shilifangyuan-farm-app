@@ -12,6 +12,7 @@ export interface MealSalesPeriod {
 export interface MealSalesOrder {
   id: string;
   order_number: string;
+  sales_channel: "meal_preorder" | "regular" | "group";
   customer_name: string;
   customer_email: string;
   membership_type: string;

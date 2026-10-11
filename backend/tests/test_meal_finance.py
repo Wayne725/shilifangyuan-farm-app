@@ -173,3 +173,44 @@ async def test_reports_are_admin_only_and_do_not_mutate_financial_records(financ
     await report(c)
     assert await c.session.scalar(select(func.count(Refund.id))) == before
     assert c.order.payment_status == PaymentStatus.PAID
+
+
+@pytest.mark.asyncio
+async def test_all_channels_include_regular_and_group_sales_refunds_and_csv(finance_context):
+    c = finance_context
+    ordinary = await c.session.scalar(select(Order).where(Order.order_number == 'ORDINARY-REPORT'))
+    await c.session.refresh(ordinary, ['items'])
+    ordinary.created_at = FIRST
+    ordinary.items = [OrderItem(product_name='一般選品', unit_label='袋', quantity=2, unit_price=2500, subtotal=5000, tax_type=TaxType.TAX_EXEMPT)]
+    group = Order(order_number='GROUP-REPORT', order_kind=OrderKind.REGULAR, sales_channel=SalesChannel.GROUP,
+                  user=c.buyer, amount_total=600, contact_email=c.buyer.email, paid_at=FIRST, created_at=FIRST,
+                  membership_type_snapshot=c.order.membership_type_snapshot, payment_status=PaymentStatus.PAID,
+                  items=[OrderItem(product_name='團購選品', unit_label='箱', quantity=1, unit_price=600, subtotal=600, tax_type=TaxType.TAXABLE)])
+    c.session.add_all([group, Refund(order=ordinary, amount=1000, status=RefundStatus.COMPLETED,
+                                  reason='一般選品退貨', requested_by_id=c.admin.id, created_at=FIRST, completed_at=FIRST)])
+    await c.session.commit()
+    all_sales = await report(c, sales_channel='all')
+    assert all_sales['summary']['received'] == 6240
+    assert all_sales['summary']['refunded'] == 1320
+    assert all_sales['summary']['net'] == 4920
+    assert all_sales['summary']['paid_meal_quantity'] == 6
+    assert all_sales['orders']['total'] == 4
+    assert {row['sales_channel'] for row in all_sales['orders']['items']} == {'meal_preorder', 'regular', 'group'}
+    regular = await report(c, sales_channel='regular')
+    assert regular['summary']['net'] == 4000
+    assert regular['orders']['total'] == 1
+    assert regular['products'][0]['quantity'] == 2
+    grouped = await report(c, sales_channel='group')
+    assert grouped['summary']['received'] == 600 and grouped['orders']['total'] == 1
+    assert (await report(c))['summary']['received'] == 640
+    response = await c.client.get('/v1/admin/finance/meal-sales.csv', params={'starts_on': '2030-01-02', 'ends_on': '2030-01-02', 'sales_channel': 'regular'}, headers=auth_headers(c.admin))
+    rows = list(csv.DictReader(io.StringIO(response.text.lstrip('\ufeff'))))
+    assert len(rows) == 1 and rows[0]['銷售類型'] == '日常選品'
+    assert rows[0]['期間收款'] == '5000' and rows[0]['期間完成退款'] == '1000'
+
+
+@pytest.mark.asyncio
+async def test_invalid_channel_is_rejected(finance_context):
+    c = finance_context
+    response = await c.client.get('/v1/admin/finance/meal-sales', params={'starts_on': '2030-01-02', 'ends_on': '2030-01-02', 'sales_channel': 'unknown'}, headers=auth_headers(c.admin))
+    assert response.status_code == 422

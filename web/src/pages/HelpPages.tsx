@@ -2,7 +2,8 @@ import { ArrowLeft, CreditCard, FileText, Storefront, UsersThree } from "@phosph
 import { Link } from "@tanstack/react-router";
 
 const helpItems = [
-  { icon: Storefront, title: "如何訂便當", body: "從「我要訂餐」選明天的午餐或晚餐，選餐點與份數，再點選半小時取餐時段。確認地點、餐點、金額及發票資料後付款。付款完成後，回到「我的便當訂單」查看取餐碼。" },
+  { icon: FileText, title: "放大字體", body: "網站上方「字體大小」可選「放大」，選擇會記在目前瀏覽器。需要恢復時按「標準」。" },
+  { icon: Storefront, title: "如何訂便當", body: "從「我要訂餐」確認明天的日期與地點，直接點取餐時間，再選餐點與份數。確認地點、餐點、金額及發票資料後付款。付款完成後，回到「我的便當訂單」查看取餐碼。" },
   { icon: UsersThree, title: "團購投票", body: "投票只用來估計需求；正式開團後仍須加入並完成付款。" },
   { icon: CreditCard, title: "線上付款", body: "付款結果以訂單中心狀態為準；中斷時可由原訂單安全續接。" },
   { icon: FileText, title: "便當退單", body: "在便當訂單內選擇「申請取消這筆便當」並填寫原因，由管理員核准或拒絕。審核前訂單仍有效；核准後取消訂單，已付款會交由原付款通路退款。退款及發票狀態會分別更新，請回到原訂單查看。已取餐或供餐結束的訂單請洽管理員處理。" },
@@ -14,7 +15,7 @@ const helpItems = [
 const mealQuestions = [
   { question: "今天可以訂今天的餐嗎？", answer: "不可以。只能提前一天預訂，以台灣日期為準；今天可訂明天的餐點，也不能提前兩天以上下單。" },
   { question: "最晚什麼時候要訂？", answer: "請看該場次的「預訂截止」。最晚須在取餐日前一天結束前送出，管理員也可能設定較早截單。超過截止時間就無法建立新訂單。" },
-  { question: "午餐、晚餐的操作一樣嗎？", answer: "一樣。先選餐點與份數，再點選取餐時間，確認明細後付款。兩種餐別的取餐時間不同，都每半小時一個時段。" },
+  { question: "午餐、晚餐的操作一樣嗎？", answer: "一樣，餐點相同。直接選 11:00～13:00 或 16:30～18:00 的半小時取餐時段，再選餐點與份數，確認明細後付款。" },
   { question: "離開頁面後，餐點還在嗎？", answer: "同一個瀏覽器分頁返回時，會保留選餐、份數與取餐時間。若庫存、菜單或可預訂日期改變，系統會調整並提醒你重新確認。訂單成立後，這筆選餐草稿會清除。" },
   { question: "忘記訂單編號或取餐碼怎麼辦？", answer: "登入後開啟「我的便當訂單」，選擇對應取餐日期的訂單。訂單編號在明細上方；付款成功後可看到 QR 與六位取餐碼。" },
   { question: "付款頁中斷，要重新下一單嗎？", answer: "先回到原訂單確認付款狀態。仍可付款時，使用原訂單的「前往付款」；不要因為付款頁中斷或發票尚未開立就再下一單。" },
@@ -31,5 +32,5 @@ export function HelpPage() {
 }
 
 export function NotFoundPage() {
-  return <section className="not-found-page"><span>404</span><p className="eyebrow">PAGE NOT FOUND</p><h1>這一頁不存在。</h1><p>網址可能已更新，或內容已經下架。</p><Link className="button button-primary" to="/">回到首頁</Link></section>;
+  return <section className="not-found-page"><span>404</span><p className="eyebrow">找不到頁面</p><h1>這一頁不存在。</h1><p>網址可能已更新，或內容已經下架。</p><Link className="button button-primary" to="/">回到首頁</Link></section>;
 }

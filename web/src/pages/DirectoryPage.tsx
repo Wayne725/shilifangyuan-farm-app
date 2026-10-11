@@ -61,7 +61,7 @@ export function DirectoryPage() {
   return (
     <section className="social-page-shell">
       <header className="social-page-heading">
-        <div><p className="eyebrow">MEMBER DIRECTORY</p><h1>社員名錄</h1></div>
+        <div><p className="eyebrow">社員通訊錄</p><h1>社員名錄</h1></div>
         {canAccess && <button className="button button-system" type="button" onClick={() => setEditing((value) => !value)}><PencilSimple size={18} />編輯我的資料</button>}
       </header>
       <SocialNav />
@@ -74,7 +74,7 @@ export function DirectoryPage() {
         <>
           {editing && (
             <form className="social-form directory-form" onSubmit={submit}>
-              <div className="form-heading"><div><p className="eyebrow">MY DIRECTORY PROFILE</p><h2>我的公開資料</h2></div><label className="switch-field"><input type="checkbox" checked={form.is_public} onChange={(event) => setForm({ ...form, is_public: event.target.checked })} /><span>{form.is_public ? "公開中" : "不公開"}</span></label></div>
+              <div className="form-heading"><div><p className="eyebrow">我的通訊錄資料</p><h2>我的公開資料</h2></div><label className="switch-field"><input type="checkbox" checked={form.is_public} onChange={(event) => setForm({ ...form, is_public: event.target.checked })} /><span>{form.is_public ? "公開中" : "不公開"}</span></label></div>
               <div className="field-grid two-columns">
                 <label className="field"><span>顯示名稱</span><input required maxLength={80} value={form.nickname} onChange={(event) => setForm({ ...form, nickname: event.target.value })} /></label>
                 <label className="field"><span>頭像網址</span><input type="url" maxLength={500} placeholder="https://" value={form.avatar_url} onChange={(event) => setForm({ ...form, avatar_url: event.target.value })} /></label>

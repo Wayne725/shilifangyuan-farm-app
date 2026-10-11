@@ -92,7 +92,7 @@ export function ProposalDetailPage() {
       </article>
 
       <section className="voting-panel">
-        <div className="section-title-row"><div><p className="eyebrow">VOTING</p><h2>表決結果</h2></div><strong>{item.tally.total} 票</strong></div>
+        <div className="section-title-row"><div><p className="eyebrow">表決結果</p><h2>表決結果</h2></div><strong>{item.tally.total} 票</strong></div>
         {item.proposal_type === "resolution" ? (
           <div className="vote-grid resolution-votes">
             {(["yes", "no", "abstain"] as const).map((choice) => (
@@ -119,7 +119,7 @@ export function ProposalDetailPage() {
       </section>
 
       <section className="discussion-panel">
-        <div className="section-title-row"><div><p className="eyebrow">DISCUSSION</p><h2>社員討論</h2></div><ChatCircle size={27} weight="light" /></div>
+        <div className="section-title-row"><div><p className="eyebrow">社員討論</p><h2>社員討論</h2></div><ChatCircle size={27} weight="light" /></div>
         {comments.isPending && <LoadingLines count={3} />}
         <div className="comment-list">
           {comments.data?.map((entry) => <article key={entry.id}><div><strong>{entry.display_name}</strong><time>{formatDateTime(entry.created_at)}</time></div><p>{entry.body}</p></article>)}

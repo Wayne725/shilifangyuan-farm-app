@@ -7,7 +7,7 @@ import {
   Plus,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
@@ -53,12 +53,14 @@ interface MealQuote {
 
 export function MealEventPage() {
   const { eventId } = useParams({ from: "/meals/$eventId" });
-  return <MealEventOrder key={eventId} eventId={eventId} />;
+  const { pickup_at } = useSearch({ from: "/meals/$eventId" });
+  return <MealEventOrder key={eventId} eventId={eventId} initialPickupAt={pickup_at} />;
 }
 
-function MealEventOrder({ eventId }: { eventId: string }) {
+function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initialPickupAt?: string }) {
+  const navigate = useNavigate({ from: "/meals/$eventId" });
   const { user, openLogin } = useAuth();
-  const [draft, setDraft] = useState(() => readMealDraft(eventId));
+  const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
   const [draftAdjusted, setDraftAdjusted] = useState(false);
   const [now, setNow] = useState(Date.now);
   const [invoicePreference, setInvoicePreference] = useState(
@@ -144,6 +146,9 @@ function MealEventOrder({ eventId }: { eventId: string }) {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (initialPickupAt) setDraft((current) => ({ ...current, pickupAt: initialPickupAt }));
+  }, [initialPickupAt]);
   useEffect(() => {
     if (!event.data) return;
     if (mealDraftWasAdjusted(draft, currentDraft)) setDraftAdjusted(true);
@@ -232,8 +237,8 @@ function MealEventOrder({ eventId }: { eventId: string }) {
       <div className="offer-hero meal-offer-hero">
         <div className="offer-copy">
           <p className="meal-event-status">{mealBookingStatus(mealEvent, now)}</p>
-          <h1>{mealEvent.title}</h1>
-          <p>選餐點與份數 → 選取餐時間 → 確認明細並付款</p>
+          <p className="eyebrow">便當預訂</p>
+          <h1>選餐點與份數</h1>
           <dl>
             <div><dt>取餐日期</dt><dd>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}</dd></div>
             <div><dt>取餐地點</dt><dd>{mealEvent.location}</dd></div>
@@ -247,8 +252,7 @@ function MealEventOrder({ eventId }: { eventId: string }) {
         <div>
           <section className="meal-selected-date" aria-label="已選取餐日期">
             <div className="checkout-step-title"><span>01</span><div><h2>取餐日期</h2></div></div>
-            <p><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}</strong><Link className="text-link" to="/shop">更換餐別</Link></p>
-            <p className="field-help">只能提前一天預訂，今天可訂 {tomorrow.replaceAll("-", "/")} 的餐點。</p>
+            <p><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}{pickupReady && ` · ${pickupAt.slice(11)}`}</strong><Link className="text-link" to="/shop">更換取餐時間</Link></p>
           </section>
           {draftAdjusted && <p className="meal-selection-notice" role="status">選餐已依最新庫存或可選時段調整，請再次確認餐點、份數與取餐時間。</p>}
           <div className="checkout-step-title"><span>02</span><div><h2>選擇餐點與份數</h2></div></div>
@@ -258,7 +262,7 @@ function MealEventOrder({ eventId }: { eventId: string }) {
               return (
                 <article className={quantity > 0 ? "meal-offering selected" : "meal-offering"} key={offering.id}>
                   <div className="meal-offering-summary">
-                    <div className="meal-offering-copy"><small>剩餘 {offering.available_quantity} 份</small><h3>{offering.meal_name}</h3><p>{offering.description || "本餐點內容由合作社廚房維護。"}</p><strong>{formatMoney(offering.price)} 起</strong></div>
+                    <div className="meal-offering-copy"><small>剩餘 {offering.available_quantity} 份</small><h3>{offering.meal_name}</h3>{offering.description && <p>{offering.description}</p>}<strong>{formatMoney(offering.price)} 起</strong></div>
                     <div className="quantity-control">
                       <button type="button" disabled={quantity === 0} onClick={() => changeQuantity(offering.id, quantity - 1, offering.available_quantity)} aria-label={`減少${offering.meal_name}`}><Minus size={20} /></button>
                       <span aria-label={`${offering.meal_name} ${quantity} 份`}>{quantity}</span>
@@ -300,11 +304,9 @@ function MealEventOrder({ eventId }: { eventId: string }) {
           {activeOfferings.length === 0 && <DataState title="菜單待公告" detail="管理員公布餐點後即可選餐，請稍後再查看。" />}
           <section className="meal-pickup-selection" aria-label="選擇取餐時間">
             <div className="checkout-step-title"><span>03</span><div><h2>選擇取餐時間</h2></div></div>
-            <p className="field-help">每半小時一個時段，點選你預計到場的時間。</p>
-            <div className="meal-pickup-options" role="group" aria-label="預計取餐時間（台灣時間）">{pickupOptions.map((option) => <button key={option.value} type="button" aria-pressed={pickupAt === option.value} disabled={!orderingOpen} onClick={() => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: option.value })); }}>{option.label}</button>)}</div>
+            <div className="meal-pickup-options" role="group" aria-label="預計取餐時間（台灣時間）">{pickupOptions.map((option) => <button key={option.value} type="button" aria-pressed={pickupAt === option.value} disabled={!orderingOpen} onClick={() => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: option.value })); void navigate({ search: { pickup_at: option.value }, replace: true }); }}>{option.label}</button>)}</div>
             {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
             {pickupReady && <p className="meal-pickup-confirmation" role="status">已選取餐時間：{formatMealDateTime(taipeiInputToIso(pickupAt))}</p>}
-            <p className="field-help">同一分頁返回時，可繼續選餐；系統會再確認菜單、庫存及可選時段。</p>
           </section>
           <InvoicePreferenceFields
             onChange={setInvoicePreference}
@@ -339,7 +341,7 @@ function MealEventOrder({ eventId }: { eventId: string }) {
             <div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div>
           </dl>
           {!confirmedQuote && selectedMeals.length > 0 && <p className="meal-selection-notice">預估金額依目前選擇計算；請完成取餐時間、必選項目與發票資料，以確認實際金額。</p>}
-          <button className="button button-quiet full-width meal-draft-reset" type="button" disabled={checkout.isPending || (!selectedMealQuantity && !pickupAt)} onClick={() => { clearMealDraft(eventId); setDraft(emptyMealDraft()); setDraftAdjusted(false); }}>清空選餐與取餐時間</button>
+          <button className="button button-quiet full-width meal-draft-reset" type="button" disabled={checkout.isPending || (!selectedMealQuantity && !pickupAt)} onClick={() => { clearMealDraft(eventId); setDraft(emptyMealDraft()); setDraftAdjusted(false); void navigate({ search: { pickup_at: undefined }, replace: true }); }}>清空選餐與取餐時間</button>
           {!user ? (
             <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後預訂</button>
           ) : (

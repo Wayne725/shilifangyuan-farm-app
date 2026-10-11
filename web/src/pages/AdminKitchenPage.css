@@ -1,33 +1,33 @@
-.meal-kitchen-page { font-size: 18px; line-height: 1.7; }
+.meal-kitchen-page { font-size: 1.125rem; line-height: 1.7; }
 .meal-kitchen-filters, .meal-kitchen-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; margin: 24px 0; }
-.meal-kitchen-page input, .meal-kitchen-page select, .meal-kitchen-page .button, .meal-kitchen-print-controls .button { min-height: 48px; font-size: 18px; }
+.meal-kitchen-page input, .meal-kitchen-page select, .meal-kitchen-page .button, .meal-kitchen-print-controls .button { min-height: 48px; font-size: 1.125rem; }
 .meal-kitchen-page :is(button, a, input, select):focus-visible, .meal-kitchen-print-dialog :is(button, input):focus-visible { outline: 3px solid var(--moss); outline-offset: 4px; }
 .meal-kitchen-summary { padding: 20px 0; border-block: 1px solid var(--line); }
-.meal-kitchen-summary strong { font-size: 26px; }
+.meal-kitchen-summary strong { font-size: 1.625rem; }
 .meal-kitchen-summary ul { display: flex; gap: 12px 24px; flex-wrap: wrap; padding: 0; list-style: none; }
 .meal-kitchen-orders { display: grid; margin-top: 24px; }
 .meal-kitchen-order { padding: 28px 0; border-top: 1px solid var(--line); }
 .meal-kitchen-order header { display: flex; justify-content: space-between; gap: 16px; }
-.meal-kitchen-order h2 { font-size: 24px; overflow-wrap: anywhere; }
-.meal-kitchen-pickup { font-size: 24px; font-weight: 600; }
+.meal-kitchen-order h2 { font-size: 1.5rem; overflow-wrap: anywhere; }
+.meal-kitchen-pickup { font-size: 1.5rem; font-weight: 600; }
 .meal-kitchen-meals { padding: 0; list-style: none; }
 .meal-kitchen-meals li { border-bottom: 1px solid var(--line); padding: 12px 0; }
-.meal-kitchen-meals p { font-size: 18px; margin: 4px 0; }
+.meal-kitchen-meals p { font-size: 1.125rem; margin: 4px 0; }
 .meal-kitchen-warning { padding: 16px; background: var(--paper-deep); border-left: 4px solid var(--clay); }
-.meal-kitchen-printer-note { font-size: 16px; margin-top: 32px; }
-.meal-kitchen-print-dialog { position: fixed; z-index: 80; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: 90dvh; width: min(560px, calc(100vw - 32px)); overflow: auto; background: var(--paper-light); padding: 24px; font-size: 18px; }
+.meal-kitchen-printer-note { font-size: 1rem; margin-top: 32px; }
+.meal-kitchen-print-dialog { position: fixed; z-index: 80; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: 90dvh; width: min(560px, calc(100vw - 32px)); overflow: auto; background: var(--paper-light); padding: 24px; font-size: 1.125rem; }
 .meal-kitchen-print-controls > .icon-button { float: right; }
 .meal-kitchen-reprint { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
 .meal-kitchen-reprint input { width: 24px; height: 24px; }
-.meal-kitchen-ticket { width: 80mm; max-width: 100%; padding: 5mm; background: #fff; color: #000; margin: 24px auto 0; font-family: "Noto Sans TC", sans-serif; font-size: 16px; line-height: 1.6; }
-.meal-kitchen-ticket h2 { font-size: 20px; text-align: center; }
+.meal-kitchen-ticket { width: 80mm; max-width: 100%; padding: 5mm; background: #fff; color: #000; margin: 24px auto 0; font-family: "Noto Sans TC", sans-serif; font-size: 1rem; line-height: 1.6; }
+.meal-kitchen-ticket h2 { font-size: 1.25rem; text-align: center; }
 .meal-kitchen-ticket p { margin: 8px 0; overflow-wrap: anywhere; }
-.meal-kitchen-ticket-order { font-size: 20px; font-weight: 700; }
+.meal-kitchen-ticket-order { font-size: 1.25rem; font-weight: 700; }
 .meal-kitchen-ticket ul { list-style: none; margin: 12px 0; padding: 0; border-block: 1px dashed #000; }
 .meal-kitchen-ticket li { padding: 10px 0; break-inside: avoid; }
-.meal-kitchen-ticket-reprint { display: block; text-align: center; font-size: 22px; }
+.meal-kitchen-ticket-reprint { display: block; text-align: center; font-size: 1.375rem; }
 .meal-kitchen-ticket-alert { border: 2px solid #000; padding: 8px; }
-@media (max-width: 600px) { .meal-kitchen-filters .field { width: 100%; } .meal-kitchen-order header { flex-direction: column; } .meal-kitchen-pickup { font-size: 22px; } }
+@media (max-width: 600px) { .meal-kitchen-filters .field { width: 100%; } .meal-kitchen-order header { flex-direction: column; } .meal-kitchen-pickup { font-size: 1.375rem; } }
 @media print {
   @page meal-ticket { margin: 0; }
   body:has(.meal-kitchen-print-dialog) { min-width: 0; width: 80mm; background: #fff; color: #000; }

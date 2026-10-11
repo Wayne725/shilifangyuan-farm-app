@@ -83,3 +83,11 @@ export function pickupTimeOptions(event: MealEvent, now = Date.now()): Array<{ v
     .sort()
     .map((value) => ({ value, label: value.slice(11) }));
 }
+
+export function mealPickupChoices(events: MealEvent[], date: string, now = Date.now()) {
+  return events.filter((event) => mealServiceDate(event) === date && !["draft", "cancelled", "completed"].includes(event.status))
+    .flatMap((event) => pickupTimeOptions(event, now).map((option) => ({
+      ...option, eventId: event.id, location: event.location, title: event.title,
+      status: mealBookingStatus(event, now),
+    }))).sort((left, right) => left.value.localeCompare(right.value) || left.location.localeCompare(right.location) || left.eventId.localeCompare(right.eventId));
+}

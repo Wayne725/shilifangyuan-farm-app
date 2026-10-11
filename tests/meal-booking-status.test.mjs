@@ -11,7 +11,7 @@ const compiled = ts.transpileModule(source, {
 });
 assert.deepEqual(compiled.diagnostics.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error), []);
 const {
-  mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions,
+  mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions, mealPickupChoices,
   validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime,
 } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
 
@@ -172,4 +172,16 @@ test("台灣日期與星期不受UTC前一日影響，跨月位移保持台灣�
   assert.ok(formatMealDateTime(earlySunday).includes("週日"));
   assert.equal(shiftMealDate("2026-09-30", 1), "2026-10-01");
   assert.equal(shiftMealDate("2026-10-01", -1), "2026-09-30");
+});
+
+test("取餐選單合併午晚時段，保留各自場次、地點與售完狀態", () => {
+  const lunch = mealEvent();
+  const dinner = mealEvent({ id: "dinner", meal_period: "dinner", pickup_starts_at: "2026-09-18T16:30:00+08:00", pickup_ends_at: "2026-09-18T18:30:00+08:00", offerings: [{ id: "dinner-dish", is_active: true, available_quantity: 0 }] });
+  const choices = mealPickupChoices([dinner, lunch, mealEvent({ id: "hidden", status: "draft" })], "2026-09-18", NOW);
+  assert.deepEqual(choices.map((row) => row.label), ["11:00", "11:30", "12:00", "12:30", "13:00", "16:30", "17:00", "17:30", "18:00"]);
+  assert.equal(choices[0].eventId, lunch.id);
+  assert.equal(choices[0].status, "可預訂");
+  assert.equal(choices.at(-1).eventId, dinner.id);
+  assert.equal(choices.at(-1).status, "已售完");
+  assert.deepEqual(mealPickupChoices([lunch, dinner], "2026-09-17", NOW), []);
 });

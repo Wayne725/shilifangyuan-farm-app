@@ -10,7 +10,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Link, Outlet } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
@@ -25,6 +25,13 @@ export function AppShell() {
   const { itemCount } = useCommerce();
   const { user, isAuthReady, sessionError, retrySession, openLogin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [largeText, setLargeText] = useState(() => {
+    try { return localStorage.getItem("slf_text_size") === "large"; } catch { return false; }
+  });
+  useEffect(() => {
+    document.documentElement.dataset.textSize = largeText ? "large" : "standard";
+    try { localStorage.setItem("slf_text_size", largeText ? "large" : "standard"); } catch { /* The current size still applies when storage is unavailable. */ }
+  }, [largeText]);
 
   return (
     <div className="site-frame">
@@ -145,6 +152,12 @@ export function AppShell() {
           )}
         </nav>
       )}
+
+      <div className="reading-controls" role="group" aria-label="文字大小">
+        <span>字體大小</span>
+        <button type="button" aria-pressed={!largeText} onClick={() => setLargeText(false)}>標準</button>
+        <button type="button" aria-pressed={largeText} onClick={() => setLargeText(true)}>放大</button>
+      </div>
 
       <main id="main-content">
         {sessionError ? (

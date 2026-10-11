@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, exists, func, or_, select, union_all
@@ -16,6 +16,7 @@ class MealSalesFilters(BaseModel):
     starts_on: Annotated[date, Field(ge=date(2, 1, 1), le=date(9998, 12, 31))]
     ends_on: Annotated[date, Field(ge=date(2, 1, 1), le=date(9998, 12, 31))]
     search: str = Field(default="", max_length=100)
+    sales_channel: Literal["all", "meal_preorder", "regular", "group"] = "meal_preorder"
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -31,7 +32,11 @@ class MealSalesFilters(BaseModel):
         return start, end
 
 
-def _receipts():
+def _channel_scope(filters):
+    return True if filters.sales_channel == "all" else Order.sales_channel == SalesChannel(filters.sales_channel)
+
+
+def _receipts(filters):
     received = or_(PaymentAttempt.paid_at.is_not(None), PaymentAttempt.status.in_({
         PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED,
     }))
@@ -39,10 +44,10 @@ def _receipts():
         Order.id.label("order_id"), PaymentAttempt.amount.label("amount"),
         func.coalesce(PaymentAttempt.paid_at, Order.paid_at).label("occurred_at"),
     ).join(PaymentAttempt, PaymentAttempt.order_id == Order.id).where(
-        Order.sales_channel == SalesChannel.MEAL_PREORDER, received,
+        _channel_scope(filters), received,
     )
     legacy = select(Order.id.label("order_id"), Order.amount_total.label("amount"), Order.paid_at.label("occurred_at")).where(
-        Order.sales_channel == SalesChannel.MEAL_PREORDER, Order.paid_at.is_not(None),
+        _channel_scope(filters), Order.paid_at.is_not(None),
         ~exists().where(PaymentAttempt.order_id == Order.id, received),
     )
     return union_all(attempts, legacy).cte("meal_receipts")
@@ -64,7 +69,7 @@ def _day_expression(session, column):
 def _order_scope(filters, receipts):
     start, end = filters.bounds()
     return select(Order).join(User, User.id == Order.user_id).where(
-        Order.sales_channel == SalesChannel.MEAL_PREORDER, _search_condition(filters.search), or_(
+        _channel_scope(filters), _search_condition(filters.search), or_(
             and_(Order.created_at >= start, Order.created_at < end),
             exists().where(receipts.c.order_id == Order.id, receipts.c.occurred_at >= start, receipts.c.occurred_at < end),
             exists().where(Refund.order_id == Order.id, or_(
@@ -80,7 +85,7 @@ def _money_in_period(at, start, end):
 
 
 async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
-    receipts = _receipts()
+    receipts = _receipts(filters)
     query = _order_scope(filters, receipts)
     total = int(await session.scalar(select(func.count()).select_from(query.subquery())) or 0)
     orders = list(await session.scalars(query.options(
@@ -102,7 +107,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
         fulfillment = order.fulfillment
         event = order.meal_event
         details.append({
-            "id": order.id, "order_number": order.order_number, "customer_name": order.user.display_name,
+            "id": order.id, "order_number": order.order_number, "sales_channel": order.sales_channel.value, "customer_name": order.user.display_name,
             "customer_email": order.contact_email, "membership_type": order.membership_type_snapshot.value,
             "created_at": aware(order.created_at), "paid_at": aware(order.paid_at) if order.paid_at else None, "order_amount": order.amount_total,
             "tax_amount": order.tax_amount, "period_received": period_receipts[order.id], "period_refunded": period_refunds,
@@ -126,9 +131,9 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
 
 async def meal_sales_report(session: AsyncSession, filters: MealSalesFilters):
     start, end = filters.bounds()
-    receipts = _receipts()
+    receipts = _receipts(filters)
     scope = select(Order.id).join(User, User.id == Order.user_id).where(
-        Order.sales_channel == SalesChannel.MEAL_PREORDER, _search_condition(filters.search),
+        _channel_scope(filters), _search_condition(filters.search),
     ).cte("selected_meal_orders")
     receipt_day = _day_expression(session, receipts.c.occurred_at)
     receipt_rows = (await session.execute(select(receipt_day, func.sum(receipts.c.amount), func.count()).where(

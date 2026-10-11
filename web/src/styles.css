@@ -3,7 +3,7 @@
 :root {
   color: #1c241e;
   background: #e6e0d3;
-  font-family: "Manrope", "Noto Sans TC", sans-serif;
+  font-family: var(--sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --paper: #f2eee3;
@@ -21,6 +21,7 @@
   --harbor-dark: #405550;
   --line: rgba(28, 36, 30, 0.16);
   --line-strong: rgba(28, 36, 30, 0.36);
+  --sans: "Manrope", "Noto Sans TC", sans-serif;
   --serif: "Newsreader", "Noto Serif TC", serif;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --section-space: clamp(56px, 6vw, 82px);
@@ -189,7 +190,7 @@ p {
   padding: 9px 16px;
   color: var(--ink-soft);
   border-radius: 99px;
-  font-size: 13px;
+  font-size: 1rem;
   transition: color 240ms var(--ease), background-color 240ms var(--ease);
 }
 
@@ -216,7 +217,7 @@ p {
   padding: 0 13px;
   background: transparent;
   border: 0;
-  font-size: 12px;
+  font-size: 1rem;
   cursor: pointer;
 }
 
@@ -226,7 +227,7 @@ p {
   gap: 7px;
   padding: 0 10px;
   color: var(--harbor-dark);
-  font-size: 12px;
+  font-size: 1rem;
 }
 
 .cart-link {
@@ -243,7 +244,7 @@ p {
   color: white;
   background: var(--clay);
   border-radius: 99px;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .mobile-menu-button {
@@ -271,7 +272,7 @@ p {
   border: 0;
   border-bottom: 1px solid var(--line);
   font-family: var(--serif);
-  font-size: 22px;
+  font-size: 1.375rem;
   text-align: left;
   cursor: pointer;
 }
@@ -279,7 +280,7 @@ p {
 .eyebrow {
   margin-bottom: 12px;
   color: var(--brass);
-  font-size: 10px;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.24em;
   text-transform: uppercase;
@@ -304,7 +305,7 @@ p {
 .hero-index span {
   color: var(--brass);
   font-family: var(--serif);
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .hero-index i {
@@ -316,7 +317,7 @@ p {
 
 .hero-index small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.18em;
   writing-mode: vertical-rl;
 }
@@ -336,7 +337,7 @@ p {
   max-width: 720px;
   margin-bottom: 28px;
   font-family: var(--serif);
-  font-size: clamp(47px, 5.2vw, 83px);
+  font-size: clamp(2.9375rem, 5.2vw, 5.1875rem);
   line-height: 0.98;
   letter-spacing: -0.035em;
 }
@@ -357,7 +358,7 @@ p {
   margin-bottom: 15px;
   color: var(--ink-soft);
   font-family: "Noto Serif TC", serif;
-  font-size: 17px;
+  font-size: 1.0625rem;
   line-height: 1.95;
 }
 
@@ -366,7 +367,7 @@ p {
   margin-bottom: 32px;
   color: #737a73;
   font-family: var(--serif);
-  font-size: 14px;
+  font-size: 1rem;
   font-style: italic;
   line-height: 1.55;
 }
@@ -386,7 +387,7 @@ p {
   padding: 0 22px;
   border: 1px solid transparent;
   border-radius: 0;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
   cursor: pointer;
   transition: transform 260ms var(--ease), color 260ms var(--ease), background-color 260ms var(--ease), border-color 260ms var(--ease);
@@ -425,7 +426,7 @@ p {
   width: fit-content;
   margin-top: 38px;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   letter-spacing: 0.08em;
 }
 
@@ -482,21 +483,21 @@ p {
 .hero-note span {
   margin-bottom: 7px;
   color: var(--brass);
-  font-size: 8px;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.16em;
 }
 
 .hero-note strong {
   font-family: var(--serif);
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 400;
 }
 
 .hero-note p {
   margin: 6px 0 0;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .home-principles {
@@ -520,18 +521,18 @@ p {
   grid-row: span 2;
   color: var(--brass);
   font-family: var(--serif);
-  font-size: 14px;
+  font-size: 1rem;
 }
 
 .home-principles p {
   margin-bottom: 3px;
   font-family: "Noto Serif TC", serif;
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 .home-principles small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.08em;
 }
 
@@ -555,7 +556,7 @@ p {
 .order-summary h2 {
   margin-bottom: 0;
   font-family: var(--serif);
-  font-size: clamp(34px, 4vw, 54px);
+  font-size: clamp(2.125rem, 4vw, 3.375rem);
   line-height: 1.05;
   letter-spacing: -0.025em;
 }
@@ -564,7 +565,7 @@ p {
   max-width: 600px;
   margin: 12px 0 0;
   color: var(--ink-soft);
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -574,7 +575,7 @@ p {
   gap: 8px;
   padding-bottom: 4px;
   border-bottom: 1px solid currentColor;
-  font-size: 12px;
+  font-size: 1rem;
 }
 
 .product-grid {
@@ -631,7 +632,7 @@ p {
   padding: 6px 9px;
   color: var(--paper-light);
   background: rgba(45, 58, 48, 0.91);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.06em;
 }
 
@@ -646,7 +647,7 @@ p {
   justify-content: space-between;
   gap: 10px;
   color: var(--brass);
-  font-size: 8px;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -655,7 +656,7 @@ p {
 .product-copy h3 {
   margin: 13px 0 8px;
   font-family: "Noto Serif TC", serif;
-  font-size: 21px;
+  font-size: 1.3125rem;
   line-height: 1.35;
 }
 
@@ -667,7 +668,7 @@ p {
   color: var(--ink-soft);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -687,13 +688,13 @@ p {
 
 .price {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: 1.5625rem;
 }
 
 .product-bottom small {
   margin-top: 3px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .icon-button {
@@ -733,14 +734,14 @@ p {
 }
 
 .passage-copy h2 {
-  font-size: clamp(34px, 3.2vw, 46px);
+  font-size: clamp(2.125rem, 3.2vw, 2.875rem);
 }
 
 .passage-copy p:last-child {
   max-width: 460px;
   margin-top: 24px;
   color: rgba(250, 248, 241, 0.66);
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1.8;
 }
 
@@ -757,7 +758,7 @@ p {
 
 .workspace-door span {
   color: var(--sage);
-  font-size: 11px;
+  font-size: 1rem;
   letter-spacing: 0.16em;
 }
 
@@ -765,7 +766,7 @@ p {
   min-height: 2.9em;
   max-width: 250px;
   font-family: "Noto Serif TC", serif;
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 400;
   line-height: 1.45;
 }
@@ -807,12 +808,12 @@ p {
 .agenda-strip article > span {
   color: var(--brass);
   font-family: var(--serif);
-  font-size: 19px;
+  font-size: 1.1875rem;
 }
 
 .agenda-strip small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -820,13 +821,13 @@ p {
 .agenda-strip h3 {
   margin: 5px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 20px;
+  font-size: 1.25rem;
 }
 
 .agenda-strip p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
 }
 
 .quiet-placeholder {
@@ -865,7 +866,7 @@ p {
 .admin-intro h1,
 .checkout-heading h1 {
   margin-bottom: 0;
-  font-size: clamp(45px, 5.7vw, 78px);
+  font-size: clamp(2.8125rem, 5.7vw, 4.875rem);
 }
 
 .intro-aside {
@@ -876,14 +877,14 @@ p {
 .intro-aside p {
   margin-bottom: 15px;
   color: var(--brass);
-  font-size: 9px;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.16em;
 }
 
 .intro-aside span {
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.8;
 }
 
@@ -910,7 +911,7 @@ p {
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
-  font-size: 16px;
+  font-size: 1rem;
   text-decoration: none;
   cursor: pointer;
 }
@@ -941,13 +942,13 @@ p {
 .editorial-number {
   color: var(--brass);
   font-family: var(--serif);
-  font-size: 26px;
+  font-size: 1.625rem;
 }
 
 .editorial-card span,
 .meal-card span {
   color: var(--brass);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -955,14 +956,14 @@ p {
 .editorial-card h3 {
   margin: 8px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 25px;
+  font-size: 1.5625rem;
 }
 
 .editorial-card p {
   max-width: 640px;
   margin: 0;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -1006,14 +1007,14 @@ p {
 
 .meal-date-navigation h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 600;
 }
 
 .meal-date-heading p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
 }
 
 .meal-date-strip {
@@ -1048,7 +1049,7 @@ p {
 }
 
 .meal-date-button strong {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 500;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
@@ -1056,7 +1057,7 @@ p {
 
 .meal-date-weekday,
 .meal-date-status {
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -1115,13 +1116,13 @@ p {
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 1rem;
   transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
 }
 
 .meal-period-options small {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .meal-period-options button:disabled {
@@ -1176,12 +1177,12 @@ p {
 .meal-card h3 {
   margin: 10px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 26px;
+  font-size: 1.625rem;
 }
 
 .meal-card p {
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -1203,7 +1204,7 @@ p {
   color: var(--paper-light);
   background: var(--moss-dark);
   border: 1px solid rgba(255, 255, 255, 0.22);
-  font-size: 12px;
+  font-size: 1rem;
   box-shadow: 0 18px 45px rgba(28, 36, 30, 0.18);
 }
 
@@ -1215,7 +1216,7 @@ p {
   color: var(--moss-dark);
   background: var(--paper-light);
   border-radius: 50%;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .member-ribbon {
@@ -1237,7 +1238,7 @@ p {
   border: 1px solid rgba(250, 248, 241, 0.46);
   border-radius: 50%;
   font-family: var(--serif);
-  font-size: 23px;
+  font-size: 1.4375rem;
 }
 
 .member-monogram.guest {
@@ -1248,7 +1249,7 @@ p {
 
 .member-ribbon small {
   color: var(--sage);
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.15em;
 }
 
@@ -1256,7 +1257,7 @@ p {
   display: block;
   margin-top: 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 400;
 }
 
@@ -1274,13 +1275,13 @@ p {
 .member-ribbon dt {
   margin-bottom: 5px;
   color: rgba(250, 248, 241, 0.58);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .member-ribbon dd {
   margin: 0;
   font-family: var(--serif);
-  font-size: 17px;
+  font-size: 1.0625rem;
 }
 
 .social-layout {
@@ -1307,31 +1308,31 @@ p {
   align-items: center;
   gap: 9px;
   color: var(--brass);
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .activity-row small {
   color: var(--brass);
-  font-size: 9px;
+  font-size: 1rem;
   text-transform: uppercase;
 }
 
 .activity-row h3 {
   margin: 7px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 21px;
+  font-size: 1.3125rem;
 }
 
 .activity-row p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.65;
 }
 
 .activity-row > strong {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   font-weight: 500;
   text-align: right;
 }
@@ -1344,13 +1345,13 @@ p {
 
 .activity-action > strong {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .activity-action > small {
   color: var(--harbor-dark);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .activity-action button {
@@ -1359,7 +1360,7 @@ p {
   background: transparent;
   border: 1px solid var(--harbor);
   cursor: pointer;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .activity-action button.registered {
@@ -1383,7 +1384,7 @@ p {
 }
 
 .panel-title h2 {
-  font-size: 38px;
+  font-size: 2.375rem;
 }
 
 .governance-row {
@@ -1397,13 +1398,13 @@ p {
 
 .governance-row > span {
   color: var(--sage);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .governance-row h3 {
   margin: 0 0 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .governance-row p {
@@ -1413,7 +1414,7 @@ p {
   color: rgba(250, 248, 241, 0.58);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .wish-column {
@@ -1430,13 +1431,13 @@ p {
 }
 
 .wish-heading h2 {
-  font-size: 37px;
+  font-size: 2.3125rem;
 }
 
 .locked-note {
   padding: 25px 0;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.8;
 }
 
@@ -1448,18 +1449,18 @@ p {
 .wish-card > span {
   color: var(--brass);
   font-family: var(--serif);
-  font-size: 15px;
+  font-size: 1rem;
 }
 
 .wish-card h3 {
   margin: 12px 0 8px;
   font-family: "Noto Serif TC", serif;
-  font-size: 20px;
+  font-size: 1.25rem;
 }
 
 .wish-card p {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -1474,7 +1475,7 @@ p {
   border: 0;
   border-top: 1px solid var(--line);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .wish-card button b {
@@ -1485,7 +1486,7 @@ p {
   color: var(--paper-light);
   background: var(--moss);
   border-radius: 50%;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .wish-card button:disabled {
@@ -1523,19 +1524,19 @@ p {
 .checkout-step-title > span {
   color: var(--brass);
   font-family: var(--serif);
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .checkout-step-title small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.14em;
 }
 
 .checkout-step-title h2 {
   margin: 4px 0 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 25px;
+  font-size: 1.5625rem;
 }
 
 .checkout-item {
@@ -1555,19 +1556,19 @@ p {
 
 .checkout-item small {
   color: var(--brass);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .checkout-item h3 {
   margin: 7px 0 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .checkout-item p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .quantity-control {
@@ -1591,7 +1592,7 @@ p {
 
 .quantity-control span {
   min-width: 18px;
-  font-size: 12px;
+  font-size: 1rem;
   text-align: center;
 }
 
@@ -1636,13 +1637,13 @@ p {
 .pickup-options strong {
   margin-bottom: 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .pickup-options small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .pickup-options i {
@@ -1708,13 +1709,13 @@ p {
 .fulfillment-switch strong {
   margin-bottom: 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .fulfillment-switch small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.5;
 }
 
@@ -1784,7 +1785,7 @@ p {
 .invoice-carrier-options strong {
   margin-bottom: 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -1794,7 +1795,7 @@ p {
 .invoice-company-form > p,
 .invoice-delivery-form > p {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -1844,7 +1845,7 @@ p {
   display: grid;
   gap: 7px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .invoice-barcode-field,
@@ -1898,7 +1899,7 @@ p {
   padding: 13px 15px;
   color: var(--ink-soft);
   background: var(--paper-deep);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .shipping-blockers p {
@@ -1917,7 +1918,7 @@ p {
   margin-bottom: 20px;
   padding-bottom: 15px;
   border-bottom: 1px solid rgba(111, 129, 125, 0.32);
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .shipping-form fieldset {
@@ -1929,7 +1930,7 @@ p {
 .shipping-form legend,
 .recipient-grid label {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.04em;
 }
 
@@ -1951,7 +1952,7 @@ p {
   background: var(--paper-light);
   border: 1px solid transparent;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .shipping-channels label.selected {
@@ -1992,7 +1993,7 @@ p {
 .shipping-help {
   margin: 18px 0 0;
   color: var(--harbor-dark);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.65;
 }
 
@@ -2036,7 +2037,7 @@ p {
 .workspace-heading h1 {
   margin: 0;
   font-family: var(--serif);
-  font-size: clamp(40px, 4.8vw, 64px);
+  font-size: clamp(2.5rem, 4.8vw, 4rem);
   line-height: 1.02;
   letter-spacing: -0.035em;
 }
@@ -2051,7 +2052,7 @@ p {
   padding-left: 25px;
   color: var(--ink-soft);
   border-left: 1px solid var(--line-strong);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.8;
 }
 
@@ -2073,7 +2074,7 @@ p {
 .account-gate h1 {
   margin: 0 0 14px;
   font-family: var(--serif);
-  font-size: clamp(42px, 5vw, 68px);
+  font-size: clamp(2.625rem, 5vw, 4.25rem);
 }
 
 .account-gate > p:not(.eyebrow) {
@@ -2107,12 +2108,12 @@ p {
 
 .return-banner strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
 }
 
 .return-banner span {
   margin-top: 3px;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .return-banner.failed {
@@ -2156,19 +2157,19 @@ p {
 .order-index button > span,
 .order-index button > small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .order-index button > strong {
   font-family: var(--serif);
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 400;
 }
 
 .order-number {
   min-width: 0;
   max-width: 100%;
-  font-family: "Manrope", "Noto Sans TC", sans-serif;
+  font-family: var(--sans);
   font-variant-numeric: tabular-nums;
   font-weight: 500;
   line-height: 1.25;
@@ -2177,8 +2178,8 @@ p {
 }
 
 .order-index button > .order-number {
-  font-family: "Manrope", "Noto Sans TC", sans-serif;
-  font-size: 16px;
+  font-family: var(--sans);
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -2188,7 +2189,7 @@ p {
   padding: 5px 8px;
   color: var(--harbor-dark);
   background: var(--harbor-pale);
-  font-size: 8px;
+  font-size: 1rem;
   font-style: normal;
 }
 
@@ -2224,13 +2225,13 @@ p {
 .order-detail-head h2 {
   margin: 0 0 5px;
   font-family: var(--serif);
-  font-size: 39px;
+  font-size: 2.4375rem;
 }
 
 .order-detail-head .order-number-large {
   max-width: 100%;
-  font-family: "Manrope", "Noto Sans TC", sans-serif;
-  font-size: clamp(22px, 2.6vw, 32px);
+  font-family: var(--sans);
+  font-size: clamp(1.375rem, 2.6vw, 2rem);
   font-weight: 500;
   line-height: 1.15;
   letter-spacing: -0.025em;
@@ -2238,13 +2239,13 @@ p {
 
 .order-detail-head span {
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .order-detail-head > strong {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 31px;
+  font-size: 1.9375rem;
   font-weight: 400;
 }
 
@@ -2273,12 +2274,12 @@ p {
 
 .order-status-grid span {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .order-status-grid strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -2313,19 +2314,19 @@ p {
 }
 
 .invoice-summary-card small {
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.12em;
 }
 
 .invoice-summary-card strong {
   margin: 4px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
 }
 
 .invoice-summary-card span,
 .invoice-summary-card dl {
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .invoice-summary-card dl {
@@ -2353,19 +2354,19 @@ p {
 }
 
 .shipment-card small {
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.12em;
 }
 
 .shipment-card strong {
   margin: 4px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
 }
 
 .shipment-card span,
 .shipment-card dl {
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .shipment-card dl {
@@ -2403,13 +2404,13 @@ p {
 
 .order-lines strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .order-lines small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .order-lines small em {
@@ -2422,7 +2423,7 @@ p {
 
 .order-lines b {
   font-family: var(--serif);
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 400;
 }
 
@@ -2457,7 +2458,7 @@ p {
 
 .inline-confirm label {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .inline-confirm input {
@@ -2476,7 +2477,7 @@ p {
   padding-top: 20px;
   color: var(--ink-soft);
   border-top: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .orders-footnote .text-link {
@@ -2491,14 +2492,14 @@ p {
 
 .account-identity span {
   color: var(--harbor-dark);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.12em;
 }
 
 .account-identity strong {
   margin: 8px 0 3px;
   font-family: "Noto Serif TC", serif;
-  font-size: 21px;
+  font-size: 1.3125rem;
   font-weight: 500;
 }
 
@@ -2516,7 +2517,7 @@ p {
   border: 0;
   border-bottom: 1px solid currentColor;
   cursor: pointer;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .account-identity button {
@@ -2538,7 +2539,7 @@ p {
   padding: 17px 22px;
   color: var(--ink-soft);
   border-right: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .account-page > .existing-member-claim {
@@ -2571,12 +2572,12 @@ p {
 
 .account-metrics span {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .account-metrics strong {
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: 1.5625rem;
   font-weight: 400;
 }
 
@@ -2608,7 +2609,7 @@ p {
 .panel-heading-inline h2 {
   margin: 0;
   font-family: var(--serif);
-  font-size: 35px;
+  font-size: 2.1875rem;
 }
 
 .charge-list article {
@@ -2628,20 +2629,20 @@ p {
 .charge-list article > div small,
 .charge-list article > small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .charge-list article > div strong {
   margin-top: 4px;
   font-family: var(--serif);
-  font-size: 21px;
+  font-size: 1.3125rem;
   font-weight: 400;
 }
 
 .charge-list .button {
   min-height: 38px;
   padding-inline: 13px;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .notification-list article {
@@ -2671,20 +2672,20 @@ p {
 
 .notification-list strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 12px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .notification-list p {
   margin: 4px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.55;
 }
 
 .notification-list time {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .badge-list {
@@ -2709,14 +2710,14 @@ p {
 
 .badge-list strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 12px;
+  font-size: 1rem;
 }
 
 .badge-list small,
 .badge-list > p {
   margin-top: 4px;
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .surplus-list {
@@ -2735,12 +2736,12 @@ p {
 .surplus-list span,
 .surplus-list small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .surplus-list strong {
   font-family: var(--serif);
-  font-size: 21px;
+  font-size: 1.3125rem;
   font-weight: 400;
 }
 
@@ -2773,13 +2774,13 @@ p {
 .operation-title span,
 .operation-title small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .operation-title strong {
   margin: 4px 0;
   font-family: var(--serif);
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 400;
 }
 
@@ -2796,7 +2797,7 @@ p {
   padding: 6px 8px;
   color: var(--ink-soft);
   background: var(--paper-deep);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .operation-state .system-state {
@@ -2811,12 +2812,12 @@ p {
   background: transparent;
   border: 1px solid var(--harbor);
   cursor: pointer;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .no-action {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .shipping-rate-panel {
@@ -2827,7 +2828,7 @@ p {
 .shipping-rate-panel h2 {
   margin: 0 0 25px;
   font-family: var(--serif);
-  font-size: 38px;
+  font-size: 2.375rem;
 }
 
 .rate-list article {
@@ -2845,18 +2846,18 @@ p {
 
 .rate-list strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 12px;
+  font-size: 1rem;
 }
 
 .rate-list small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .rate-list article > span {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .rate-list article > small {
@@ -2866,7 +2867,7 @@ p {
 .rate-note {
   margin-top: 23px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -2901,7 +2902,7 @@ p {
   padding: 7px 10px;
   color: var(--paper-light);
   background: var(--harbor-dark);
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -2917,14 +2918,14 @@ p {
 .offer-copy h1 {
   margin: 0 0 20px;
   font-family: var(--serif);
-  font-size: clamp(43px, 5vw, 70px);
+  font-size: clamp(2.6875rem, 5vw, 4.375rem);
   line-height: 1;
 }
 
 .offer-copy > p:not(.eyebrow) {
   color: var(--ink-soft);
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
   line-height: 1.85;
 }
 
@@ -2941,12 +2942,12 @@ p {
 
 .offer-copy dt {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .offer-copy dd {
   margin: 5px 0 0;
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .offer-checkout {
@@ -2981,14 +2982,14 @@ p {
   border-right: 1px solid var(--line);
   border-left: 1px solid var(--line);
   font-family: var(--serif);
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 400;
 }
 
 .offer-quantity span {
   padding: 0 16px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .offer-pickup-options {
@@ -3011,7 +3012,7 @@ p {
 .offer-summary h2 {
   margin: 0 0 26px;
   font-family: var(--serif);
-  font-size: 36px;
+  font-size: 2.25rem;
 }
 
 .offer-summary dl {
@@ -3029,7 +3030,7 @@ p {
 .offer-summary dt,
 .offer-summary dd {
   margin: 0;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .offer-summary .offer-total {
@@ -3041,7 +3042,7 @@ p {
 .offer-total dd {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 25px;
+  font-size: 1.5625rem;
 }
 
 .meal-offering-list {
@@ -3074,24 +3075,24 @@ p {
 
 .meal-offering-list small {
   color: var(--brass);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meal-offering-list h3 {
   margin: 5px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meal-offering-list p {
   margin: 0 0 8px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .meal-offering-list strong {
   font-family: var(--serif);
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 400;
 }
 
@@ -3118,13 +3119,13 @@ p {
   margin-bottom: 9px;
   color: var(--ink);
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
 }
 
 .meal-option-group legend small {
   color: var(--brass);
   font-family: var(--sans);
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.08em;
 }
 
@@ -3161,7 +3162,7 @@ p {
 .meal-selection-notice {
   margin: 8px 0 0;
   color: var(--clay);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .meal-selection-notice {
@@ -3175,14 +3176,14 @@ p {
 }
 
 .meal-quote-line dt strong {
-  font-size: 10px;
+  font-size: 1rem;
   font-weight: 600;
 }
 
 .meal-quote-line dt small {
   max-width: 230px;
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -3202,12 +3203,12 @@ p {
 
 .pickup-window strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .pickup-window small {
   margin-top: 4px;
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .pickup-note {
@@ -3215,7 +3216,7 @@ p {
   gap: 8px;
   margin: 17px 0 0;
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
   line-height: 1.55;
 }
 
@@ -3239,7 +3240,7 @@ p {
 
 .summary-bezel h2 {
   margin-bottom: 32px;
-  font-size: 37px;
+  font-size: 2.3125rem;
 }
 
 .login-required {
@@ -3250,7 +3251,7 @@ p {
 .login-required p {
   margin: 15px 0 22px;
   color: rgba(250, 248, 241, 0.68);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -3276,7 +3277,7 @@ p {
 .summary-lines dt,
 .summary-lines dd {
   margin: 0;
-  font-size: 11px;
+  font-size: 1rem;
   font-weight: 400;
 }
 
@@ -3296,7 +3297,7 @@ p {
 
 .summary-total dd {
   font-family: var(--serif);
-  font-size: 28px;
+  font-size: 1.75rem;
 }
 
 .full-width {
@@ -3306,7 +3307,7 @@ p {
 .summary-note {
   margin: 18px 0 0;
   color: rgba(250, 248, 241, 0.45);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -3337,14 +3338,14 @@ p {
 .admin-gate h1 {
   margin: 0 0 10px;
   font-family: var(--serif);
-  font-size: clamp(42px, 5vw, 68px);
+  font-size: clamp(2.625rem, 5vw, 4.25rem);
 }
 
 .checkout-complete > strong {
   margin: 20px 0;
   color: var(--moss);
   font-family: var(--serif);
-  font-size: 30px;
+  font-size: 1.875rem;
 }
 
 .complete-note,
@@ -3368,14 +3369,14 @@ p {
 
 .admin-intro-meta span {
   color: var(--brass);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.12em;
 }
 
 .admin-intro-meta strong {
   margin: 9px 0 4px;
   font-family: "Noto Serif TC", serif;
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 400;
 }
 
@@ -3408,18 +3409,18 @@ p {
 
 .admin-metrics span {
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .admin-metrics strong {
   font-family: var(--serif);
-  font-size: 31px;
+  font-size: 1.9375rem;
   font-weight: 400;
 }
 
 .admin-metrics small {
   color: var(--brass);
-  font-size: 7px;
+  font-size: 1rem;
   letter-spacing: 0.1em;
 }
 
@@ -3441,19 +3442,19 @@ p {
   min-height: 58px;
   padding: 10px 4px;
   border-bottom: 1px solid var(--line);
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .data-head {
   min-height: 40px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.08em;
 }
 
 .data-row strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -3463,7 +3464,7 @@ p {
   padding: 5px 8px;
   color: var(--moss-dark);
   background: #d7ddce;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .status-pending {
@@ -3478,7 +3479,7 @@ p {
 
 .admin-side-panel h2 {
   margin-bottom: 25px;
-  font-size: 38px;
+  font-size: 2.375rem;
 }
 
 .location-list article {
@@ -3497,14 +3498,14 @@ p {
 
 .location-list strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .location-list small,
 .location-list span {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .admin-next {
@@ -3517,14 +3518,14 @@ p {
 
 .admin-next span {
   color: var(--sage);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.12em;
 }
 
 .admin-next p {
   margin: 13px 0 22px;
   font-family: "Noto Serif TC", serif;
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.65;
 }
 
@@ -3548,12 +3549,12 @@ p {
   margin: 0 0 5px;
   color: var(--ink);
   font-family: "Noto Serif TC", serif;
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 .data-state p {
   margin: 0;
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -3567,7 +3568,7 @@ p {
   background: transparent;
   border: 0;
   border-bottom: 1px solid currentColor;
-  font-size: 11px;
+  font-size: 1rem;
   cursor: pointer;
 }
 
@@ -3597,7 +3598,7 @@ p {
   padding: 10px 12px;
   color: #7b3e31;
   background: #f0ddd5;
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.5;
 }
 
@@ -3620,13 +3621,13 @@ p {
 .site-footer p {
   margin: 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
 }
 
 .footer-meta {
   display: flex;
   gap: 25px;
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.1em;
 }
 
@@ -3660,7 +3661,7 @@ p {
 .compact-intro h1,
 .social-page-heading h1,
 .membership-workspace-heading h1 {
-  font-size: clamp(40px, 4.8vw, 64px);
+  font-size: clamp(2.5rem, 4.8vw, 4rem);
 }
 
 .social-subnav {
@@ -3684,7 +3685,7 @@ p {
   padding: 17px 15px 15px;
   color: var(--ink-soft);
   border-bottom: 2px solid transparent;
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .social-subnav a.active {
@@ -3711,14 +3712,14 @@ p {
   max-width: 600px;
   margin: 0;
   font-family: var(--serif);
-  font-size: clamp(30px, 4vw, 46px);
+  font-size: clamp(1.875rem, 4vw, 2.875rem);
 }
 
 .social-access-card p:not(.eyebrow) {
   max-width: 540px;
   margin: 0 0 9px;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.8;
 }
 
@@ -3741,7 +3742,7 @@ p {
   background: var(--sage);
   border-radius: 50%;
   font-family: var(--serif);
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .social-identity-strip small,
@@ -3752,13 +3753,13 @@ p {
 .social-identity-strip small,
 .social-identity-strip dt {
   color: rgba(250, 248, 241, 0.58);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .social-identity-strip strong {
   margin-top: 4px;
   font-family: "Noto Serif TC", serif;
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 400;
 }
 
@@ -3813,14 +3814,14 @@ p {
 .social-feature span,
 .social-feature small {
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .social-feature strong {
   grid-column: 1;
   align-self: end;
   font-family: var(--serif);
-  font-size: 42px;
+  font-size: 2.625rem;
   font-weight: 400;
 }
 
@@ -3858,7 +3859,7 @@ p {
 .application-actions h2 {
   margin: 0;
   font-family: var(--serif);
-  font-size: clamp(28px, 3vw, 40px);
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
 }
 
 .social-feed > article,
@@ -3876,7 +3877,7 @@ p {
 .governance-feed span,
 .governance-feed small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .social-feed strong,
@@ -3887,14 +3888,14 @@ p {
 .social-feed strong {
   margin-bottom: 4px;
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .governance-feed b {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 400;
 }
 
@@ -3958,7 +3959,7 @@ p {
 .form-heading > span {
   max-width: 250px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.6;
   text-align: right;
 }
@@ -3971,7 +3972,7 @@ p {
   color: var(--ink-soft);
   background: var(--harbor-pale);
   border-left: 3px solid var(--harbor);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.65;
 }
 
@@ -4017,7 +4018,7 @@ p {
   align-content: start;
   gap: 7px;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .field input,
@@ -4050,7 +4051,7 @@ p {
   align-items: center;
   gap: 9px;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .check-field input,
@@ -4074,7 +4075,7 @@ p {
   padding: 10px 12px;
   color: var(--harbor-dark);
   background: var(--harbor-pale);
-  font-size: 11px;
+  font-size: 1rem;
 }
 
 .status-chip {
@@ -4083,7 +4084,7 @@ p {
   padding: 5px 8px;
   color: var(--harbor-dark);
   background: var(--harbor-pale);
-  font-size: 8px;
+  font-size: 1rem;
   letter-spacing: 0.06em;
 }
 
@@ -4117,13 +4118,13 @@ p {
   align-items: center;
   gap: 10px;
   color: var(--brass);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .activity-main h2 {
   margin: 10px 0 8px;
   font-family: "Noto Serif TC", serif;
-  font-size: 23px;
+  font-size: 1.4375rem;
 }
 
 .activity-main p {
@@ -4131,7 +4132,7 @@ p {
   margin-bottom: 12px;
   overflow: hidden;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.7;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -4148,7 +4149,7 @@ p {
   align-items: center;
   gap: 5px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .activity-cta {
@@ -4159,7 +4160,7 @@ p {
 
 .activity-cta small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
   line-height: 1.5;
 }
 
@@ -4191,27 +4192,27 @@ p {
 .wish-grid time,
 .directory-grid small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .wish-grid h2,
 .directory-grid h2 {
   margin: 24px 0 10px;
   font-family: "Noto Serif TC", serif;
-  font-size: 23px;
+  font-size: 1.4375rem;
 }
 
 .wish-grid p,
 .directory-grid p {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.75;
 }
 
 .wish-price {
   margin-bottom: 15px;
   color: var(--brass);
-  font-size: 11px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -4220,7 +4221,7 @@ p {
   padding: 12px;
   color: var(--harbor-dark);
   background: var(--harbor-pale);
-  font-size: 10px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -4234,7 +4235,7 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .directory-summary {
@@ -4246,12 +4247,12 @@ p {
 
 .directory-summary span {
   font-family: var(--serif);
-  font-size: 42px;
+  font-size: 2.625rem;
 }
 
 .directory-summary p {
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .directory-avatar {
@@ -4281,7 +4282,7 @@ p {
 
 .directory-grid strong {
   color: var(--harbor-dark);
-  font-size: 10px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -4295,7 +4296,7 @@ p {
 .section-title-row > strong {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 23px;
+  font-size: 1.4375rem;
   font-weight: 400;
 }
 
@@ -4322,20 +4323,20 @@ p {
 .proposal-list small,
 .proposal-list footer {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .proposal-list h3 {
   margin: 15px 0 7px;
   font-family: "Noto Serif TC", serif;
-  font-size: 21px;
+  font-size: 1.3125rem;
 }
 
 .proposal-list p {
   display: -webkit-box;
   overflow: hidden;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.7;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -4348,7 +4349,7 @@ p {
 
 .proposal-list footer strong {
   color: var(--harbor-dark);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .meeting-panel {
@@ -4363,19 +4364,19 @@ p {
 .meeting-list article > span,
 .meeting-list time {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meeting-list h3 {
   margin: 8px 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meeting-list ul {
   padding-left: 18px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -4389,13 +4390,13 @@ p {
 .meeting-attendance strong {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 28px;
+  font-size: 1.75rem;
   font-weight: 400;
 }
 
 .meeting-attendance small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meeting-resolutions {
@@ -4415,13 +4416,13 @@ p {
 
 .meeting-resolutions strong {
   color: var(--harbor-dark);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .meeting-resolutions span {
   margin-top: 3px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -4431,7 +4432,7 @@ p {
   gap: 7px;
   margin-bottom: 34px;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .proposal-detail {
@@ -4448,13 +4449,13 @@ p {
 .proposal-detail header small,
 .proposal-detail header p {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .proposal-detail h1 {
   margin: 25px 0 14px;
   font-family: var(--serif);
-  font-size: clamp(38px, 5vw, 64px);
+  font-size: clamp(2.375rem, 5vw, 4rem);
   line-height: 1.05;
 }
 
@@ -4463,7 +4464,7 @@ p {
   padding: 35px 0;
   border-block: 1px solid var(--line);
   font-family: "Noto Serif TC", serif;
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 2;
   white-space: pre-wrap;
 }
@@ -4482,7 +4483,7 @@ p {
 
 .review-note p {
   margin: 5px 0 0;
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -4499,13 +4500,13 @@ p {
 
 .proposal-timeline dt {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .proposal-timeline dd {
   margin: 6px 0 0;
   font-family: var(--serif);
-  font-size: 17px;
+  font-size: 1.0625rem;
 }
 
 .proposal-owner-actions {
@@ -4559,7 +4560,7 @@ p {
 .quiet-note,
 .named-votes > p {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .named-votes {
@@ -4575,7 +4576,7 @@ p {
   width: 100%;
   margin: 0 0 6px;
   font-family: "Noto Serif TC", serif;
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 .named-votes > span {
@@ -4584,7 +4585,7 @@ p {
   padding: 7px 9px;
   color: var(--ink-soft);
   background: var(--paper);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .comment-list article {
@@ -4600,13 +4601,13 @@ p {
 
 .comment-list time {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .comment-list p {
   margin: 9px 0 0;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.75;
 }
 
@@ -4637,7 +4638,7 @@ p {
 .membership-heading h1 {
   margin: 0 0 10px;
   font-family: var(--serif);
-  font-size: clamp(40px, 5vw, 66px);
+  font-size: clamp(2.5rem, 5vw, 4.125rem);
 }
 
 .membership-heading > p:not(.eyebrow) {
@@ -4668,14 +4669,14 @@ p {
 .application-status span,
 .application-status small {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .application-status strong {
   margin: 5px 0;
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 30px;
+  font-size: 1.875rem;
   font-weight: 400;
 }
 
@@ -4707,19 +4708,19 @@ p {
 .document-grid h3 {
   margin: 25px 0 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 .document-grid span {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .document-grid .button {
   min-height: 38px;
   margin-top: auto;
   padding-inline: 13px;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .document-grid .button input {
@@ -4788,7 +4789,7 @@ p {
   padding: 16px 18px 14px;
   color: var(--ink-soft);
   border-bottom: 2px solid transparent;
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 .admin-workspace-links a.active {
@@ -4843,7 +4844,7 @@ p {
 .roster-entry-card .review-card-actions small {
   display: block;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
   font-weight: 500;
   line-height: 1.7;
 }
@@ -4851,14 +4852,14 @@ p {
 .review-card-copy h3 {
   margin: 13px 0 8px;
   font-family: "Noto Serif TC", serif;
-  font-size: 21px;
+  font-size: 1.3125rem;
 }
 
 .review-card-copy p,
 .review-card-copy small {
   display: block;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -4902,7 +4903,7 @@ p {
   background: var(--harbor-dark);
   border: 1px solid var(--harbor-dark);
   cursor: pointer;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .review-card-actions button + button {
@@ -4926,7 +4927,7 @@ p {
   background: transparent;
   border: 1px solid var(--harbor);
   cursor: pointer;
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .document-review-links {
@@ -4951,7 +4952,7 @@ p {
   gap: 15px;
   min-height: 52px;
   border-bottom: 1px solid var(--line);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .registration-admin-list > div > span,
@@ -4970,7 +4971,7 @@ p {
   background: transparent;
   border: 1px solid var(--line-strong);
   cursor: pointer;
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meeting-admin-card {
@@ -4987,13 +4988,13 @@ p {
 .meeting-admin-summary > strong {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 32px;
+  font-size: 2rem;
   font-weight: 400;
 }
 
 .meeting-admin-summary > small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meeting-admin-summary > button,
@@ -5004,7 +5005,7 @@ p {
   background: transparent;
   border: 1px solid var(--harbor);
   cursor: pointer;
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meeting-admin-tools {
@@ -5026,7 +5027,7 @@ p {
 .meeting-admin-tools h4 {
   margin: 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 17px;
+  font-size: 1.0625rem;
   font-weight: 400;
 }
 
@@ -5060,7 +5061,7 @@ p {
 .meeting-resolution-admin-list span {
   margin-top: 4px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .meeting-create-section {
@@ -5079,19 +5080,19 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 15px;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .login-dialog h2 {
   margin: 0 0 12px;
   font-family: var(--serif);
-  font-size: 40px;
+  font-size: 2.5rem;
   font-weight: 400;
 }
 
 .login-dialog > p:not(.eyebrow):not(.dialog-footnote) {
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -5109,7 +5110,7 @@ p {
 
 .login-form label {
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .login-form input {
@@ -5126,7 +5127,7 @@ p {
 .dialog-footnote {
   margin: 20px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.5;
 }
 
@@ -5135,7 +5136,7 @@ p {
   justify-content: space-between;
   gap: 18px;
   margin-top: 18px;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .login-links a,
@@ -5175,7 +5176,7 @@ p {
   padding-bottom: 6px;
   border-bottom: 1px solid rgba(250, 248, 241, 0.35);
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
 }
 
 .auth-intro-icon {
@@ -5192,7 +5193,7 @@ p {
   max-width: 520px;
   margin: 12px 0 20px;
   font-family: var(--serif);
-  font-size: clamp(44px, 5.4vw, 76px);
+  font-size: clamp(2.75rem, 5.4vw, 4.75rem);
   line-height: 0.98;
   letter-spacing: -0.04em;
 }
@@ -5201,13 +5202,13 @@ p {
   max-width: 430px;
   color: rgba(250, 248, 241, 0.7);
   font-family: "Noto Serif TC", serif;
-  font-size: 14px;
+  font-size: 1rem;
   line-height: 1.85;
 }
 
 .auth-page-intro > small {
   color: rgba(250, 248, 241, 0.5);
-  font-size: 9px;
+  font-size: 1rem;
   letter-spacing: 0.08em;
 }
 
@@ -5235,14 +5236,14 @@ p {
 .registration-choice-heading h2 {
   margin: 10px 0 12px;
   font-family: var(--serif);
-  font-size: clamp(34px, 4vw, 48px);
+  font-size: clamp(2.125rem, 4vw, 3rem);
   line-height: 1.05;
 }
 
 .registration-choice-heading > p:last-child,
 .registration-notice {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.75;
 }
 
@@ -5278,7 +5279,7 @@ p {
 
 .registration-choice-card > span {
   color: var(--brass);
-  font-size: 8px;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.16em;
 }
@@ -5286,13 +5287,13 @@ p {
 .registration-choice-card h3 {
   margin: 10px 0 14px;
   font-family: var(--serif);
-  font-size: 30px;
+  font-size: 1.875rem;
 }
 
 .registration-choice-card p {
   margin-bottom: 28px;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 1rem;
   line-height: 1.75;
 }
 
@@ -5301,7 +5302,7 @@ p {
   align-items: center;
   gap: 8px;
   margin-top: auto;
-  font-size: 11px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -5324,7 +5325,7 @@ p {
   padding-bottom: 4px;
   color: var(--ink-soft);
   border-bottom: 1px solid var(--line-strong);
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .registration-notice {
@@ -5338,7 +5339,7 @@ p {
 .auth-result h2 {
   margin: 10px 0 34px;
   font-family: var(--serif);
-  font-size: clamp(34px, 4vw, 48px);
+  font-size: clamp(2.125rem, 4vw, 3rem);
   line-height: 1.05;
 }
 
@@ -5355,13 +5356,13 @@ p {
 .field-hint {
   margin-top: -7px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .auth-switch {
   margin: 25px 0 0;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
   text-align: center;
 }
 
@@ -5372,7 +5373,7 @@ p {
 .auth-result > p:not(.eyebrow) {
   max-width: 470px;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: 1rem;
   line-height: 1.75;
 }
 
@@ -5388,11 +5389,11 @@ p {
 }
 
 .development-token span {
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .development-token strong {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-variant-numeric: tabular-nums;
   font-weight: 500;
   letter-spacing: 0.12em;
@@ -5407,7 +5408,7 @@ p {
 }
 
 .verification-code {
-  font-size: 22px;
+  font-size: 1.375rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.34em;
   text-align: center;
@@ -5423,7 +5424,7 @@ p {
 
 .auth-resend button {
   width: fit-content;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 /* Integrated operations modules */
@@ -5482,13 +5483,13 @@ p {
 .admin-record-card h3 {
   margin: 8px 0 0;
   font-family: "Noto Serif TC", serif;
-  font-size: 19px;
+  font-size: 1.1875rem;
 }
 
 .admin-record-card > p {
   min-height: 36px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -5504,7 +5505,7 @@ p {
   gap: 10px;
   padding-top: 7px;
   border-top: 1px solid var(--line);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .admin-record-card dt {
@@ -5524,7 +5525,7 @@ p {
   background: transparent;
   border: 1px solid var(--harbor);
   cursor: pointer;
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .admin-option-row,
@@ -5553,7 +5554,7 @@ p {
   background: transparent;
   border: 1px solid var(--harbor);
   cursor: pointer;
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .operation-actions button:disabled {
@@ -5580,7 +5581,7 @@ p {
   display: grid;
   gap: 5px;
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .operation-refund input,
@@ -5594,7 +5595,7 @@ p {
   background: var(--paper);
   border: 1px solid var(--line-strong);
   border-radius: 0;
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .rate-list article.inactive {
@@ -5626,7 +5627,7 @@ p {
 
 .rate-create > strong {
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -5648,7 +5649,7 @@ p {
   align-items: center;
   gap: 7px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .supplier-meta,
@@ -5664,7 +5665,7 @@ p {
   padding: 6px 8px;
   color: var(--harbor-dark);
   background: var(--harbor-pale);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .supplier-accreditation-list {
@@ -5680,7 +5681,7 @@ p {
   justify-content: space-between;
   gap: 18px;
   margin: 0;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .bundle-item-editor {
@@ -5763,7 +5764,7 @@ p {
   padding: 7px 10px;
   color: var(--paper-light);
   background: var(--moss-dark);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .product-detail-copy {
@@ -5775,14 +5776,14 @@ p {
 .product-detail-copy h1 {
   margin: 12px 0 22px;
   font-family: var(--serif);
-  font-size: clamp(43px, 5vw, 70px);
+  font-size: clamp(2.6875rem, 5vw, 4.375rem);
   line-height: 0.98;
 }
 
 .product-detail-description {
   color: var(--ink-soft);
   font-family: "Noto Serif TC", serif;
-  font-size: 13px;
+  font-size: 1rem;
   line-height: 1.9;
 }
 
@@ -5799,7 +5800,7 @@ p {
   gap: 20px;
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .product-detail-copy dd {
@@ -5826,13 +5827,13 @@ p {
 
 .product-detail-prices small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .product-detail-prices strong {
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: 22px;
+  font-size: 1.375rem;
   font-weight: 400;
 }
 
@@ -5863,12 +5864,12 @@ p {
 .product-detail-notes h2 {
   margin: 0 0 7px;
   font-family: "Noto Serif TC", serif;
-  font-size: 15px;
+  font-size: 1rem;
 }
 
 .product-detail-notes p {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.6;
 }
 
@@ -5885,7 +5886,7 @@ p {
 
 .group-vote-note p {
   margin: 0;
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .group-vote-list {
@@ -5904,14 +5905,14 @@ p {
 .group-vote-list h2 {
   margin: 0 0 6px;
   font-family: "Noto Serif TC", serif;
-  font-size: 19px;
+  font-size: 1.1875rem;
 }
 
 .group-vote-list p,
 .group-vote-list small {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .group-vote-detail {
@@ -5933,7 +5934,7 @@ p {
 .group-vote-hero h1 {
   margin: 10px 0 14px;
   font-family: var(--serif);
-  font-size: clamp(45px, 7vw, 82px);
+  font-size: clamp(2.8125rem, 7vw, 5.125rem);
 }
 
 .group-vote-stats {
@@ -5957,13 +5958,13 @@ p {
 
 .group-vote-stats strong {
   font-family: var(--serif);
-  font-size: 35px;
+  font-size: 2.1875rem;
   font-weight: 400;
 }
 
 .group-vote-stats span {
   color: var(--sage);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .group-vote-action-panel {
@@ -5979,13 +5980,13 @@ p {
 .group-vote-action-panel h2 {
   margin: 0 0 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .group-vote-action-panel p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .group-vote-buttons {
@@ -6017,13 +6018,13 @@ p {
 }
 
 .meal-choice strong {
-  font-size: 10px;
+  font-size: 1rem;
 }
 
 .meal-choice small {
   margin-top: 3px;
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meal-offering-editor {
@@ -6091,14 +6092,14 @@ p {
 
 .pickup-ticket > small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .pickup-ticket > strong {
   margin: 5px 0;
   color: var(--harbor-dark);
   font-family: var(--serif);
-  font-size: clamp(38px, 5vw, 58px);
+  font-size: clamp(2.375rem, 5vw, 3.625rem);
   font-weight: 400;
   letter-spacing: 0.12em;
 }
@@ -6108,14 +6109,14 @@ p {
   max-width: 390px;
   margin: 5px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
 .credential-pending > h3 {
   margin: 15px 0 5px;
   font-family: "Noto Serif TC", serif;
-  font-size: 20px;
+  font-size: 1.25rem;
 }
 
 .credential-pending > .button {
@@ -6149,11 +6150,11 @@ p {
 
 .meal-pickup-info span {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .meal-pickup-info strong {
-  font-size: 9px;
+  font-size: 1rem;
   font-weight: 500;
 }
 
@@ -6185,13 +6186,13 @@ p {
 .finance-alert h2 {
   margin: 12px 0 6px;
   font-family: var(--serif);
-  font-size: clamp(28px, 4vw, 42px);
+  font-size: clamp(1.75rem, 4vw, 2.625rem);
 }
 
 .finance-alert p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .finance-stat-grid {
@@ -6215,12 +6216,12 @@ p {
 .finance-stat-grid span,
 .finance-stat-grid b {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .finance-stat-grid strong {
   font-family: var(--serif);
-  font-size: 26px;
+  font-size: 1.625rem;
   font-weight: 400;
 }
 
@@ -6237,7 +6238,7 @@ p {
 
 .finance-total strong {
   color: var(--harbor-dark);
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .finance-warning {
@@ -6247,7 +6248,7 @@ p {
   padding: 12px;
   color: #6d3e2d;
   background: #ead9cf;
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .finance-ledger {
@@ -6261,7 +6262,7 @@ p {
   gap: 16px;
   padding: 14px 8px;
   border-bottom: 1px solid var(--line);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .finance-ledger-head {
@@ -6295,12 +6296,12 @@ p {
 
 .surplus-totals small {
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 1rem;
 }
 
 .surplus-totals strong {
   font-family: var(--serif);
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 400;
 }
 
@@ -6311,7 +6312,7 @@ p {
   margin: 0;
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 9px;
+  font-size: 1rem;
 }
 
 .surplus-distributions span {
@@ -6337,7 +6338,7 @@ p {
 .not-found-page h1 {
   margin: 8px 0;
   font-family: var(--serif);
-  font-size: clamp(48px, 7vw, 78px);
+  font-size: clamp(3rem, 7vw, 4.875rem);
 }
 
 .help-list {
@@ -6356,20 +6357,20 @@ p {
 .help-list article > span {
   color: var(--brass);
   font-family: var(--serif);
-  font-size: 19px;
+  font-size: 1.1875rem;
 }
 
 .help-list h2 {
   margin: 0 0 7px;
   font-family: "Noto Serif TC", serif;
-  font-size: 17px;
+  font-size: 1.0625rem;
 }
 
 .help-list p,
 .not-found-page > p:not(.eyebrow) {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -6385,7 +6386,7 @@ p {
 .not-found-page > span {
   color: var(--harbor);
   font-family: var(--serif);
-  font-size: 110px;
+  font-size: 6.875rem;
   line-height: 0.8;
 }
 
@@ -6808,7 +6809,7 @@ p {
   }
 
   .auth-page-intro h1 {
-    font-size: 42px;
+    font-size: 2.625rem;
   }
 
   .auth-intro-icon {
@@ -6923,7 +6924,7 @@ p {
   .page-intro h1,
   .admin-intro h1,
   .checkout-heading h1 {
-    font-size: 47px;
+    font-size: 2.9375rem;
   }
 
   .hero-actions {
@@ -6968,7 +6969,7 @@ p {
 
   .section-heading h2,
   .passage-copy h2 {
-    font-size: 38px;
+    font-size: 2.375rem;
   }
 
   .product-grid,
@@ -7149,7 +7150,7 @@ p {
   }
 
   .workspace-heading h1 {
-    font-size: 42px;
+    font-size: 2.625rem;
   }
 
   .workspace-heading > p,
@@ -7245,7 +7246,7 @@ p {
   }
 
   .offer-copy h1 {
-    font-size: 44px;
+    font-size: 2.75rem;
   }
 
   .offer-copy dl {
@@ -7353,7 +7354,7 @@ p {
   .social-page-heading h1,
   .membership-workspace-heading h1,
   .workspace-heading h1 {
-    font-size: 39px;
+    font-size: 2.4375rem;
   }
 
   .social-page-shell,
@@ -7512,7 +7513,7 @@ p {
 }
 
 .meal-offer-page .offer-copy h1 {
-  font-size: clamp(28px, 4vw, 40px);
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
   line-height: 1.4;
 }
 
@@ -7531,7 +7532,7 @@ p {
 .meal-offer-page .offer-copy dd,
 .meal-offer-page .offer-copy > p:not(.eyebrow),
 .meal-offer-page .meal-offering-copy p {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -7551,7 +7552,7 @@ p {
 .meal-offer-page .invoice-type-switch small,
 .meal-offer-page .invoice-carrier-options small,
 .meal-offer-page .invoice-preference-panel p {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.6;
   letter-spacing: 0;
 }
@@ -7559,7 +7560,7 @@ p {
 .meal-offer-page .field select,
 .meal-offer-page .invoice-preference input {
   min-height: 48px;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meal-offer-page .invoice-preference input[type="radio"] {
@@ -7574,7 +7575,7 @@ p {
 .meal-offer-page .meal-summary dd,
 .meal-offer-page .meal-quote-line dt strong,
 .meal-offer-page .pickup-window strong {
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meal-offer-page .meal-checkout {
@@ -7593,11 +7594,11 @@ p {
 }
 
 .meal-offer-page .meal-offering-copy h3 {
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .meal-offer-page .meal-offering-copy strong {
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .meal-offer-page .quantity-control {
@@ -7618,7 +7619,7 @@ p {
 
 .meal-offer-page .quantity-control span {
   min-width: 24px;
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .meal-offer-page .meal-option-groups {
@@ -7628,7 +7629,7 @@ p {
 .meal-offer-page .meal-option-list button,
 .meal-offer-page .button {
   min-height: 48px;
-  font-size: 18px;
+  font-size: 1.125rem;
   letter-spacing: 0;
 }
 
@@ -7652,7 +7653,7 @@ p {
 }
 
 .meal-offer-page .offer-total dd {
-  font-size: 28px;
+  font-size: 1.75rem;
 }
 
 .meal-summary-shortcut {
@@ -7675,7 +7676,7 @@ p {
 }
 
 .meal-cancellation-card h3 {
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .meal-cancellation-card p,
@@ -7683,7 +7684,7 @@ p {
 .meal-cancellation-management > p,
 .meal-cancellation-management .admin-order-search,
 .meal-orders-page .inline-confirm {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -7706,14 +7707,14 @@ p {
   color: var(--ink);
   background: var(--paper-light);
   border: 1px solid var(--line-strong);
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meal-cancellation-card .button,
 .meal-cancellation-management .button,
 .meal-orders-page .inline-confirm .button {
   min-height: 48px;
-  font-size: 16px;
+  font-size: 1rem;
   letter-spacing: 0;
 }
 
@@ -7759,11 +7760,11 @@ p {
   }
 
   .meal-summary-shortcut span {
-    font-size: 16px;
+    font-size: 1rem;
   }
 
   .meal-summary-shortcut strong {
-    font-size: 24px;
+    font-size: 1.5rem;
   }
 
   .meal-summary-shortcut .button {
@@ -7797,7 +7798,7 @@ p {
   }
 
   .meal-offer-page .offer-total dd {
-    font-size: 24px;
+    font-size: 1.5rem;
   }
 }
 
@@ -7812,14 +7813,14 @@ p {
 }
 
 .meal-order-management h2 {
-  font-size: clamp(24px, 3vw, 32px);
+  font-size: clamp(1.5rem, 3vw, 2rem);
   line-height: 1.4;
 }
 
 .meal-order-management p,
 .meal-order-management li,
 .meal-order-management .field > span {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -7848,18 +7849,18 @@ p {
 }
 
 .meal-operation-tasks span {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
 }
 
 .meal-operation-tasks strong {
-  font-size: 32px;
+  font-size: 2rem;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
 
 .meal-operation-tasks small {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.5;
 }
 
@@ -7889,13 +7890,13 @@ p {
   background: var(--paper-light);
   border: 1px solid var(--line-strong);
   border-radius: 0;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meal-order-management .button,
 .meal-operation-order summary {
   min-height: 48px;
-  font-size: 16px;
+  font-size: 1rem;
   letter-spacing: 0;
 }
 
@@ -7924,12 +7925,12 @@ p {
 
 .meal-operation-order h3 {
   margin: 0;
-  font-size: 22px;
+  font-size: 1.375rem;
   line-height: 1.5;
 }
 
 .meal-operation-order > header > strong {
-  font-size: 24px;
+  font-size: 1.5rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -7981,7 +7982,7 @@ p {
 
 .admin-meals-workspace > .admin-social-tabs > .tab-list button {
   min-height: 48px;
-  font-size: 16px;
+  font-size: 1rem;
   letter-spacing: 0;
 }
 
@@ -7999,7 +8000,7 @@ p {
 .meal-shop-intro h1,
 .meal-orders-page .workspace-heading h1,
 .meal-help-page header h1 {
-  font-size: clamp(28px, 4vw, 40px);
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
   line-height: 1.4;
 }
 
@@ -8022,7 +8023,7 @@ p {
 .meal-orders-page .invoice-summary-card span,
 .meal-help-page p:not(.eyebrow),
 .meal-help-page .text-link {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.7;
   letter-spacing: 0;
 }
@@ -8055,7 +8056,7 @@ p {
 
 .meal-event-row h3 {
   margin: 8px 0;
-  font-size: 24px;
+  font-size: 1.5rem;
   line-height: 1.5;
 }
 
@@ -8070,7 +8071,7 @@ p {
 
 .meal-event-unavailable {
   color: var(--ink-soft);
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meal-booking-content .meal-period-options button,
@@ -8079,7 +8080,7 @@ p {
 .meal-orders-page .button,
 .meal-help-page .button {
   min-height: 48px;
-  font-size: 18px;
+  font-size: 1.125rem;
   line-height: 1.5;
   letter-spacing: 0;
 }
@@ -8102,7 +8103,7 @@ p {
   flex-wrap: wrap;
   gap: 12px 24px;
   align-items: center;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .meal-pickup-options {
@@ -8119,7 +8120,7 @@ p {
   background: var(--paper-light);
   border: 1px solid var(--line-strong);
   border-radius: 4px;
-  font-size: 20px;
+  font-size: 1.25rem;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
@@ -8137,7 +8138,7 @@ p {
 
 .meal-pickup-confirmation {
   color: var(--moss-dark);
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
   line-height: 1.6;
 }
@@ -8150,18 +8151,18 @@ p {
 .meal-orders-page .order-index strong,
 .meal-orders-page .meal-pickup-info strong,
 .meal-orders-page .invoice-summary-card strong {
-  font-size: 20px;
+  font-size: 1.25rem;
   line-height: 1.6;
 }
 
 .meal-orders-page .order-lines strong,
 .meal-orders-page .order-lines b {
-  font-size: 18px;
+  font-size: 1.125rem;
   line-height: 1.6;
 }
 
 .meal-orders-page .order-lines em {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -8171,12 +8172,12 @@ p {
 }
 
 .meal-orders-page .pickup-ticket > strong {
-  font-size: clamp(36px, 8vw, 52px);
+  font-size: clamp(2.25rem, 8vw, 3.25rem);
 }
 
 .meal-help-page .help-list h2,
 .meal-order-lines h3 {
-  font-size: 22px;
+  font-size: 1.375rem;
   line-height: 1.5;
 }
 
@@ -8196,7 +8197,7 @@ p {
 .meal-faq summary {
   min-height: 48px;
   padding-block: 12px;
-  font-size: 18px;
+  font-size: 1.125rem;
   line-height: 1.6;
   font-weight: 600;
   cursor: pointer;
@@ -8255,3 +8256,18 @@ p {
     display: none;
   }
 }
+
+html { font-size: 16px; }
+html[data-text-size="large"] { font-size: 20px; }
+.eyebrow { font-family: var(--sans); font-size: 1rem; letter-spacing: .08em; line-height: 1.6; }
+.reading-controls { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px clamp(18px, 4vw, 72px); border-bottom: 1px solid var(--line); font-size: 1rem; }
+.reading-controls button { min-height: 44px; padding: 6px 14px; background: transparent; border: 1px solid var(--line); cursor: pointer; }
+.reading-controls button[aria-pressed="true"] { border-color: var(--moss-dark); color: var(--moss-dark); font-weight: 600; }
+.meal-time-selection { margin-top: 28px; }
+.meal-time-location { padding: 18px 0; border-bottom: 1px solid var(--line); }
+.meal-time-location h4 { margin: 0 0 16px; font-size: 1.125rem; font-weight: 500; }
+.meal-pickup-options a { display: inline-flex; align-items: center; justify-content: center; min-width: 90px; min-height: 52px; padding: 12px 20px; background: var(--paper-light); border: 1px solid var(--line-strong); border-radius: 4px; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.meal-pickup-options a:hover { color: var(--paper-light); background: var(--moss-dark); }
+.meal-time-selection .meal-pickup-options button { display: grid; gap: 4px; }
+.meal-time-selection .meal-pickup-options small { font-size: 1rem; }
+@media print { html, html[data-text-size="large"] { font-size: 16px; } .reading-controls { display: none; } }

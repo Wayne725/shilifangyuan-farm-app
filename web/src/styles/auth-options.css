@@ -20,7 +20,7 @@
   border-radius: 4px;
   color: var(--ink);
   background: var(--paper-light);
-  font-size: 18px;
+  font-size: 1.125rem;
   cursor: pointer;
 }
 
@@ -35,7 +35,7 @@
   border: 1px solid #087f3c;
   background: #06c755;
   color: #062a13;
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 600;
 }
 
@@ -48,7 +48,7 @@
 .line-login-alternative,
 .line-account-link p,
 .line-callback-page p {
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -64,7 +64,7 @@
 
 .line-account-link h2,
 .line-callback-page h2 {
-  font-size: 24px;
+  font-size: 1.5rem;
 }
 
 .line-callback-page {
@@ -74,13 +74,13 @@
 }
 
 .line-callback-page h1 {
-  font-size: 36px;
+  font-size: 2.25rem;
 }
 
 .line-callback-page input,
 .line-callback-page .button {
   min-height: 48px;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .line-callback-page form {

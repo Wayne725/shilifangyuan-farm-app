@@ -73,7 +73,7 @@ export function RosterCsvImport({ onDone }: { onDone: () => void }) {
 
   return <section className="social-form roster-csv-import" aria-labelledby="roster-csv-title">
     <div className="form-heading">
-      <div><p className="eyebrow">MEMBER ROSTER</p><h2 id="roster-csv-title">匯入社員名冊</h2></div>
+      <div><p className="eyebrow">社員名冊</p><h2 id="roster-csv-title">匯入社員名冊</h2></div>
       <a className="button button-quiet" href="/templates/member-roster.csv" download>下載 CSV 範本</a>
     </div>
     <label className="field roster-csv-file"><span>選擇 CSV 檔案</span><input ref={fileInput} type="file" accept=".csv,text/csv" disabled={Boolean(busy)} onChange={(event) => void checkFile(event.target.files?.[0])} /></label>

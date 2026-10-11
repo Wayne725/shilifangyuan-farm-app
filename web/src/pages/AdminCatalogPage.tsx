@@ -124,7 +124,7 @@ export function AdminCatalogPage() {
     return (
       <section className="admin-gate">
         <div className="admin-gate-mark"><Buildings size={38} weight="light" /></div>
-        <p className="eyebrow">CATALOG OPERATIONS</p>
+        <p className="eyebrow">商品供應</p>
         <h1>商品與供應管理只向管理者開放。</h1>
         {!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button> : <Link className="button button-quiet" to="/shop">返回生活消費</Link>}
       </section>
@@ -185,7 +185,7 @@ export function AdminCatalogPage() {
 function AdminSection({ title, count, pending, error, children }: { title: string; count: number; pending: boolean; error?: string; children: React.ReactNode }) {
   return (
     <section className="admin-review-section">
-      <div className="section-title-row"><div><p className="eyebrow">MASTER DATA</p><h2>{title}</h2></div><span>{count}</span></div>
+      <div className="section-title-row"><div><p className="eyebrow">基本資料</p><h2>{title}</h2></div><span>{count}</span></div>
       {pending && <LoadingLines count={3} />}
       {error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}
       {!pending && !error && count === 0 && <DataState title={`目前沒有${title}`} detail="建立後會出現在這裡。" />}
@@ -239,7 +239,7 @@ function ProductForm({ title, draft, suppliers, busy, error, onChange, onCancel,
   const toggleChannel = (channel: ShippingChannel) => onChange({ ...draft, allowed_shipping_channels: draft.allowed_shipping_channels.includes(channel) ? draft.allowed_shipping_channels.filter((item) => item !== channel) : [...draft.allowed_shipping_channels, channel] });
   return (
     <form className="social-form admin-master-form" onSubmit={submit}>
-      <div className="form-heading"><div><p className="eyebrow">PRODUCT RECORD</p><h2>{title}</h2></div><span>社員價不可高於一般價。</span></div>
+      <div className="form-heading"><div><p className="eyebrow">商品資料</p><h2>{title}</h2></div><span>社員價不可高於一般價。</span></div>
       <div className="field-grid three-columns">
         <label className="field"><span>產品編號</span><input value={draft.product_number} onChange={(event) => onChange({ ...draft, product_number: event.target.value })} /></label>
         <label className="field"><span>SKU</span><input value={draft.sku} onChange={(event) => onChange({ ...draft, sku: event.target.value })} /></label>
@@ -295,7 +295,7 @@ function SupplierForm({ title, draft, busy, error, onChange, onCancel, onSubmit 
   const submit = (event: FormEvent) => { event.preventDefault(); onSubmit(); };
   return (
     <form className="social-form admin-master-form" onSubmit={submit}>
-      <div className="form-heading"><div><p className="eyebrow">SUPPLIER RECORD</p><h2>{title}</h2></div><span>聯絡人與銀行資料屬私密資料。</span></div>
+      <div className="form-heading"><div><p className="eyebrow">供應者資料</p><h2>{title}</h2></div><span>聯絡人與銀行資料屬私密資料。</span></div>
       <div className="field-grid three-columns">
         <label className="field"><span>供應商編號</span><input value={draft.supplier_number} onChange={(event) => onChange({ ...draft, supplier_number: event.target.value })} /></label>
         <label className="field"><span>商號</span><input required value={draft.business_name} onChange={(event) => onChange({ ...draft, business_name: event.target.value })} /></label>
@@ -344,7 +344,7 @@ function LocationEditor({ location, onDone }: { location: PickupLocation; onDone
 }
 
 function LocationForm({ title, draft, busy, error, onChange, onCancel, onSubmit }: { title: string; draft: { code: string; name: string; address: string; instructions: string; sort_order: number; is_active: boolean }; busy: boolean; error?: string; onChange: (draft: { code: string; name: string; address: string; instructions: string; sort_order: number; is_active: boolean }) => void; onCancel: () => void; onSubmit: () => void }) {
-  return <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}><div className="form-heading"><div><p className="eyebrow">PICKUP LOCATION</p><h2>{title}</h2></div></div><div className="field-grid two-columns"><label className="field"><span>代碼</span><input required pattern="[a-z0-9-]+" value={draft.code} onChange={(event) => onChange({ ...draft, code: event.target.value })} /></label><label className="field"><span>名稱</span><input required value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label><label className="field wide"><span>地址</span><input value={draft.address} onChange={(event) => onChange({ ...draft, address: event.target.value })} /></label><label className="field wide"><span>取貨說明</span><textarea rows={3} value={draft.instructions} onChange={(event) => onChange({ ...draft, instructions: event.target.value })} /></label><label className="field"><span>排序</span><input min={0} type="number" value={draft.sort_order} onChange={(event) => onChange({ ...draft, sort_order: Number(event.target.value) })} /></label></div><label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />啟用取貨點</label>{error && <p className="form-error">{error}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={onCancel}>取消</button><button className="button button-primary" disabled={busy}>儲存取貨點</button></div></form>;
+  return <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}><div className="form-heading"><div><p className="eyebrow">取貨點</p><h2>{title}</h2></div></div><div className="field-grid two-columns"><label className="field"><span>代碼</span><input required pattern="[a-z0-9-]+" value={draft.code} onChange={(event) => onChange({ ...draft, code: event.target.value })} /></label><label className="field"><span>名稱</span><input required value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label><label className="field wide"><span>地址</span><input value={draft.address} onChange={(event) => onChange({ ...draft, address: event.target.value })} /></label><label className="field wide"><span>取貨說明</span><textarea rows={3} value={draft.instructions} onChange={(event) => onChange({ ...draft, instructions: event.target.value })} /></label><label className="field"><span>排序</span><input min={0} type="number" value={draft.sort_order} onChange={(event) => onChange({ ...draft, sort_order: Number(event.target.value) })} /></label></div><label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />啟用取貨點</label>{error && <p className="form-error">{error}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={onCancel}>取消</button><button className="button button-primary" disabled={busy}>儲存取貨點</button></div></form>;
 }
 
 function accreditationLabel(status: SupplierAccreditationStatus) {

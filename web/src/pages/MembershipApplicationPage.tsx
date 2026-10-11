@@ -104,11 +104,11 @@ export function MembershipApplicationPage() {
   }
 
   if (!user) {
-    return <section className="account-gate"><UserCircle size={48} weight="light" /><p className="eyebrow">MEMBERSHIP</p><h1>開始入社申請</h1><p>登入後填寫資料並查看申請進度。</p><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></section>;
+    return <section className="account-gate"><UserCircle size={48} weight="light" /><p className="eyebrow">社員資格</p><h1>開始入社申請</h1><p>登入後填寫資料並查看申請進度。</p><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></section>;
   }
   if (membership.isPending || application.isPending) return <section className="membership-page"><LoadingLines count={5} /></section>;
   if (membership.data?.membership_type === "member") {
-    return <section className="membership-page"><header className="membership-heading"><CheckCircle size={42} weight="light" /><p className="eyebrow">ACTIVE MEMBER</p><h1>你已是正式社員</h1><p>{membership.data.membership?.member_number || "社員資格已啟用"}</p><div><Link className="button button-primary" to="/social">進入社務系統</Link><Link className="button button-quiet" to="/account" search={{ membership_charge_id: undefined, payment: undefined }}>查看社員中心</Link></div></header></section>;
+    return <section className="membership-page"><header className="membership-heading"><CheckCircle size={42} weight="light" /><p className="eyebrow">正式社員</p><h1>你已是正式社員</h1><p>{membership.data.membership?.member_number || "社員資格已啟用"}</p><div><Link className="button button-primary" to="/social">進入社務系統</Link><Link className="button button-quiet" to="/account" search={{ membership_charge_id: undefined, payment: undefined }}>查看社員中心</Link></div></header></section>;
   }
 
   const status = application.data?.status || "draft";
@@ -117,7 +117,7 @@ export function MembershipApplicationPage() {
   return (
     <section className="membership-page">
       <header className="workspace-heading membership-workspace-heading">
-        <div><p className="eyebrow">MEMBERSHIP APPLICATION</p><h1>入社申請</h1></div>
+        <div><p className="eyebrow">入社申請</p><h1>入社申請</h1></div>
         <div className="application-status"><span>{applicationStatusLabel(status)}</span><small>填妥基本資料即可送出</small></div>
       </header>
 
@@ -125,7 +125,7 @@ export function MembershipApplicationPage() {
 
       <form className="membership-form" onSubmit={save}>
         <section>
-          <div className="form-heading"><div><p className="eyebrow">PROFILE</p><h2>基本資料</h2></div></div>
+          <div className="form-heading"><div><p className="eyebrow">基本資料</p><h2>基本資料</h2></div></div>
           <div className="field-grid three-columns">
             <label className="field"><span>姓名</span><input required disabled={!editable} value={form.legal_name} onChange={(event) => setForm({ ...form, legal_name: event.target.value })} /></label>
             <label className="field"><span>出生日期</span><input required disabled={!editable} type="date" value={form.birth_date} onChange={(event) => setForm({ ...form, birth_date: event.target.value })} /></label>
@@ -148,7 +148,7 @@ export function MembershipApplicationPage() {
       </form>
 
       <section className="application-actions">
-        <div><p className="eyebrow">NEXT STEP</p><h2>{applicationNextStep(status)}</h2></div>
+        <div><p className="eyebrow">下一步</p><h2>{applicationNextStep(status)}</h2></div>
         <div>
           {editable && <button className="button button-system" type="button" disabled={!application.data?.profile || submitApplication.isPending} onClick={() => submitApplication.mutate()}>{status === "needs_supplement" ? "重新送件" : "送出申請"}</button>}
           {["draft", "submitted", "needs_supplement", "approved"].includes(status) && application.data && <button className="button button-quiet" type="button" disabled={withdrawApplication.isPending} onClick={() => withdrawApplication.mutate()}>撤回申請</button>}

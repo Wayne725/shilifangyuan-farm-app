@@ -31,3 +31,32 @@ async def test_postgres_cash_basis_uses_taipei_midnight_and_never_multiplies_ref
         assert result["daily"][0]["period"] == "2030-01-02"
         assert result["products"][0]["quantity"] == 2
         assert result["products"][0]["sales_amount"] == 200
+
+
+@pytest.mark.asyncio
+async def test_postgres_all_sales_channels_share_receipt_and_refund_scope(postgres_sessions):
+    from app.models import Order, OrderItem, OrderKind, SalesChannel, TaxType
+
+    async with postgres_sessions() as session:
+        c = await seed_cancellation_order(session)
+        midnight = datetime(2030, 1, 1, 16, tzinfo=timezone.utc)
+        c.order.paid_at = midnight
+        ordinary = Order(order_number='PG-REGULAR-SALE', order_kind=OrderKind.REGULAR,
+                         sales_channel=SalesChannel.REGULAR, user=c.buyer, amount_total=600,
+                         contact_email=c.buyer.email, membership_type_snapshot=c.order.membership_type_snapshot,
+                         created_at=midnight, paid_at=midnight, payment_status=PaymentStatus.PAID,
+                         items=[OrderItem(product_name='一般選品', unit_label='袋', quantity=3,
+                                          unit_price=200, subtotal=600, tax_type=TaxType.TAX_EXEMPT)])
+        session.add_all([ordinary, Refund(order=ordinary, amount=200, status=RefundStatus.COMPLETED,
+                                         requested_by_id=c.admin.id, reason='跨類型退款', created_at=midnight,
+                                         completed_at=midnight + timedelta(hours=1))])
+        await session.commit()
+        filters = MealSalesFilters(starts_on='2030-01-02', ends_on='2030-01-02', sales_channel='all')
+        result = await meal_sales_report(session, filters)
+        assert result['summary']['received'] == 800
+        assert result['summary']['refunded'] == 200
+        assert result['summary']['net'] == 600
+        regular = await meal_sales_report(session, filters.model_copy(update={'sales_channel': 'regular'}))
+        assert regular['summary']['net'] == 400
+        assert regular['orders']['total'] == 1
+        assert regular['products'][0]['quantity'] == 3

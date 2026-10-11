@@ -100,7 +100,7 @@ function ScheduleForm({ initial, meals, schedules, onDone, onCancel }: { initial
     onSuccess: onDone,
   });
   return <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); if (!invalidTime && !invalidAdvance) save.mutate(); }}>
-    <div className="form-heading"><div><p className="eyebrow">DAILY MEAL SCHEDULE</p><h2>{initial ? "編輯每日排程" : "建立每日午晚餐排程"}</h2></div><span>全部採台灣時間（Asia/Taipei）。</span></div>
+    <div className="form-heading"><div><p className="eyebrow">每日供餐排程</p><h2>{initial ? "編輯每日排程" : "建立每日午晚餐排程"}</h2></div><span>全部採台灣時間（Asia/Taipei）。</span></div>
     <div className="field-grid two-columns">
       <label className="field"><span>排程／場次名稱</span><input required maxLength={120} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
       <label className="field"><span>取餐地點</span><input required maxLength={160} value={draft.location} onChange={(event) => setDraft({ ...draft, location: event.target.value })} /></label>

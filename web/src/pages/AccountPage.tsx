@@ -143,7 +143,7 @@ export function AccountPage() {
     return (
       <section className="account-gate">
         <UserCircle size={48} weight="light" />
-        <p className="eyebrow">MEMBER CENTER</p>
+        <p className="eyebrow">會員中心</p>
         <h1>你的合作生活，集中在這裡。</h1>
         <p>登入後查看社員資格、應繳款、點數、徽章、盈餘分配與通知。</p>
         <button className="button button-primary" type="button" onClick={openLogin}>帳號登入</button>
@@ -157,7 +157,7 @@ export function AccountPage() {
     <section className="account-page">
       <header className="workspace-heading account-heading">
         <div>
-          <p className="eyebrow">MEMBER CENTER / 會員中心</p>
+          <p className="eyebrow">會員中心</p>
           <h1>{user.display_name}，<br />這是你的合作紀錄。</h1>
         </div>
         <div className="account-identity">
@@ -200,7 +200,7 @@ export function AccountPage() {
       <div className="account-grid">
         <section className="account-panel charges-panel">
           <div className="panel-heading-inline">
-            <div><p className="eyebrow">MEMBERSHIP PAYMENTS</p><h2>社員款項</h2></div>
+            <div><p className="eyebrow">社員款項</p><h2>社員款項</h2></div>
             <CreditCard size={27} weight="light" />
           </div>
           {charges.isPending && <LoadingLines count={3} />}
@@ -240,7 +240,7 @@ export function AccountPage() {
 
         <section className="account-panel notification-panel">
           <div className="panel-heading-inline">
-            <div><p className="eyebrow">NOTIFICATIONS</p><h2>最新通知</h2></div>
+            <div><p className="eyebrow">最新通知</p><h2>最新通知</h2></div>
             {unreadCount > 0 && (
               <button type="button" onClick={() => markAllRead.mutate()} disabled={markAllRead.isPending}>全部已讀</button>
             )}
@@ -260,7 +260,7 @@ export function AccountPage() {
 
         <section className="account-panel cooperative-panel">
           <div className="panel-heading-inline">
-            <div><p className="eyebrow">CO-OP RECORD</p><h2>合作成果</h2></div>
+            <div><p className="eyebrow">合作成果</p><h2>合作成果</h2></div>
             <Sparkle size={27} weight="light" />
           </div>
           {!isActiveMember ? (
@@ -326,7 +326,7 @@ function ExistingMemberClaimPanel({ onDone }: { onDone: () => void }) {
   return (
     <form className="social-form existing-member-claim" onSubmit={submit}>
       <div className="form-heading">
-        <div><p className="eyebrow">EXISTING MEMBER CLAIM</p><h2>已是社員？認領既有資格</h2></div>
+        <div><p className="eyebrow">既有社員資格</p><h2>已是社員？認領既有資格</h2></div>
         <span>系統會以此帳號 Email 核對合作社名冊，不會重新走入社流程。</span>
       </div>
       <div className="field-grid three-columns">

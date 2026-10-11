@@ -198,6 +198,9 @@ const groupCampaignRoute = createRoute({
 const mealEventRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/meals/$eventId",
+  validateSearch: (search: Record<string, unknown>): { pickup_at?: string } => ({
+    pickup_at: typeof search.pickup_at === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(search.pickup_at) ? search.pickup_at : undefined,
+  }),
   component: page("./pages/MealEventPage", "MealEventPage"),
 });
 

@@ -95,7 +95,7 @@ for (const width of [1440, 390]) {
       await noOverflow(page);
     }
     await page.goto(`${base}/shop`);
-    await page.getByRole('heading', { name: '選日期與餐別', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '選取餐時間', exact: true }).waitFor();
     assert.equal(await page.locator('.meal-booking-content .section-heading .eyebrow').evaluate((element) => getComputedStyle(element).fontSize), eyebrow);
     await noOverflow(page);
     await screenshot(page, `meal-original-style-${width}`);

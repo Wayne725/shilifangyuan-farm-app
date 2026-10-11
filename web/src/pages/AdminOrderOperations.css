@@ -8,13 +8,13 @@
   max-width: 300px;
 }
 .admin-operation-page { max-width: none; }
-.admin-operation-page .data-row { grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.9fr) minmax(130px, 0.9fr) minmax(90px, 0.6fr); gap: 16px; font-size: 15px; }
-.admin-operation-page .data-head { font-size: 14px; }
-.admin-operation-page .data-row strong { font-size: 17px; }
+.admin-operation-page .data-row { grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.9fr) minmax(130px, 0.9fr) minmax(90px, 0.6fr); gap: 16px; font-size: 1rem; }
+.admin-operation-page .data-head { font-size: 1rem; }
+.admin-operation-page .data-row strong { font-size: 1.0625rem; }
 .admin-operation-page .status-active,
-.admin-operation-page .status-pending { font-size: 14px; }
-.admin-operation-page .location-list article { font-size: 16px; }
-.admin-operation-page .location-list small { font-size: 14px; }
+.admin-operation-page .status-pending { font-size: 1rem; }
+.admin-operation-page .location-list article { font-size: 1rem; }
+.admin-operation-page .location-list small { font-size: 1rem; }
 .admin-operation-heading {
   display: flex;
   flex-wrap: wrap;
@@ -31,16 +31,16 @@
   padding: 22px 0;
 }
 .operation-title span,
-.operation-title small { font-size: 14px; }
-.operation-title strong { font-size: 20px; }
+.operation-title small { font-size: 1rem; }
+.operation-title strong { font-size: 1.25rem; }
 .operation-state { gap: 8px; }
-.operation-state span { padding: 8px 10px; font-size: 14px; }
+.operation-state span { padding: 8px 10px; font-size: 1rem; }
 .operation-actions > button,
 .operation-refund button,
-.operation-invoice-query button { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+.operation-invoice-query button { min-height: 44px; padding: 8px 14px; font-size: 1rem; }
 .operation-invoice-query { grid-template-columns: minmax(240px, 1fr) auto; align-items: end; }
-.operation-invoice-query label { font-size: 14px; }
-.operation-invoice-query input { min-height: 46px; font-size: 16px; }
+.operation-invoice-query label { font-size: 1rem; }
+.operation-invoice-query input { min-height: 46px; font-size: 1rem; }
 .invoice-summary-card {
   grid-template-columns: auto minmax(0, 1fr) minmax(150px, 220px);
   gap: 18px;
@@ -49,8 +49,8 @@
 }
 .invoice-summary-card small,
 .invoice-summary-card span,
-.invoice-summary-card dl { font-size: 14px; line-height: 1.55; }
-.invoice-summary-card strong { font-size: 19px; }
+.invoice-summary-card dl { font-size: 1rem; line-height: 1.55; }
+.invoice-summary-card strong { font-size: 1.1875rem; }
 .invoice-summary-card dl > div { gap: 12px; }
 @media (max-width: 680px) {
   .admin-operation-nav { justify-content: flex-start; margin-inline: 22px; overflow-x: auto; }
@@ -68,7 +68,7 @@
   margin: 28px 0 0;
   padding: 0;
 }
-.admin-failure-panel h2 { font-size: 24px; }
-.failed-job strong { font-size: 16px; }
-.failed-job p { font-size: 15px; line-height: 1.6; }
-.failed-job .admin-order-search label { font-size: 14px; }
+.admin-failure-panel h2 { font-size: 1.5rem; }
+.failed-job strong { font-size: 1rem; }
+.failed-job p { font-size: 1rem; line-height: 1.6; }
+.failed-job .admin-order-search label { font-size: 1rem; }
