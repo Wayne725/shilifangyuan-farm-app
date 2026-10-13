@@ -117,6 +117,10 @@ export async function apiFetch<T>(
     "/v1/auth/resend-verification",
     "/v1/auth/forgot-password",
     "/v1/auth/reset-password",
+    "/v1/auth/line/start",
+    "/v1/auth/line/callback",
+    "/v1/auth/line/register",
+    "/v1/auth/line/pending",
   ]);
   if (response.status === 401 && !cannotRefresh.has(path)) {
     const restored = await restoreSession();

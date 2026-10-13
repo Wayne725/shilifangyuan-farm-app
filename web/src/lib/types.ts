@@ -5,6 +5,7 @@ export interface User {
   email: string;
   display_name: string;
   user_role: UserRole;
+  email_verified_at?: string | null;
 }
 
 export interface AuthResponse {

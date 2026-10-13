@@ -311,7 +311,19 @@ const adminUsersRoute = createRoute({
   component: page("./pages/AdminUsersPage", "AdminUsersPage"),
 });
 
+const lineLoginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/auth/line/callback",
+  validateSearch: (search: Record<string, unknown>): { code?: string; state?: string; error?: string } => ({
+    code: typeof search.code === "string" ? search.code : undefined,
+    state: typeof search.state === "string" ? search.state : undefined,
+    error: typeof search.error === "string" ? search.error : undefined,
+  }),
+  component: page("./pages/LineLoginPage", "LineLoginPage"),
+});
+
 const routeTree = rootRoute.addChildren([
+  lineLoginRoute,
   homeRoute,
   registerRoute,
   verifyEmailRoute,

@@ -406,6 +406,44 @@ class User(Base):
     )
 
 
+class ExternalIdentity(Base):
+    __tablename__ = "external_identities"
+    __table_args__ = (
+        UniqueConstraint("provider", "subject", name="uq_external_identity_subject"),
+        UniqueConstraint("provider", "user_id", name="uq_external_identity_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(24))
+    subject: Mapped[str] = mapped_column(String(255))
+    registration_intent: Mapped[str] = mapped_column(String(24), default="nonmember")
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LineOAuthState(Base):
+    __tablename__ = "line_oauth_states"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    browser_hash: Mapped[str] = mapped_column(String(64))
+    nonce: Mapped[str] = mapped_column(String(128))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    purpose: Mapped[str] = mapped_column(String(16))
+    target_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    target_token_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    registration_intent: Mapped[str] = mapped_column(String(24))
+    return_to: Mapped[str] = mapped_column(String(500))
+    remember_me: Mapped[bool] = mapped_column(Boolean)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    registration_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True)
+    pending_subject: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pending_display_name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    registration_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class EmailVerificationToken(Base):
     __tablename__ = "email_verification_tokens"
 

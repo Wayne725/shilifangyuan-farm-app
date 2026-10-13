@@ -51,7 +51,7 @@ def test_retention_migration_preserves_old_documents_without_auto_expiry(tmp_pat
         with engine.connect() as connection:
             assert connection.execute(snapshot).all() == before
             assert connection.execute(text("SELECT expires_at, deletion_attempts, deletion_retry_at, deletion_error FROM membership_documents")).one() == (None, 0, None, None)
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0020_meal_booking_deadline"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0021_line_login"
     finally:
         engine.dispose()
         get_settings.cache_clear()

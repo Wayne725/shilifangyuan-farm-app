@@ -18,6 +18,7 @@ import {
 } from "../lib/api";
 import type { AuthResponse, User } from "../lib/types";
 import { rememberedLoginEmail, rememberLoginEmail } from "../lib/login-preferences";
+import { LineLoginButton } from "../components/LineLogin";
 import "../styles/auth-options.css";
 
 interface AuthContextValue {
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState(rememberedLoginEmail);
   const [rememberAccount, setRememberAccount] = useState(() => Boolean(rememberedLoginEmail()));
   const [rememberMe, setRememberMe] = useState(true);
+  const [lineIntent, setLineIntent] = useState<"member" | "nonmember">("nonmember");
 
   useEffect(() => {
     let active = true;
@@ -84,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAuthReady(true);
       setSessionError("");
       setOpen(false);
+      if (window.location.pathname === "/auth/line/callback") window.location.assign("/account");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "登入失敗");
     } finally {
@@ -114,7 +117,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               <X size={20} weight="light" />
             </Dialog.Close>
             <Dialog.Title>登入訂餐</Dialog.Title>
+            <Dialog.Description className="line-login-description">選擇 LINE 或 Email 登入。</Dialog.Description>
+            <div className="line-membership-intent" role="group" aria-label="社員身分選擇"><button type="button" aria-pressed={lineIntent === "member"} onClick={() => setLineIntent("member")}>我是社員</button><button type="button" aria-pressed={lineIntent === "nonmember"} onClick={() => setLineIntent("nonmember")}>我不是社員</button></div>
             <label className="login-preference"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span>保持登入</span></label>
+            <LineLoginButton intent={lineIntent} rememberMe={rememberMe} returnTo={window.location.pathname === "/auth/line/callback" ? "/shop" : undefined} />
+            <p className="line-login-alternative">或使用 Email 登入</p>
             <form className="login-form" onSubmit={login}>
               <label>
                 電子信箱

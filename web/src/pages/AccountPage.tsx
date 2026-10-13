@@ -13,6 +13,7 @@ import { Link, useSearch } from "@tanstack/react-router";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { LineAccountLink } from "../components/LineLogin";
 import { useAuth } from "../context/AuthContext";
 import { openMembershipHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
@@ -173,6 +174,8 @@ export function AccountPage() {
         <Link to="/social"><Certificate size={19} />社務系統</Link>
         {user.user_role === "admin" && <Link to="/admin"><Sparkle size={19} />管理工作台</Link>}
       </nav>
+
+      <LineAccountLink userId={user.id} emailVerified={Boolean(user.email_verified_at)} />
 
       {displayedPaymentStatus && (
         <div className={`return-banner ${displayedPaymentStatus}`}>

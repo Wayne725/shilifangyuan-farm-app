@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     )
     app_base_url: str = "http://localhost:8000"
     web_base_url: str = "http://127.0.0.1:4173"
+    line_login_channel_id: str = ""
+    line_login_channel_secret: str = ""
+    line_login_redirect_uri: str = ""
+    line_login_scope: str = "openid profile email"
     payment_provider: str = "ecpay"
     ecpay_payment_merchant_id: str = ""
     ecpay_payment_hash_key: str = ""

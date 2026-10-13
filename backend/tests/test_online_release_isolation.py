@@ -88,10 +88,11 @@ def test_online_product_exception_rejects_skus_longer_than_eighty_characters():
         )
 
 
-def test_core_release_has_one_booking_migration_head():
+def test_core_release_keeps_one_linear_migration_head():
     backend = Path(__file__).resolve().parents[1]
     migrations = ScriptDirectory(str(backend / "alembic"))
-    assert migrations.get_heads() == ["0020_meal_booking_deadline"]
+    assert migrations.get_heads() == ["0021_line_login"]
+    assert migrations.get_revision("0021_line_login").down_revision == "0020_meal_booking_deadline"
 
 
 def test_online_release_models_do_not_add_cash_payment_fields():
