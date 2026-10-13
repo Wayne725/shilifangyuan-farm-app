@@ -103,13 +103,30 @@ async def test_start_binds_one_time_state_to_browser_and_pkce(database_session, 
         assert response.headers["cache-control"] == "no-store"
 
 
-@pytest.mark.parametrize("return_to", ["https://evil.example/shop", "//evil.example/shop", "/admin", "/shop\\evil", "/shop\n", "/meals/../admin"])
+@pytest.mark.parametrize("return_to", ["https://evil.example/shop", "//evil.example/shop", "/unknown-screen", "/shop\\evil", "/shop\n", "/meals/../admin", "/groups/../admin"])
 @pytest.mark.asyncio
 async def test_start_rejects_open_redirects_and_unsupported_return_paths(database_session, settings, return_to):
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
         response = await client.post("/v1/auth/line/start", json={"return_to": return_to})
         assert response.status_code == 422
         assert await database_session.scalar(select(func.count()).select_from(LineOAuthState)) == 0
+
+
+@pytest.mark.parametrize("return_to", [
+    "/social", "/admin?section=orders&q=SLF-1", "/admin/meals?tab=cancellations&q=SLF-1",
+    "/groups/campaign-1", "/products/product-1", "/proposals/proposal-1",
+    "/group-votes/proposal-1", "/membership", "/register",
+])
+@pytest.mark.asyncio
+async def test_login_keeps_supported_work_page_without_granting_admin_role(database_session, settings, profile, return_to):
+    async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
+        state, _ = await start_flow(client, return_to=return_to)
+        response = await callback(client, state)
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["return_to"] == ("/account" if return_to == "/register" else return_to)
+        assert result["session"]["user"]["user_role"] == "customer"
+        assert result["session"]["user"]["membership_type"] == "nonmember"
 
 
 @pytest.mark.asyncio

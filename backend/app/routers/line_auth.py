@@ -53,11 +53,22 @@ def _hash(value: str) -> str:
 def _return_path(value: str) -> str:
     parsed = urlsplit(value)
     path = parsed.path
-    valid_path = path in {"/", "/shop", "/meal-orders", "/orders", "/account", "/checkout"} or (
-        path.startswith("/meals/") and path[7:] and all(char.isalnum() or char in "_-" for char in path[7:])
+    valid_path = path in {
+        "/", "/shop", "/help", "/social", "/activities", "/governance", "/meetings",
+        "/wishes", "/directory", "/membership", "/checkout", "/cart", "/orders",
+        "/account", "/group-votes", "/group-votes/new", "/meal-orders", "/admin",
+        "/admin/social", "/admin/catalog", "/admin/groups", "/admin/meals",
+        "/admin/finance", "/admin/kitchen", "/admin/users", "/register", "/verify-email",
+        "/forgot-password", "/reset-password",
+    } or any(
+        path.startswith(prefix) and path[len(prefix):]
+        and all(char.isalnum() or char in "_-" for char in path[len(prefix):])
+        for prefix in ("/meals/", "/groups/", "/products/", "/proposals/", "/group-votes/")
     )
     if parsed.scheme or parsed.netloc or not valid_path or "\\" in value or any(ord(char) < 32 for char in value):
         raise HTTPException(status_code=422, detail="登入返回頁面不合法")
+    if path in {"/register", "/verify-email", "/forgot-password", "/reset-password"}:
+        return "/account"
     return value
 
 
