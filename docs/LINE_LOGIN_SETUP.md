@@ -2,7 +2,7 @@
 
 日期：2026-10-13
 
-目前程式已隔離整理及測試，尚未發布或啟用。LINE Developers 帳號已註冊，但目前沒有 Provider／Channel 權限；官方帳號管理員權限不會自動帶入 LINE Login。
+首次設定已完成：Provider「十里方圓」、LINE Login Channel `2011990124`、正式回呼網址與 Render 後端設定。對應程式已隔離整理及測試，正式使用仍須發布前後端、將 Channel 發布為 Published，並完成下列授權驗收。
 
 ## 帳號與 Channel
 
@@ -16,10 +16,10 @@
 
 | 環境變數 | 值 |
 | --- | --- |
-| LINE_LOGIN_CHANNEL_ID | LINE Login Channel ID |
+| LINE_LOGIN_CHANNEL_ID | 2011990124 |
 | LINE_LOGIN_CHANNEL_SECRET | Channel secret；僅存後端環境變數，不提交 Git 或傳給前端 |
 | LINE_LOGIN_REDIRECT_URI | https://shilifangyuan.com/auth/line/callback |
-| LINE_LOGIN_SCOPE | openid profile email；未取得 Email 權限則為 openid profile |
+| LINE_LOGIN_SCOPE | 目前為 openid profile；取得 Email 權限後可加入 email |
 | WEB_BASE_URL | https://shilifangyuan.com，須與回呼網址相同 origin |
 
 沿用正式 HttpOnly／Secure cookie 及前端 `/v1/` API 代理設定。缺少設定時 `/v1/auth/line/status` 回傳 ready=false，LINE 按鈕停用，原 Email 登入仍可使用。
