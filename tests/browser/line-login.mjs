@@ -10,7 +10,7 @@ if (!['127.0.0.1', 'localhost'].includes(target.hostname) || target.pathname !==
 const base = target.origin;
 const session = {
   access_token: 'isolated-line-session',
-  user: { id: 'original-buyer', email: 'buyer@example.test', display_name: '測試買家', user_role: 'customer', email_verified_at: '2030-01-02T00:00:00Z' },
+  user: { id: 'original-buyer', email: 'buyer@example.test', display_name: '測試買家', user_role: 'customer', membership_type: 'nonmember', email_verified_at: '2030-01-02T00:00:00Z' },
 };
 const needsEmail = { status: 'needs_email', return_to: '/account', intent: 'member', message: '請填寫訂單通知信箱' };
 
@@ -41,14 +41,14 @@ async function fixture(t, width, options = {}) {
       return route.fulfill({ status: state.startStatus, json: state.startStatus === 200 ? { authorization_url: `${base}/auth/line/callback?state=isolated-state&code=isolated-code` } : { detail: 'LINE授權已失效，請重新登入' } });
     }
     if (path === '/v1/auth/line/callback' && request.method() === 'POST') {
-      if (state.callback.status === 'linked') { state.signedIn = true; state.linked = true; }
+      if (['linked', 'authenticated'].includes(state.callback.status)) { state.signedIn = true; state.linked = true; }
       return route.fulfill({ status: state.callbackStatus, json: state.callbackStatus === 200 ? state.callback : { detail: 'LINE授權已失效，請重新登入' } });
     }
     if (path === '/v1/auth/line/pending' && request.method() === 'GET') return route.fulfill({ json: state.pending });
     if (path === '/v1/auth/line/register' && request.method() === 'POST') {
       if (state.registerStatus !== 200) return route.fulfill({ status: state.registerStatus, json: { detail: '此Email已有帳號，請使用原帳號登入後連結LINE' } });
       state.signedIn = true;
-      return route.fulfill({ json: { status: 'authenticated', return_to: '/account', session } });
+      return route.fulfill({ json: { status: 'authenticated', return_to: state.registerReturnTo || '/account', intent: state.callback.intent || 'nonmember', session } });
     }
     if (path === '/v1/auth/login' && request.method() === 'POST') {
       state.signedIn = true;
@@ -86,6 +86,19 @@ async function openLogin(page) {
 }
 
 for (const width of [1440, 390]) {
+  for (const intent of ['member', 'nonmember']) test(`${width}px LINE首次註冊${intent}分流，社員認領前不開放社務入口`, async (t) => {
+    const { page, state } = await fixture(t, width, { callback: { ...needsEmail, intent, return_to: '/shop' }, registerReturnTo: '/shop' });
+    await page.goto(`${base}/auth/line/callback?state=isolated&code=isolated`);
+    await page.getByLabel('Email', { exact: true }).fill('new-buyer@example.test');
+    await page.getByRole('button', { name: /完成(?:登入|註冊)/ }).click();
+    await page.waitForURL(`${base}${intent === 'member' ? '/account' : '/shop'}`);
+    if (intent === 'member') await page.getByRole('heading', { name: '已是社員？認領既有資格', exact: true }).waitFor();
+    else await page.getByRole('heading', { name: '我要訂餐', exact: true }).waitFor();
+    assert.equal(await page.locator('a[href="/social"]').count(), 0);
+    assert.equal(calls(state, 'line/register').length, 1);
+    assert.equal(session.user.membership_type, 'nonmember');
+    await verify(page, state);
+  });
   for (const remember of [true, false]) test(`${width}px 單一保持登入設定同時控制Email預填與登入期限（${remember}）`, async (t) => {
     const { page, state } = await fixture(t, width);
     const dialog = await openLogin(page);
@@ -152,7 +165,7 @@ for (const width of [1440, 390]) {
     await page.goto(`${base}/auth/line/callback?state=isolated-state&code=isolated-code`);
     const email = page.getByLabel('Email', { exact: true });
     await email.fill('existing@example.test');
-    await page.getByRole('button', { name: /完成登入/ }).click();
+    await page.getByRole('button', { name: /完成(?:登入|註冊)/ }).click();
     await page.getByRole('alert').filter({ hasText: '此Email已有帳號' }).waitFor();
     assert.equal(await email.inputValue(), 'existing@example.test');
     assert.deepEqual(calls(state, 'line/register').map((call) => call.body), [{ email: 'existing@example.test' }]);
@@ -184,6 +197,16 @@ for (const width of [1440, 390]) {
     await verify(page, state);
   });
 }
+
+test('既有LINE帳號登入即使選社員仍回原頁，不當成新註冊送去認領', async (t) => {
+  const { page, state } = await fixture(t, 390, { callback: { status: 'authenticated', return_to: '/shop', intent: 'member', session } });
+  await page.goto(`${base}/auth/line/callback?state=isolated&code=isolated`);
+  await page.waitForURL(`${base}/shop`);
+  await page.getByRole('heading', { name: '我要訂餐', exact: true }).waitFor();
+  assert.equal(calls(state, 'line/register').length, 0);
+  assert.equal(await page.locator('a[href="/social"]').count(), 0);
+  await verify(page, state);
+});
 
 test('未選社員預設一般使用者與保持登入，start401不refresh或重試', async (t) => {
   const { page, state } = await fixture(t, 390, { startStatus: 401 });
@@ -238,7 +261,7 @@ test('沒有授權參數時讀pending，重整仍能補Email並完成登入', as
   assert.equal(calls(state, 'line/pending').length, 1);
   await page.reload();
   await page.getByLabel('Email', { exact: true }).fill('buyer@example.test');
-  await page.getByRole('button', { name: /完成登入/ }).click();
+  await page.getByRole('button', { name: /完成(?:登入|註冊)/ }).click();
   await page.waitForURL(`${base}/account`);
   assert.equal(calls(state, 'line/pending').length, 2);
   assert.equal(calls(state, 'line/callback').length, 0);

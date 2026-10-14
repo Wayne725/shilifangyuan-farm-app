@@ -7,10 +7,12 @@ import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
 import { apiFetch, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import type { Activity, Product } from "../lib/types";
+import { useSocialAccess } from "../lib/social-access";
 
 export function HomePage() {
   const { addToCart } = useCommerce();
   const { user, openLogin } = useAuth();
+  const socialAccess = useSocialAccess(user);
   const products = useQuery({
     queryKey: ["products"],
     queryFn: () => apiFetch<Product[]>("/v1/products"),
@@ -18,7 +20,7 @@ export function HomePage() {
   const activities = useQuery({
     queryKey: ["activities"],
     queryFn: () => apiFetch<Activity[]>("/v1/activities"),
-    enabled: Boolean(user),
+    enabled: socialAccess,
   });
   const heroProduct = products.data?.find((item) => item.image_url);
 
@@ -48,9 +50,9 @@ export function HomePage() {
               進入生活消費
               <ArrowRight size={19} weight="light" />
             </Link>
-            <Link className="button button-quiet" to="/social">
+            {socialAccess && <Link className="button button-quiet" to="/social">
               查看本月社務
-            </Link>
+            </Link>}
           </div>
           <a className="scroll-cue" href="#daily-selection">
             <ArrowDown size={17} weight="light" />
@@ -117,7 +119,7 @@ export function HomePage() {
         </div>
       </section>
 
-      <section className="workspace-passage">
+      <section className={`workspace-passage${socialAccess ? "" : " single-workspace"}`}>
         <div className="passage-copy">
           <p className="eyebrow">ONE IDENTITY, TWO WORKSPACES / 合作生活</p>
           <h2>不是多一個平台，<br />是把彼此連回來。</h2>
@@ -130,14 +132,14 @@ export function HomePage() {
           <strong>選品・團購・便當預購</strong>
           <ArrowRight size={25} weight="light" />
         </Link>
-        <Link className="workspace-door society" to="/social">
+        {socialAccess && <Link className="workspace-door society" to="/social">
           <span>社務系統</span>
           <strong>社員・活動・提案與治理</strong>
           <ArrowRight size={25} weight="light" />
-        </Link>
+        </Link>}
       </section>
 
-      <section className="content-section community-preview">
+      {socialAccess && <section className="content-section community-preview">
         <SectionHeading
           eyebrow="COMMON AGENDA / 共同參與"
           title="共同生活，正在發生。"
@@ -176,7 +178,7 @@ export function HomePage() {
             </div>
           )}
         </div>
-      </section>
+      </section>}
     </>
   );
 }

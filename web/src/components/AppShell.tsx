@@ -10,10 +10,12 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Link, Outlet } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
+import { useSocialAccess } from "../lib/social-access";
+import "../styles/site-navigation.css";
 
 const navItems = [
   { to: "/" as const, label: "首頁" },
@@ -25,6 +27,19 @@ export function AppShell() {
   const { itemCount } = useCommerce();
   const { user, isAuthReady, sessionError, retrySession, openLogin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const socialAccess = useSocialAccess(user);
+  const visibleNavItems = navItems.filter((item) => item.to !== "/social" || socialAccess);
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMobileOpen(false);
+      menuButton.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [mobileOpen]);
   const [largeText, setLargeText] = useState(() => {
     try { return localStorage.getItem("slf_text_size") === "large"; } catch { return false; }
   });
@@ -46,22 +61,18 @@ export function AppShell() {
         </Link>
 
         <nav className="desktop-nav" aria-label="主要導覽">
-          {navItems.map(({ to, label, icon: Icon }) => (
+          {visibleNavItems.map(({ to, label, icon: Icon }) => (
             <Link
               key={to}
               to={to}
               activeProps={{ className: "active" }}
               activeOptions={{ exact: to === "/" }}
+              onClick={() => setMobileOpen(false)}
             >
               {Icon && <Icon size={17} weight="light" />}
               {label}
             </Link>
           ))}
-          {user?.user_role === "admin" && (
-            <Link to="/admin" activeProps={{ className: "active" }}>
-              管理工作台
-            </Link>
-          )}
         </nav>
 
         <div className="header-actions">
@@ -85,7 +96,7 @@ export function AppShell() {
             <button
               className="account-button"
               type="button"
-              onClick={openLogin}
+              onClick={() => { setMobileOpen(false); openLogin(); }}
               disabled={!isAuthReady}
             >
               <SignIn size={20} weight="light" />
@@ -94,8 +105,11 @@ export function AppShell() {
           )}
           <button
             className="mobile-menu-button"
+            ref={menuButton}
             type="button"
             aria-label={mobileOpen ? "關閉導覽" : "開啟導覽"}
+            aria-expanded={mobileOpen}
+            aria-controls="site-menu"
             onClick={() => setMobileOpen((value) => !value)}
           >
             {mobileOpen ? <X size={22} /> : <List size={22} />}
@@ -104,8 +118,8 @@ export function AppShell() {
       </header>
 
       {mobileOpen && (
-        <nav className="mobile-nav" aria-label="行動版導覽">
-          {navItems.map(({ to, label }) => (
+        <nav className="mobile-nav site-menu" id="site-menu" aria-label="網站選單">
+          {visibleNavItems.map(({ to, label }) => (
             <Link key={to} to={to} onClick={() => setMobileOpen(false)}>
               {label}
             </Link>
@@ -128,6 +142,7 @@ export function AppShell() {
               管理工作台
             </Link>
           )}
+          <Link to="/help" onClick={() => setMobileOpen(false)}>常見問題</Link>
           {user ? (
             <button
               type="button"
@@ -154,7 +169,6 @@ export function AppShell() {
       )}
 
       <div className="reading-controls" role="group" aria-label="文字大小">
-        <span>字體大小</span>
         <button type="button" aria-pressed={!largeText} onClick={() => setLargeText(false)}>標準</button>
         <button type="button" aria-pressed={largeText} onClick={() => setLargeText(true)}>放大</button>
       </div>
@@ -176,7 +190,7 @@ export function AppShell() {
           <p>把消費、互助與共同治理，放回同一個日常入口。</p>
         </div>
         <div className="footer-meta">
-          <Link to="/help">使用說明</Link>
+          <Link to="/help">常見問題</Link>
           <span>新竹・台灣</span>
           <span>社員共同所有 · 日常共同參與</span>
         </div>

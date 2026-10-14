@@ -57,7 +57,7 @@ export function MealOrdersPage() {
   return (
     <section className="orders-page meal-orders-page">
       <Link className="text-link" to="/shop"><ArrowLeft size={17} />回到便當預訂</Link>
-      <header className="workspace-heading"><div><h1>我的便當訂單</h1><p>選一筆訂單，查看餐點明細、取餐時間及取餐碼。</p></div><Link className="button button-quiet" to="/help">需要幫忙</Link></header>
+      <header className="workspace-heading"><div><h1>我的便當訂單</h1><p>選一筆訂單，查看餐點明細、取餐時間及取餐碼。</p></div><Link className="button button-quiet" to="/help">常見問題</Link></header>
       {orders.isPending && <LoadingLines count={4} />}
       {orders.isError && <DataState kind="error" title="便當訂單無法讀取" detail={orders.error.message} onAction={() => orders.refetch()} />}
       {orders.data?.length === 0 && <DataState title="目前沒有便當訂單" detail="可先查看明天的餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />}

@@ -5,6 +5,8 @@ export interface User {
   email: string;
   display_name: string;
   user_role: UserRole;
+  membership_type?: "nonmember" | "trainee" | "member";
+  membership_status?: string | null;
   email_verified_at?: string | null;
 }
 

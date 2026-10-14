@@ -51,7 +51,7 @@ export function ShopPage() {
         <div>
           <h1>我要訂餐</h1>
         </div>
-        <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link><Link className="button button-quiet" to="/help">需要幫忙</Link></nav>
+        <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link><Link className="button button-quiet" to="/help">常見問題</Link></nav>
       </section>
 
       <Tabs.Root className="market-tabs" defaultValue="meals">

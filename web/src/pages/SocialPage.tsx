@@ -55,7 +55,7 @@ export function SocialPage() {
           <span>活動、願望、社員名錄與合作社議事。</span>
         </div>
       </section>
-      <SocialNav />
+      {isMember && <SocialNav />}
 
       {!user ? (
         <section className="social-access-card">

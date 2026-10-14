@@ -2,7 +2,7 @@ import { ArrowLeft, CreditCard, FileText, Storefront, UsersThree } from "@phosph
 import { Link } from "@tanstack/react-router";
 
 const helpItems = [
-  { icon: FileText, title: "放大字體", body: "網站上方「字體大小」可選「放大」，選擇會記在目前瀏覽器。需要恢復時按「標準」。" },
+  { icon: FileText, title: "放大字體", body: "網站上方按「放大」，選擇會記在目前瀏覽器。需要恢復時按「標準」。" },
   { icon: Storefront, title: "如何訂便當", body: "從「我要訂餐」確認明天的日期與地點，直接點取餐時間，再選餐點與份數。確認地點、餐點、金額及發票資料後付款。付款完成後，回到「我的便當訂單」查看取餐碼。" },
   { icon: UsersThree, title: "團購投票", body: "投票只用來估計需求；正式開團後仍須加入並完成付款。" },
   { icon: CreditCard, title: "線上付款", body: "付款結果以訂單中心狀態為準；中斷時可由原訂單安全續接。" },
@@ -13,6 +13,8 @@ const helpItems = [
 ];
 
 const mealQuestions = [
+  { question: "還沒有網站帳號，可以用 LINE 註冊嗎？", answer: "可以。進入網站，按「帳號登入」再選「使用LINE登入」，依 LINE 畫面授權後補一次通知信箱，即可建立帳號，不需另外建立網站密碼。若信箱已有網站帳號，請先登入原帳號再連結 LINE。" },
+  { question: "我是社員／我不是社員有什麼差別？", answer: "首次以 LINE 建立帳號時，選「我是社員」會在註冊後帶到既有社員資格認領；選「我不是社員」則回到原本頁面。選按鈕本身不會取得社員權限，資格須由名冊驗證或管理員核對。已有帳號依目前的實際社員資格登入。" },
   { question: "如何使用 LINE 登入？", answer: "打開登入視窗，選擇社員身分，按「使用LINE登入」並依 LINE 畫面授權。已有 Email 帳號時，先登入原帳號，到帳號中心按「連結LINE」，之後才能用 LINE 沿用原訂單與社員資格。勾選「保持登入」可保留登入狀態，也會記住 Email 登入時填寫的信箱。" },
   { question: "今天可以訂今天的餐嗎？", answer: "不可以。只能提前一天預訂，以台灣日期為準；今天可訂明天的餐點，也不能提前兩天以上下單。" },
   { question: "最晚什麼時候要訂？", answer: "請看該場次的「預訂截止」。最晚須在取餐日前一天結束前送出，管理員也可能設定較早截單。超過截止時間就無法建立新訂單。" },

@@ -171,7 +171,7 @@ export function AccountPage() {
 
       <nav className="account-shortcuts" aria-label="會員快捷功能">
         <Link to="/orders" search={{ order_id: undefined, result: undefined, message: undefined }}><Receipt size={19} />我的訂單</Link>
-        <Link to="/social"><Certificate size={19} />社務系統</Link>
+        {(isActiveMember || user.user_role === "admin") && <Link to="/social"><Certificate size={19} />社務系統</Link>}
         {user.user_role === "admin" && <Link to="/admin"><Sparkle size={19} />管理工作台</Link>}
       </nav>
 
