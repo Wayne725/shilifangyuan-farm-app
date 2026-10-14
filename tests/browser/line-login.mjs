@@ -86,6 +86,20 @@ async function openLogin(page) {
 }
 
 for (const width of [1440, 390]) {
+  for (const remember of [true, false]) test(`${width}px 單一保持登入設定同時控制Email預填與登入期限（${remember}）`, async (t) => {
+    const { page, state } = await fixture(t, width);
+    const dialog = await openLogin(page);
+    assert.equal(await dialog.getByRole('checkbox').count(), 1);
+    await dialog.getByLabel('保持登入', { exact: true }).setChecked(remember);
+    if (process.env.ADMIN_CLARITY_SCREENSHOTS && width === 390 && remember) await page.screenshot({ path: '/Users/liuweiwei/Documents/farm/outputs/login-single-preference-verified.png', fullPage: true });
+    await dialog.getByRole('textbox', { name: '電子信箱', exact: true }).fill('buyer@example.test');
+    await dialog.locator('input[name="password"]').fill('isolated-password');
+    await dialog.getByRole('button', { name: '登入系統', exact: true }).click();
+    await page.getByRole('heading', { name: /測試買家/ }).waitFor();
+    assert.equal(calls(state, 'login').at(-1).body.remember_me, remember);
+    assert.equal(await page.evaluate(() => localStorage.getItem('shilifangyuan.remembered-login-email')), remember ? 'buyer@example.test' : null);
+    await verify(page, state);
+  });
   test(`${width}px LINE未設定時按鈕停用，Email仍可登入且大字不溢出`, async (t) => {
     const { page, state } = await fixture(t, width, { ready: false });
     await page.goto(`${base}/account`); await enlarge(page);

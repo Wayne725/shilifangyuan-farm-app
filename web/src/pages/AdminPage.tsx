@@ -16,6 +16,7 @@ import { AdminOperationsNav } from "../components/AdminOperationsNav";
 import { AdminFailurePanel } from "../components/AdminFailurePanel";
 import { AdminInvoiceAdjustment } from "../components/AdminInvoiceAdjustment";
 import { AdminReasonChoices } from "../components/AdminReasonChoices";
+import { AdminStatusQuery } from "../components/AdminStatusQuery";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import "./AdminOrderOperations.css";
 import { useAuth } from "../context/AuthContext";
@@ -27,7 +28,6 @@ import {
   invoiceStatusLabel,
 } from "../lib/labels";
 import type {
-  AdminInvoiceQueryResult,
   Order,
   PickupLocation,
   Supplier,
@@ -101,14 +101,6 @@ export function AdminPage() {
     mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) => apiFetch<Order>(`/v1/orders/${orderId}/admin/refund`, { method: "POST", body: JSON.stringify({ reason }) }),
     onSuccess: refreshFinancialOrders,
   });
-  const queryInvoice = useMutation({
-    mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) =>
-      apiFetch<AdminInvoiceQueryResult>(`/v1/admin/orders/${orderId}/invoice/query`, {
-        method: "POST",
-        body: JSON.stringify({ reason }),
-      }),
-    onSuccess: refreshFinancialOrders,
-  });
 
   if (!isAdmin) {
     return (
@@ -146,17 +138,14 @@ export function AdminPage() {
           <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} />
           <AdminOrderAction
             order={order}
-            busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending || refundOrder.isPending || queryInvoice.isPending}
+            busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending || refundOrder.isPending}
             onFulfillment={(status) => updateFulfillment.mutate({ orderId: order.id, status })}
             onCreateLogistics={() => createLogistics.mutate(order.id)}
             onShipment={(status) => advanceShipment.mutate({ orderId: order.id, status })}
             onRefund={(reason) => refundOrder.mutate({ orderId: order.id, reason })}
-            onInvoiceQuery={(reason) => queryInvoice.mutate({ orderId: order.id, reason })}
           />
           <AdminInvoiceAdjustment order={order} />
-          <AdminPaymentQuery orderId={order.id} />
-          {queryInvoice.variables?.orderId === order.id && queryInvoice.isSuccess && <p className="form-success" role="status">{queryInvoice.data.message}</p>}
-          {queryInvoice.variables?.orderId === order.id && queryInvoice.isError && <p className="form-error" role="alert">{queryInvoice.error.message}</p>}
+          <AdminStatusQuery orderId={order.id} kind="payment" disabled={refundOrder.isPending} />
           {refundOrder.variables?.orderId === order.id && refundOrder.isSuccess && <p className="form-success" role="status">退款狀態：{adminPaymentStatusLabel(refundOrder.data.payment_status)}</p>}
           {refundOrder.variables?.orderId === order.id && refundOrder.isError && <p className="form-error" role="alert">{refundOrder.error.message}</p>}
         </article>
@@ -218,23 +207,6 @@ export function AdminPage() {
   </>;
 }
 
-function AdminPaymentQuery({ orderId }: { orderId: string }) {
-  const [reason, setReason] = useState("客服核對付款狀態");
-  const queryClient = useQueryClient();
-  const query = useMutation({
-    mutationFn: () => apiFetch<{ message: string }>(`/v1/admin/orders/${orderId}/payment/query`, {
-      method: "POST", body: JSON.stringify({ reason: reason.trim() }),
-    }),
-    onSuccess: () => Promise.all(["admin-orders", "admin-meal-orders", "admin-meal-operations-summary", "meal-sales-report"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))),
-  });
-  return <details className="admin-extra-actions"><summary>查詢付款</summary><form className="operation-invoice-query" onSubmit={(event) => { event.preventDefault(); if (reason.trim()) query.mutate(); }}>
-    <AdminReasonChoices label="金流查詢原因" value={reason} onChange={setReason} maxLength={1000} disabled={query.isPending} choices={[{ label: "核對付款", value: "客服核對付款狀態" }, { label: "核對退款", value: "客服核對退款狀態" }]} />
-    <button type="submit" disabled={query.isPending || !reason.trim()}>重新查詢雷門付款</button>
-    {query.isError && <p className="form-error">{query.error.message}</p>}
-    {query.isSuccess && <p className="form-success">{query.data.message}</p>}
-  </form></details>;
-}
-
 function AdminOrderAction({
   order,
   busy,
@@ -242,7 +214,6 @@ function AdminOrderAction({
   onCreateLogistics,
   onShipment,
   onRefund,
-  onInvoiceQuery,
 }: {
   order: Order;
   busy: boolean;
@@ -250,18 +221,11 @@ function AdminOrderAction({
   onCreateLogistics: () => void;
   onShipment: (status: string) => void;
   onRefund: (reason: string) => void;
-  onInvoiceQuery: (reason: string) => void;
 }) {
   const [refundOpen, setRefundOpen] = useState(false);
   const [refundReason, setRefundReason] = useState("依買家申請退款");
-  const [invoiceReason, setInvoiceReason] = useState("客服核對發票狀態");
   const refundControl = order.available_actions.includes("refund") && (refundOpen ? <div className="operation-refund"><AdminReasonChoices label="退款原因" value={refundReason} onChange={setRefundReason} disabled={busy} choices={[{ label: "買家申請", value: "依買家申請退款" }, { label: "商品無法供應", value: "商品無法供應，申請退款" }, { label: "重複付款", value: "重複付款，申請退款" }]} /><button type="button" disabled={busy || !refundReason.trim()} onClick={() => onRefund(refundReason)}>確認退款 {formatMoney(order.amount_total)}</button><button type="button" onClick={() => setRefundOpen(false)}>取消</button></div> : <button type="button" disabled={busy} onClick={() => setRefundOpen(true)}>建立退款</button>);
-  const invoiceControl = <details className="admin-extra-actions"><summary>查詢發票</summary>
-    <div className="operation-invoice-query">
-      <AdminReasonChoices label="發票查詢原因" value={invoiceReason} onChange={setInvoiceReason} disabled={busy} maxLength={1000} choices={[{ label: "核對開立", value: "客服核對發票狀態" }, { label: "核對作廢", value: "客服核對發票作廢狀態" }]} />
-      <button type="button" disabled={busy || !invoiceReason.trim()} onClick={() => onInvoiceQuery(invoiceReason.trim())}>重新查詢電子發票</button>
-    </div>
-  </details>;
+  const invoiceControl = <AdminStatusQuery orderId={order.id} kind="invoice" disabled={busy} />;
   if (order.sales_channel === "meal_preorder") {
     return <div className="operation-actions"><Link className="button button-quiet" to="/admin/meals" search={{ tab: "orders", q: order.order_number }}>便當取餐與退單審核</Link>{invoiceControl}</div>;
   }

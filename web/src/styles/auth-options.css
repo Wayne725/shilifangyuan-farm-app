@@ -1,5 +1,5 @@
 .login-dialog { font-size: 1.125rem; line-height: 1.65; }
-.login-dialog .login-form .login-preference { display: flex; align-items: center; gap: .75rem; min-height: 3rem; }
+.login-dialog .login-preference { display: flex; align-items: center; gap: .75rem; min-height: 3rem; }
 .login-dialog .login-preference input { width: 1.4rem; min-height: 1.4rem; height: 1.4rem; flex-shrink: 0; margin: 0; }
 .login-dialog .login-preference-help, .login-dialog .dialog-footnote { font-size: 1rem; line-height: 1.65; }
 .login-dialog .login-form input:not([type="checkbox"]), .login-dialog .button { min-height: 3rem; font-size: 1.125rem; }

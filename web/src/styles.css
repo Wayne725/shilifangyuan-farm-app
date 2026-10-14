@@ -8278,7 +8278,15 @@ html[data-text-size="large"] { font-size: 20px; }
 .meal-order-filter-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
 .meal-order-advanced-filters summary, .admin-extra-actions summary { padding: 12px 0; min-height: 48px; font-size: 1rem; color: var(--moss-dark); font-weight: 600; cursor: pointer; }
 .admin-extra-actions { min-width: 0; width: 100%; }
-.admin-extra-actions > .operation-invoice-query { margin: 0; padding: 14px 0; }
+.admin-extra-actions > .operation-invoice-query { margin: 0; padding: 1.25rem; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.operation-invoice-query .admin-quick-buttons { margin: 0; }
+.admin-query-custom summary { padding: .5rem 0; }
+.admin-query-custom .field { margin: .5rem 0 1rem; }
+.admin-query-custom textarea { width: 100%; padding: .75rem; font: inherit; background: var(--paper); border: 1px solid var(--line-strong); }
+.admin-query-result { margin: 0; padding: 1rem; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.admin-query-result p { margin: .5rem 0 0; }
+.meal-event-conflicts { margin: 1rem 0; padding: 1rem 1.25rem; border: 1px solid var(--line-strong); background: var(--paper); font-size: 1rem; }
+.meal-event-conflicts ul { margin: .5rem 0 0; padding-left: 1.25rem; }
 .operation-refund { grid-template-columns: minmax(0, 1fr); }
 .admin-reason-choices :is(button, textarea):focus-visible, .admin-extra-actions summary:focus-visible, .meal-order-advanced-filters summary:focus-visible { outline: 2px solid var(--moss-dark); outline-offset: 3px; }
 @media (max-width: 900px) { .meal-order-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

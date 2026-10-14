@@ -42,7 +42,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [email, setEmail] = useState(rememberedLoginEmail);
-  const [rememberAccount, setRememberAccount] = useState(() => Boolean(rememberedLoginEmail()));
   const [rememberMe, setRememberMe] = useState(true);
   const [lineIntent, setLineIntent] = useState<"member" | "nonmember">("nonmember");
 
@@ -80,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }),
       });
       saveSession(session);
-      rememberLoginEmail(email, rememberAccount);
+      rememberLoginEmail(email, rememberMe);
       queryClient.clear();
       setUser(session.user);
       setIsAuthReady(true);
@@ -119,7 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             <Dialog.Title>登入訂餐</Dialog.Title>
             <Dialog.Description className="line-login-description">選擇 LINE 或 Email 登入。</Dialog.Description>
             <div className="line-membership-intent" role="group" aria-label="社員身分選擇"><button type="button" aria-pressed={lineIntent === "member"} onClick={() => setLineIntent("member")}>我是社員</button><button type="button" aria-pressed={lineIntent === "nonmember"} onClick={() => setLineIntent("nonmember")}>我不是社員</button></div>
-            <label className="login-preference"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /><span>保持登入</span></label>
+            <label className="login-preference"><input type="checkbox" checked={rememberMe} onChange={(event) => { setRememberMe(event.target.checked); if (!event.target.checked) rememberLoginEmail("", false); }} /><span>保持登入</span></label>
             <LineLoginButton intent={lineIntent} rememberMe={rememberMe} returnTo={window.location.pathname === "/auth/line/callback" ? "/shop" : undefined} />
             <p className="line-login-alternative">或使用 Email 登入</p>
             <form className="login-form" onSubmit={login}>
@@ -127,7 +126,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 電子信箱
                 <input name="email" type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} />
               </label>
-              <label className="login-preference"><input type="checkbox" checked={rememberAccount} onChange={(event) => setRememberAccount(event.target.checked)} /><span>記住登入帳號</span></label>
               <label>
                 密碼
                 <input

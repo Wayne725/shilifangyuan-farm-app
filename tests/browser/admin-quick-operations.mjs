@@ -23,7 +23,7 @@ async function fixture(t, width) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  const state = { writes: [], reads: [], errors: [], unknown: [], conflict: false, holdReview: false, refunded: false,
+  const state = { writes: [], reads: [], errors: [], unknown: [], events: [], conflict: false, holdReview: false, holdQuery: false, queryStatus: 200, refunded: false,
     requests: [request('A'), request('B', false)], orders: [order('A'), order('C', 'pending', 'pending'), { ...order('D'), cancelled_at: '2030-01-02T02:00:00Z' }] };
   state.orders[0].cancellation_request = state.requests[0].request;
   const retail = { id: 'retail', order_number: 'RETAIL-001', amount_total: 240, payment_status: 'paid', fulfillment_status: 'pending_confirmation', fulfillment_method: 'cooperative_pickup', sales_channel: 'regular', created_at: '2030-01-02T01:00:00Z', invoice_status: 'issued', items: [{ tax_type: 'tax_exempt', quantity: 2, subtotal: 240 }], available_actions: ['refund'], invoice: { provider: 'fanyu', status: 'issued' } };
@@ -34,7 +34,8 @@ async function fixture(t, width) {
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'admin', user_role: 'admin', display_name: '測試管理員', email: 'admin@example.com' } } });
     if (req.method() === 'GET') {
       state.reads.push({ path, ...Object.fromEntries(url.searchParams) });
-      if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/meals', '/v1/admin/meal-events'].includes(path)) return route.fulfill({ json: [] });
+      if (path === '/v1/admin/meal-events') return route.fulfill({ json: state.events });
+      if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/meals'].includes(path)) return route.fulfill({ json: [] });
       if (path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { today: '2030-01-02', pending_cancellation: 2, refund_attention: 0, invoice_attention: 0, today_pickup: 0 } });
       if (path === '/v1/admin/meal-orders') {
         const rows = state.orders.filter((o) => !url.searchParams.get('search') || o.order_number.includes(url.searchParams.get('search')));
@@ -64,6 +65,8 @@ async function fixture(t, width) {
     if (req.method() === 'POST' && /^\/v1\/(admin\/orders\/retail\/(invoice\/query|invoice\/void|payment\/query)|orders\/retail\/admin\/refund)$/.test(path)) {
       state.writes.push({ path, body: req.postDataJSON() });
       if (path.endsWith('/refund')) { retail.payment_status = 'refund_pending'; return route.fulfill({ json: retail }); }
+      if (path.endsWith('/query') && state.holdQuery) await new Promise((resolve) => { state.releaseQuery = resolve; });
+      if (path.endsWith('/query') && state.queryStatus !== 200) return route.fulfill({ status: state.queryStatus, json: { detail: '供應商暫時無回應，請稍後重查' } });
       return route.fulfill({ json: { message: '查詢完成' } });
     }
     state.unknown.push(`${req.method()} ${path}`);
@@ -82,6 +85,46 @@ async function verify(page, state) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 }
 for (const width of [1440, 390]) {
+  test(`${width}px 手動場次提醒同地點重疊，鄰接及其他地點不誤報`, async (t) => {
+    const { page, state } = await fixture(t, width);
+    state.events = [{ id: 'scheduled', title: '每日供餐 2030-01-03', location: '合作社', status: 'published', can_edit: false, schedule_template_id: 'template', offerings: [],
+      pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00` }];
+    await page.goto(`${base}/admin/meals?tab=events`);
+    const form = page.locator('form').filter({ has: page.getByRole('heading', { name: '建立便當場次', exact: true }) });
+    await form.getByLabel('取餐地點', { exact: true }).fill('合作社');
+    await form.getByRole('status').filter({ hasText: '相同地點已有重疊場次' }).waitFor();
+    assert.match(await form.getByRole('status').innerText(), /循環排程/);
+    await form.getByLabel('取餐開始（台灣時間）', { exact: true }).fill(`${date}T13:30`);
+    assert.equal(await form.getByRole('status').count(), 0);
+    await form.getByLabel('取餐開始（台灣時間）', { exact: true }).fill(`${date}T11:00`);
+    await form.getByLabel('取餐地點', { exact: true }).fill('其他地點');
+    assert.equal(await form.getByRole('status').count(), 0);
+    assert.equal(state.writes.length, 0);
+    await verify(page, state);
+  });
+  test(`${width}px 核對按鈕直接查詢並在區塊顯示結果，內容保留內距`, async (t) => {
+    const { page, state } = await fixture(t, width);
+    await page.goto(`${base}/admin`);
+    await page.getByText('查詢發票', { exact: true }).click();
+    const invoice = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢發票', { exact: true }) });
+    await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith('/invoice/query'), { timeout: 1500 }),
+      invoice.getByRole('button', { name: /^(核對開立|查詢開立狀態)$/ }).click(),
+    ]);
+    await invoice.getByRole('status').filter({ hasText: '查詢完成' }).waitFor();
+    assert.equal(state.writes.length, 1);
+    const inset = await invoice.locator('.operation-invoice-query').evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingLeft));
+    assert.ok(inset >= 16, `查詢框左內距 ${inset}px`);
+    await page.getByText('查詢付款', { exact: true }).click();
+    const payment = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢付款', { exact: true }) });
+    await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith('/payment/query'), { timeout: 1500 }),
+      payment.getByRole('button', { name: /^(核對退款|查詢退款狀態)$/ }).click(),
+    ]);
+    await payment.getByRole('status').filter({ hasText: '查詢完成' }).waitFor();
+    assert.deepEqual(state.writes.map((r) => r.body.reason), ['客服核對發票狀態', '客服核對退款狀態']);
+    await verify(page, state);
+  });
   test(`${width}px 一鍵日期與狀態、清單製作操作不換頁，歷史／未付款不顯示製作鍵`, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin/meals`);
@@ -148,9 +191,9 @@ for (const width of [1440, 390]) {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin`);
     await page.getByText('查詢發票', { exact: true }).click();
-    await responseAfter(page, (r) => r.url().endsWith('/invoice/query'), () => page.getByRole('button', { name: '重新查詢電子發票', exact: true }).click());
+    await responseAfter(page, (r) => r.url().endsWith('/invoice/query'), () => page.getByRole('button', { name: '查詢開立狀態', exact: true }).click());
     await page.getByText('查詢付款', { exact: true }).click();
-    await responseAfter(page, (r) => r.url().endsWith('/payment/query'), () => page.getByRole('button', { name: '重新查詢雷門付款', exact: true }).click());
+    await responseAfter(page, (r) => r.url().endsWith('/payment/query'), () => page.getByRole('button', { name: '查詢付款狀態', exact: true }).click());
     await page.getByRole('button', { name: '建立退款', exact: true }).click();
     await page.getByRole('button', { name: '商品無法供應', exact: true }).click();
     assert.equal(state.writes.filter((r) => r.path.endsWith('/refund')).length, 0);
@@ -161,6 +204,45 @@ for (const width of [1440, 390]) {
     await verify(page, state);
   });
 }
+
+test('查詢中停用按鈕避免重送，失敗顯示在原區塊且不保留舊成功提示', async (t) => {
+  const { page, state } = await fixture(t, 390);
+  await page.goto(`${base}/admin`);
+  await page.getByText('查詢發票', { exact: true }).click();
+  const invoice = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢發票', { exact: true }) });
+  state.holdQuery = true;
+  await invoice.getByRole('button', { name: '查詢開立狀態', exact: true }).click();
+  await invoice.getByRole('status').filter({ hasText: '正在查詢汎宇' }).waitFor();
+  assert.equal(await invoice.getByRole('button', { name: '查詢作廢狀態', exact: true }).isEnabled(), false);
+  assert.equal(state.writes.length, 1);
+  state.holdQuery = false; state.releaseQuery();
+  await invoice.getByRole('status').filter({ hasText: '查詢完成' }).waitFor();
+  state.queryStatus = 502;
+  await invoice.getByRole('button', { name: '查詢作廢狀態', exact: true }).click();
+  await invoice.getByRole('alert').filter({ hasText: '供應商暫時無回應' }).waitFor();
+  assert.equal(await invoice.getByRole('status').filter({ hasText: '查詢完成' }).count(), 0);
+  assert.equal(state.writes.length, 2);
+  await page.getByRole('button', { name: '放大', exact: true }).click();
+  await verify(page, state);
+  if (process.env.ADMIN_CLARITY_SCREENSHOTS) await page.screenshot({ path: '/Users/liuweiwei/Documents/farm/outputs/admin-status-query-verified.png', fullPage: true });
+});
+
+test('自訂查詢原因保留輸入，填寫時不查詢，明確送出一次', async (t) => {
+  const { page, state } = await fixture(t, 390);
+  await page.goto(`${base}/admin`);
+  await page.getByText('查詢付款', { exact: true }).click();
+  const payment = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢付款', { exact: true }) });
+  await payment.getByText('其他查詢原因', { exact: true }).click();
+  const submit = payment.getByRole('button', { name: '重新查詢雷門付款', exact: true });
+  assert.equal(await submit.isEnabled(), false);
+  await payment.getByLabel('金流查詢原因', { exact: true }).fill('核對跨日退款');
+  assert.equal(state.writes.length, 0);
+  await responseAfter(page, (r) => r.url().endsWith('/payment/query'), () => submit.click());
+  await payment.getByRole('status').filter({ hasText: '查詢完成' }).waitFor();
+  assert.deepEqual(state.writes.map((r) => r.body.reason), ['核對跨日退款']);
+  assert.equal(await payment.getByLabel('金流查詢原因', { exact: true }).inputValue(), '核對跨日退款');
+  await verify(page, state);
+});
 
 test('人工作廢只對已退款訂單顯示，原因選擇不送出，最後按鈕才核對作廢', async (t) => {
   const { page, state } = await fixture(t, 390);
