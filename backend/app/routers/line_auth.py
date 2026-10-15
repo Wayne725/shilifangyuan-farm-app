@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -24,6 +25,7 @@ from ..rate_limit import LOGIN_RULE, client_key, enforce
 from .auth import _new_token_pair_and_session, _validate_cookie_origin, token_response
 
 line_auth_router = APIRouter(prefix="/v1/auth/line", tags=["auth"])
+logger = logging.getLogger(__name__)
 FLOW_COOKIE = "slf_line_flow"
 REGISTRATION_COOKIE = "slf_line_registration"
 COOKIE_PATH = "/v1/auth/line"
@@ -175,7 +177,14 @@ async def line_callback(body: LineCallback, request: Request, response: Response
     now = datetime.now(timezone.utc)
     record = await session.scalar(select(LineOAuthState).where(LineOAuthState.state_hash == _hash(body.state)))
     browser = request.cookies.get(FLOW_COOKIE, "")
-    if record is None or not browser or not secrets.compare_digest(record.browser_hash, _hash(browser)):
+    state_found = record is not None
+    cookie_present = bool(browser)
+    browser_match = bool(record and browser and secrets.compare_digest(record.browser_hash, _hash(browser)))
+    if not (state_found and cookie_present and browser_match):
+        logger.warning(
+            "[LINE-FLOW-DIAG] state_found=%s cookie_present=%s browser_match=%s",
+            state_found, cookie_present, browser_match,
+        )
         raise HTTPException(status_code=400, detail="LINE登入流程無效，請從原頁重新登入")
     claimed = await session.scalar(update(LineOAuthState).where(
         LineOAuthState.id == record.id, LineOAuthState.consumed_at.is_(None), LineOAuthState.expires_at > now
