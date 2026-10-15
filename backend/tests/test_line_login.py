@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import logging
 import math
 import time
 from datetime import datetime, timedelta, timezone
@@ -14,6 +13,7 @@ from app.auth import decode_token, make_token_pair, verify_password
 from app.integrations.common import IntegrationConfigurationError, IntegrationError, IntegrationResponseError
 from app.integrations.line_login import LineLoginClient, LineProfile
 from app.models import ExternalIdentity, LineOAuthState, Membership, MembershipStatus, User, UserRole
+import app.routers.line_auth as line_auth_module
 from app.routers.auth import auth_router
 from app.routers.line_auth import FLOW_COOKIE, REGISTRATION_COOKIE, line_auth_router
 from tests.support import api_test_context, fast_password_hash, make_test_settings
@@ -174,7 +174,13 @@ async def test_new_line_account_member_intent_does_not_grant_membership_or_email
 
 @pytest.mark.parametrize("invalid", ["wrong_browser", "missing_cookie", "expired", "consumed", "unknown"])
 @pytest.mark.asyncio
-async def test_invalid_authorization_never_exchanges_code(database_session, settings, profile, invalid, caplog):
+async def test_invalid_authorization_never_exchanges_code(database_session, settings, profile, invalid, monkeypatch):
+    diagnostics = []
+    monkeypatch.setattr(
+        line_auth_module.logger,
+        "warning",
+        lambda message, *args: diagnostics.append(message % args),
+    )
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
         state, _ = await start_flow(client)
         row = await database_session.scalar(select(LineOAuthState))
@@ -189,18 +195,21 @@ async def test_invalid_authorization_never_exchanges_code(database_session, sett
         else:
             state = "unknown-state-with-sufficient-length"
         await database_session.commit()
-        with caplog.at_level(logging.WARNING, logger="app.routers.line_auth"):
-            response = await callback(client, state)
+        response = await callback(client, state)
         assert response.status_code == 400
         if invalid == "wrong_browser":
-            assert "state_found=True cookie_present=True browser_match=False" in caplog.text
+            assert "state_found=True cookie_present=True browser_match=False" in diagnostics
         elif invalid == "missing_cookie":
-            assert "state_found=True cookie_present=False browser_match=False" in caplog.text
+            assert "state_found=True cookie_present=False browser_match=False" in diagnostics
         elif invalid == "unknown":
-            assert "state_found=False cookie_present=True browser_match=False" in caplog.text
+            assert "state_found=False cookie_present=True browser_match=False" in diagnostics
         else:
-            assert "[LINE-FLOW-DIAG]" not in caplog.text
-        assert "different-browser" not in caplog.text and "unknown-state-with-sufficient-length" not in caplog.text
+            assert diagnostics == []
+        assert all(
+            "different-browser" not in line
+            and "unknown-state-with-sufficient-length" not in line
+            for line in diagnostics
+        )
         assert profile[1] == []
         assert await database_session.scalar(select(func.count()).select_from(ExternalIdentity)) == 0
 
