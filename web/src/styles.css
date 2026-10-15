@@ -4039,7 +4039,8 @@ p {
 }
 
 .field input:disabled,
-.field textarea:disabled {
+.field textarea:disabled,
+.field select:disabled {
   color: var(--ink-soft);
   background: #ece7dc;
   border-color: var(--line);

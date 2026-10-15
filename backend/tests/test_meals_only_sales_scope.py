@@ -112,9 +112,6 @@ def test_preview_acceptance_allowlist_cannot_bypass_meal_scope():
 @pytest.mark.parametrize("endpoint,kwargs", [
     (orders.create_order, {"body": None}),
     (groups.join_campaign, {"campaign_id": "existing", "body": None}),
-    (membership.save_my_application, {"body": None}),
-    (membership.submit_my_application, {}),
-    (membership.resubmit_supplement, {}),
     (membership.create_document_upload_url, {"body": None, "request": None, "storage": Mock()}),
     (membership.confirm_document_upload, {"document_id": "existing", "body": None, "storage": Mock()}),
     (logistics.create_logistics_selection, {"order_id": "existing", "body": None}),

@@ -87,7 +87,7 @@ async def test_no_identity_number_collected_or_returned_and_existing_ciphertext_
     assert saved.identity_number_encrypted == old_value
 
 
-async def test_document_free_submission_preserves_fees_and_admin_review(v2_context):
+async def test_document_free_submission_defers_fees_until_admin_approval(v2_context):
     client, session = v2_context["client"], v2_context["session"]
     for kind, amount in ((MembershipChargeKind.ADMISSION_FEE, 500), (MembershipChargeKind.SHARE_CAPITAL, 1000)):
         session.add(MembershipFeeSchedule(charge_kind=kind, amount=amount, effective_from=date(2026, 1, 1)))
@@ -101,14 +101,16 @@ async def test_document_free_submission_preserves_fees_and_admin_review(v2_conte
     assert submitted.status_code == 200, submitted.text
     assert submitted.json()["documents"] == []
     charges = (await client.get("/v1/membership/charges", headers=headers)).json()
-    assert {(charge["charge_kind"], charge["amount"], charge["status"]) for charge in charges} == {
-        ("admission_fee", 500, "pending"), ("share_capital", 1000, "pending"),
-    }
+    assert charges == []
     path = f"/v1/admin/membership-applications/{saved.json()['id']}/approve"
     assert (await client.post(path, headers=headers, json={})).status_code == 403
     approved = await client.post(path, headers=auth_headers(v2_context["admin"]), json={})
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "pending_payment"
+    charges = (await client.get("/v1/membership/charges", headers=headers)).json()
+    assert {(charge["charge_kind"], charge["amount"], charge["status"]) for charge in charges} == {
+        ("admission_fee", 500, "pending"), ("share_capital", 1000, "pending"),
+    }
 
 
 async def test_member_profile_hides_share_holdings_but_admin_retains_records(v2_context):

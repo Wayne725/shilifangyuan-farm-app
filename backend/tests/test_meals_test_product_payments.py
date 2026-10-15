@@ -216,7 +216,6 @@ async def test_checkout_rejects_tampered_attempt_amount(product_context):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path,body", [
     ("/v1/group-campaigns/missing/join", {"quantity": 1, "contact_email": "buyer@example.com"}),
-    ("/v1/membership/application/submit", {}),
     ("/v1/orders/missing/logistics/selection", {"channel": "home_delivery", "temperature": "ambient",
         "recipient_name": "測試買家", "recipient_phone": "0912345678", "shipping_address": "台北市中正區測試路1號"}),
 ])

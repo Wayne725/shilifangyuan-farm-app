@@ -1009,7 +1009,7 @@ async def test_active_member_cannot_open_duplicate_membership_application(
 
 
 @pytest.mark.asyncio
-async def test_membership_submission_adds_charges_before_admin_approval(
+async def test_membership_submission_defers_charges_until_admin_approval(
     v2_context,
 ) -> None:
     client = v2_context["client"]
@@ -1085,8 +1085,7 @@ async def test_membership_submission_adds_charges_before_admin_approval(
     pending_membership = await session.scalar(
         select(Membership).where(Membership.user_id == applicant.id)
     )
-    assert pending_membership is not None
-    assert pending_membership.status == MembershipStatus.PENDING_PAYMENT
+    assert pending_membership is None
     charges_before_approval = (
         await session.scalars(
             select(MembershipCharge).where(
@@ -1094,19 +1093,7 @@ async def test_membership_submission_adds_charges_before_admin_approval(
             )
         )
     ).all()
-    assert {
-        charge.charge_kind: (charge.amount, charge.status)
-        for charge in charges_before_approval
-    } == {
-        MembershipChargeKind.ADMISSION_FEE: (
-            500,
-            MembershipChargeStatus.PENDING,
-        ),
-        MembershipChargeKind.SHARE_CAPITAL: (
-            1000,
-            MembershipChargeStatus.PENDING,
-        ),
-    }
+    assert charges_before_approval == []
 
     supplement_requested = await client.post(
         f"/v1/admin/membership-applications/{application.id}/request-supplement",

@@ -8,7 +8,7 @@ from .config import Settings
 from .models import FulfillmentMethod, SalesChannel
 
 
-MEALS_ONLY_MESSAGE = "目前僅開放便當訂購；其他新交易及入社申請暫未開放"
+MEALS_ONLY_MESSAGE = "目前僅開放便當訂購；其他新交易暫未開放"
 DEMO_MEAL_EVENT_IDS = frozenset({
     "meal-event-preorder-demo",
     "meal-event-dinner-demo",

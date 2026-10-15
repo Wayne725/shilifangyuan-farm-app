@@ -508,7 +508,6 @@ async def save_my_application(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
-    require_sales_scope_allows(settings)
     application = await _save_profile_and_application(
         session,
         user,
@@ -528,7 +527,6 @@ async def submit_my_application(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
-    require_sales_scope_allows(settings)
     application = await _application_for_user(
         session,
         user.id,
@@ -544,7 +542,6 @@ async def submit_my_application(
     )
     if profile is None:
         raise HTTPException(status_code=409, detail="請先填寫入社資料")
-    await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.SUBMITTED
     application.submitted_at = datetime.now(timezone.utc)
     application.review_reason = None
@@ -569,7 +566,6 @@ async def resubmit_supplement(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
-    require_sales_scope_allows(settings)
     application = await _application_for_user(
         session,
         user.id,
@@ -587,7 +583,6 @@ async def resubmit_supplement(
     )
     if profile is None:
         raise HTTPException(status_code=409, detail="請先填寫入社資料")
-    await _ensure_membership_charges(session, application)
     application.status = MembershipApplicationStatus.SUBMITTED
     application.submitted_at = datetime.now(timezone.utc)
     application.review_reason = None

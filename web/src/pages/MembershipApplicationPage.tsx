@@ -23,10 +23,24 @@ const emptyForm = {
   line_id: "",
 };
 
+const genderOptions = ["男", "女", "非二元", "不透露"];
+const placeOfOriginOptions = [
+  "台北市", "新北市", "桃園市", "台中市", "台南市", "高雄市", "基隆市", "新竹市", "嘉義市",
+  "新竹縣", "苗栗縣", "彰化縣", "南投縣", "雲林縣", "嘉義縣", "屏東縣", "宜蘭縣", "花蓮縣",
+  "台東縣", "澎湖縣", "金門縣", "連江縣",
+];
+const occupationOptions = [
+  "農林漁牧", "製造／營造", "商業／金融", "教育／研究", "醫療／照護", "資訊／科技", "餐飲／服務",
+  "公務／行政", "自由業", "學生", "家管／照護", "退休", "待業",
+];
+
 export function MembershipApplicationPage() {
   const { user, openLogin } = useAuth();
   const queryClient = useQueryClient();
   const [form, setForm] = useState(emptyForm);
+  const [genderChoice, setGenderChoice] = useState("");
+  const [placeOfOriginChoice, setPlaceOfOriginChoice] = useState("");
+  const [occupationChoice, setOccupationChoice] = useState("");
   const [consented, setConsented] = useState(false);
   const membership = useQuery({
     queryKey: ["membership-me", user?.id],
@@ -63,6 +77,9 @@ export function MembershipApplicationPage() {
       landline_phone: profile.landline_phone || "",
       line_id: profile.line_id || "",
     });
+    setGenderChoice(genderOptions.includes(profile.gender || "") ? profile.gender || "" : profile.gender ? "__other" : "");
+    setPlaceOfOriginChoice(placeOfOriginOptions.includes(profile.place_of_origin || "") ? profile.place_of_origin || "" : profile.place_of_origin ? "__other" : "");
+    setOccupationChoice(occupationOptions.includes(profile.occupation || "") ? profile.occupation || "" : profile.occupation ? "__other" : "");
     setConsented(true);
   }, [application.data?.profile]);
 
@@ -129,9 +146,9 @@ export function MembershipApplicationPage() {
           <div className="field-grid three-columns">
             <label className="field"><span>姓名</span><input required disabled={!editable} value={form.legal_name} onChange={(event) => setForm({ ...form, legal_name: event.target.value })} /></label>
             <label className="field"><span>出生日期</span><input required disabled={!editable} type="date" value={form.birth_date} onChange={(event) => setForm({ ...form, birth_date: event.target.value })} /></label>
-            <label className="field"><span>性別</span><input disabled={!editable} value={form.gender} onChange={(event) => setForm({ ...form, gender: event.target.value })} /></label>
-            <label className="field"><span>籍貫</span><input disabled={!editable} value={form.place_of_origin} onChange={(event) => setForm({ ...form, place_of_origin: event.target.value })} /></label>
-            <label className="field"><span>職業</span><input disabled={!editable} value={form.occupation} onChange={(event) => setForm({ ...form, occupation: event.target.value })} /></label>
+            <label className="field"><span>性別</span><select disabled={!editable} value={genderChoice} onChange={(event) => { const value = event.target.value; setGenderChoice(value); setForm({ ...form, gender: value === "__other" ? "" : value }); }}><option value="">請選擇</option>{genderOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他（請填寫）</option></select>{genderChoice === "__other" && <input disabled={!editable} aria-label="自填性別" placeholder="請填寫性別" value={form.gender} onChange={(event) => setForm({ ...form, gender: event.target.value })} />}</label>
+            <label className="field"><span>籍貫</span><select disabled={!editable} value={placeOfOriginChoice} onChange={(event) => { const value = event.target.value; setPlaceOfOriginChoice(value); setForm({ ...form, place_of_origin: value === "__other" ? "" : value }); }}><option value="">請選擇</option>{placeOfOriginOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他／國外（請填寫）</option></select>{placeOfOriginChoice === "__other" && <input disabled={!editable} aria-label="自填籍貫" placeholder="請填寫籍貫" value={form.place_of_origin} onChange={(event) => setForm({ ...form, place_of_origin: event.target.value })} />}</label>
+            <label className="field"><span>職業</span><select disabled={!editable} value={occupationChoice} onChange={(event) => { const value = event.target.value; setOccupationChoice(value); setForm({ ...form, occupation: value === "__other" ? "" : value }); }}><option value="">請選擇</option>{occupationOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他（請填寫）</option></select>{occupationChoice === "__other" && <input disabled={!editable} aria-label="自填職業" placeholder="請填寫職業" value={form.occupation} onChange={(event) => setForm({ ...form, occupation: event.target.value })} />}</label>
             <label className="field"><span>手機</span><input required disabled={!editable} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
             <label className="field"><span>市話</span><input disabled={!editable} value={form.landline_phone} onChange={(event) => setForm({ ...form, landline_phone: event.target.value })} /></label>
             <label className="field"><span>LINE ID</span><input disabled={!editable} value={form.line_id} onChange={(event) => setForm({ ...form, line_id: event.target.value })} /></label>
@@ -152,7 +169,7 @@ export function MembershipApplicationPage() {
         <div>
           {editable && <button className="button button-system" type="button" disabled={!application.data?.profile || submitApplication.isPending} onClick={() => submitApplication.mutate()}>{status === "needs_supplement" ? "重新送件" : "送出申請"}</button>}
           {["draft", "submitted", "needs_supplement", "approved"].includes(status) && application.data && <button className="button button-quiet" type="button" disabled={withdrawApplication.isPending} onClick={() => withdrawApplication.mutate()}>撤回申請</button>}
-          {["submitted", "approved"].includes(status) && <Link className="button button-primary" to="/account" search={{ membership_charge_id: undefined, payment: undefined }}>查看社員款項</Link>}
+          {status === "approved" && <Link className="button button-primary" to="/account" search={{ membership_charge_id: undefined, payment: undefined }}>查看社員款項</Link>}
         </div>
         {(submitApplication.isError || withdrawApplication.isError) && <p className="form-error">{submitApplication.error?.message || withdrawApplication.error?.message}</p>}
       </section>
