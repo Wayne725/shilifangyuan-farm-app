@@ -192,17 +192,17 @@ async def test_invalid_authorization_never_exchanges_code(database_session, sett
             row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         elif invalid == "consumed":
             row.consumed_at = datetime.now(timezone.utc)
-        else:
+        elif invalid == "unknown":
             state = "unknown-state-with-sufficient-length"
         await database_session.commit()
         response = await callback(client, state)
         assert response.status_code == 400
         if invalid == "wrong_browser":
-            assert "state_found=True cookie_present=True browser_match=False" in diagnostics
+            assert diagnostics == ["[LINE-FLOW-DIAG] state_found=True cookie_present=True browser_match=False"]
         elif invalid == "missing_cookie":
-            assert "state_found=True cookie_present=False browser_match=False" in diagnostics
+            assert diagnostics == ["[LINE-FLOW-DIAG] state_found=True cookie_present=False browser_match=False"]
         elif invalid == "unknown":
-            assert "state_found=False cookie_present=True browser_match=False" in diagnostics
+            assert diagnostics == ["[LINE-FLOW-DIAG] state_found=False cookie_present=True browser_match=False"]
         else:
             assert diagnostics == []
         assert all(
