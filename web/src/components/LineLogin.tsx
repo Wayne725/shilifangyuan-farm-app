@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api";
 
@@ -13,19 +15,24 @@ type LineLoginProps = {
   rememberMe?: boolean;
   mode?: "login" | "link";
   returnTo?: string;
+  consentText?: string;
+  consentLink?: boolean;
 };
 
-export function LineLoginButton({ intent = "nonmember", rememberMe = true, mode = "login", returnTo }: LineLoginProps) {
+export function LineLoginButton({ intent = "nonmember", rememberMe = true, mode = "login", returnTo,
+  consentText = "我已閱讀並同意LINE登入資料使用說明。", consentLink = true }: LineLoginProps) {
+  const [consented, setConsented] = useState(false);
   const status = useQuery({ queryKey: ["line-login-status", mode], queryFn: () => apiFetch<LineStatus>("/v1/auth/line/status"), retry: false });
   const start = useMutation({
     mutationFn: () => apiFetch<{ authorization_url: string }>("/v1/auth/line/start", { method: "POST", body: JSON.stringify({
-      intent, remember_me: rememberMe, mode,
+      intent, remember_me: rememberMe, mode, data_consent_version: "line-data-v1",
       return_to: returnTo || `${window.location.pathname}${window.location.search}`,
     }) }),
     onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
   });
   return <div className="line-login-entry">
-    <button className="button line-login-button" type="button" disabled={!status.data?.ready || start.isPending} onClick={() => start.mutate()}>
+    <label className="line-data-consent"><input type="checkbox" checked={consented} onChange={(event) => setConsented(event.target.checked)} /><span>{consentText}{consentLink && <> <Link to="/line-consent">閱讀說明</Link></>}</span></label>
+    <button className="button line-login-button" type="button" disabled={!status.data?.ready || !consented || start.isPending} onClick={() => start.mutate()}>
       {start.isPending ? "正在開啟LINE授權…" : mode === "link" ? "連結LINE" : "使用LINE登入"}
     </button>
     {status.isPending && <p role="status">正在確認LINE登入服務…</p>}

@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 FLOW_COOKIE = "slf_line_flow"
 REGISTRATION_COOKIE = "slf_line_registration"
 COOKIE_PATH = "/v1/auth/line"
+LINE_DATA_CONSENT_VERSION = "line-data-v1"
 
 
 class LineStart(BaseModel):
@@ -36,6 +37,7 @@ class LineStart(BaseModel):
     remember_me: bool = True
     return_to: str = Field(default="/shop", max_length=500)
     mode: Literal["login", "link"] = "login"
+    data_consent_version: Literal["line-data-v1"]
 
 
 class LineCallback(BaseModel):
@@ -130,7 +132,9 @@ async def line_start(body: LineStart, request: Request, response: Response,
         purpose=body.mode, target_user_id=user.id if user else None,
         target_token_version=int(user.token_version or 0) if user else None,
         registration_intent=body.intent, return_to=_return_path(body.return_to),
-        remember_me=body.remember_me, expires_at=now + timedelta(minutes=10))
+        remember_me=body.remember_me, data_consent_version=body.data_consent_version,
+        data_consented_at=now,
+        expires_at=now + timedelta(minutes=10))
     session.add(record)
     await session.commit()
     _cookie(response, FLOW_COOKIE, browser, settings)
@@ -163,7 +167,9 @@ async def _create_account(profile: LineProfile, email: str | None, record: LineO
     session.add(user)
     await session.flush()
     session.add(ExternalIdentity(user_id=user.id, provider="line", subject=profile.subject,
-        registration_intent=record.registration_intent))
+        registration_intent=record.registration_intent,
+        data_consent_version=record.data_consent_version,
+        data_consented_at=record.data_consented_at))
     await session.flush()
     return user
 
@@ -186,6 +192,8 @@ async def line_callback(body: LineCallback, request: Request, response: Response
             state_found, cookie_present, browser_match,
         )
         raise HTTPException(status_code=400, detail="LINE登入流程無效，請從原頁重新登入")
+    if record.data_consent_version != LINE_DATA_CONSENT_VERSION or record.data_consented_at is None:
+        raise HTTPException(status_code=400, detail="LINE資料同意流程已更新，請重新開始登入")
     claimed = await session.scalar(update(LineOAuthState).where(
         LineOAuthState.id == record.id, LineOAuthState.consumed_at.is_(None), LineOAuthState.expires_at > now
     ).values(consumed_at=now).returning(LineOAuthState.id).execution_options(synchronize_session=False))
@@ -225,7 +233,11 @@ async def line_callback(body: LineCallback, request: Request, response: Response
                 raise HTTPException(status_code=409, detail="此帳號已連結另一個LINE，請洽管理員核對")
             if identity is None:
                 session.add(ExternalIdentity(user_id=user.id, provider="line", subject=profile.subject,
-                    registration_intent=record.registration_intent))
+                    registration_intent=record.registration_intent,
+                    data_consent_version=record.data_consent_version, data_consented_at=record.data_consented_at))
+            else:
+                identity.data_consent_version = record.data_consent_version
+                identity.data_consented_at = record.data_consented_at
             await session.commit()
             _clear_flow(response, settings)
             return {"status": "linked", "return_to": record.return_to, "message": "LINE已連結原帳號，下次可直接使用LINE登入"}
@@ -234,6 +246,8 @@ async def line_callback(body: LineCallback, request: Request, response: Response
             if account is None or not account.is_active:
                 raise HTTPException(status_code=403, detail="此帳號已停用，請洽管理員")
             identity.last_login_at = now
+            identity.data_consent_version = record.data_consent_version
+            identity.data_consented_at = record.data_consented_at
             return await _sign_in(account, record, session, response, settings)
         email = profile.email
         if email and await session.scalar(select(User.id).where(User.email == email)) is not None:

@@ -34,6 +34,45 @@
   font-weight: 600;
 }
 
+.line-data-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: .75rem;
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.line-data-consent input {
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  margin: .2rem 0 0;
+  accent-color: var(--moss-dark);
+}
+
+.line-data-consent a { text-underline-offset: .2em; }
+
+.line-consent-page {
+  width: min(calc(100% - 2rem), 48rem);
+  margin: 0 auto;
+  padding: 2.5rem 0 5rem;
+  line-height: 1.7;
+}
+
+.line-consent-page > .eyebrow { margin: 2rem 0 .5rem; }
+.line-consent-page h1 { margin: 0; font-family: var(--serif); font-size: clamp(2rem, 5vw, 3rem); font-weight: 400; }
+.line-consent-lead { margin: 1rem 0 2rem; font-size: 1.125rem; }
+.line-consent-details { margin: 0 0 1.5rem; padding: 1.25rem 1.5rem; border: 1px solid var(--line-strong); background: var(--paper-light); }
+.line-consent-details h2 { margin: 0 0 .75rem; font-size: 1.25rem; }
+.line-consent-details ul { display: grid; gap: .65rem; margin: 0 0 1rem; padding-left: 1.4rem; }
+.line-consent-details p { margin: 0; }
+.line-consent-page .line-login-entry { max-width: 100%; }
+.line-consent-page .line-login-button { min-height: 3.5rem; }
+.line-consent-note { margin: 1.5rem 0 .5rem; }
+.line-consent-signed-in { padding: 1rem 0; }
+.line-consent-page :is(a, button, input):focus-visible { outline: 3px solid var(--moss-dark); outline-offset: 3px; }
+
 .line-login-button:disabled {
   opacity: 0.5;
   cursor: default;

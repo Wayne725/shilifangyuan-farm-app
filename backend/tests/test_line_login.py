@@ -55,7 +55,7 @@ def profile(monkeypatch):
 
 
 async def start_flow(client, **body):
-    response = await client.post("/v1/auth/line/start", json={"return_to": "/shop", **body})
+    response = await client.post("/v1/auth/line/start", json={"return_to": "/shop", "data_consent_version": "line-data-v1", **body})
     assert response.status_code == 200, response.text
     query = parse_qs(urlsplit(response.json()["authorization_url"]).query)
     return query["state"][0], query
@@ -95,6 +95,8 @@ async def test_start_binds_one_time_state_to_browser_and_pkce(database_session, 
         assert query["nonce"] == [row.nonce]
         assert query["redirect_uri"] == [settings.line_login_redirect_uri]
         assert row.registration_intent == "member" and row.remember_me is False
+        assert row.data_consent_version == "line-data-v1"
+        assert row.data_consented_at is not None
         assert row.return_to == "/checkout?from=meal"
         assert row.consumed_at is None
         assert (row.expires_at.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).total_seconds() <= 600
@@ -104,11 +106,20 @@ async def test_start_binds_one_time_state_to_browser_and_pkce(database_session, 
         assert response.headers["cache-control"] == "no-store"
 
 
+@pytest.mark.parametrize("payload", [{}, {"data_consent_version": "older-version"}])
+@pytest.mark.asyncio
+async def test_start_requires_current_data_consent(database_session, settings, payload):
+    async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
+        response = await client.post("/v1/auth/line/start", json=payload)
+        assert response.status_code == 422
+        assert await database_session.scalar(select(func.count()).select_from(LineOAuthState)) == 0
+
+
 @pytest.mark.parametrize("return_to", ["https://evil.example/shop", "//evil.example/shop", "/unknown-screen", "/shop\\evil", "/shop\n", "/meals/../admin", "/groups/../admin"])
 @pytest.mark.asyncio
 async def test_start_rejects_open_redirects_and_unsupported_return_paths(database_session, settings, return_to):
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
-        response = await client.post("/v1/auth/line/start", json={"return_to": return_to})
+        response = await client.post("/v1/auth/line/start", json={"return_to": return_to, "data_consent_version": "line-data-v1"})
         assert response.status_code == 422
         assert await database_session.scalar(select(func.count()).select_from(LineOAuthState)) == 0
 
@@ -136,9 +147,9 @@ async def test_status_fallback_and_cross_origin_start(database_session, settings
     async with api_test_context(database_session, [line_auth_router], settings=unconfigured) as client:
         status = await client.get("/v1/auth/line/status")
         assert status.json()["ready"] is False
-        assert (await client.post("/v1/auth/line/start", json={})).status_code == 503
+        assert (await client.post("/v1/auth/line/start", json={"data_consent_version": "line-data-v1"})).status_code == 503
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
-        response = await client.post("/v1/auth/line/start", json={}, headers={"Origin": "https://evil.example"})
+        response = await client.post("/v1/auth/line/start", json={"data_consent_version": "line-data-v1"}, headers={"Origin": "https://evil.example"})
         assert response.status_code == 403
         assert await database_session.scalar(select(func.count()).select_from(LineOAuthState)) == 0
 
@@ -160,6 +171,9 @@ async def test_new_line_account_member_intent_does_not_grant_membership_or_email
         assert saved.customer_number.startswith("SLF-C-")
         identity = await database_session.scalar(select(ExternalIdentity))
         assert identity.registration_intent == "member" and identity.user_id == saved.id
+        assert identity.data_consent_version == "line-data-v1" and identity.data_consented_at is not None
+        state_record = await database_session.scalar(select(LineOAuthState))
+        assert identity.data_consented_at == state_record.data_consented_at
         assert await database_session.scalar(select(func.count()).select_from(Membership)) == 0
         refresh_cookie = next(value for value in response.headers.get_list("set-cookie") if value.startswith(f"{settings.refresh_cookie_name}="))
         assert "HttpOnly" in refresh_cookie and "SameSite=lax" in refresh_cookie
@@ -282,6 +296,8 @@ async def test_link_preserves_original_admin_and_membership_then_signs_in_same_i
         state, _ = await start_flow(client, mode="link", return_to="/account")
         linked = await callback(client, state)
         assert linked.status_code == 200 and linked.json()["status"] == "linked"
+        identity = await database_session.scalar(select(ExternalIdentity))
+        assert identity.data_consent_version == "line-data-v1" and identity.data_consented_at is not None
         assert await database_session.scalar(select(func.count()).select_from(User)) == 1
         assert (await database_session.get(User, user.id)).email == "existing@example.com"
         client.headers.clear()
@@ -298,9 +314,9 @@ async def test_start_mode_and_account_changes_are_rejected(database_session, set
     first = await seed_user(database_session)
     second = await seed_user(database_session, email="another@example.com")
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
-        assert (await client.post("/v1/auth/line/start", json={"mode": "link"})).status_code == 401
+        assert (await client.post("/v1/auth/line/start", json={"mode": "link", "data_consent_version": "line-data-v1"})).status_code == 401
         client.headers.update(credentials(first, settings))
-        assert (await client.post("/v1/auth/line/start", json={"mode": "login"})).status_code == 409
+        assert (await client.post("/v1/auth/line/start", json={"mode": "login", "data_consent_version": "line-data-v1"})).status_code == 409
         state, _ = await start_flow(client, mode="link")
         client.headers.update(credentials(second, settings))
         assert (await callback(client, state)).status_code == 409

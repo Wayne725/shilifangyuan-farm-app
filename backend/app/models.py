@@ -419,6 +419,8 @@ class ExternalIdentity(Base):
     provider: Mapped[str] = mapped_column(String(24))
     subject: Mapped[str] = mapped_column(String(255))
     registration_intent: Mapped[str] = mapped_column(String(24), default="nonmember")
+    data_consent_version: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    data_consented_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -435,6 +437,8 @@ class LineOAuthState(Base):
     target_user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     target_token_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     registration_intent: Mapped[str] = mapped_column(String(24))
+    data_consent_version: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    data_consented_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     return_to: Mapped[str] = mapped_column(String(500))
     remember_me: Mapped[bool] = mapped_column(Boolean)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

@@ -24,6 +24,13 @@
 
 沿用正式 HttpOnly／Secure cookie 及前端 `/v1/` API 代理設定。缺少設定時 `/v1/auth/line/status` 回傳 ready=false，LINE 按鈕停用，原 Email 登入仍可使用。
 
+## LINE 官方帳號入口與資料同意
+
+- 官方帳號圖文選單可新增「便當預訂／LINE登入」連結，網址設為 `https://shilifangyuan.com/line-consent`。
+- 此頁先說明網站會使用 LINE 使用者識別碼與顯示名稱來建立及辨認網站帳號，並說明訂單、社員資格及通知 Email 的資料用途；使用者勾選同意後才可開始 LINE 授權。
+- 後端只接受目前同意版本，成功登入或連結後，在 LINE 身分紀錄保存同意版本及時間。取消 LINE 授權不會自動刪除網站已建立的帳號或訂單。
+- 上述網址可提供給官方帳號管理員加入圖文選單；需由具備官方帳號管理權限的人員在 LINE Official Account Manager 儲存選單設定。本次程式不會自動修改 LINE 官方帳號選單。
+
 ## 帳號與社員資格
 
 - 已有 Email 帳號：先登入原帳號，再於帳號中心按「連結LINE」，保留訂單與社員資格。

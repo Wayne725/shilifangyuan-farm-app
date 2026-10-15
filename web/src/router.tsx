@@ -331,9 +331,16 @@ const lineLoginRoute = createRoute({
   component: page("./pages/LineLoginPage", "LineLoginPage"),
 });
 
+const lineConsentRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/line-consent",
+  component: page("./pages/LineConsentPage", "LineConsentPage"),
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   lineLoginRoute,
+  lineConsentRoute,
   homeRoute,
   registerRoute,
   verifyEmailRoute,
