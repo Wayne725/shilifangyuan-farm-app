@@ -4,6 +4,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -51,7 +52,7 @@ def test_retention_migration_preserves_old_documents_without_auto_expiry(tmp_pat
         with engine.connect() as connection:
             assert connection.execute(snapshot).all() == before
             assert connection.execute(text("SELECT expires_at, deletion_attempts, deletion_retry_at, deletion_error FROM membership_documents")).one() == (None, 0, None, None)
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0022_line_customer_email"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == ScriptDirectory.from_config(config).get_current_head()
     finally:
         engine.dispose()
         get_settings.cache_clear()
