@@ -27,7 +27,7 @@ export function MealImageEditor({ meal, onDone }: { meal: Meal; onDone: () => vo
       <ImageField label={`${meal.name}照片網址`} value={imageUrl} onChange={setImageUrl} />
       {options.map((option) => <ImageField key={option.id} label={`${option.groupName} · ${option.name}照片網址`} value={optionImages[option.id] || ""} onChange={(value) => setOptionImages((current) => ({ ...current, [option.id]: value }))} />)}
       {save.isError && <p className="form-error">{save.error.message}</p>}
-      {save.isSuccess && <p role="status">照片已儲存</p>}
+      {save.isSuccess && !mainChanged && !changedOptions.length && <p role="status">照片已儲存</p>}
       <button className="button button-quiet" disabled={save.isPending || (!mainChanged && !changedOptions.length)}>{save.isPending ? "儲存中…" : "儲存照片"}</button>
     </form>
   </details>;
