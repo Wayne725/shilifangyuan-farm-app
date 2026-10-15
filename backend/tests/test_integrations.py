@@ -1,16 +1,26 @@
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 
+import app.jobs as jobs_module
 from app.config import Settings
-from app.database import Base
 from app.integrations.ecpay import build_check_mac_value
-from app.integrations.common import HTTPResponse
+from app.integrations.common import (
+    HTTPResponse,
+    IntegrationConfigurationError,
+    IntegrationResponseError,
+)
+from app.integrations.email_sender import (
+    EmailSendResult,
+    FailoverEmailSender,
+    email_sender_from_settings,
+)
 from app.integrations.invoice import (
     ECPayInvoiceAdapter,
     ECPayInvoiceSettings,
@@ -22,44 +32,68 @@ from app.integrations.invoice import (
     is_mobile_barcode_format,
     normalize_mobile_barcode,
 )
-from app.integrations.invoice_service import issue_picked_up_order_invoice
+from app.integrations.fanyu_invoice import (
+    FanyuInvoiceAdapter,
+    FanyuInvoiceSettings,
+)
+from app.integrations.invoice_service import (
+    InvoiceApplicationError,
+    enqueue_invoice_adjustment_after_refund,
+    invoice_request_from_order,
+    issue_paid_order_invoice,
+    reconcile_order_invoice,
+)
 from app.integrations.notifications import (
     NotificationCommand,
     NotificationService,
 )
 from app.integrations.payment_service import (
+    PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
     create_payment_attempt,
     payment_adapter_from_settings,
     release_attempt_reservations,
 )
-from app.integrations.sendgrid import (
+from app.integrations.mailersend import (
     EmailMessage,
-    SendGridAdapter,
-    SendGridSettings,
+    MailerSendAdapter,
+    MailerSendSettings,
 )
+from app.integrations.resend import ResendAdapter, ResendSettings
 from app.models import (
     InventoryReservation,
     ExternalEvent,
+    FulfillmentMethod,
+    FulfillmentState,
     FulfillmentStatus,
     GroupCampaign,
     GroupDecisionStatus,
     GroupIntakeStatus,
     Invoice,
+    InvoiceBuyerType,
+    InvoiceCarrierType,
     InvoiceStatus,
     MembershipType,
     Order,
+    OrderFulfillment,
     OrderItem,
     OrderKind,
+    OutboxEvent,
     PaymentAttempt,
     PaymentStatus,
     Product,
     Refund,
+    RefundStatus,
     ReservationStatus,
+    Shipment,
+    ShipmentStatus,
+    ShippingChannel,
+    ShippingTemperature,
     TaxType,
     TargetType,
     User,
 )
+from tests.support import fanyu_test_context, make_test_settings, prepare_test_invoice
 
 
 INVOICE_MERCHANT_ID = "2000132"
@@ -67,21 +101,8 @@ INVOICE_HASH_KEY = "ejCk326UnaZWKisg"
 INVOICE_HASH_IV = "q9jcZX8Ib9LM8wYk"
 
 
-@pytest.fixture
-async def database_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        yield session
-    await engine.dispose()
-
-
 def payment_settings() -> Settings:
-    return Settings(
-        app_base_url="https://api.example.test",
-        web_base_url="https://app.example.test",
+    return make_test_settings(
         ecpay_payment_merchant_id=TEST_PAYMENT_MERCHANT_ID,
         ecpay_payment_hash_key=TEST_PAYMENT_HASH_KEY,
         ecpay_payment_hash_iv=TEST_PAYMENT_HASH_IV,
@@ -93,7 +114,24 @@ TEST_PAYMENT_HASH_KEY = "pwFHCqoQZGmho4w6"
 TEST_PAYMENT_HASH_IV = "EkRm7iFT261dpevs"
 
 
-async def make_regular_order(database_session):
+def preview_raygate_acceptance_settings(**overrides) -> Settings:
+    values = {
+        "environment": "preview",
+        "payment_provider": "raygate",
+        "raygate_payment_store_identifier": "acceptance-store",
+        "raygate_payment_key_hex": "11" * 32,
+        "raygate_payment_iv_hex": "22" * 16,
+        "raygate_payment_merchant_id": "merchant",
+        "raygate_payment_terminal_id": "terminal",
+        "raygate_payment_base_url": "https://pay.example.test",
+        "raygate_payment_allowed_hostname": "pay.example.test",
+        "raygate_payment_stage": False,
+        **overrides,
+    }
+    return make_test_settings(**values)
+
+
+async def make_regular_order(database_session, *, invoice_context=None):
     user = User(
         email="buyer@example.test",
         display_name="測試買家",
@@ -114,6 +152,7 @@ async def make_regular_order(database_session):
     await database_session.flush()
     order = Order(
         order_number="SLFTEST0001",
+        invoice_provider_context=invoice_context,
         order_kind=OrderKind.REGULAR,
         user_id=user.id,
         membership_type_snapshot=user.membership_type,
@@ -134,6 +173,65 @@ async def make_regular_order(database_session):
     database_session.add(order)
     await database_session.commit()
     return user, product, order
+
+
+@pytest.mark.asyncio
+async def test_fanyu_invoice_does_not_send_a_duplicate_platform_email(
+    database_session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.PENDING
+    event = OutboxEvent(
+        event_type="invoice.issue_requested",
+        aggregate_type="order",
+        aggregate_id=order.id,
+        payload={"order_id": order.id},
+    )
+    database_session.add(event)
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+        binding_context = fanyu_test_context()
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request, provider="fanyu")
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            return {"RtnCode": 0, "RtnMsg": "not found"}
+
+        async def issue_prepared_invoice(self, request):
+            return InvoiceIssueResult(
+                relate_number=request.relate_number,
+                invoice_number="AB12345679",
+                invoice_date="2026-09-04 22:23:50",
+                random_number="2162",
+                raw={"invNo": "AB12345679"},
+            )
+
+    monkeypatch.setattr(
+        jobs_module,
+        "invoice_adapter_from_settings",
+        lambda _settings: InvoiceAdapter(),
+    )
+    emails = []
+
+    class EmailProvider:
+        async def send(self, message):
+            emails.append(message)
+            return EmailSendResult(True, "isolated-email", 200, "mock")
+
+    monkeypatch.setattr(jobs_module, "email_sender_from_settings", lambda _: EmailProvider())
+    reports = [
+        await jobs_module.reconcile_once(database_session, make_test_settings())
+        for _ in range(3)
+    ]
+
+    assert all(report.outbox_failed == 0 for report in reports)
+    assert reports[0].outbox_completed >= 1
+    assert emails == []
 
 
 def signed_payment_callback(attempt, payment_date, simulate_paid="0"):
@@ -232,7 +330,7 @@ def test_invoice_payload_supports_taxable_and_exempt_snapshots() -> None:
         InvoiceIssueRequest(
             relate_number="INV20260729001",
             customer_email="sandbox@example.test",
-            carrier_type="3",
+            carrier_type="mobile_barcode",
             carrier_number="/AB12+-.",
             items=[
                 InvoiceLine("白米", 2, 100, tax_type="1"),
@@ -247,8 +345,16 @@ def test_invoice_payload_supports_taxable_and_exempt_snapshots() -> None:
     assert [item["ItemTaxType"] for item in payload["Items"]] == ["1", "3"]
 
 
+def test_resend_rejects_url_shaped_sender_email() -> None:
+    with pytest.raises(IntegrationConfigurationError):
+        ResendSettings(
+            api_key="re_test-secret",
+            sender_email="no-reply@mail.https://example.com.com",
+        ).validate()
+
+
 @pytest.mark.asyncio
-async def test_sendgrid_adapter_uses_mocked_network() -> None:
+async def test_mailersend_adapter_uses_mocked_network() -> None:
     captured = {}
 
     async def transport(url, payload, headers, timeout):
@@ -261,9 +367,9 @@ async def test_sendgrid_adapter_uses_mocked_network() -> None:
             headers={"X-Message-Id": "message-123"},
         )
 
-    adapter = SendGridAdapter(
-        SendGridSettings(
-            api_key="SG.test-secret",
+    adapter = MailerSendAdapter(
+        MailerSendSettings(
+            api_token="mlsn.test-secret",
             sender_email="sender@example.test",
         ),
         transport=transport,
@@ -278,8 +384,161 @@ async def test_sendgrid_adapter_uses_mocked_network() -> None:
 
     assert result.accepted is True
     assert result.provider_message_id == "message-123"
-    assert captured["headers"]["Authorization"] == "Bearer SG.test-secret"
+    assert captured["headers"]["Authorization"] == "Bearer mlsn.test-secret"
     assert captured["payload"]["from"]["name"] == "十里方圓"
+
+
+@pytest.mark.asyncio
+async def test_resend_adapter_accepts_email_through_public_api() -> None:
+    captured = {}
+
+    async def transport(url, payload, headers, timeout):
+        captured.update(
+            {"url": url, "payload": payload, "headers": headers}
+        )
+        return HTTPResponse(
+            status_code=200,
+            body='{"id":"resend-message-123"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    adapter = ResendAdapter(
+        ResendSettings(
+            api_key="re_test-secret",
+            sender_email="sender@example.test",
+        ),
+        transport=transport,
+    )
+    result = await adapter.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="付款成功",
+            text_content="訂單已付款。",
+            idempotency_key="outbox-event-123",
+        )
+    )
+
+    assert result.provider_message_id == "resend-message-123"
+    assert captured == {
+        "url": "https://api.resend.com/emails",
+        "payload": {
+            "from": "十里方圓 <sender@example.test>",
+            "to": ["buyer@example.test"],
+            "subject": "付款成功",
+            "text": "訂單已付款。",
+        },
+        "headers": {
+            "Authorization": "Bearer re_test-secret",
+            "Idempotency-Key": "outbox-event-123",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_email_sender_falls_back_when_primary_provider_rejects() -> None:
+    class RejectingSender:
+        async def send(self, message):
+            raise IntegrationResponseError("primary unavailable")
+
+    class AcceptingSender:
+        async def send(self, message):
+            return EmailSendResult(
+                accepted=True,
+                provider_message_id="fallback-message-123",
+                status_code=202,
+                provider="mailersend",
+            )
+
+    sender = FailoverEmailSender([RejectingSender(), AcceptingSender()])
+
+    result = await sender.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="付款成功",
+            text_content="訂單已付款。",
+        )
+    )
+
+    assert result.provider == "mailersend"
+    assert result.provider_message_id == "fallback-message-123"
+
+
+@pytest.mark.asyncio
+async def test_configured_sender_prefers_resend_then_mailersend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    async def reject_resend(self, message):
+        calls.append("resend")
+        raise IntegrationResponseError("resend unavailable")
+
+    async def accept_mailersend(self, message):
+        calls.append("mailersend")
+        return EmailSendResult(
+            accepted=True,
+            provider_message_id="mailersend-message-123",
+            status_code=202,
+            provider="mailersend",
+        )
+
+    monkeypatch.setattr(ResendAdapter, "send", reject_resend)
+    monkeypatch.setattr(MailerSendAdapter, "send", accept_mailersend)
+    sender = email_sender_from_settings(
+        Settings(
+            _env_file=None,
+            resend_api_key="re_test-secret",
+            email_from_email="sender@example.test",
+            mailersend_api_token="mlsn.test-secret",
+            mailersend_from_email="sender@example.test",
+        )
+    )
+
+    result = await sender.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="付款成功",
+            text_content="訂單已付款。",
+        )
+    )
+
+    assert calls == ["resend", "mailersend"]
+    assert result.provider == "mailersend"
+
+
+@pytest.mark.asyncio
+async def test_email_sender_skips_invalid_resend_when_mailersend_is_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def accept_mailersend(self, message):
+        return EmailSendResult(
+            accepted=True,
+            provider_message_id="mailersend-valid-backup",
+            status_code=202,
+            provider="mailersend",
+        )
+
+    monkeypatch.setattr(MailerSendAdapter, "send", accept_mailersend)
+    sender = email_sender_from_settings(
+        Settings(
+            _env_file=None,
+            resend_api_key="re_test-secret",
+            email_from_email="broken@sender",
+            mailersend_api_token="mlsn.test-secret",
+            mailersend_from_email="sender@example.test",
+        )
+    )
+
+    result = await sender.send(
+        EmailMessage(
+            to_email="buyer@example.test",
+            subject="驗證信",
+            text_content="驗證碼 123456",
+        )
+    )
+
+    assert result.provider == "mailersend"
+    assert result.provider_message_id == "mailersend-valid-backup"
 
 
 @pytest.mark.asyncio
@@ -360,6 +619,147 @@ async def test_regular_payment_reserves_and_consumes_product_stock(
     assert order_status == PaymentStatus.PAID
     assert reservation_status == ReservationStatus.CONSUMED
     assert stock_quantity == 1
+
+
+@pytest.mark.asyncio
+async def test_preview_cannot_create_a_payment_attempt(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    settings = payment_settings().model_copy(update={"environment": "preview"})
+
+    with pytest.raises(PaymentApplicationError, match="Preview"):
+        await create_payment_attempt(
+            database_session,
+            order.id,
+            user,
+            settings,
+        )
+
+    attempts = list(await database_session.scalars(select(PaymentAttempt)))
+    await database_session.refresh(product)
+    assert attempts == []
+    assert product.stock_quantity == 3
+
+
+@pytest.mark.asyncio
+async def test_preview_allows_only_the_exact_ten_dollar_raygate_order(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    order.amount_total = 10
+    order.items[0].unit_price = 5
+    order.items[0].subtotal = 10
+    await database_session.commit()
+    settings = preview_raygate_acceptance_settings(
+        raygate_payment_acceptance_order_id=order.id,
+    )
+
+    attempt = await create_payment_attempt(
+        database_session,
+        order.id,
+        user,
+        settings,
+    )
+
+    assert attempt.provider == "raygate"
+    assert attempt.amount == 10
+    assert attempt.checkout_payload["redirect_url"].startswith(
+        "https://pay.example.test/calc/pay_encrypt/acceptance-store"
+    )
+
+
+@pytest.mark.asyncio
+async def test_preview_allows_a_dedicated_ten_dollar_product_sku(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    product.sku = "REMOTE-PAYMENT-10"
+    order.amount_total = 10
+    order.items[0].quantity = 1
+    order.items[0].unit_price = 10
+    order.items[0].subtotal = 10
+    await database_session.commit()
+    settings = preview_raygate_acceptance_settings(
+        raygate_payment_acceptance_sku=product.sku,
+    )
+
+    attempt = await create_payment_attempt(
+        database_session,
+        order.id,
+        user,
+        settings,
+    )
+
+    assert attempt.provider == "raygate"
+    assert attempt.amount == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("product_sku", "quantity", "unit_price"),
+    [
+        ("ANOTHER-PRODUCT", 1, 10),
+        ("REMOTE-PAYMENT-10", 2, 5),
+    ],
+)
+async def test_preview_product_allowlist_rejects_other_products_and_quantities(
+    database_session,
+    product_sku: str,
+    quantity: int,
+    unit_price: int,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    product.sku = product_sku
+    order.amount_total = 10
+    order.items[0].quantity = quantity
+    order.items[0].unit_price = unit_price
+    order.items[0].subtotal = 10
+    await database_session.commit()
+    settings = preview_raygate_acceptance_settings(
+        raygate_payment_acceptance_sku="REMOTE-PAYMENT-10",
+    )
+
+    with pytest.raises(PaymentApplicationError, match="Preview"):
+        await create_payment_attempt(
+            database_session,
+            order.id,
+            user,
+            settings,
+        )
+
+    attempts = list(await database_session.scalars(select(PaymentAttempt)))
+    assert attempts == []
+
+
+@pytest.mark.asyncio
+async def test_preview_acceptance_rejects_a_different_order(
+    database_session,
+) -> None:
+    user, product, order = await make_regular_order(database_session)
+    order.amount_total = 10
+    await database_session.commit()
+    settings = make_test_settings(
+        environment="preview",
+        payment_provider="raygate",
+        raygate_payment_stage=False,
+        raygate_payment_acceptance_order_id=(
+            "00000000-0000-4000-8000-000000000001"
+        ),
+    )
+
+    with pytest.raises(PaymentApplicationError, match="Preview"):
+        await create_payment_attempt(
+            database_session,
+            order.id,
+            user,
+            settings,
+        )
+
+    attempts = list(await database_session.scalars(select(PaymentAttempt)))
+    await database_session.refresh(product)
+    assert attempts == []
+    assert product.stock_quantity == 3
 
 
 @pytest.mark.asyncio
@@ -480,25 +880,30 @@ async def test_reset_tombstone_acknowledges_late_callback_without_order(
 
 
 @pytest.mark.asyncio
-async def test_picked_up_order_invoice_is_queried_then_issued_once(
+async def test_paid_order_invoice_is_queried_then_issued_once(
     database_session,
 ) -> None:
     _user, _product, order = await make_regular_order(database_session)
     order.payment_status = PaymentStatus.PAID
-    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.fulfillment_status = FulfillmentStatus.PENDING_CONFIRMATION
     order.invoice_status = InvoiceStatus.PENDING
     await database_session.commit()
 
     class InvoiceAdapter:
+        provider_name = "ecpay"
+
         def __init__(self):
             self.query_count = 0
             self.issue_count = 0
 
-        async def query_invoice(self, relate_number):
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request)
+
+        async def query_invoice(self, relate_number, *, buyer_type="personal"):
             self.query_count += 1
             return {"RtnCode": 0, "RtnMsg": "not found"}
 
-        async def issue_invoice(self, request):
+        async def issue_prepared_invoice(self, request):
             self.issue_count += 1
             assert request.items[0].tax_type == "1"
             return InvoiceIssueResult(
@@ -510,7 +915,7 @@ async def test_picked_up_order_invoice_is_queried_then_issued_once(
             )
 
     adapter = InvoiceAdapter()
-    result = await issue_picked_up_order_invoice(
+    result = await issue_paid_order_invoice(
         database_session, order.id, adapter
     )
     invoice = await database_session.scalar(
@@ -522,6 +927,344 @@ async def test_picked_up_order_invoice_is_queried_then_issued_once(
     assert adapter.issue_count == 1
     assert invoice.status == InvoiceStatus.ISSUED
     assert invoice.random_number == "1234"
+
+
+@pytest.mark.asyncio
+async def test_fanyu_no_data_query_is_followed_by_one_issue(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.invoice_status = InvoiceStatus.PENDING
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+        def __init__(self):
+            self.issue_count = 0
+            self.binding_context = fanyu_test_context()
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request, provider="fanyu")
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            assert buyer_type == "personal"
+            return {
+                "RtnCode": 0,
+                "RtnMsg": "查無電子發票",
+                "InvoiceNo": "",
+            }
+
+        async def issue_prepared_invoice(self, request):
+            self.issue_count += 1
+            return InvoiceIssueResult(
+                relate_number=request.relate_number,
+                invoice_number="AB12345670",
+                invoice_date="2026-07-29 123000",
+                random_number="9012",
+                raw={"invNo": "AB12345670"},
+            )
+
+    adapter = InvoiceAdapter()
+    await issue_paid_order_invoice(database_session, order.id, adapter)
+    invoice = await database_session.scalar(
+        select(Invoice).where(Invoice.order_id == order.id)
+    )
+
+    assert adapter.issue_count == 1
+    assert invoice.provider == "fanyu"
+    assert invoice.invoice_date is not None
+    assert invoice.status == InvoiceStatus.ISSUED
+
+
+@pytest.mark.asyncio
+async def test_fanyu_invoice_persists_exact_provider_request_snapshot(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.PENDING
+    order.invoice_buyer_type = InvoiceBuyerType.COMPANY
+    order.invoice_buyer_tax_id = "12345675"
+    order.invoice_buyer_name = "測試股份有限公司"
+    order.invoice_buyer_email = "accounting@example.test"
+    order.invoice_carrier_type = InvoiceCarrierType.MOBILE_BARCODE
+    order.invoice_carrier_value = "/AB12+-."
+    await database_session.commit()
+    provider_requests = []
+
+    async def transport(url, payload, headers, timeout):
+        provider_requests.append(payload["reqData"])
+        if url.endswith("/queryInvoice"):
+            body = '{"statusCode":"3","statusDesc":"查無資料","respData":{}}'
+        else:
+            body = (
+                '{"statusCode":"0","statusDesc":"","respData":'
+                '{"invNo":"AB12345674","invDate":"20260902",'
+                '"invTime":"10:00:00","randomNumber":"2468"}}'
+            )
+        return HTTPResponse(status_code=200, body=body, headers={})
+
+    adapter = FanyuInvoiceAdapter(
+        FanyuInvoiceSettings(
+            company_id="15989995",
+            user_id="15989995ADMIN",
+            auth_password="A15989995",
+            api_key="test-api-key",
+            seller_id="15989995",
+            signature_verified=True,
+        ),
+        transport=transport,
+    )
+
+    await issue_paid_order_invoice(database_session, order.id, adapter)
+    invoice = await database_session.scalar(
+        select(Invoice)
+        .where(Invoice.order_id == order.id)
+        .options(selectinload(Invoice.items))
+    )
+
+    assert invoice is not None
+    assert invoice.provider_request == provider_requests[1]
+    assert invoice.provider_request["carrierType"] == "3J0002"
+    assert invoice.provider_request["notifyEmail"] == "accounting@example.test"
+    assert invoice.provider_request["Details"][0]["amount"] == "190.47619"
+    assert invoice.sales_amount == 190
+    assert invoice.tax_amount == 10
+    assert invoice.total_amount == 200
+    assert invoice.items[0].unit_price == Decimal("95.238095")
+    assert invoice.items[0].amount == Decimal("190.476190")
+
+
+@pytest.mark.asyncio
+async def test_fanyu_personal_cloud_order_uses_contact_email_as_member_carrier(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order = await database_session.scalar(
+        select(Order)
+        .where(Order.id == order.id)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.fulfillment).selectinload(
+                OrderFulfillment.shipment
+            ),
+        )
+    )
+    assert order is not None
+
+    request = invoice_request_from_order(order, "INVSLFTEST0001")
+    data = FanyuInvoiceAdapter(
+        FanyuInvoiceSettings(
+            company_id="15989995",
+            user_id="15989995ADMIN",
+            auth_password="A15989995",
+            api_key="test-api-key",
+            seller_id="15989995",
+            signature_verified=True,
+        )
+    ).build_issue_data(request)
+
+    assert data["carrierType"] == "EG0478"
+    assert data["carrierID1"] == order.contact_email
+    assert data["carrierID2"] == order.contact_email
+    assert data["notifyEmail"] == order.contact_email
+
+
+@pytest.mark.asyncio
+async def test_invoice_query_recovers_provider_result_without_reissuing(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session, invoice_context=fanyu_test_context())
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.invoice_status = InvoiceStatus.FAILED
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request, provider="fanyu")
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            return {
+                "RtnCode": 1,
+                "InvoiceNo": "AB12345671",
+                "InvoiceDate": "2026-07-29 124500",
+                "RandomNumber": "3456",
+                "ProviderStatus": "0",
+            }
+
+        binding_context = fanyu_test_context()
+
+        async def issue_prepared_invoice(self, request):
+            raise AssertionError("查到既有發票後不可重複開立")
+
+    result = await reconcile_order_invoice(
+        database_session,
+        order.id,
+        InvoiceAdapter(),
+    )
+    invoice = await database_session.scalar(
+        select(Invoice).where(Invoice.order_id == order.id)
+    )
+
+    assert result is not None
+    assert result.invoice_number == "AB12345671"
+    assert invoice.status == InvoiceStatus.ISSUED
+    assert order.invoice_status == InvoiceStatus.ISSUED
+
+
+@pytest.mark.asyncio
+async def test_invoice_provider_cannot_change_after_snapshot(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    database_session.add(
+        Invoice(
+            order=order,
+            relate_number="INVSLFTEST0001",
+            provider="ecpay",
+            status=InvoiceStatus.FAILED,
+        )
+    )
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "fanyu"
+
+    with pytest.raises(InvoiceApplicationError, match="不能改由 fanyu"):
+        await reconcile_order_invoice(
+            database_session,
+            order.id,
+            InvoiceAdapter(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_invoice_intent_survives_process_interruption_before_writeback(
+    database_session,
+) -> None:
+    user, _product, order = await make_regular_order(database_session)
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.PENDING
+    await database_session.commit()
+    order_id = order.id
+    user_id = user.id
+    order_amount = order.amount_total
+
+    class InterruptedInvoiceAdapter:
+        provider_name = "ecpay"
+        external_issue_started = False
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request)
+
+        async def query_invoice(self, relate_number, *, buyer_type):
+            return {"RtnCode": 0, "RtnMsg": "查無資料"}
+
+        async def issue_prepared_invoice(self, request):
+            self.external_issue_started = True
+            raise asyncio.CancelledError
+
+    adapter = InterruptedInvoiceAdapter()
+    with pytest.raises(asyncio.CancelledError):
+        await issue_paid_order_invoice(database_session, order_id, adapter)
+    assert adapter.external_issue_started is True
+    await database_session.rollback()
+    database_session.expunge_all()
+
+    saved_order = await database_session.scalar(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(selectinload(Order.invoice))
+    )
+    invoice = saved_order.invoice
+    assert invoice is not None
+    assert invoice.status == InvoiceStatus.PENDING
+    assert invoice.provider_request
+
+    saved_order.payment_status = PaymentStatus.REFUNDED
+    refund = Refund(
+        order=saved_order,
+        amount=order_amount,
+        status=RefundStatus.COMPLETED,
+        reason="付款已退款",
+        requested_by_id=user_id,
+    )
+    database_session.add(refund)
+    await database_session.flush()
+    assert enqueue_invoice_adjustment_after_refund(
+        database_session,
+        saved_order,
+        refund,
+    ) is True
+    assert invoice.status == InvoiceStatus.VOID_PENDING
+
+
+@pytest.mark.asyncio
+async def test_delivered_logistics_invoice_includes_shipping_fee(
+    database_session,
+) -> None:
+    _user, _product, order = await make_regular_order(database_session)
+    order.amount_total = 360
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.invoice_status = InvoiceStatus.PENDING
+    order.fulfillment_method = FulfillmentMethod.ECPAY_LOGISTICS
+    order.fulfillment = OrderFulfillment(
+        method=FulfillmentMethod.ECPAY_LOGISTICS,
+        status=FulfillmentState.DELIVERED,
+        shipment=Shipment(
+            channel=ShippingChannel.HOME_DELIVERY,
+            temperature=ShippingTemperature.AMBIENT,
+            status=ShipmentStatus.DELIVERED,
+            shipping_fee=160,
+        ),
+    )
+    await database_session.commit()
+
+    class InvoiceAdapter:
+        provider_name = "ecpay"
+        issued_request = None
+
+        def prepare_invoice(self, request):
+            return prepare_test_invoice(request)
+
+        async def query_invoice(self, relate_number, *, buyer_type="personal"):
+            return {"RtnCode": 0, "RtnMsg": "not found"}
+
+        async def issue_prepared_invoice(self, request):
+            self.issued_request = request
+            return InvoiceIssueResult(
+                relate_number=request.relate_number,
+                invoice_number="AB12345679",
+                invoice_date="2026-07-29 12:30:00",
+                random_number="5678",
+                raw={"RtnCode": 1, "InvoiceNo": "AB12345679"},
+            )
+
+    adapter = InvoiceAdapter()
+    await issue_paid_order_invoice(database_session, order.id, adapter)
+
+    assert adapter.issued_request is not None
+    actual_lines = [
+        (line.name, line.amount, line.tax_type)
+        for line in adapter.issued_request.items
+    ]
+    assert actual_lines == [
+        ("測試白米", 200, "1"),
+        ("運費", 160, "1"),
+    ]
+    assert (
+        sum(line.amount for line in adapter.issued_request.items)
+        == order.amount_total
+    )
 
 
 @pytest.mark.asyncio

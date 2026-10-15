@@ -1,0 +1,117 @@
+.login-dialog { font-size: 1.125rem; line-height: 1.65; }
+.login-dialog .login-preference { display: flex; align-items: center; gap: .75rem; min-height: 3rem; }
+.login-dialog .login-preference input { width: 1.4rem; min-height: 1.4rem; height: 1.4rem; flex-shrink: 0; margin: 0; }
+.login-dialog .login-preference-help, .login-dialog .dialog-footnote { font-size: 1rem; line-height: 1.65; }
+.login-dialog .login-form input:not([type="checkbox"]), .login-dialog .button { min-height: 3rem; font-size: 1.125rem; }
+
+.line-membership-intent,
+.line-callback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.line-membership-intent button {
+  flex: 1;
+  min-height: 48px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--ink);
+  background: var(--paper-light);
+  font-size: 1.125rem;
+  cursor: pointer;
+}
+
+.line-membership-intent button[aria-pressed="true"] {
+  color: var(--paper-light);
+  background: var(--moss-dark);
+}
+
+.line-login-entry .line-login-button {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid #087f3c;
+  background: #06c755;
+  color: #062a13;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.line-login-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.line-login-entry p,
+.line-login-alternative,
+.line-account-link p,
+.line-callback-page p {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.line-account-link {
+  margin: 24px 0;
+  padding: 24px 0;
+  border-block: 1px solid var(--line);
+}
+
+.line-account-link .line-login-entry {
+  max-width: 400px;
+}
+
+.line-account-link h2,
+.line-callback-page h2 {
+  font-size: 1.5rem;
+}
+
+.line-callback-page {
+  max-width: 680px;
+  margin: 40px auto;
+  padding: 24px;
+}
+
+.line-callback-page h1 {
+  font-size: 2.25rem;
+}
+
+.line-callback-page input,
+.line-callback-page .button {
+  min-height: 48px;
+  font-size: 1.125rem;
+}
+
+.line-callback-page form {
+  display: grid;
+  gap: 20px;
+}
+
+.line-membership-intent button:focus-visible,
+.line-login-button:focus-visible,
+.line-callback-page button:focus-visible,
+.line-callback-page a:focus-visible {
+  outline: 3px solid var(--moss-dark);
+  outline-offset: 3px;
+}
+
+.line-login-description { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.line-login-alternative { text-align: center; margin: 1rem 0; }
+.line-callback-page { min-width: 0; }
+.line-callback-page input { width: 100%; min-width: 0; }
+
+.account-login-page { width: min(100%, 38rem); margin-inline: auto; padding: 3rem 1.5rem 5rem; line-height: 1.6; }
+.account-login-page header { margin-block: 2rem; }
+.account-login-page h1 { margin: .5rem 0 0; font-family: var(--serif); font-weight: 400; font-size: clamp(2rem, 5vw, 3rem); }
+.account-login-page .login-form { margin-top: 0; gap: 1.25rem; }
+.account-login-page .login-form input:not([type="checkbox"]) { height: 3.5rem; font-size: 1.125rem; }
+.account-login-page .login-preference { display: flex; align-items: center; gap: .75rem; min-height: 2.75rem; }
+.account-login-page .login-preference input { width: 1.4rem; height: 1.4rem; margin: 0; flex-shrink: 0; }
+.account-login-page .login-form > .button { min-height: 3.5rem; font-size: 1.125rem; }
+.account-login-page .login-secondary { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.25rem; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line-strong); }
+.account-login-page .line-membership-intent { margin: 0; gap: .5rem; }
+.account-login-page .line-membership-intent button { flex: none; padding: .5rem .75rem; min-height: 2.75rem; border-radius: 0; font-size: 1rem; }
+.account-login-page .line-login-button { width: auto; min-height: 2.75rem; padding: .5rem 1rem; font-size: 1rem; color: var(--moss-dark); background: transparent; border-color: var(--line-strong); }
+.account-login-page .line-login-entry p { margin-block: .5rem; font-size: 1rem; }
+.account-login-page :is(input, button, a):focus-visible { outline: 3px solid var(--moss-dark); outline-offset: 3px; }

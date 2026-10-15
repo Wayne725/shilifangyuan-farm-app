@@ -16,8 +16,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+settings = get_settings()
 config.set_main_option(
-    "sqlalchemy.url", get_settings().async_database_url.replace("%", "%%")
+    "sqlalchemy.url", settings.async_database_url.replace("%", "%%")
 )
 target_metadata = Base.metadata
 
@@ -45,10 +46,14 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
+    connect_args = {}
+    if settings.async_database_url.startswith("postgresql+asyncpg://"):
+        connect_args = {"timeout": settings.database_connect_timeout_seconds}
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

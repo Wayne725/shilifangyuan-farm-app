@@ -1,0 +1,17 @@
+.admin-users-page { font-size: 1.125rem; line-height: 1.65; }
+.admin-user-search { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 1rem; align-items: end; margin-block: 1.5rem; }
+.admin-users-page input, .admin-users-page select, .admin-users-page textarea, .admin-users-page button { font-size: 1.125rem; min-height: 3rem; }
+.admin-user-row { padding-block: 1.5rem; border-bottom: 1px solid var(--line, #d9ddd8); overflow-wrap: anywhere; }
+.admin-user-row header { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.admin-user-row h2 { font-size: 1.375rem; margin: 0; }
+.admin-user-row p { margin-block: .5rem; }
+.admin-offline-membership { display: grid; gap: 1rem; max-width: 42rem; margin-top: 1rem; }
+.admin-offline-confirm { display: flex; align-items: start; gap: .75rem; }
+.admin-offline-confirm input { width: 1.5rem; height: 1.5rem; min-height: 0; flex-shrink: 0; margin-top: .25rem; }
+.admin-users-page :is(input, select, textarea, button, a):focus-visible { outline: 3px solid #426848; outline-offset: 3px; }
+.admin-users-page > .workspace-heading { grid-template-columns: minmax(0, 1fr); }
+.admin-user-search :is(input, select, .button) { height: 3.5rem; min-height: 3.5rem; margin: 0; line-height: 1.4; }
+.admin-membership-removal { max-width: 42rem; margin-block: 1rem; padding: 1.25rem; border: 1px solid var(--line-strong); }
+.admin-membership-removal h3 { margin: 0 0 1rem; font-size: 1.25rem; }
+.admin-user-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }
+@media(max-width: 700px) { .admin-user-search { grid-template-columns: 1fr; } }

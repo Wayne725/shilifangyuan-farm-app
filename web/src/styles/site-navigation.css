@@ -1,0 +1,28 @@
+.site-frame > .site-header {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: clamp(12px, 2vw, 24px);
+}
+.site-header .desktop-nav { justify-self: start; width: max-content; }
+.site-header .account-button span { max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-header .mobile-menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  min-height: 48px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.site-frame .site-menu { display: block; padding-inline: clamp(22px, 4vw, 72px); }
+.site-menu a:hover, .site-menu button:hover { color: var(--moss-dark); }
+.workspace-passage.single-workspace { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+.workspace-passage.single-workspace .passage-copy { grid-column: auto; }
+@media (min-width: 901px) and (max-width: 1180px) {
+  .site-header .brand span { display: none; }
+  .site-header :is(.account-button, .cart-link, .orders-link) span { display: inline; }
+}
+@media (max-width: 900px) {
+  .site-frame > .site-header { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+  .site-header .header-actions { grid-column: 2; }
+  .workspace-passage.single-workspace { grid-template-columns: minmax(0, 1fr); }
+}

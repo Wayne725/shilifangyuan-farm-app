@@ -12,9 +12,11 @@ jobs:
       RECONCILE_URL: ${{ secrets.RECONCILE_URL }}
       RECONCILE_SECRET: ${{ secrets.RECONCILE_SECRET }}
     steps:
-      - name: Skip until deployment secrets are configured
+      - name: Require deployment secrets
         if: ${{ env.RECONCILE_URL == '' || env.RECONCILE_SECRET == '' }}
-        run: echo "Reconciliation is inactive until Render deployment secrets are configured."
+        run: |
+          echo "Reconciliation requires RECONCILE_URL and RECONCILE_SECRET."
+          exit 1
 
       - name: Reconcile deadlines, payments, invoices, and notifications
         if: ${{ env.RECONCILE_URL != '' && env.RECONCILE_SECRET != '' }}

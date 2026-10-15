@@ -2,12 +2,7 @@ import re
 
 import pytest
 import app.routers.catalog as catalog_module
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.auth import make_token_pair
-from app.database import Base, get_session
 from app.models import Product, TaxType, User, UserRole
 from app.routers.catalog import (
     catalog_router,
@@ -16,31 +11,14 @@ from app.routers.catalog import (
     update_product,
 )
 from app.schemas import ProductCreate, ProductUpdate
-
-
-@pytest.fixture
-async def database_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        yield session
-    await engine.dispose()
+from tests.support import api_test_context, auth_headers
 
 
 @pytest.fixture
 async def http_client(database_session):
-    application = FastAPI()
-    application.include_router(catalog_router)
-
-    async def override_get_session():
-        yield database_session
-
-    application.dependency_overrides[get_session] = override_get_session
-    async with AsyncClient(
-        transport=ASGITransport(app=application),
-        base_url="http://test",
+    async with api_test_context(
+        database_session,
+        [catalog_router],
     ) as client:
         yield client
 
@@ -62,11 +40,6 @@ async def users(database_session):
     database_session.add_all([admin, customer])
     await database_session.commit()
     return admin, customer
-
-
-def auth_headers(user: User) -> dict[str, str]:
-    token = make_token_pair(user)["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 def product_payload(**overrides) -> dict:
