@@ -36,6 +36,6 @@ export function MealImageEditor({ meal, onDone }: { meal: Meal; onDone: () => vo
 function ImageField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return <div className="meal-image-field">
     <MealPhoto src={value.trim()} alt={label.replace("網址", "")} />
-    <label className="field"><span>{label}</span><input type="url" maxLength={500} value={value} placeholder="https://…" onChange={(event) => onChange(event.target.value)} /></label>
+    <label className="field"><span>{label}</span><input type="text" inputMode="url" autoCapitalize="none" spellCheck={false} maxLength={500} value={value} placeholder="https://…" onChange={(event) => onChange(event.target.value)} /></label>
   </div>;
 }
