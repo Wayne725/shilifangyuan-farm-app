@@ -12,6 +12,7 @@ from app.models import (
     PaymentAttempt, PaymentStatus, Refund, User, UserRole,
 )
 from app.routers.admin_users import admin_users_router
+from app.routers.membership import membership_router
 from tests.support import api_test_context, auth_headers, make_test_settings
 
 
@@ -22,7 +23,7 @@ async def users_context(database_session):
     other = User(email="users-other@example.com", display_name="其他使用者", password_hash="private-password-hash")
     database_session.add_all([admin, buyer, other])
     await database_session.commit()
-    async with api_test_context(database_session, [admin_users_router], settings=make_test_settings()) as client:
+    async with api_test_context(database_session, [admin_users_router, membership_router], settings=make_test_settings()) as client:
         yield SimpleNamespace(session=database_session, client=client, admin=admin, buyer=buyer, other=other)
 
 
@@ -55,6 +56,30 @@ async def test_email_less_line_customer_can_be_found_and_linked_to_roster_by_adm
     await c.session.refresh(entry)
     assert entry.claimed_user_id == c.buyer.id
     assert promoted.json()["membership_type"] == "member"
+
+
+@pytest.mark.asyncio
+async def test_remove_membership_updates_registered_user_without_deleting_records(users_context):
+    c = users_context
+    granted = await grant(c)
+    assert granted.status_code == 200
+    membership_id = granted.json()["membership_id"]
+    path = f"/v1/admin/members/{membership_id}/suspend"
+    assert (await c.client.post(path, json={"reason": "社員資料誤設"}, headers=auth_headers(c.other))).status_code == 403
+    removed = await c.client.post(path, json={"reason": "社員資料誤設"}, headers=auth_headers(c.admin))
+    assert removed.status_code == 200, removed.text
+    listing = await c.client.get("/v1/admin/users", params={"search": c.buyer.email, "membership_type": "nonmember"}, headers=auth_headers(c.admin))
+    item = listing.json()["items"][0]
+    assert item["membership_type"] == "nonmember"
+    assert item["membership_status"] == "suspended"
+    assert item["membership_id"] == membership_id
+    assert item["member_number"] == granted.json()["member_number"]
+    summary = await c.client.get("/v1/members/me", headers=auth_headers(c.buyer))
+    assert summary.json()["membership_type"] == "nonmember"
+    assert await c.session.scalar(select(User.id).where(User.id == c.buyer.id)) == c.buyer.id
+    audit = await c.session.scalar(select(AdminAudit).where(AdminAudit.action == "membership.suspended"))
+    assert audit.reason == "社員資料誤設" and audit.actor_id == c.admin.id
+    assert await c.session.scalar(select(func.count()).select_from(Refund)) == 0
 
 
 @pytest.mark.asyncio

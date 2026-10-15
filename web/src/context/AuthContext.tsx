@@ -1,9 +1,6 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import { X } from "@phosphor-icons/react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
-  type FormEvent,
   type ReactNode,
   useContext,
   useEffect,
@@ -17,8 +14,8 @@ import {
   saveSession,
 } from "../lib/api";
 import type { AuthResponse, User } from "../lib/types";
-import { rememberedLoginEmail, rememberLoginEmail } from "../lib/login-preferences";
-import { LineLoginButton } from "../components/LineLogin";
+import { rememberLoginEmail } from "../lib/login-preferences";
+import { loginReturnTo } from "../lib/login-navigation";
 import "../styles/auth-options.css";
 
 interface AuthContextValue {
@@ -27,6 +24,7 @@ interface AuthContextValue {
   sessionError: string;
   retrySession: () => void;
   openLogin: () => void;
+  login: (email: string, password: string, rememberMe: boolean) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -38,12 +36,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [sessionError, setSessionError] = useState("");
   const [sessionAttempt, setSessionAttempt] = useState(0);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [email, setEmail] = useState(rememberedLoginEmail);
-  const [rememberMe, setRememberMe] = useState(true);
-  const [lineIntent, setLineIntent] = useState<"member" | "nonmember">("nonmember");
 
   useEffect(() => {
     let active = true;
@@ -64,33 +56,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [sessionAttempt]);
 
-  const login = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setBusy(true);
-    setError("");
-    try {
-      const session = await apiFetch<AuthResponse>("/v1/auth/login", {
-        method: "POST",
-        body: JSON.stringify({
-          email: form.get("email"),
-          password: form.get("password"),
-          remember_me: rememberMe,
-        }),
-      });
-      saveSession(session);
-      rememberLoginEmail(email, rememberMe);
-      queryClient.clear();
-      setUser(session.user);
-      setIsAuthReady(true);
-      setSessionError("");
-      setOpen(false);
-      if (window.location.pathname === "/auth/line/callback") window.location.assign("/account");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "登入失敗");
-    } finally {
-      setBusy(false);
-    }
+  const login = async (email: string, password: string, rememberMe: boolean) => {
+    const session = await apiFetch<AuthResponse>("/v1/auth/login", {
+      method: "POST", body: JSON.stringify({ email, password, remember_me: rememberMe }),
+    });
+    saveSession(session);
+    rememberLoginEmail(email, rememberMe);
+    queryClient.clear();
+    setUser(session.user);
+    setIsAuthReady(true);
+    setSessionError("");
+  };
+
+  const openLogin = () => {
+    if (window.location.pathname === "/login") return;
+    const returnTo = loginReturnTo(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+    window.location.assign(`/login?return_to=${encodeURIComponent(returnTo)}`);
   };
 
   const logout = async () => {
@@ -103,62 +84,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  return (
-    <AuthContext.Provider
-      value={{ user, isAuthReady, sessionError, retrySession: () => setSessionAttempt((value) => value + 1), openLogin: () => setOpen(true), logout }}
-    >
-      {children}
-      <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content className="login-dialog">
-            <Dialog.Close className="icon-button dialog-close" aria-label="關閉">
-              <X size={20} weight="light" />
-            </Dialog.Close>
-            <Dialog.Title>登入訂餐</Dialog.Title>
-            <Dialog.Description className="line-login-description">選擇 LINE 或 Email 登入。</Dialog.Description>
-            <div className="line-membership-intent" role="group" aria-label="社員身分選擇"><button type="button" aria-pressed={lineIntent === "member"} onClick={() => setLineIntent("member")}>我是社員</button><button type="button" aria-pressed={lineIntent === "nonmember"} onClick={() => setLineIntent("nonmember")}>我不是社員</button></div>
-            <label className="login-preference"><input type="checkbox" checked={rememberMe} onChange={(event) => { setRememberMe(event.target.checked); if (!event.target.checked) rememberLoginEmail("", false); }} /><span>保持登入</span></label>
-            <LineLoginButton intent={lineIntent} rememberMe={rememberMe} returnTo={window.location.pathname === "/auth/line/callback" ? "/shop" : undefined} />
-            <p className="line-login-alternative">或使用 Email 登入</p>
-            <form className="login-form" onSubmit={login}>
-              <label>
-                電子信箱
-                <input name="email" type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} />
-              </label>
-              <label>
-                密碼
-                <input
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                />
-              </label>
-              {error && <p className="form-error">{error}</p>}
-              <button className="button button-primary" disabled={busy}>
-                {busy ? "登入中…" : "登入系統"}
-              </button>
-            </form>
-            <div className="login-links">
-              <a href="/forgot-password" onClick={() => setOpen(false)}>
-                忘記密碼
-              </a>
-              <a href="/register" onClick={() => setOpen(false)}>
-                註冊帳號
-              </a>
-            </div>
-            <p className="dialog-footnote">
-              尚未完成 Email 驗證？{" "}
-              <a href="/verify-email" onClick={() => setOpen(false)}>
-                輸入或重寄驗證碼
-              </a>
-            </p>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ user, isAuthReady, sessionError,
+    retrySession: () => setSessionAttempt((value) => value + 1), openLogin, login, logout }}>
+    {children}
+  </AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

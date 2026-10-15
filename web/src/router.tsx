@@ -55,6 +55,15 @@ const homeRoute = createRoute({
   component: page("./pages/HomePage", "HomePage"),
 });
 
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  validateSearch: (search: Record<string, unknown>): { return_to?: string } => ({
+    return_to: typeof search.return_to === "string" ? search.return_to : undefined,
+  }),
+  component: page("./pages/LoginPage", "LoginPage"),
+});
+
 const registerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/register",
@@ -323,6 +332,7 @@ const lineLoginRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
+  loginRoute,
   lineLoginRoute,
   homeRoute,
   registerRoute,

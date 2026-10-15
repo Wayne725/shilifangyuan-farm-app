@@ -86,7 +86,8 @@ async function verify(page, state) {
 async function openLogin(page) {
   await page.goto(`${base}/account`);
   await page.getByRole('main').getByRole('button', { name: '帳號登入', exact: true }).click();
-  return page.getByRole('dialog');
+  await page.getByRole('heading', { name: '帳號登入', exact: true }).waitFor();
+  return page.getByRole('main');
 }
 
 for (const width of [1440, 390]) {
@@ -119,7 +120,7 @@ for (const width of [1440, 390]) {
     const { page, state } = await fixture(t, width, { ready: false });
     await page.goto(`${base}/account`); await enlarge(page);
     await page.getByRole('main').getByRole('button', { name: '帳號登入', exact: true }).click();
-    const dialog = page.getByRole('dialog');
+    const dialog = page.getByRole('main');
     await dialog.getByText(/LINE登入尚未啟用/).waitFor();
     assert.equal(await dialog.getByRole('button', { name: /使用\s*LINE\s*登入/ }).isEnabled(), false);
     assert.equal(await dialog.getByRole('button', { name: '登入系統', exact: true }).isEnabled(), true);
@@ -171,7 +172,7 @@ for (const width of [1440, 390]) {
     assert.equal(calls(state, 'line/callback').length, 1);
     await enlarge(page);
     await page.getByRole('button', { name: /Email.*登入/ }).click();
-    const dialog = page.getByRole('dialog');
+    const dialog = page.getByRole('main');
     await dialog.getByLabel('電子信箱', { exact: true }).fill('buyer@example.test');
     await dialog.getByLabel('密碼', { exact: true }).fill('Isolated-test-only-123');
     await dialog.getByRole('button', { name: '登入系統', exact: true }).click();
@@ -216,7 +217,7 @@ test('未選社員預設一般使用者與保持登入，start401不refresh或�
   await dialog.getByRole('button', { name: /使用\s*LINE\s*登入/ }).click();
   await dialog.getByRole('alert').filter({ hasText: 'LINE授權已失效' }).waitFor();
   assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'nonmember', remember_me: true, mode: 'login', return_to: '/account' }]);
-  assert.equal(calls(state, 'refresh').length, 1);
+  assert.equal(calls(state, 'refresh').length, 2);
   assert.equal(calls(state, 'line/callback').length, 0);
   await verify(page, state);
 });

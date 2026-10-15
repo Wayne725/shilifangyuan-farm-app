@@ -41,7 +41,7 @@ async function mockAccount(context, { signedIn = false, loginStatus = 200, verif
 }
 
 async function login(page) {
-  const dialog = page.getByRole('dialog');
+  const dialog = page.getByRole('main');
   await dialog.getByLabel('電子信箱', { exact: true }).fill('buyer@example.test');
   await dialog.getByLabel('密碼', { exact: true }).fill('Isolated-test-only-123');
   await dialog.getByRole('button', { name: '登入系統', exact: true }).click();
@@ -57,7 +57,7 @@ test('驗證完成後登入回到首頁，不再顯示登入提示', async () =>
     await page.getByLabel('六位數驗證碼', { exact: true }).fill('123456');
     await page.getByRole('button', { name: '完成驗證', exact: true }).click();
     await page.getByRole('button', { name: '登入開始使用', exact: true }).click();
-    assert.equal(new URL(page.url()).pathname, '/verify-email');
+    assert.equal(new URL(page.url()).pathname, '/login');
     await login(page);
     await page.waitForURL(`${base}/`, { timeout: 5000 });
     assert.equal(await page.getByRole('dialog').count(), 0);
@@ -126,7 +126,7 @@ for (const path of ['/register', '/register?intent=nonmember', '/verify-email?to
   });
 }
 
-test('驗證完成但登入失敗時留在驗證頁，不誤判已登入', async () => {
+test('驗證完成但登入失敗時留在登入頁，不誤判已登入', async () => {
   const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   try {
     const context = await browser.newContext();
@@ -137,8 +137,8 @@ test('驗證完成但登入失敗時留在驗證頁，不誤判已登入', async
     await page.getByRole('button', { name: '完成驗證', exact: true }).click();
     await page.getByRole('button', { name: '登入開始使用', exact: true }).click();
     await login(page);
-    await page.getByRole('dialog').getByText('帳號或密碼錯誤', { exact: true }).waitFor();
-    assert.equal(new URL(page.url()).pathname, '/verify-email');
+    await page.getByRole('main').getByText('帳號或密碼錯誤', { exact: true }).waitFor();
+    assert.equal(new URL(page.url()).pathname, '/login');
   } finally {
     await browser.close();
   }

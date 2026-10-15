@@ -15,7 +15,7 @@ const helpItems = [
 const mealQuestions = [
   { question: "還沒有網站帳號，可以用 LINE 註冊嗎？", answer: "可以。按「帳號登入」再選「使用LINE登入」，授權後會自動建立顧客帳號並回到原頁，不需填 Email 或建立密碼。訂單與發票通知信箱到結帳時再填。已有網站帳號請先登入原帳號，再連結 LINE，沿用訂單與社員資格。" },
   { question: "我是社員／我不是社員有什麼差別？", answer: "這是社員意向，不會改變實際資格；兩者授權後都回到原頁。若已在線下加入合作社，請由管理員核對社員名冊並連結資格；已有帳號依目前的實際社員資格登入。" },
-  { question: "如何使用 LINE 登入？", answer: "打開登入視窗，選擇社員身分，按「使用LINE登入」並依 LINE 畫面授權。已有 Email 帳號時，先登入原帳號，到帳號中心按「連結LINE」，之後才能用 LINE 沿用原訂單與社員資格。勾選「保持登入」可保留登入狀態，也會記住 Email 登入時填寫的信箱。" },
+  { question: "如何使用 LINE 登入？", answer: "開啟帳號登入頁，在下方選擇社員身分，按「使用LINE登入」並依 LINE 畫面授權。已有 Email 帳號時，先登入原帳號，到帳號中心按「連結LINE」，之後才能用 LINE 沿用原訂單與社員資格。勾選「保持登入」可保留登入狀態，也會記住 Email 登入時填寫的信箱。" },
   { question: "今天可以訂今天的餐嗎？", answer: "不可以。只能提前一天預訂，以台灣日期為準；今天可訂明天的餐點，也不能提前兩天以上下單。" },
   { question: "最晚什麼時候要訂？", answer: "請看該場次的「預訂截止」。最晚須在取餐日前一天結束前送出，管理員也可能設定較早截單。超過截止時間就無法建立新訂單。" },
   { question: "午餐、晚餐的操作一樣嗎？", answer: "一樣，餐點相同。直接選 11:00～13:00 或 16:30～18:00 的半小時取餐時段，再選餐點與份數，確認明細後付款。" },
@@ -31,7 +31,7 @@ const mealQuestions = [
 ];
 
 export function HelpPage() {
-  return <section className="help-page meal-help-page"><Link className="text-link" to="/shop"><ArrowLeft size={17} />回到便當預訂</Link><header><h1>操作說明與常見問題</h1><p>從訂餐到取餐，依照下方步驟操作。</p></header><nav className="meal-help-actions" aria-label="常用入口"><Link className="button button-primary" to="/shop">我要訂餐</Link><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link></nav><div className="help-list">{helpItems.map(({ icon: Icon, title, body }, index) => <article key={title}><span>{String(index + 1).padStart(2, "0")}</span><Icon size={24} weight="light" /><div><h2>{title}</h2><p>{body}</p></div></article>)}</div><section className="meal-faq" aria-label="便當常見問題"><h2>常見問題</h2>{mealQuestions.map(({ question, answer }) => <details key={question}><summary>{question}</summary><p>{answer}</p></details>)}</section></section>;
+  return <section className="help-page meal-help-page"><Link className="text-link" to="/"><ArrowLeft size={17} />回到首頁</Link><header><h1>操作說明與常見問題</h1></header><div className="help-list">{helpItems.map(({ icon: Icon, title, body }, index) => <article key={title}><span>{String(index + 1).padStart(2, "0")}</span><Icon size={24} weight="light" /><div><h2>{title}</h2><p>{body}</p></div></article>)}</div><section className="meal-faq" aria-label="便當常見問題"><h2>常見問題</h2>{mealQuestions.map(({ question, answer }) => <details key={question}><summary>{question}</summary><p>{answer}</p></details>)}</section></section>;
 }
 
 export function NotFoundPage() {
