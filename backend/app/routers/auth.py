@@ -72,6 +72,7 @@ def user_read(user: User) -> UserRead:
         id=user.id,
         customer_number=user.customer_number,
         email=user.email,
+        notification_email=user.notification_email,
         display_name=user.display_name,
         user_role=user.user_role,
         membership_type=membership_type_for_user(user),

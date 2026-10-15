@@ -2,7 +2,8 @@ export type UserRole = "customer" | "admin";
 
 export interface User {
   id: string;
-  email: string;
+  email: string | null;
+  notification_email?: string | null;
   display_name: string;
   user_role: UserRole;
   membership_type?: "nonmember" | "trainee" | "member";

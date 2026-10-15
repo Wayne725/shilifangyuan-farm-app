@@ -239,8 +239,8 @@ export function InvoicePreferenceFields({
           </label>
           <p id={emailDescriptionId}>
             {value.buyerType === "personal" && value.carrierType === "cloud"
-              ? "預填登入 Email，可修改；此信箱同時作為會員載具識別與通知信箱。"
-              : "預填登入 Email，可修改；汎宇會將開票通知寄到這個信箱。"}
+              ? "訂單與發票通知寄到此信箱，並作為會員載具識別。"
+              : "訂單與發票通知寄到此信箱。"}
           </p>
           {emailError && <p className="invoice-field-error">{emailError}</p>}
         </div>

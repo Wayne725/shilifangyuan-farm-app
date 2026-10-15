@@ -60,11 +60,12 @@ export function MealEventPage() {
 function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initialPickupAt?: string }) {
   const navigate = useNavigate({ from: "/meals/$eventId" });
   const { user, openLogin } = useAuth();
+  const notificationEmail = user?.notification_email || user?.email || "";
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
   const [draftAdjusted, setDraftAdjusted] = useState(false);
   const [now, setNow] = useState(Date.now);
   const [invoicePreference, setInvoicePreference] = useState(
-    () => defaultInvoicePreference(user?.email || ""),
+    () => defaultInvoicePreference(notificationEmail),
   );
   const event = useQuery({
     queryKey: ["meal-event", eventId],
@@ -108,7 +109,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       body: JSON.stringify({
         items,
         pickup_at: taipeiInputToIso(pickupAt),
-        contact_email: user?.email || "preview@example.com",
+        contact_email: invoicePreference.buyerEmail.trim(),
         ...invoicePreferencePayload(invoicePreference),
       }),
     }),
@@ -128,7 +129,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         eventId,
         pickupAt: taipeiInputToIso(pickupAt),
         items,
-        contactEmail: user.email,
+        contactEmail: invoicePreference.buyerEmail.trim(),
         invoicePreference,
       });
     },
@@ -157,11 +158,11 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   }, [currentDraft, draft, event.data, eventId]);
 
   useEffect(() => {
-    if (!user?.email) return;
+    if (!notificationEmail) return;
     setInvoicePreference((current) =>
-      current.buyerEmail ? current : { ...current, buyerEmail: user.email },
+      current.buyerEmail ? current : { ...current, buyerEmail: notificationEmail },
     );
-  }, [user?.email]);
+  }, [notificationEmail]);
 
   if (event.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (event.isError || !event.data) {

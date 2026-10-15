@@ -348,7 +348,8 @@ class User(Base):
     customer_number: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, unique=True, index=True
     )
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, unique=True, index=True)
+    notification_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
     token_version: Mapped[int] = mapped_column(Integer, default=0)

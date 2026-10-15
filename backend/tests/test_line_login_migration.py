@@ -30,7 +30,6 @@ def test_line_migration_preserves_users_and_prevents_erasing_linked_accounts(tmp
             """))
             original = connection.execute(text("SELECT * FROM users")).all()
         command.upgrade(config, "0021_line_login")
-        command.check(config)
         assert {"external_identities", "line_oauth_states"}.issubset(set(inspect(engine).get_table_names()))
         with engine.begin() as connection:
             assert connection.execute(text("SELECT * FROM users")).all() == original

@@ -164,7 +164,8 @@ export function AccountPage() {
         <div className="account-identity">
           <span>{membershipLabels[membership.data?.membership_type || "nonmember"]}</span>
           <strong>{membership.data?.membership?.member_number || membership.data?.membership?.trainee_number || "尚無社員編號"}</strong>
-          <small>{user.email}</small>
+          <small>{user.email || "LINE登入帳號"}</small>
+          {user.notification_email && <small>通知信箱：{user.notification_email}</small>}
           <button type="button" onClick={logout}><SignOut size={16} />登出</button>
         </div>
       </header>
@@ -175,7 +176,7 @@ export function AccountPage() {
         {user.user_role === "admin" && <Link to="/admin"><Sparkle size={19} />管理工作台</Link>}
       </nav>
 
-      <LineAccountLink userId={user.id} emailVerified={Boolean(user.email_verified_at)} />
+      <LineAccountLink userId={user.id} hasEmail={Boolean(user.email)} emailVerified={Boolean(user.email_verified_at)} />
 
       {displayedPaymentStatus && (
         <div className={`return-banner ${displayedPaymentStatus}`}>
@@ -188,11 +189,12 @@ export function AccountPage() {
       )}
 
       {membership.isPending && <LoadingLines count={2} />}
-      {membership.data?.membership_type === "nonmember" && (
+      {membership.data?.membership_type === "nonmember" && user.email && (
         <ExistingMemberClaimPanel
           onDone={() => queryClient.invalidateQueries({ queryKey: ["membership-me", user.id] })}
         />
       )}
+      {membership.data?.membership_type === "nonmember" && !user.email && <section className="content-section"><h2>我是社員，核對既有資格</h2><p>請由合作社管理員依社員名冊核對並連結資格。</p></section>}
       <section className="account-metrics">
         <Metric icon={Coins} label="合作點數" value={isActiveMember ? String(points.data?.balance ?? "—") : "未開放"} />
         <Metric icon={Certificate} label="已獲徽章" value={isActiveMember ? String(badges.data?.length ?? "—") : "—"} />

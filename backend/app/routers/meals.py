@@ -816,6 +816,7 @@ async def create_meal_order(
             pickup_code=pickup_code,
         ),
     )
+    user.notification_email = order.contact_email
     session.add(order)
     await session.flush()
     qr_token = _pickup_qr_payload(order)

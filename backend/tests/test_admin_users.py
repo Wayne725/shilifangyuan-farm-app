@@ -39,6 +39,25 @@ def roster(number, **overrides):
 
 
 @pytest.mark.asyncio
+async def test_email_less_line_customer_can_be_found_and_linked_to_roster_by_admin(users_context):
+    c = users_context
+    c.buyer.email = None
+    c.buyer.notification_email = "line-notices@example.com"
+    entry = roster("LINE-100")
+    c.session.add(entry)
+    await c.session.commit()
+    found = await c.client.get("/v1/admin/users", params={"search": "line-notices@example.com"}, headers=auth_headers(c.admin))
+    assert found.status_code == 200 and found.json()["total"] == 1
+    assert found.json()["items"][0]["email"] is None
+    assert found.json()["items"][0]["membership_type"] == "nonmember"
+    promoted = await grant(c, member_number="LINE-100")
+    assert promoted.status_code == 200, promoted.text
+    await c.session.refresh(entry)
+    assert entry.claimed_user_id == c.buyer.id
+    assert promoted.json()["membership_type"] == "member"
+
+
+@pytest.mark.asyncio
 async def test_all_registered_users_search_and_membership_filter_are_admin_only(users_context):
     c = users_context
     c.session.add(Membership(user=c.other, status=MembershipStatus.ACTIVE, member_number="ROSTER_100%"))

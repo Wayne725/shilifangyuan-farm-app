@@ -77,7 +77,8 @@ class DemoResetRequest(BaseModel):
 class UserRead(ApiModel):
     id: str
     customer_number: Optional[str] = None
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    notification_email: Optional[EmailStr] = None
     display_name: str
     user_role: UserRole
     membership_type: MembershipType
@@ -538,6 +539,13 @@ class InvoicePreferenceInput(BaseModel):
     invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.CLOUD
     invoice_carrier_value: Optional[str] = Field(default=None, max_length=64)
 
+    @model_validator(mode="before")
+    @classmethod
+    def use_checkout_notification_email(cls, value):
+        if isinstance(value, dict) and value.get("contact_email") is None and value.get("invoice_buyer_email"):
+            return {**value, "contact_email": value["invoice_buyer_email"]}
+        return value
+
     @model_validator(mode="after")
     def validate_invoice_preference(self) -> "InvoicePreferenceInput":
         if self.invoice_buyer_type == InvoiceBuyerType.COMPANY:
@@ -974,7 +982,7 @@ class ActivityRegistrationRead(ApiModel):
 
 class AdminActivityRegistrationRead(ActivityRegistrationRead):
     display_name: str
-    email: EmailStr
+    email: Optional[EmailStr] = None
 
 
 class ActivityRead(ApiModel):

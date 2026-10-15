@@ -35,10 +35,10 @@ export function LineLoginButton({ intent = "nonmember", rememberMe = true, mode 
   </div>;
 }
 
-export function LineAccountLink({ userId, emailVerified }: { userId: string; emailVerified: boolean }) {
+export function LineAccountLink({ userId, emailVerified, hasEmail = true }: { userId: string; emailVerified: boolean; hasEmail?: boolean }) {
   const status = useQuery({ queryKey: ["line-account-status", userId], queryFn: () => apiFetch<LineStatus>("/v1/auth/line/status") });
   return <section className="line-account-link" aria-label="LINE帳號連結"><h2>LINE登入</h2>
-    {status.data?.linked ? <><p>已連結LINE</p><p>{emailVerified ? "Email已驗證。" : "Email尚未驗證。"}</p></>
+    {status.data?.linked ? <><p>已連結LINE</p>{hasEmail && <p>{emailVerified ? "Email已驗證。" : "Email尚未驗證。"}</p>}</>
       : <><p>連結後沿用目前帳號的訂單與社員資格。</p><LineLoginButton mode="link" returnTo="/account" /></>}
     {status.isError && <p className="form-error">{status.error.message}</p>}
   </section>;

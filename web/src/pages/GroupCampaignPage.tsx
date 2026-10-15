@@ -47,6 +47,7 @@ const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
 export function GroupCampaignPage() {
   const { campaignId } = useParams({ from: "/groups/$campaignId" });
   const { user, openLogin } = useAuth();
+  const notificationEmail = user?.notification_email || user?.email || "";
   const [quantity, setQuantity] = useState(1);
   const [method, setMethod] = useState<"pickup" | "shipping">("pickup");
   const [pickupLocationId, setPickupLocationId] = useState("");
@@ -55,7 +56,7 @@ export function GroupCampaignPage() {
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [invoicePreference, setInvoicePreference] = useState(
-    () => defaultInvoicePreference(user?.email || ""),
+    () => defaultInvoicePreference(notificationEmail),
   );
   const campaign = useQuery({
     queryKey: ["group-campaign", campaignId],
@@ -86,7 +87,7 @@ export function GroupCampaignPage() {
         return beginGroupCheckout({
           campaignId,
           quantity,
-          contactEmail: user.email,
+          contactEmail: invoicePreference.buyerEmail.trim(),
           invoicePreference,
           fulfillment: {
             kind: "shipping",
@@ -101,7 +102,7 @@ export function GroupCampaignPage() {
       return beginGroupCheckout({
         campaignId,
         quantity,
-        contactEmail: user.email,
+        contactEmail: invoicePreference.buyerEmail.trim(),
         invoicePreference,
         fulfillment: { kind: "pickup", pickupLocationId },
       });
@@ -126,11 +127,11 @@ export function GroupCampaignPage() {
   }, [campaign.data, shippingChannel]);
 
   useEffect(() => {
-    if (!user?.email) return;
+    if (!notificationEmail) return;
     setInvoicePreference((current) =>
-      current.buyerEmail ? current : { ...current, buyerEmail: user.email },
+      current.buyerEmail ? current : { ...current, buyerEmail: notificationEmail },
     );
-  }, [user?.email]);
+  }, [notificationEmail]);
 
   if (campaign.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (campaign.isError || !campaign.data) {

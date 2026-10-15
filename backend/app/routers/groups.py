@@ -589,6 +589,7 @@ async def join_campaign(
             ),
         ),
     )
+    user.notification_email = order.contact_email
     session.add(order)
     await session.commit()
     order = await session.scalar(

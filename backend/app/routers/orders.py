@@ -325,6 +325,7 @@ async def create_order(
     )
     if controlled_product and not await is_meals_test_product_order(session, settings, order):
         require_sales_scope_allows(settings)
+    user.notification_email = order.contact_email
     session.add(order)
     await session.commit()
     order = await load_order(session, order.id)

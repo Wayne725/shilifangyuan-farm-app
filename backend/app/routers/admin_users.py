@@ -47,7 +47,7 @@ def _user_item(user: User) -> dict:
     membership = user.__dict__.get("membership")
     return {
         "id": user.id, "customer_number": user.customer_number,
-        "display_name": user.display_name, "email": user.email,
+        "display_name": user.display_name, "email": user.email, "notification_email": user.notification_email,
         "user_role": user.user_role.value, "is_active": user.is_active,
         "created_at": user.created_at.replace(tzinfo=user.created_at.tzinfo or timezone.utc), "email_verified": user.email_verified_at is not None,
         "membership_type": membership_type_for_user(user).value,
@@ -68,7 +68,7 @@ async def list_registered_users(
 ) -> dict:
     query = select(User).outerjoin(Membership, Membership.user_id == User.id)
     if search.strip():
-        query = query.where(or_(*(column.icontains(search.strip(), autoescape=True) for column in [User.email, User.display_name, User.customer_number, Membership.member_number])))
+        query = query.where(or_(*(column.icontains(search.strip(), autoescape=True) for column in [User.email, User.notification_email, User.display_name, User.customer_number, Membership.member_number])))
     if membership_type == "member":
         query = query.where(Membership.status == MembershipStatus.ACTIVE)
     elif membership_type == "trainee":

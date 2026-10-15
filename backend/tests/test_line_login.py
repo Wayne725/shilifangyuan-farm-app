@@ -240,10 +240,12 @@ async def test_existing_email_is_not_silently_merged(database_session, settings,
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
         state, _ = await start_flow(client)
         result = await callback(client, state)
-        assert result.status_code == 409
-        assert "原帳號" in result.json()["detail"]
-        assert await database_session.scalar(select(func.count()).select_from(User)) == 1
-        assert await database_session.scalar(select(func.count()).select_from(ExternalIdentity)) == 0
+        assert result.status_code == 200
+        created = result.json()["session"]["user"]
+        assert created["id"] != existing.id and created["email"] is None
+        assert created["membership_type"] == "nonmember" and created["user_role"] == "customer"
+        assert await database_session.scalar(select(func.count()).select_from(User)) == 2
+        assert await database_session.scalar(select(func.count()).select_from(ExternalIdentity)) == 1
         assert (await database_session.get(User, existing.id)).password_hash != "!line-only"
 
 
@@ -341,30 +343,47 @@ async def test_disabled_linked_account_cannot_sign_in(database_session, settings
 
 
 @pytest.mark.asyncio
-async def test_no_line_email_can_resume_registration_and_is_one_use(database_session, settings, profile):
+async def test_no_line_email_automatically_creates_customer_once(database_session, settings, profile):
     profile[0]["email"] = None
-    async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
+    async with api_test_context(database_session, [line_auth_router, auth_router], settings=settings) as client:
         state, _ = await start_flow(client, intent="member", remember_me=False, return_to="/checkout")
         result = await callback(client, state)
-        assert result.json()["status"] == "needs_email"
-        assert await database_session.scalar(select(func.count()).select_from(User)) == 0
-        pending = await client.get("/v1/auth/line/pending")
-        assert pending.json()["intent"] == "member" and pending.json()["return_to"] == "/checkout"
-        assert pending.headers["cache-control"] == "no-store"
-        old_browser = client.cookies.get(FLOW_COOKIE)
-        old_registration = client.cookies.get(REGISTRATION_COOKIE)
-        assert old_registration
-        registration = await client.post("/v1/auth/line/register", json={"email": "NOTIFICATION@example.com"})
-        assert registration.status_code == 200, registration.text
-        user = registration.json()["session"]["user"]
-        assert user["email"] == "notification@example.com" and user["email_verified_at"] is None
+        assert result.status_code == 200, result.text
+        assert result.json()["status"] == "authenticated" and result.json()["return_to"] == "/checkout"
+        user = result.json()["session"]["user"]
+        assert user["email"] is None and user["email_verified_at"] is None
+        assert user["notification_email"] is None
         assert user["membership_type"] == "nonmember"
         assert client.cookies.get(FLOW_COOKIE) is None and client.cookies.get(REGISTRATION_COOKIE) is None
-        client.cookies.set(FLOW_COOKIE, old_browser, path="/v1/auth/line")
-        client.cookies.set(REGISTRATION_COOKIE, old_registration, path="/v1/auth/line")
-        assert (await client.post("/v1/auth/line/register", json={"email": "again@example.com"})).status_code == 400
+        assert (await callback(client, state)).status_code == 400
+        assert (await client.post("/v1/auth/line/register", json={})).status_code == 400
+        refresh = await client.post("/v1/auth/refresh")
+        assert refresh.status_code == 200 and refresh.json()["user"]["id"] == user["id"]
         assert await database_session.scalar(select(func.count()).select_from(User)) == 1
         assert len(profile[1]) == 1
+
+
+async def legacy_pending_flow(client, session, subject):
+    state, _ = await start_flow(client)
+    record = await session.scalar(select(LineOAuthState).where(LineOAuthState.state_hash == hashlib.sha256(state.encode()).hexdigest()))
+    record.consumed_at = datetime.now(timezone.utc)
+    record.pending_subject = subject
+    record.pending_display_name = "舊版待完成LINE使用者"
+    registration = "legacy-registration-token"
+    record.registration_hash = hashlib.sha256(registration.encode()).hexdigest()
+    await session.commit()
+    client.cookies.set(REGISTRATION_COOKIE, registration, path="/v1/auth/line")
+
+
+@pytest.mark.asyncio
+async def test_legacy_pending_flow_can_finish_without_email(database_session, settings, profile):
+    async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
+        await legacy_pending_flow(client, database_session, profile[0]["subject"])
+        assert (await client.get("/v1/auth/line/pending")).json()["status"] == "needs_email"
+        result = await client.post("/v1/auth/line/register", json={})
+        assert result.status_code == 200, result.text
+        assert result.json()["session"]["user"]["email"] is None
+        assert (await client.post("/v1/auth/line/register", json={})).status_code == 400
 
 
 @pytest.mark.parametrize("failure", ["expired", "wrong_browser", "existing_email", "already_logged_in"])
@@ -373,8 +392,7 @@ async def test_pending_registration_failures_do_not_create_or_merge_accounts(dat
     profile[0]["email"] = None
     existing = await seed_user(database_session)
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
-        state, _ = await start_flow(client)
-        assert (await callback(client, state)).json()["status"] == "needs_email"
+        await legacy_pending_flow(client, database_session, profile[0]["subject"])
         email = "new@example.com"
         if failure == "expired":
             row = await database_session.scalar(select(LineOAuthState))

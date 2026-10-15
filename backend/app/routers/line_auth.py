@@ -43,7 +43,7 @@ class LineCallback(BaseModel):
 
 
 class LineRegistration(BaseModel):
-    email: EmailStr
+    email: EmailStr | None = None
 
 
 def _hash(value: str) -> str:
@@ -151,9 +151,9 @@ async def _sign_in(user: User, record: LineOAuthState, session: AsyncSession,
         "session": result.model_dump(mode="json")}
 
 
-async def _create_account(profile: LineProfile, email: str, record: LineOAuthState,
+async def _create_account(profile: LineProfile, email: str | None, record: LineOAuthState,
     session: AsyncSession) -> User:
-    if await session.scalar(select(User.id).where(User.email == email)) is not None:
+    if email and await session.scalar(select(User.id).where(User.email == email)) is not None:
         raise HTTPException(status_code=409, detail="此Email已有帳號，請先使用原帳號登入，再於帳號中心連結LINE")
     user = User(email=email, display_name=profile.display_name,
         customer_number=await next_identity_number(session, User.customer_number, "SLF-C"),
@@ -226,19 +226,11 @@ async def line_callback(body: LineCallback, request: Request, response: Response
                 raise HTTPException(status_code=403, detail="此帳號已停用，請洽管理員")
             identity.last_login_at = now
             return await _sign_in(account, record, session, response, settings)
-        if profile.email:
-            account = await _create_account(profile, profile.email, record, session)
-            return await _sign_in(account, record, session, response, settings)
-        registration = secrets.token_urlsafe(32)
-        record.pending_subject = profile.subject
-        record.pending_display_name = profile.display_name
-        record.registration_hash = _hash(registration)
-        record.expires_at = now + timedelta(minutes=10)
-        await session.commit()
-        _cookie(response, REGISTRATION_COOKIE, registration, settings)
-        _cookie(response, FLOW_COOKIE, browser, settings)
-        return {"status": "needs_email", "return_to": record.return_to, "intent": record.registration_intent,
-            "message": "LINE身分已確認，請補一次訂單與電子發票通知Email，不需要建立密碼"}
+        email = profile.email
+        if email and await session.scalar(select(User.id).where(User.email == email)) is not None:
+            email = None
+        account = await _create_account(profile, email, record, session)
+        return await _sign_in(account, record, session, response, settings)
     except IntegrityError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="帳號或LINE已建立連結，請重新登入或使用原帳號連結") from exc
@@ -261,8 +253,8 @@ async def line_register(body: LineRegistration, request: Request, response: Resp
     expires = record.expires_at.replace(tzinfo=record.expires_at.tzinfo or timezone.utc)
     if not record.pending_subject or record.registration_completed_at or expires <= now:
         raise HTTPException(status_code=400, detail="LINE註冊流程已過期或已完成，請重新登入")
-    email = str(body.email).lower()
-    if await session.scalar(select(User.id).where(User.email == email)) is not None:
+    email = str(body.email).lower() if body.email else None
+    if email and await session.scalar(select(User.id).where(User.email == email)) is not None:
         raise HTTPException(status_code=409, detail="此Email已有帳號，請先使用原帳號登入，再於帳號中心連結LINE")
     claimed = await session.scalar(update(LineOAuthState).where(
         LineOAuthState.id == record.id, LineOAuthState.registration_completed_at.is_(None), LineOAuthState.expires_at > now

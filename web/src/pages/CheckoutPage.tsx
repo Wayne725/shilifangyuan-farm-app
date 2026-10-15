@@ -47,6 +47,7 @@ const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
 
 export function CheckoutPage() {
   const { user, openLogin } = useAuth();
+  const notificationEmail = user?.notification_email || user?.email || "";
   const { cart, changeQuantity, clearCart } = useCommerce();
   const [checkoutMethod, setCheckoutMethod] =
     useState<CheckoutMethod>("cooperative_pickup");
@@ -57,7 +58,7 @@ export function CheckoutPage() {
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [invoicePreference, setInvoicePreference] = useState(
-    () => defaultInvoicePreference(user?.email || ""),
+    () => defaultInvoicePreference(notificationEmail),
   );
   const items = useMemo(
     () =>
@@ -110,7 +111,7 @@ export function CheckoutPage() {
         }
         return beginCheckout({
           items,
-          contactEmail: user.email,
+          contactEmail: invoicePreference.buyerEmail.trim(),
           invoicePreference,
           fulfillment: {
             kind: "shipping",
@@ -124,7 +125,7 @@ export function CheckoutPage() {
       }
       return beginCheckout({
         items,
-        contactEmail: user.email,
+        contactEmail: invoicePreference.buyerEmail.trim(),
         invoicePreference,
         fulfillment: { kind: "pickup", pickupLocationId },
       });
@@ -160,11 +161,11 @@ export function CheckoutPage() {
   }, [eligibility.availableChannels, shippingChannel]);
 
   useEffect(() => {
-    if (!user?.email) return;
+    if (!notificationEmail) return;
     setInvoicePreference((current) =>
-      current.buyerEmail ? current : { ...current, buyerEmail: user.email },
+      current.buyerEmail ? current : { ...current, buyerEmail: notificationEmail },
     );
-  }, [user?.email]);
+  }, [notificationEmail]);
 
   const shippingReady = Boolean(
     shippingChannel &&

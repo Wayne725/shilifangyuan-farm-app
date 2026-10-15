@@ -9,7 +9,7 @@ import { apiFetch, formatDateTime } from "../lib/api";
 import "../styles/admin-users.css";
 
 interface RegisteredUser {
-  id: string; customer_number?: string | null; display_name: string; email: string;
+  id: string; customer_number?: string | null; display_name: string; email: string | null; notification_email?: string | null;
   user_role: string; is_active: boolean; created_at: string; email_verified: boolean;
   membership_type: string; membership_status?: string | null; member_number?: string | null;
 }
@@ -56,7 +56,7 @@ function RegisteredUserRow({ item }: { item: RegisteredUser }) {
   });
   const canGrant = item.is_active && !["active", "resigned", "terminated"].includes(item.membership_status || "");
   const submit = (event: FormEvent) => { event.preventDefault(); if (confirmed && reason.trim().length >= 2) grant.mutate(); };
-  return <article className="admin-user-row"><header><div><h2>{item.display_name}</h2><p>{item.email}</p></div><strong>{statusLabels[item.membership_status || ""] || "非社員"}</strong></header>
+  return <article className="admin-user-row"><header><div><h2>{item.display_name}</h2><p>{item.email || "LINE登入帳號"}</p>{item.notification_email && <p>通知信箱：{item.notification_email}</p>}</div><strong>{statusLabels[item.membership_status || ""] || "非社員"}</strong></header>
     <p>會員編號：{item.customer_number || "尚未編號"}{item.member_number && `　社員編號：${item.member_number}`}</p>
     <p>註冊時間：{formatDateTime(item.created_at)}　帳號：{item.is_active ? "啟用" : "停用"}</p>
     <p>管理權限：{item.user_role === "admin" ? "管理員，可使用所有管理模組" : "一般使用者"}</p>
