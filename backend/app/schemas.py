@@ -1107,6 +1107,7 @@ class MemberProposalRead(ApiModel):
 
 class MealOptionInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    image_url: Optional[str] = Field(default=None, max_length=500)
     price_delta: int = Field(default=0, ge=0)
     position: int = Field(default=0, ge=0)
     is_active: bool = True
@@ -1134,6 +1135,7 @@ class MealOptionGroupInput(BaseModel):
 class MealOptionRead(ApiModel):
     id: str
     name: str
+    image_url: Optional[str] = None
     price_delta: int
     position: int
     is_active: bool
@@ -1180,6 +1182,16 @@ class MealRead(ApiModel):
     tax_type: TaxType
     is_active: bool
     option_groups: List[MealOptionGroupRead] = Field(default_factory=list)
+
+
+class MealOptionImageUpdate(BaseModel):
+    id: str
+    image_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class MealImagesUpdate(BaseModel):
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    options: List[MealOptionImageUpdate] = Field(default_factory=list, max_length=1000)
 
 
 class MealOfferingInput(BaseModel):

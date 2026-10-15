@@ -2718,7 +2718,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
                     "min_selections": 0,
                     "max_selections": 1,
                     "options": [
-                        {"name": "茂谷汽水", "price_delta": 20},
+                        {"name": "茂谷汽水", "price_delta": 20, "image_url": "https://images.example.test/soda.jpg"},
                     ],
                 },
             ],
@@ -2729,6 +2729,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
     groups = meal.json()["option_groups"]
     sushi_id = groups[0]["options"][1]["id"]
     soda_id = groups[1]["options"][0]["id"]
+    assert groups[1]["options"][0]["image_url"] == "https://images.example.test/soda.jpg"
 
     event = await client.post(
         "/v1/admin/meal-events",
@@ -2748,6 +2749,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
     )
     assert event.status_code == 201, event.text
     event_id = event.json()["id"]
+    assert event.json()["offerings"][0]["option_groups"][1]["options"][0]["image_url"] == "https://images.example.test/soda.jpg"
     offering_id = event.json()["offerings"][0]["id"]
     published = await client.post(
         f"/v1/admin/meal-events/{event_id}/publish",

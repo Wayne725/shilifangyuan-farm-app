@@ -80,6 +80,7 @@
   "GET /v1/vote-proposals/{proposal_id}",
   "GET /v1/wishes",
   "PATCH /v1/admin/meal-kitchen/orders/{order_id}/status",
+  "PATCH /v1/admin/meals/{meal_id}/images",
   "PATCH /v1/admin/member-roster/{entry_id}/shares",
   "PATCH /v1/admin/members/{membership_id}/shares",
   "PATCH /v1/admin/pickup-locations/{location_id}",

@@ -9,6 +9,7 @@ import { AdminMealCancellations } from "../components/AdminMealCancellations";
 import { AdminMealOrderSearch } from "../components/AdminMealOrderSearch";
 import { MealScheduleSettings } from "../components/MealScheduleSettings";
 import { MealEventConflicts } from "../components/MealEventConflicts";
+import { MealImageEditor } from "../components/MealImageEditor";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { useAuth } from "../context/AuthContext";
@@ -45,7 +46,11 @@ export function AdminMealsPage() {
     return <section className="admin-gate"><div className="admin-gate-mark"><Buildings size={38} weight="light" /></div><p className="eyebrow">MEAL OPERATIONS / 便當管理</p><h1>餐點與場次管理只向管理者開放。</h1>{!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button> : <Link className="button button-quiet" to="/shop">返回生活消費</Link>}</section>;
   }
 
-  const refreshMeals = () => queryClient.invalidateQueries({ queryKey: ["admin-meals"] });
+  const refreshMeals = () => {
+    void queryClient.invalidateQueries({ queryKey: ["admin-meals"] });
+    void queryClient.invalidateQueries({ queryKey: ["meal-events"] });
+    void queryClient.invalidateQueries({ queryKey: ["meal-event"] });
+  };
   const refreshEvents = () => {
     queryClient.invalidateQueries({ queryKey: ["admin-meal-events"] });
     queryClient.invalidateQueries({ queryKey: ["admin-meal-event-orders"] });
@@ -76,7 +81,7 @@ export function AdminMealsPage() {
           <MealCreateForm onDone={refreshMeals} />
           {meals.isPending && <LoadingLines count={3} />}
           {meals.isError && <DataState kind="error" title="餐點資料無法讀取" detail={meals.error.message} />}
-          <div className="admin-record-grid">{meals.data?.map((meal) => <article className="admin-record-card" key={meal.id}><BowlFood size={22} weight="light" /><span className={`status-chip ${meal.is_active ? "passed" : ""}`}>{meal.is_active ? "啟用" : "停用"}</span><h3>{meal.name}</h3><p>{meal.description || "尚未填寫餐點介紹"}</p><dl><div><dt>售價</dt><dd>{formatMoney(meal.price)}</dd></div><div><dt>選項</dt><dd>{meal.option_groups.length} 組</dd></div><div><dt>稅別</dt><dd>{meal.tax_type === "taxable" ? "應稅" : "免稅"}</dd></div></dl></article>)}</div>
+          <div className="admin-record-grid">{meals.data?.map((meal) => <article className="admin-record-card" key={meal.id}><BowlFood size={22} weight="light" /><span className={`status-chip ${meal.is_active ? "passed" : ""}`}>{meal.is_active ? "啟用" : "停用"}</span><h3>{meal.name}</h3><p>{meal.description || "尚未填寫餐點介紹"}</p><dl><div><dt>售價</dt><dd>{formatMoney(meal.price)}</dd></div><div><dt>選項</dt><dd>{meal.option_groups.length} 組</dd></div><div><dt>稅別</dt><dd>{meal.tax_type === "taxable" ? "應稅" : "免稅"}</dd></div></dl><MealImageEditor meal={meal} onDone={refreshMeals} /></article>)}</div>
         </Tabs.Content>
       </Tabs.Root>
     </section>

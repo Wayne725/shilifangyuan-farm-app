@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
+import { MealPhoto } from "../components/MealPhoto";
 import {
   defaultInvoicePreference,
   InvoicePreferenceFields,
@@ -263,6 +264,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               return (
                 <article className={quantity > 0 ? "meal-offering selected" : "meal-offering"} key={offering.id}>
                   <div className="meal-offering-summary">
+                    <MealPhoto className="meal-offering-photo" src={offering.image_url} alt={`${offering.meal_name}照片`} />
                     <div className="meal-offering-copy"><small>剩餘 {offering.available_quantity} 份</small><h3>{offering.meal_name}</h3>{offering.description && <p>{offering.description}</p>}<strong>{formatMoney(offering.price)} 起</strong></div>
                     <div className="quantity-control">
                       <button type="button" disabled={quantity === 0} onClick={() => changeQuantity(offering.id, quantity - 1, offering.available_quantity)} aria-label={`減少${offering.meal_name}`}><Minus size={20} /></button>
@@ -282,13 +284,14 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                               {group.options.filter((option) => option.is_active).map((option) => (
                                 <button
                                   aria-pressed={selected.includes(option.id)}
+                                  aria-label={`${option.name}${option.price_delta > 0 ? ` +${formatMoney(option.price_delta)}` : ""}`}
                                   className={selected.includes(option.id) ? "selected" : ""}
                                   key={option.id}
                                   onClick={() => toggleOption(offering.id, group, option.id)}
                                   type="button"
                                 >
-                                  <span>{option.name}</span>
-                                  {option.price_delta > 0 && <small>+{formatMoney(option.price_delta)}</small>}
+                                  <MealPhoto className="meal-option-photo" src={option.image_url} alt={`${option.name}照片`} />
+                                  <span className="meal-option-label"><span>{option.name}</span>{option.price_delta > 0 && <small>+{formatMoney(option.price_delta)}</small>}</span>
                                 </button>
                               ))}
                             </div>

@@ -423,6 +423,7 @@ export interface GroupVoteProposal {
 export interface MealOption {
   id: string;
   name: string;
+  image_url?: string | null;
   price_delta: number;
   position: number;
   is_active: boolean;
