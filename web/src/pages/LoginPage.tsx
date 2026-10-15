@@ -39,7 +39,7 @@ export function LoginPage() {
     </form>
     <div className="login-links"><a href="/forgot-password">忘記密碼</a><a href="/register">註冊帳號</a></div>
     <div className="login-secondary">
-      <div className="line-membership-intent" role="group" aria-label="社員身分選擇"><button type="button" aria-pressed={lineIntent === "member"} onClick={() => setLineIntent("member")}>我是社員</button><button type="button" aria-pressed={lineIntent === "nonmember"} onClick={() => setLineIntent("nonmember")}>我不是社員</button></div>
+      <div className="line-membership-intent" role="group" aria-label="社員身分選擇"><button className={lineIntent === "member" ? "is-selected" : undefined} type="button" aria-pressed={lineIntent === "member"} onClick={() => setLineIntent("member")}>我是社員</button><button className={lineIntent === "nonmember" ? "is-selected" : undefined} type="button" aria-pressed={lineIntent === "nonmember"} onClick={() => setLineIntent("nonmember")}>我不是社員</button></div>
       <LineLoginButton intent={lineIntent} rememberMe={rememberMe} returnTo={returnTo} />
     </div>
     <p className="dialog-footnote"><a href="/verify-email">輸入或重寄驗證碼</a></p>
