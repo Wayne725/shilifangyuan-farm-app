@@ -7997,6 +7997,14 @@ p {
   align-items: center;
 }
 
+.meal-orders-page > .text-link {
+  margin-bottom: 1.5rem;
+}
+
+.meal-orders-page > .workspace-heading {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .meal-shop-intro h1,
 .meal-orders-page .workspace-heading h1,
 .meal-help-page header h1 {

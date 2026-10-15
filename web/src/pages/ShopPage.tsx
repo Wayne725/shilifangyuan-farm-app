@@ -13,6 +13,7 @@ import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
   const { addToCart, itemCount } = useCommerce();
+  const [activeTab, setActiveTab] = useState("meals");
   const [now, setNow] = useState(Date.now);
   const today = taipeiDate(now);
   const previousToday = useRef(today);
@@ -44,17 +45,18 @@ export function ShopPage() {
     !["draft", "cancelled", "completed"].includes(meal.status)
       && new Date(meal.pickup_ends_at).getTime() > now,
   ) || [];
+  const pageTitle = activeTab === "meals" ? "我要訂餐" : activeTab === "groups" ? "共同團購" : "日常選品";
 
   return (
     <>
       <section className="page-intro shop-intro meal-shop-intro">
         <div>
-          <h1>我要訂餐</h1>
+          <h1>{pageTitle}</h1>
         </div>
-        <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link><Link className="button button-quiet" to="/help">常見問題</Link></nav>
+        {activeTab === "meals" && <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link></nav>}
       </section>
 
-      <Tabs.Root className="market-tabs" defaultValue="meals">
+      <Tabs.Root className="market-tabs" value={activeTab} onValueChange={setActiveTab}>
         <Tabs.List className="tab-list" aria-label="消費類型">
           <Tabs.Trigger value="meals">
             <BowlFood size={18} weight="light" />

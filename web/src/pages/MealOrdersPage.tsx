@@ -57,7 +57,7 @@ export function MealOrdersPage() {
   return (
     <section className="orders-page meal-orders-page">
       <Link className="text-link" to="/shop"><ArrowLeft size={17} />回到便當預訂</Link>
-      <header className="workspace-heading"><div><h1>我的便當訂單</h1><p>選一筆訂單，查看餐點明細、取餐時間及取餐碼。</p></div><Link className="button button-quiet" to="/help">常見問題</Link></header>
+      <header className="workspace-heading"><div><h1>我的便當訂單</h1><p>選一筆訂單，查看餐點明細、取餐時間及取餐碼。</p></div></header>
       {orders.isPending && <LoadingLines count={4} />}
       {orders.isError && <DataState kind="error" title="便當訂單無法讀取" detail={orders.error.message} onAction={() => orders.refetch()} />}
       {orders.data?.length === 0 && <DataState title="目前沒有便當訂單" detail="可先查看明天的餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />}
@@ -74,7 +74,7 @@ export function MealOrdersPage() {
       <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} taxAmount={selected.tax_amount} />
       <p className="meal-order-created-at">下單時間：{formatDateTime(selected.created_at)}</p>
       {(pay.isError || cancel.isError) && <p className="form-error">{pay.error?.message || cancel.error?.message}</p>}{selected.available_actions.includes("request_cancellation") && !cancelOpen && <button className="button button-quiet" type="button" onClick={() => setCancelOpen(true)}>申請取消這筆便當</button>}{cancelOpen && <div className="inline-confirm"><button className="icon-button" type="button" aria-label="關閉退單申請" onClick={() => setCancelOpen(false)}><X size={20} /></button><strong>送出後由管理員審核；核准前訂單仍有效，不會立即退款或作廢發票。</strong><label>退單原因<textarea required maxLength={2000} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button className="button button-danger" type="button" disabled={!reason.trim() || cancel.isPending} onClick={() => cancel.mutate(selected.id)}>{cancel.isPending ? "送出申請中…" : "送出退單申請"}</button></div>}</article> : <DataState title="找不到這筆便當訂單" detail="請從左方或上方的訂單清單選擇一筆訂單。" />}</div>}
-      <div className="orders-footnote"><Link className="button button-quiet" to="/shop">我要訂餐</Link><Link className="text-link" to="/help">查看操作說明與常見問題</Link></div>
+      <div className="orders-footnote"><Link className="button button-quiet" to="/shop">我要訂餐</Link></div>
     </section>
   );
 }

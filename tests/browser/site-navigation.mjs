@@ -29,7 +29,7 @@ async function fixture(t, width, sample) {
     if (path === '/v1/auth/refresh') return route.fulfill({ status: state.signedIn ? 200 : 401, json: state.signedIn ? { access_token: 'isolated', user } : { detail: '尚未登入' } });
     if (path === '/v1/auth/logout') { state.signedIn = false; return route.fulfill({ status: 204, body: '' }); }
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: sample.confirmedMembership || (sample.social ? 'member' : user?.membership_type || 'nonmember'), membership: { status: 'active' } } });
-    if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/activities', '/v1/membership/charges', '/v1/notifications', '/v1/me/badges', '/v1/me/surplus-distributions'].includes(path)) return route.fulfill({ json: [] });
+    if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/meal-orders', '/v1/activities', '/v1/membership/charges', '/v1/notifications', '/v1/me/badges', '/v1/me/surplus-distributions'].includes(path)) return route.fulfill({ json: [] });
     if (path === '/v1/me/points') return route.fulfill({ json: { balance: 0 } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: false, identity_verified: false, message: '' } });
     state.unknown.push(`${req.method()} ${path}`);
@@ -118,10 +118,33 @@ test('登出後即隱藏原社員導覽入口，購物與常見問題仍可使�
   assert.equal(await page.getByRole('navigation', { name: '網站選單', exact: true }).count(), 0);
   await page.getByRole('button', { name: '開啟導覽', exact: true }).click();
   await page.getByRole('navigation', { name: '網站選單', exact: true }).getByRole('link', { name: '生活消費', exact: true }).click();
-  await page.getByRole('link', { name: '常見問題', exact: true }).first().waitFor();
+  await page.getByRole('button', { name: '開啟導覽', exact: true }).click();
+  await page.getByRole('navigation', { name: '網站選單', exact: true }).getByRole('link', { name: '常見問題', exact: true }).waitFor();
   assert.equal(await page.getByRole('link', { name: '需要幫忙', exact: true }).count(), 0);
   assert.deepEqual(state.errors, []); assert.deepEqual(state.unknown, []);
 });
+
+for (const width of [1440, 390]) {
+  test(`${width}px 消費類型切換同步標題與訂單入口，常見問題僅在選單`, async (t) => {
+    const { page, state } = await fixture(t, width, cases.find((row) => row.name === '非社員'));
+    await page.goto(`${base}/shop`);
+    await page.getByRole('heading', { name: '我要訂餐', exact: true }).waitFor();
+    for (const [tabName, title] of [['共同團購', '共同團購'], ['日常選品', '日常選品'], ['便當預購', '我要訂餐']]) {
+      await page.getByRole('tab', { name: tabName, exact: true }).click();
+      assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), title);
+      assert.equal(await page.getByRole('link', { name: '我的便當訂單', exact: true }).count(), tabName === '便當預購' ? 1 : 0);
+    }
+    assert.equal(await page.getByRole('link', { name: /常見問題/ }).count(), 0);
+    await page.getByRole('button', { name: '開啟導覽', exact: true }).click();
+    assert.equal(await page.getByRole('link', { name: /常見問題/ }).count(), 1);
+    await page.getByRole('button', { name: '關閉導覽', exact: true }).click();
+    await page.getByRole('link', { name: '我的便當訂單', exact: true }).click();
+    await page.getByRole('heading', { name: '我的便當訂單', exact: true }).waitFor();
+    assert.equal(await page.getByRole('link', { name: /常見問題/ }).count(), 0);
+    if (process.env.BROWSER_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/meal-orders-heading-${width}.png`, fullPage: true });
+    assert.deepEqual(state.errors, []); assert.deepEqual(state.unknown, []);
+  });
+}
 
 test('會員中心取得最新社員資格後導覽同步更新，不額外查詢或依註冊意向升權', async (t) => {
   const sample = { name: '新轉正帳號', user: { membership_type: 'nonmember' }, confirmedMembership: 'member', social: false };

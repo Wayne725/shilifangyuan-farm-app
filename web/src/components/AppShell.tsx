@@ -190,7 +190,6 @@ export function AppShell() {
           <p>把消費、互助與共同治理，放回同一個日常入口。</p>
         </div>
         <div className="footer-meta">
-          <Link to="/help">常見問題</Link>
           <span>新竹・台灣</span>
           <span>社員共同所有 · 日常共同參與</span>
         </div>
