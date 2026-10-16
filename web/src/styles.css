@@ -7626,6 +7626,48 @@ p {
   scroll-margin-top: 32px;
 }
 
+.meal-checkout-settings {
+  margin-block: 28px;
+  padding-block: 28px;
+  border-block: 1px solid var(--line);
+}
+
+.meal-checkout-settings .invoice-preference {
+  margin-top: 28px;
+}
+
+.meal-summary .checkout-step-title {
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.meal-summary .checkout-step-title h2 {
+  margin: 0;
+  font-size: 1.375rem;
+  line-height: 1.5;
+}
+
+.meal-summary .invoice-type-switch,
+.meal-summary .invoice-carrier-options,
+.meal-summary .invoice-company-form {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.meal-summary .invoice-preference-panel {
+  padding-inline: 0;
+  border: 0;
+}
+
+.meal-summary .meal-pickup-options {
+  gap: 10px;
+}
+
+.meal-summary .meal-pickup-options button {
+  flex: 1 0 5.5rem;
+  min-width: 0;
+  padding-inline: 12px;
+}
+
 .meal-offer-page .meal-summary dl > div {
   gap: 12px;
 }
@@ -8072,13 +8114,13 @@ p {
 }
 
 .meal-offer-page .meal-offering-summary:has(> .meal-offering-photo) {
-  grid-template-columns: 5rem minmax(0, 1fr) auto;
+  grid-template-columns: 10rem minmax(0, 1fr) auto;
 }
 
 .meal-offer-page .meal-offering-photo {
-  width: 5rem;
-  height: 5rem;
-  align-self: start;
+  width: 10rem;
+  height: 10rem;
+  align-self: center;
 }
 
 .meal-offer-page .meal-option-list button {
@@ -8087,8 +8129,8 @@ p {
 }
 
 .meal-offer-page .meal-option-photo {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 3.5rem;
+  height: 3.5rem;
 }
 
 .meal-option-label {
@@ -8135,7 +8177,12 @@ p {
 
 @media (min-width: 621px) and (max-width: 1180px) {
   .meal-offer-page .meal-offering-summary:has(> .meal-offering-photo) {
-    grid-template-columns: 5rem minmax(0, 1fr);
+    grid-template-columns: 8rem minmax(0, 1fr);
+  }
+
+  .meal-offer-page .meal-offering-photo {
+    width: 8rem;
+    height: 8rem;
   }
 
   .meal-offer-page .meal-offering-summary:has(> .meal-offering-photo) .quantity-control {
@@ -8297,13 +8344,13 @@ p {
   }
 
   .meal-offer-page .meal-offering-summary:has(> .meal-offering-photo) {
-    grid-template-columns: 4rem minmax(0, 1fr);
+    grid-template-columns: 7rem minmax(0, 1fr);
     gap: 12px;
   }
 
   .meal-offer-page .meal-offering-photo {
-    width: 4rem;
-    height: 4rem;
+    width: 7rem;
+    height: 7rem;
   }
 
   .meal-offer-page .meal-offering-list .quantity-control {

@@ -306,17 +306,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             })}
           </div>
           {activeOfferings.length === 0 && <DataState title="菜單待公告" detail="管理員公布餐點後即可選餐，請稍後再查看。" />}
-          <section className="meal-pickup-selection" aria-label="選擇取餐時間">
-            <div className="checkout-step-title"><span>03</span><div><h2>選擇取餐時間</h2></div></div>
-            <div className="meal-pickup-options" role="group" aria-label="預計取餐時間（台灣時間）">{pickupOptions.map((option) => <button key={option.value} type="button" aria-pressed={pickupAt === option.value} disabled={!orderingOpen} onClick={() => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: option.value })); void navigate({ search: { pickup_at: option.value }, replace: true }); }}>{option.label}</button>)}</div>
-            {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
-            {pickupReady && <p className="meal-pickup-confirmation" role="status">已選取餐時間：{formatMealDateTime(taipeiInputToIso(pickupAt))}</p>}
-          </section>
-          <InvoicePreferenceFields
-            onChange={setInvoicePreference}
-            sectionNumber="04"
-            value={invoicePreference}
-          />
         </div>
 
         <aside className="offer-summary meal-summary" id="meal-order-summary" tabIndex={-1} aria-labelledby="meal-summary-heading">
@@ -345,6 +334,19 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             <div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div>
           </dl>
           {!confirmedQuote && selectedMeals.length > 0 && <p className="meal-selection-notice">預估金額依目前選擇計算；請完成取餐時間、必選項目與發票資料，以確認實際金額。</p>}
+          <div className="meal-checkout-settings">
+            <section className="meal-pickup-selection" aria-label="選擇取餐時間">
+              <div className="checkout-step-title"><span>03</span><div><h2>選擇取餐時間</h2></div></div>
+              <div className="meal-pickup-options" role="group" aria-label="預計取餐時間（台灣時間）">{pickupOptions.map((option) => <button key={option.value} type="button" aria-pressed={pickupAt === option.value} disabled={!orderingOpen} onClick={() => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: option.value })); void navigate({ search: { pickup_at: option.value }, replace: true }); }}>{option.label}</button>)}</div>
+              {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
+              {pickupReady && <p className="meal-pickup-confirmation" role="status">已選取餐時間：{formatMealDateTime(taipeiInputToIso(pickupAt))}</p>}
+            </section>
+            <InvoicePreferenceFields
+              onChange={setInvoicePreference}
+              sectionNumber="04"
+              value={invoicePreference}
+            />
+          </div>
           <button className="button button-quiet full-width meal-draft-reset" type="button" disabled={checkout.isPending || (!selectedMealQuantity && !pickupAt)} onClick={() => { clearMealDraft(eventId); setDraft(emptyMealDraft()); setDraftAdjusted(false); void navigate({ search: { pickup_at: undefined }, replace: true }); }}>清空選餐與取餐時間</button>
           {!user ? (
             <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後預訂</button>
