@@ -5,6 +5,7 @@ import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import { formatMealDateTime } from "../lib/meal-time";
 import type { MealCancellationQueue, MealCancellationQueueItem } from "../lib/types";
 import { DataState, LoadingLines } from "./Shared";
+import { MealCancellationSummary } from "./MealCancellationSummary";
 import { AdminReasonChoices } from "./AdminReasonChoices";
 
 const reviewLabels = { pending: "待審核", approved: "已核准", rejected: "未核准" };
@@ -27,14 +28,20 @@ export function AdminMealCancellations({ initialSearch = "" }: { initialSearch?:
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [search, setSearch] = useState(initialSearch);
   const [offset, setOffset] = useState(0);
+  const [startsOn, setStartsOn] = useState("");
+  const [endsOn, setEndsOn] = useState("");
   const params = new URLSearchParams({ review_status: status, search, limit: String(pageSize), offset: String(offset) });
+  if (startsOn) params.set("starts_on", startsOn);
+  if (endsOn) params.set("ends_on", endsOn);
   const queue = useQuery({
-    queryKey: ["admin-meal-cancellations", status, search, offset],
+    queryKey: ["admin-meal-cancellations", status, search, offset, startsOn, endsOn],
     queryFn: () => apiFetch<MealCancellationQueue>(`/v1/admin/meal-cancellation-requests?${params}`),
     refetchInterval: 15000,
   });
   return <section className="meal-cancellation-management" aria-labelledby="meal-cancellation-heading">
     <h2 id="meal-cancellation-heading">退單審核</h2>
+    <div className="field-grid two-columns"><label className="field"><span>申請開始日期</span><input type="date" value={startsOn} onChange={event => { setStartsOn(event.target.value); setOffset(0); }} /></label><label className="field"><span>申請結束日期</span><input type="date" min={startsOn} value={endsOn} onChange={event => { setEndsOn(event.target.value); setOffset(0); }} /></label></div>
+    <MealCancellationSummary startsOn={startsOn} endsOn={endsOn} search={search} status={status} />
     <div className="admin-quick-buttons" role="group" aria-label="退單審核狀態">{["pending", "approved", "rejected", "all"].map((key) => <button className="button button-quiet" key={key} type="button" aria-pressed={status === key} onClick={() => { setStatus(key); setOffset(0); }}>{key === "all" ? "全部紀錄" : reviewLabels[key as keyof typeof reviewLabels]}</button>)}</div>
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setSearch(searchInput.trim()); setOffset(0); }}>
       <label>訂單編號或 Email<input value={searchInput} maxLength={100} onChange={(event) => setSearchInput(event.target.value)} /></label>
@@ -63,7 +70,7 @@ function CancellationReviewCard({ item }: { item: MealCancellationQueueItem }) {
     }),
     onSuccess: async () => {
       setDecision(""); setReason("");
-      await Promise.all(["admin-meal-cancellations", "admin-meal-orders", "admin-meal-operations-summary", "admin-meal-event-orders", "admin-meal-events", "meal-orders", "orders", "admin-orders", "meal-pickup-credential", "meal-events", "meal-event", "meal-sales-report", "meal-kitchen", "meal-kitchen-ticket"]
+      await Promise.all(["admin-meal-cancellations", "meal-cancellation-summary", "admin-meal-orders", "admin-meal-operations-summary", "admin-meal-event-orders", "admin-meal-events", "meal-orders", "orders", "admin-orders", "meal-pickup-credential", "meal-events", "meal-event", "meal-sales-report", "meal-kitchen", "meal-kitchen-ticket"]
         .map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
     },
     onError: () => { void queryClient.invalidateQueries({ queryKey: ["admin-meal-cancellations"] }); },

@@ -9,6 +9,9 @@ const adminSections = [
   { to: "/admin/users" as const, label: "會員管理" },
   { to: "/admin/finance" as const, label: "財務報表" },
   { to: "/admin/social" as const, label: "社務管理" },
+  { to: "/admin/records" as const, label: "社員帳冊" },
+  { to: "/admin/promotions" as const, label: "促銷管理" },
+  { to: "/admin/settings" as const, label: "平台設定" },
 ];
 
 export function AdminNav() {

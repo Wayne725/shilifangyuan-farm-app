@@ -432,7 +432,7 @@ async def resend_verification(
         select(User).where(User.email == body.email.lower())
     )
     token = ""
-    if user is not None and user.email_verified_at is None:
+    if user is not None and (user.email_verified_at is None or user.pending_member_claim):
         token = await _issue_email_verification(session, user, settings)
     response = {
         "message": (

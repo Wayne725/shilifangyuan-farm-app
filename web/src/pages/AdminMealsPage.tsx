@@ -178,7 +178,7 @@ function DateTimeField({ label, value, onChange }: { label: string; value: strin
 function emptyEventDraft(): EventDraft {
   const orderDate = localDateTime(0).slice(0, 10);
   const pickupDate = localDateTime(1).slice(0, 10);
-  return { title: "", location: "", ordering_starts_at: `${orderDate}T00:00`, ordering_ends_at: `${orderDate}T23:59`, pickup_starts_at: `${pickupDate}T11:00`, pickup_ends_at: `${pickupDate}T13:30`, offerings: [] };
+  return { title: "", location: "", ordering_starts_at: `${orderDate}T00:00`, ordering_ends_at: `${orderDate}T20:00`, pickup_starts_at: `${pickupDate}T11:00`, pickup_ends_at: `${pickupDate}T13:30`, offerings: [] };
 }
 
 function eventDraft(event: MealEvent): EventDraft {

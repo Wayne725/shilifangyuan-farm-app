@@ -13,9 +13,21 @@ from .notifications import notifications_router
 from .orders import orders_router
 from .operations import operations_router
 from .payments import payments_router
+from .platform import platform_router
+from .member_reports import member_reports_router
+from .meal_cancellation_reports import meal_cancellation_reports_router
 from .proposals import proposals_router
 
+from .promotions import promotions_router
+
+from .invoice_reports import invoice_reports_router
+
 ALL_ROUTERS = [
+    invoice_reports_router,
+    promotions_router,
+    platform_router,
+    member_reports_router,
+    meal_cancellation_reports_router,
     auth_router,
     line_auth_router,
     admin_users_router,

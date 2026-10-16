@@ -8,8 +8,8 @@ import { DataState, LoadingLines } from "./Shared";
 type ScheduleDraft = Omit<MealSchedule, "id" | "timezone" | "created_at">;
 const weekdays = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"];
 const periodDefaults = {
-  lunch: { pickup_start_time: "11:00", pickup_end_time: "13:00", cutoff_time: "23:59" },
-  dinner: { pickup_start_time: "16:30", pickup_end_time: "18:00", cutoff_time: "23:59" },
+  lunch: { pickup_start_time: "11:00", pickup_end_time: "13:00", cutoff_time: "20:00" },
+  dinner: { pickup_start_time: "16:30", pickup_end_time: "18:00", cutoff_time: "20:00" },
 };
 
 export function MealScheduleSettings({ meals, onEventsChanged }: { meals: Meal[]; onEventsChanged: () => void }) {

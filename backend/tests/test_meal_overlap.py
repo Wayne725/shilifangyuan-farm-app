@@ -17,7 +17,7 @@ from tests.test_v2_payment_jobs import fake_payment, payment_settings, successfu
 def test_confirmed_lunch_and_dinner_overlap_are_valid(period, start, cutoff, end):
     schedule = MealScheduleInput(
         title=period, location="清華大學", meal_period=period,
-        pickup_start_time=start, cutoff_time=cutoff, pickup_end_time=end,
+        pickup_start_time=start, cutoff_time=cutoff, cutoff_days_before=0, pickup_end_time=end,
         offerings=[{"meal_id": "test", "price": 100, "capacity": 20}],
     )
     assert schedule.weekdays == [0, 1, 2, 3, 4, 5]
@@ -33,14 +33,14 @@ def test_confirmed_lunch_and_dinner_overlap_are_valid(period, start, cutoff, end
 def test_schedule_and_event_reject_cutoff_at_or_after_pickup_end(cutoff):
     offering = [{"meal_id": "test", "price": 100, "capacity": 20}]
     with pytest.raises(ValidationError, match="訂購截止必須早於取餐結束"):
-        MealScheduleInput(title="午餐", location="測試", meal_period="lunch", pickup_start_time="11:00", cutoff_time=cutoff, pickup_end_time="14:00", offerings=offering)
+        MealScheduleInput(title="午餐", location="測試", meal_period="lunch", pickup_start_time="11:00", cutoff_time=cutoff, cutoff_days_before=0, pickup_end_time="14:00", offerings=offering)
     with pytest.raises(ValidationError, match="訂購截止必須早於取餐結束"):
         MealEventCreate(title="午餐", location="測試", ordering_starts_at="2026-09-16T00:00:00+08:00", ordering_ends_at=f"2026-09-17T{cutoff}:00+08:00", pickup_starts_at="2026-09-17T11:00:00+08:00", pickup_ends_at="2026-09-17T14:00:00+08:00", offerings=offering)
 
 
 def test_cross_midnight_template_compares_dates_not_only_clock():
     schedule = MealScheduleInput(
-        title="跨夜", location="測試", meal_period="dinner", pickup_start_time="23:00", cutoff_time="23:30", pickup_end_time="00:30",
+        title="跨夜", location="測試", meal_period="dinner", pickup_start_time="23:00", cutoff_time="23:30", cutoff_days_before=0, pickup_end_time="00:30",
         offerings=[{"meal_id": "test", "price": 100, "capacity": 20}],
     )
     assert schedule.cutoff_days_before == 0

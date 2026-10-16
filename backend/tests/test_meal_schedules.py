@@ -16,7 +16,7 @@ from tests.support import api_test_context, auth_headers, make_test_settings, to
 def schedule_body(meal_id: str, **overrides):
     return {
         "title": "每日午餐", "location": "測試取餐區", "meal_period": "lunch",
-        "pickup_start_time": "11:30", "pickup_end_time": "12:30", "cutoff_time": "10:30",
+        "pickup_start_time": "11:30", "pickup_end_time": "12:30", "cutoff_time": "10:30", "cutoff_days_before": 0,
         "advance_days": 3, "offerings": [{"meal_id": meal_id, "price": 100, "capacity": 20}],
         **overrides,
     }

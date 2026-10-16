@@ -5,7 +5,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
@@ -20,9 +20,12 @@ from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationConfigurationError, IntegrationError
 from ..integrations.line_login import LineLoginClient, LineProfile
-from ..models import ExternalIdentity, LineOAuthState, User
+from ..models import ExternalIdentity, LineOAuthState, User, Membership, MembershipStatus
+from ..member_claims import MemberClaimError, verified_roster_entry, reserve_roster_claim
+from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..schemas import ExistingMemberIdentity
 from ..rate_limit import LOGIN_RULE, client_key, enforce
-from .auth import _new_token_pair_and_session, _validate_cookie_origin, token_response
+from .auth import _new_token_pair_and_session, _validate_cookie_origin, token_response, _issue_email_verification
 
 line_auth_router = APIRouter(prefix="/v1/auth/line", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -38,6 +41,7 @@ class LineStart(BaseModel):
     return_to: str = Field(default="/shop", max_length=500)
     mode: Literal["login", "link"] = "login"
     data_consent_version: Literal["line-data-v1"]
+    member_claim: ExistingMemberIdentity | None = None
 
 
 class LineCallback(BaseModel):
@@ -135,6 +139,17 @@ async def line_start(body: LineStart, request: Request, response: Response,
         remember_me=body.remember_me, data_consent_version=body.data_consent_version,
         data_consented_at=now,
         expires_at=now + timedelta(minutes=10))
+    if body.member_claim is not None:
+        if body.mode != "login" or body.intent != "member":
+            raise HTTPException(status_code=422, detail="社員資料只適用於既有社員註冊")
+        try:
+            cipher = pii_cipher_from_settings(settings)
+            await verified_roster_entry(session, cipher, **body.member_claim.model_dump(mode="json"))
+            record.member_claim_encrypted = cipher.encrypt_text(body.member_claim.model_dump_json(), associated_data=f"line-member-claim:{record.state_hash}")
+        except MemberClaimError as exc:
+            raise HTTPException(status_code=409, detail="社員資料無法核對或已認領，請確認姓名、社員編號與 Email，已有帳號請直接登入") from exc
+        except IntegrationError as exc:
+            raise HTTPException(status_code=503, detail="社員名冊驗證服務尚未完成設定") from exc
     session.add(record)
     await session.commit()
     _cookie(response, FLOW_COOKIE, browser, settings)
@@ -150,11 +165,39 @@ async def _sign_in(user: User, record: LineOAuthState, session: AsyncSession,
         raise HTTPException(status_code=403, detail="此帳號已停用，請洽管理員")
     pair, refresh = _new_token_pair_and_session(user, settings, remember_me=record.remember_me)
     session.add(refresh)
+    record.member_claim_encrypted = None
     await session.commit()
     result = token_response(user, response, settings, pair, remember_me=record.remember_me)
     _clear_flow(response, settings)
     return {"status": "authenticated", "return_to": record.return_to, "intent": record.registration_intent,
         "session": result.model_dump(mode="json")}
+
+
+async def _prepare_member_registration(account: User, record: LineOAuthState, session: AsyncSession, settings: Settings) -> None:
+    if not record.member_claim_encrypted:
+        return
+    try:
+        cipher = pii_cipher_from_settings(settings)
+        claim = ExistingMemberIdentity.model_validate_json(cipher.decrypt_text(record.member_claim_encrypted, associated_data=f"line-member-claim:{record.state_hash}"))
+        email = str(claim.email).lower()
+        if account.email and account.email != email:
+            raise HTTPException(status_code=409, detail="LINE 已連結不同信箱的帳號，請登入原帳號核對社員資格")
+        existing = await session.scalar(select(User.id).where(User.email == email, User.id != account.id))
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="此 Email 已有帳號，請登入原帳號後連結 LINE")
+        membership = await session.scalar(select(Membership).where(Membership.user_id == account.id))
+        if membership is not None:
+            raise HTTPException(status_code=409, detail="此帳號已有會籍紀錄，請由管理員核對原會籍")
+        entry = await verified_roster_entry(session, cipher, **claim.model_dump(mode="json"))
+        account.email = email
+        account.pending_member_claim = True
+        await reserve_roster_claim(session, entry, account, datetime.now(timezone.utc) + timedelta(minutes=10))
+        record.return_to = "/verify-email?" + urlencode({"email": email, "intent": "existing_member"})
+        await _issue_email_verification(session, account, settings)
+    except MemberClaimError as exc:
+        raise HTTPException(status_code=409, detail="社員資料已異動或正在認領，請重新核對資料") from exc
+    except IntegrationError as exc:
+        raise HTTPException(status_code=503, detail="社員名冊驗證服務尚未完成設定") from exc
 
 
 async def _create_account(profile: LineProfile, email: str | None, record: LineOAuthState,
@@ -248,11 +291,14 @@ async def line_callback(body: LineCallback, request: Request, response: Response
             identity.last_login_at = now
             identity.data_consent_version = record.data_consent_version
             identity.data_consented_at = record.data_consented_at
+            if record.member_claim_encrypted:
+                await _prepare_member_registration(account, record, session, settings)
             return await _sign_in(account, record, session, response, settings)
         email = profile.email
         if email and await session.scalar(select(User.id).where(User.email == email)) is not None:
             email = None
-        account = await _create_account(profile, email, record, session)
+        account = await _create_account(profile, None if record.member_claim_encrypted else email, record, session)
+        await _prepare_member_registration(account, record, session, settings)
         return await _sign_in(account, record, session, response, settings)
     except IntegrityError as exc:
         await session.rollback()

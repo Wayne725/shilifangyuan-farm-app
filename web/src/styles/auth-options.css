@@ -162,3 +162,10 @@
 .line-consent-page .line-membership-intent { margin-block: 1.5rem; }
 .line-consent-page .line-membership-intent button.is-selected { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
 .line-consent-email { margin-top: 1.5rem; }
+
+.registration-methods { display: grid; gap: 18px; margin-block: 28px; }
+.registration-flow .registration-choice-card { text-align: left; font: inherit; cursor: pointer; }
+.registration-identity-summary { display: grid; gap: 14px; margin: 0 0 20px; }
+.registration-identity-summary > div { display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: 12px; }
+.registration-identity-summary dd { margin: 0; overflow-wrap: anywhere; }
+.registration-flow .line-consent-details { padding: 20px 0; }

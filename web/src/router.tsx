@@ -75,7 +75,7 @@ const registerRoute = createRoute({
           ? "nonmember"
           : undefined,
   }),
-  component: page("./pages/AuthFlowPages", "RegisterPage"),
+  component: page("./pages/RegistrationPage", "RegisterPage"),
 });
 
 const verifyEmailRoute = createRoute({
@@ -314,6 +314,14 @@ const adminKitchenRoute = createRoute({
   component: page("./pages/AdminKitchenPage", "AdminKitchenPage"),
 });
 
+const adminRecordsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/records", component: page("./pages/AdminRecordsPage", "AdminRecordsPage") });
+
+const adminPromotionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/promotions", component: page("./pages/AdminPromotionsPage", "AdminPromotionsPage") });
+
+const adminInvoicesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/invoices", component: page("./pages/AdminInvoicesPage", "AdminInvoicesPage") });
+
+const adminSettingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/settings", component: page("./pages/AdminSettingsPage", "AdminSettingsPage") });
+
 const adminUsersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/users",
@@ -377,6 +385,10 @@ const routeTree = rootRoute.addChildren([
   adminFinanceRoute,
   adminKitchenRoute,
   adminUsersRoute,
+  adminSettingsRoute,
+  adminInvoicesRoute,
+  adminPromotionsRoute,
+  adminRecordsRoute,
   adminSocialRoute,
   accountRoute,
 ]);

@@ -15,7 +15,7 @@ from tests.support import api_test_context, auth_headers, make_test_settings, to
 from tests.test_v2_payment_jobs import fake_payment, payment_settings, successful_callback
 
 
-NOW = datetime(2030, 1, 1, 15, 59, 59, tzinfo=timezone.utc)
+NOW = datetime(2030, 1, 1, 11, 59, 59, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -49,8 +49,8 @@ def test_new_schedule_defaults_match_confirmed_periods(period, start, end):
     schedule = MealScheduleInput(title=period, location="合作社", meal_period=period, offerings=[{"meal_id": "meal", "price": 100, "capacity": 10}])
     assert schedule.pickup_start_time.isoformat(timespec="minutes") == start
     assert schedule.pickup_end_time.isoformat(timespec="minutes") == end
-    assert schedule.cutoff_time == time.min
-    assert schedule.cutoff_days_before == 0
+    assert schedule.cutoff_time == time(20)
+    assert schedule.cutoff_days_before == 1
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,7 @@ async def test_tomorrow_quotes_and_orders_accept_every_half_hour_including_last_
         await session.commit()
     detail = (await client.get(f"/v1/meal-events/{event.id}")).json()
     assert [datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(TAIPEI).strftime("%H:%M") for value in detail["pickup_slots"]] == clocks
-    assert datetime.fromisoformat(detail["booking_ends_at"].replace("Z", "+00:00")) == datetime(2030, 1, 1, 16, tzinfo=timezone.utc)
+    assert datetime.fromisoformat(detail["booking_ends_at"].replace("Z", "+00:00")) == datetime(2030, 1, 1, 12, tzinfo=timezone.utc)
     for clock in clocks:
         selected = datetime.fromisoformat(f"2030-01-02T{clock}:00+08:00")
         body["pickup_at"] = selected.isoformat()
@@ -78,7 +78,7 @@ async def test_tomorrow_quotes_and_orders_accept_every_half_hour_including_last_
         order = await session.get(Order, created.json()["id"])
         await session.refresh(order.fulfillment)
         assert meals._aware(order.fulfillment.pickup_at) == selected
-        assert order.fulfillment.meal_ordering_ends_at.replace(tzinfo=timezone.utc) == datetime(2030, 1, 1, 16, tzinfo=timezone.utc)
+        assert order.fulfillment.meal_ordering_ends_at.replace(tzinfo=timezone.utc) == datetime(2030, 1, 1, 12, tzinfo=timezone.utc)
 
 
 @pytest.mark.asyncio
@@ -153,13 +153,13 @@ async def test_today_and_day_after_tomorrow_cannot_be_booked(booking_context, of
 
 
 @pytest.mark.asyncio
-async def test_midnight_closes_new_booking_and_snapshot_blocks_payment_even_if_event_stays_open(booking_context, fake_payment, monkeypatch):
+async def test_20_clock_closes_new_booking_and_snapshot_blocks_payment_even_if_event_stays_open(booking_context, fake_payment, monkeypatch):
     client, session, buyer, _admin, event, body = booking_context
     created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
     assert created.status_code == 201
     order = await session.get(Order, created.json()["id"])
     attempt = await create_payment_attempt(session, order.id, buyer, payment_settings(), now=NOW)
-    midnight = datetime(2030, 1, 1, 16, tzinfo=timezone.utc)
+    midnight = datetime(2030, 1, 1, 12, tzinfo=timezone.utc)
     assert meals._aware(attempt.expires_at) == midnight
     assert meal_payment_window_open(order, NOW)
     assert not meal_payment_window_open(order, midnight)
@@ -230,7 +230,7 @@ async def test_new_generated_event_orders_open_only_previous_day_and_last_slot_h
     event = await meals._load_event(session, created_ids[0])
     assert event.service_date.isoformat() == "2030-01-02"
     assert meal_booking_window(event) == (
-        datetime(2030, 1, 1, 0, tzinfo=TAIPEI), datetime(2030, 1, 2, 0, tzinfo=TAIPEI),
+        datetime(2030, 1, 1, 0, tzinfo=TAIPEI), datetime(2030, 1, 1, 20, tzinfo=TAIPEI),
     )
     assert event.pickup_slot_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).hour == 13
     assert event.pickup_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).strftime("%H:%M") == "13:30"

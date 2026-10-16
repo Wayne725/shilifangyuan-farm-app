@@ -44,16 +44,21 @@ export function validPickupTime(value: string, event: MealEvent, now = Date.now(
   return pickupTimeOptions(event, now).some((option) => option.value === value);
 }
 
+export function mealBookingDeadline(event: MealEvent): number {
+  const cutoff = new Date(`${shiftMealDate(mealServiceDate(event), -1)}T20:00:00+08:00`).getTime();
+  return Math.min(cutoff, new Date(event.booking_ends_at || event.ordering_ends_at).getTime());
+}
+
 export function mealOrderingOpen(event: MealEvent, now = Date.now()): boolean {
   return ["published", "pickup_open"].includes(event.status)
     && mealServiceDate(event) === shiftMealDate(taipeiDate(now), 1)
     && new Date(event.booking_starts_at || event.ordering_starts_at).getTime() <= now
-    && new Date(event.booking_ends_at || event.ordering_ends_at).getTime() > now;
+    && mealBookingDeadline(event) > now;
 }
 
 export function mealBookingStatus(event: MealEvent, now = Date.now()): string {
   if (mealServiceDate(event) <= taipeiDate(now) || event.status === "ordering_closed"
-    || new Date(event.booking_ends_at || event.ordering_ends_at).getTime() <= now
+    || mealBookingDeadline(event) <= now
     || new Date(event.pickup_ends_at).getTime() <= now) return "已截止";
   if (!mealOrderingOpen(event, now)) return "尚未開放";
   const menu = event.offerings.filter((offering) => offering.is_active);

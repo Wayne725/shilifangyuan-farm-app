@@ -17,15 +17,16 @@ type LineLoginProps = {
   returnTo?: string;
   consentText?: string;
   consentLink?: boolean;
+  memberClaim?: { member_number: string; legal_name: string; email: string };
 };
 
-export function LineLoginButton({ intent = "nonmember", rememberMe = true, mode = "login", returnTo,
+export function LineLoginButton({ intent = "nonmember", rememberMe = true, mode = "login", returnTo, memberClaim,
   consentText = "我已閱讀並同意LINE登入資料使用說明。", consentLink = true }: LineLoginProps) {
   const [consented, setConsented] = useState(false);
   const status = useQuery({ queryKey: ["line-login-status", mode], queryFn: () => apiFetch<LineStatus>("/v1/auth/line/status"), retry: false });
   const start = useMutation({
     mutationFn: () => apiFetch<{ authorization_url: string }>("/v1/auth/line/start", { method: "POST", body: JSON.stringify({
-      intent, remember_me: rememberMe, mode, data_consent_version: "line-data-v1",
+      intent, remember_me: rememberMe, mode, ...(memberClaim ? { member_claim: memberClaim } : {}), data_consent_version: "line-data-v1",
       return_to: returnTo || `${window.location.pathname}${window.location.search}`,
     }) }),
     onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),

@@ -82,9 +82,9 @@ test("首頁入口與長訂單編號維持響應式邊界", () => {
 });
 
 test("註冊入口區分既有社員認領與非社員帳號", () => {
-  assert.match(authFlows, /既有社員註冊/);
-  assert.match(authFlows, /非社員註冊/);
-  assert.match(authFlows, /\/v1\/auth\/register-existing-member/);
+  assert.match(source, /我是既有社員/);
+  assert.match(source, /我不是社員/);
+  assert.match(source, /\/v1\/auth\/register-existing-member/);
   assert.match(source, /\/v1\/membership\/claim-existing/);
   assert.match(source, /\/v1\/admin\/member-roster/);
   assert.match(router, /search\.intent === "existing_member"/);

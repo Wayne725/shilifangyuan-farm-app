@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,6 +18,7 @@ from ..auth import (
 )
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..platform_settings import require_accepting_orders
 from ..domain import (
     DomainError,
     included_tax_amount,
@@ -172,7 +173,7 @@ def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRe
         title=event.title,
         location=event.location,
         ordering_starts_at=_aware(event.ordering_starts_at),
-        ordering_ends_at=_aware(event.ordering_ends_at),
+        ordering_ends_at=booking_end,
         pickup_starts_at=_aware(event.pickup_starts_at),
         pickup_ends_at=_aware(event.pickup_ends_at),
         status=event.status,
@@ -317,6 +318,7 @@ async def _meal_order_read(
             if order.cancelled_at is not None
             else None
         ),
+        promotion=order.promotion_snapshot,
         amount_total=order.amount_total,
         member_tax_exempt_snapshot=order.member_tax_exempt_snapshot,
         tax_amount=order.tax_amount,
@@ -696,7 +698,17 @@ async def quote_meal_order(
     if pickup_at not in pickup_slots:
         raise HTTPException(status_code=422, detail="請選擇明天午餐 11:00–13:00 或晚餐 16:30–18:00 的半小時取餐時段")
     pickup_at = pickup_at.astimezone(timezone.utc)
+    from ..promotions import price_promotion
+    promotion, discount = await price_promotion(session, total, body.coupon_code, user.id if user else None, now)
+    original_total = total
+    remaining = discount
+    for index, line in enumerate(lines):
+        reduction = remaining if index == len(lines) - 1 else discount * line["subtotal"] // original_total
+        line["subtotal"] -= reduction
+        remaining -= reduction
+    total -= discount
     return MealOrderQuoteRead(
+        promotion=promotion, original_amount=original_total, discount_amount=discount,
         sales_channel=SalesChannel.MEAL_PREORDER,
         fulfillment_method=FulfillmentMethod.EVENT_PICKUP,
         membership_type=membership_type,
@@ -730,11 +742,16 @@ async def create_meal_order(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MealOrderRead:
+    await require_accepting_orders(session)
     _require_live_meal_event(event_id, settings)
     event = await _load_event(session, event_id, for_update=True)
     if event is None:
         raise HTTPException(status_code=404, detail="找不到便當場次")
+    from ..promotions import lock_promotions
+    await lock_promotions(session)
     quote = await quote_meal_order(event_id, body, session, settings, user)
+    if body.expected_total is not None and body.expected_total != quote.amount_total:
+        raise HTTPException(status_code=409, detail="價格或優惠已變動，請重新確認訂單明細")
     by_id = {offering.id: offering for offering in event.offerings}
     quote_by_offering = {item.offering_id: item for item in quote.items}
     now = datetime.now(timezone.utc)
@@ -752,6 +769,8 @@ async def create_meal_order(
         meal_event_id=event.id,
         membership_type_snapshot=quote.membership_type,
         member_tax_exempt_snapshot=quote.member_tax_exempt,
+        promotion_id=quote.promotion["id"] if quote.promotion else None,
+        promotion_snapshot=quote.promotion,
         amount_total=quote.amount_total,
         tax_amount=quote.tax_amount,
         contact_email=body.contact_email.lower(),
@@ -884,6 +903,8 @@ async def request_meal_cancellation(
 
 @meals_router.get("/v1/admin/meal-cancellation-requests", response_model=MealCancellationQueueRead)
 async def list_meal_cancellation_requests(
+    starts_on: date | None = None,
+    ends_on: date | None = None,
     review_status: Literal["pending", "approved", "rejected", "all"] = "pending",
     search: str = Query(default="", max_length=100),
     limit: int = Query(default=30, ge=1, le=100),
@@ -892,6 +913,8 @@ async def list_meal_cancellation_requests(
     session: AsyncSession = Depends(get_session),
 ) -> MealCancellationQueueRead:
     query = select(MealCancellationRequest).join(Order).where(Order.sales_channel == SalesChannel.MEAL_PREORDER)
+    from .meal_cancellation_reports import cancellation_filters
+    query = cancellation_filters(query, starts_on, ends_on, "")
     if review_status != "all":
         query = query.where(MealCancellationRequest.status == review_status)
     if search.strip():

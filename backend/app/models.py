@@ -439,6 +439,7 @@ class LineOAuthState(Base):
     registration_intent: Mapped[str] = mapped_column(String(24))
     data_consent_version: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     data_consented_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    member_claim_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     return_to: Mapped[str] = mapped_column(String(500))
     remember_me: Mapped[bool] = mapped_column(Boolean)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -853,6 +854,31 @@ class MembershipCharge(Base):
     refunds: Mapped[List["Refund"]] = relationship(
         back_populates="membership_charge"
     )
+
+
+class MembershipOfflineReceipt(Base):
+    __tablename__ = "membership_offline_receipts"
+    __table_args__ = (
+        CheckConstraint("(membership_id IS NULL) <> (roster_entry_id IS NULL)", name="one_member_target"),
+        CheckConstraint("amount > 0", name="amount_positive"),
+        CheckConstraint("charge_kind IN ('admission_fee', 'share_capital')", name="charge_kind_valid"),
+        CheckConstraint("payment_method IN ('cash', 'bank_transfer', 'other')", name="payment_method_valid"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    idempotency_key: Mapped[str] = mapped_column(String(36), unique=True)
+    membership_id: Mapped[Optional[str]] = mapped_column(ForeignKey("memberships.id", ondelete="RESTRICT"), nullable=True, index=True)
+    roster_entry_id: Mapped[Optional[str]] = mapped_column(ForeignKey("member_roster_entries.id", ondelete="RESTRICT"), nullable=True, index=True)
+    member_number: Mapped[str] = mapped_column(String(32), index=True)
+    charge_kind: Mapped[str] = mapped_column(String(24), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    payment_method: Mapped[str] = mapped_column(String(24))
+    payer_reference_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    receipt_number: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    recorded_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    void_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class MemberDirectoryEntry(Base):
@@ -1707,6 +1733,24 @@ class MealEventOffering(Base):
     meal: Mapped[Meal] = relationship(back_populates="offerings")
 
 
+class Promotion(Base):
+    __tablename__ = "promotions"
+    __table_args__ = (CheckConstraint("minimum_amount >= 1 AND discount_value > 0", name="valid_amounts"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(100))
+    code: Mapped[Optional[str]] = mapped_column(String(32), unique=True, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    minimum_amount: Mapped[int] = mapped_column(Integer)
+    discount_kind: Mapped[str] = mapped_column(String(16))
+    discount_value: Mapped[int] = mapped_column(Integer)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    max_uses: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    per_user_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
@@ -1749,6 +1793,8 @@ class Order(Base):
     member_tax_exempt_snapshot: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false()
     )
+    promotion_id: Mapped[Optional[str]] = mapped_column(ForeignKey("promotions.id", ondelete="RESTRICT"), nullable=True, index=True)
+    promotion_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     amount_total: Mapped[int] = mapped_column(Integer)
     tax_amount: Mapped[int] = mapped_column(Integer, default=0)
     contact_email: Mapped[str] = mapped_column(String(320))

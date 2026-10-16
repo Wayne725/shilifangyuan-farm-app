@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate
-from .meal_booking import TAIPEI
+from .meal_booking import TAIPEI, MEAL_ORDER_CUTOFF
 
 
 async def generate_scheduled_meal_events(
@@ -53,7 +53,7 @@ async def generate_scheduled_meal_events(
                 time.fromisoformat(template.cutoff_time),
                 TAIPEI,
             )
-            cutoff = min(cutoff, datetime.combine(service_date, time.min, TAIPEI))
+            cutoff = min(cutoff, datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
             ordering_start = datetime.combine(service_date - timedelta(days=1), time.min, TAIPEI)
             if cutoff <= current or cutoff <= ordering_start:
                 continue

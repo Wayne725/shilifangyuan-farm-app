@@ -15,6 +15,7 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
+from ..platform_settings import require_accepting_orders
 from ..config import Settings, get_settings
 from ..sales_scope import require_sales_scope_allows
 from ..integrations.invoice_service import invoice_context_from_settings
@@ -481,6 +482,7 @@ async def join_campaign(
     settings: Settings = Depends(get_settings),
 ) -> OrderRead:
     require_sales_scope_allows(settings)
+    await require_accepting_orders(session)
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到團購")

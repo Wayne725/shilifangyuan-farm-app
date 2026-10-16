@@ -59,6 +59,7 @@ async function fixture(t, width, options = {}) {
       return route.fulfill({ json: session });
     }
     if (request.method() === 'GET') {
+      if (path === '/v1/platform') return route.fulfill({json: {orders_open: true}});
       if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'nonmember', membership: null } });
       if (path === '/v1/me/points') return route.fulfill({ json: { balance: 0 } });
       if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/membership/charges', '/v1/notifications', '/v1/me/badges', '/v1/me/surplus-distributions'].includes(path)) return route.fulfill({ json: [] });

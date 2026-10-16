@@ -567,6 +567,7 @@ export interface MealAdminOrderPage {
 }
 
 export interface MealOrder {
+  promotion?: {name: string; discount: number; original_amount: number} | null;
   id: string;
   order_number: string;
   sales_channel: "meal_preorder";

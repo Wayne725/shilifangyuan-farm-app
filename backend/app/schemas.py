@@ -92,12 +92,18 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
-class ExistingMemberRegistrationRequest(BaseModel):
+class ExistingMemberIdentity(BaseModel):
+    member_number: str = Field(min_length=1, max_length=32)
+    legal_name: str = Field(min_length=1, max_length=80)
+    email: EmailStr
+
+
+class ExistingMemberRegistrationRequest(ExistingMemberIdentity):
     member_number: str = Field(min_length=1, max_length=32)
     legal_name: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=80)
     email: EmailStr
-    phone: str = Field(min_length=8, max_length=24)
+    phone: Optional[str] = Field(default=None, min_length=8, max_length=24)
     password: str = Field(min_length=8, max_length=128)
 
 
@@ -1230,8 +1236,8 @@ class MealScheduleInput(BaseModel):
     meal_period: Literal["lunch", "dinner"]
     pickup_start_time: time = time(11)
     pickup_end_time: time = time(13)
-    cutoff_time: time = time.min
-    cutoff_days_before: int = Field(default=0, ge=0, le=29)
+    cutoff_time: time = time(20)
+    cutoff_days_before: int = Field(default=1, ge=0, le=29)
     advance_days: int = Field(default=7, ge=1, le=30)
     weekdays: List[int] = Field(default_factory=lambda: list(range(6)), min_length=1, max_length=7)
     enabled: bool = False
@@ -1319,6 +1325,8 @@ class MealOrderLineInput(BaseModel):
 
 
 class MealOrderCreate(InvoicePreferenceInput):
+    coupon_code: str = Field(default="", max_length=32, pattern=r"^[A-Za-z0-9_-]*$")
+    expected_total: Optional[int] = Field(default=None, ge=1)
     items: List[MealOrderLineInput] = Field(min_length=1, max_length=20)
     contact_email: EmailStr
     pickup_at: Optional[datetime] = None
@@ -1359,6 +1367,9 @@ class MealPickupWindowRead(ApiModel):
 
 
 class MealOrderQuoteRead(ApiModel):
+    promotion: Optional[dict] = None
+    original_amount: int = 0
+    discount_amount: int = 0
     sales_channel: SalesChannel
     fulfillment_method: FulfillmentMethod
     membership_type: MembershipType = MembershipType.NONMEMBER
@@ -1410,6 +1421,7 @@ class MealCancellationRequestRead(ApiModel):
 
 
 class MealOrderRead(ApiModel):
+    promotion: Optional[dict] = None
     id: str
     order_number: str
     sales_channel: SalesChannel

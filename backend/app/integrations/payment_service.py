@@ -1191,7 +1191,7 @@ class SQLAlchemyPaymentCallbackRepository:
                     user_id=charge.user_id,
                     event_type="membership_charge_paid",
                     title="入社款項付款成功",
-                    body=f"{charge.charge_kind.value} 已付款成功。",
+                    body=f"{'入社費' if charge.charge_kind.value == 'admission_fee' else '股金'} NT${charge.amount} 已付款成功。收據編號 {charge.receipt_number}；收款日期 {payment_time.astimezone(timezone(timedelta(hours=8))):%Y-%m-%d %H:%M}。",
                     data={
                         "membership_charge_id": charge.id,
                         "membership_id": charge.membership_id,

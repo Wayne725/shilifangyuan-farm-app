@@ -58,7 +58,7 @@ async def verified_roster_entry(
     member_number: str,
     legal_name: str,
     email: str,
-    phone: str,
+    phone: str | None = None,
 ) -> MemberRosterEntry:
     entry = await session.scalar(
         select(MemberRosterEntry)
@@ -91,7 +91,7 @@ async def verified_roster_entry(
             ),
             normalize_email(email),
         ),
-        _secure_equal(
+        phone is None or _secure_equal(
             normalize_phone(
                 cipher.decrypt_text(
                     entry.phone_encrypted,

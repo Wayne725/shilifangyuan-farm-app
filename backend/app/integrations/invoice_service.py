@@ -97,16 +97,14 @@ def invoice_request_from_order(
         if order.invoice_carrier_type == InvoiceCarrierType.MOBILE_BARCODE
         else "cloud"
     )
-    lines = [
-        InvoiceLine(
-            name=item.product_name,
-            quantity=item.quantity,
-            unit_price=item.unit_price,
-            unit=item.unit_label,
-            tax_type="3" if item.tax_type == TaxType.TAX_EXEMPT else "1",
-        )
-        for item in order.items
-    ]
+    lines = []
+    for item in order.items:
+        # Split the discounted line into integer unit prices so provider totals stay exact.
+        unit_price, remainder = divmod(item.subtotal, item.quantity)
+        for quantity, price in ((item.quantity - remainder, unit_price), (remainder, unit_price + 1)):
+            if quantity:
+                lines.append(InvoiceLine(name=item.product_name, quantity=quantity, unit_price=price,
+                    unit=item.unit_label, tax_type="3" if item.tax_type == TaxType.TAX_EXEMPT else "1"))
     shipment = (
         order.fulfillment.shipment
         if order.fulfillment is not None

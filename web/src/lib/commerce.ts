@@ -300,6 +300,8 @@ export type MealCheckoutOutcome =
   | { kind: "resume"; orderId: string; message: string };
 
 export async function beginMealCheckout(input: {
+  couponCode?: string;
+  expectedTotal?: number;
   eventId: string;
   pickupAt: string;
   items: Array<{
@@ -316,6 +318,8 @@ export async function beginMealCheckout(input: {
       method: "POST",
       body: JSON.stringify({
         items: input.items,
+        ...(input.couponCode ? {coupon_code: input.couponCode} : {}),
+        ...(input.expectedTotal !== undefined ? {expected_total: input.expectedTotal} : {}),
         pickup_at: input.pickupAt,
         contact_email: input.contactEmail,
         ...invoicePreferencePayload(input.invoicePreference),

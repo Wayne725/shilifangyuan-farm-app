@@ -124,7 +124,7 @@ for (const status of ["published", "pickup_open"]) {
 test("台灣午夜切換日期後，前一天的草稿時段與預訂資格立即失效", () => {
   const midnight = Date.parse("2026-09-17T16:00:00Z");
   const event = mealEvent({ ordering_ends_at: "2026-09-18T14:00:00+08:00" });
-  assert.equal(mealOrderingOpen(event, midnight - 1), true);
+  assert.equal(mealOrderingOpen(event, midnight - 1), false);
   assert.equal(mealOrderingOpen(event, midnight), false);
   assert.deepEqual(pickupTimeOptions(event, midnight), []);
   assert.equal(mealBookingStatus(event, midnight), "已截止");
@@ -185,3 +185,12 @@ test("取餐選單合併午晚時段，保留各自場次、地點與售完狀�
   assert.equal(choices.at(-1).status, "已售完");
   assert.deepEqual(mealPickupChoices([lunch, dinner], "2026-09-17", NOW), []);
 });
+
+for (const status of ["published", "pickup_open"]) {
+  test(`${status} 台灣 20:00 起停止隔日單，舊場次較晚截止也不能繞過`, () => {
+    const event = mealEvent({ status, ordering_ends_at: "2026-09-18T12:00:00+08:00" });
+    assert.equal(mealBookingStatus(event, Date.parse("2026-09-17T19:59:59+08:00")), "可預訂");
+    assert.equal(mealBookingStatus(event, Date.parse("2026-09-17T20:00:00+08:00")), "已截止");
+    assert.equal(mealBookingStatus(event, Date.parse("2026-09-17T20:00:00.001+08:00")), "已截止");
+  });
+}

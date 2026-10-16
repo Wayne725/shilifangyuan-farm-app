@@ -1,3 +1,4 @@
+import { StorefrontClosed, useStorefrontStatus } from "../components/StorefrontStatus";
 import {
   ArrowLeft,
   BowlFood,
@@ -32,6 +33,9 @@ import type {
 } from "../lib/types";
 
 interface MealQuote {
+  promotion?: {name: string; discount: number};
+  original_amount?: number;
+  discount_amount?: number;
   amount_total: number;
   membership_type?: string;
   member_tax_exempt?: boolean;
@@ -58,10 +62,13 @@ export function MealEventPage() {
 }
 
 function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initialPickupAt?: string }) {
+  const platform = useStorefrontStatus();
   const navigate = useNavigate({ from: "/meals/$eventId" });
   const { user, openLogin } = useAuth();
   const notificationEmail = user?.notification_email || user?.email || "";
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
+  const [couponInput, setCouponInput] = useState("");
+  const [couponCode, setCouponCode] = useState("");
   const [draftAdjusted, setDraftAdjusted] = useState(false);
   const [now, setNow] = useState(Date.now);
   const [invoicePreference, setInvoicePreference] = useState(
@@ -103,11 +110,12 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     .map((item) => `${item.offering_id}:${item.quantity}:${[...item.option_ids].sort().join(",")}`)
     .join("|");
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey, pickupAt, invoicePreference, user?.id],
+    queryKey: ["meal-quote", eventId, itemKey, pickupAt, invoicePreference, user?.id, couponCode],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
       body: JSON.stringify({
         items,
+        coupon_code: couponCode,
         pickup_at: taipeiInputToIso(pickupAt),
         contact_email: invoicePreference.buyerEmail.trim(),
         ...invoicePreferencePayload(invoicePreference),
@@ -122,11 +130,14 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   });
   const checkout = useMutation({
     mutationFn: () => {
+      if (platform.data?.orders_open === false) throw new Error(platform.data.closed_message);
       if (!user) throw new Error("請先登入");
       if (!event.data || !mealOrderingOpen(event.data)) throw new Error("只能提前一天預訂，且須在本場次的開放時間內送出");
       if (!event.data || !validPickupTime(pickupAt, event.data)) throw new Error("請重新選擇可預訂的半小時取餐時段");
       return beginMealCheckout({
         eventId,
+        couponCode,
+        expectedTotal: quote.data?.amount_total,
         pickupAt: taipeiInputToIso(pickupAt),
         items,
         contactEmail: invoicePreference.buyerEmail.trim(),
@@ -164,6 +175,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     );
   }, [notificationEmail]);
 
+  if (platform.data?.orders_open === false) return <StorefrontClosed message={platform.data.closed_message} />;
   if (event.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (event.isError || !event.data) {
     return <section className="offer-page"><DataState kind="error" title="餐期資料無法讀取" detail={event.error?.message || "找不到這個餐期"} /></section>;
@@ -328,10 +340,12 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                 <dd>{formatMoney(item.subtotal)}</dd>
               </div>
             ))}
+            {confirmedQuote?.promotion && <div><dt>{confirmedQuote.promotion.name}</dt><dd>已折抵 {formatMoney(confirmedQuote.promotion.discount)}</dd></div>}
             <InvoicePreferenceSummary value={invoicePreference} />
             {confirmedQuote && <InvoiceTaxSummary items={confirmedQuote.items} memberTaxExempt={confirmedQuote.member_tax_exempt} taxAmount={confirmedQuote.tax_amount} />}
             <div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div>
           </dl>
+          <div className="meal-coupon-field"><label className="field"><span>優惠碼</span><input maxLength={32} value={couponInput} onChange={event => setCouponInput(event.target.value.toUpperCase())} /></label><button className="button button-quiet" type="button" onClick={() => setCouponCode(couponInput.trim())}>套用優惠碼</button>{couponCode && <button type="button" className="text-link" onClick={() => {setCouponCode(""); setCouponInput("");}}>移除優惠碼</button>}</div>
           <div className="meal-checkout-settings">
             <section className="meal-pickup-selection" aria-label="選擇取餐時間">
               <div className="checkout-step-title"><span>03</span><div><h2>選擇取餐時間</h2></div></div>

@@ -1,3 +1,4 @@
+import { StorefrontClosed, useStorefrontStatus } from "../components/StorefrontStatus";
 import * as Tabs from "@radix-ui/react-tabs";
 import { ArrowRight, BowlFood, Package, UsersThree } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
@@ -12,6 +13,7 @@ import { shiftMealDate, taipeiDate } from "../lib/meal-time";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
+  const platform = useStorefrontStatus();
   const { addToCart, itemCount } = useCommerce();
   const [activeTab, setActiveTab] = useState("meals");
   const [now, setNow] = useState(Date.now);
@@ -47,6 +49,7 @@ export function ShopPage() {
   ) || [];
   const pageTitle = activeTab === "meals" ? "我要訂餐" : activeTab === "groups" ? "共同團購" : "日常選品";
 
+  if (platform.data?.orders_open === false) return <StorefrontClosed message={platform.data.closed_message} />;
   return (
     <>
       <section className="page-intro shop-intro meal-shop-intro">

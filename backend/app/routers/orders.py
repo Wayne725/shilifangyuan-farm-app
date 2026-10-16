@@ -15,6 +15,7 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
+from ..platform_settings import require_accepting_orders
 from ..config import Settings, get_settings
 from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled, meals_test_product_pairs
 from ..sales_scope import require_sales_scope_allows
@@ -253,6 +254,7 @@ async def create_order(
         or body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP
     ):
         require_sales_scope_allows(settings)
+    await require_accepting_orders(session)
     if body.fulfillment_method not in {
         FulfillmentMethod.COOPERATIVE_PICKUP,
         FulfillmentMethod.ECPAY_LOGISTICS,

@@ -1,0 +1,277 @@
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Literal
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
+
+from ..auth import require_admin
+from ..config import Settings, get_settings
+from ..csv_export import csv_response
+from ..database import get_session
+from ..domain import aware
+from ..integrations.common import IntegrationError
+from ..integrations.notifications import NotificationCommand, NotificationService, SQLAlchemyNotificationRepository
+from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..meal_booking import TAIPEI
+from ..member_claims import roster_aad
+from ..models import (AdminAudit, MemberProfile, MemberRosterEntry, Membership, MembershipCharge,
+    MembershipChargeStatus, MembershipOfflineReceipt, MembershipStatus, PaymentStatus, PointAccount, PointTransaction,
+    Refund, RefundStatus, User)
+
+member_reports_router = APIRouter(prefix="/v1/admin", tags=["member-reports"])
+
+
+def _cipher(settings):
+    try:
+        return pii_cipher_from_settings(settings)
+    except IntegrationError as exc:
+        raise HTTPException(status_code=503, detail="私密資料加密設定尚未完成") from exc
+
+
+def _local(value):
+    return aware(value).astimezone(TAIPEI).strftime("%Y-%m-%d %H:%M") if value else ""
+
+
+def _range(starts_on, ends_on):
+    if starts_on and ends_on and starts_on > ends_on:
+        raise HTTPException(status_code=422, detail="結束日期不可早於開始日期")
+    start = datetime.combine(starts_on, time.min, TAIPEI) if starts_on else None
+    end = datetime.combine(ends_on + timedelta(days=1), time.min, TAIPEI) if ends_on else None
+    return start, end
+
+
+async def _member_rows(session, settings):
+    cipher = _cipher(settings)
+    roster = list(await session.scalars(select(MemberRosterEntry).order_by(MemberRosterEntry.member_number)))
+    by_number = {row.member_number: row for row in roster}
+    joined = (await session.execute(select(Membership, User, MemberProfile).join(User, User.id == Membership.user_id)
+        .outerjoin(MemberProfile, MemberProfile.user_id == User.id).order_by(Membership.member_number, Membership.id))).all()
+    seen, rows = set(), []
+    def decrypt(value, aad):
+        return cipher.decrypt_text(value, associated_data=aad) if value else ""
+    for membership, user, profile in joined:
+        entry = by_number.get(membership.member_number)
+        if membership.member_number:
+            seen.add(membership.member_number)
+        aad = f"member-profile:{user.id}"
+        row = {"id": membership.id, "source": "membership", "member_number": membership.member_number or membership.trainee_number or "",
+               "status": membership.status.value, "legal_name": decrypt(profile.legal_name_encrypted, aad) if profile else decrypt(entry.legal_name_encrypted, roster_aad(entry.id)) if entry else user.display_name,
+               "email": user.email or user.notification_email or (decrypt(entry.email_encrypted, roster_aad(entry.id)) if entry else ""),
+               "phone": decrypt(profile.phone_encrypted, aad) if profile else decrypt(entry.phone_encrypted, roster_aad(entry.id)) if entry else "",
+               "share_certificate_number": membership.share_certificate_number, "share_count": membership.share_count,
+               "share_capital_amount": membership.share_capital_amount, "share_subscribed_on": membership.share_subscribed_on,
+               "share_paid_on": membership.share_paid_on, "activated_at": membership.activated_at}
+        for name in ("birth_date", "gender", "place_of_origin", "occupation", "address", "registered_address", "correspondence_address", "landline_phone", "line_id", "emergency_contact"):
+            row[name] = decrypt(getattr(profile, f"{name}_encrypted"), aad) if profile else ""
+        rows.append(row)
+    for entry in roster:
+        if entry.member_number in seen:
+            continue
+        aad = roster_aad(entry.id)
+        rows.append({"id": entry.id, "source": "roster", "member_number": entry.member_number,
+            "status": "active" if entry.is_active else "inactive", "legal_name": decrypt(entry.legal_name_encrypted, aad),
+            "email": decrypt(entry.email_encrypted, aad), "phone": decrypt(entry.phone_encrypted, aad),
+            "share_certificate_number": entry.share_certificate_number, "share_count": entry.share_count,
+            "share_capital_amount": entry.share_capital_amount, "share_subscribed_on": entry.share_subscribed_on,
+            "share_paid_on": entry.share_paid_on, "activated_at": entry.claimed_at})
+    return sorted(rows, key=lambda row: (row["member_number"], row["id"]))
+
+
+def _filter_members(rows, status, q):
+    term = q.strip().lower()
+    return [row for row in rows if (status == "all" or row["status"] == status) and
+            (not term or any(term in str(row.get(key) or "").lower() for key in ("member_number", "legal_name", "email", "share_certificate_number")))]
+
+
+@member_reports_router.get("/member-register")
+async def list_member_register(q: str = Query(default="", max_length=120), status: Literal["active", "all"] = "active",
+    limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    rows = _filter_members(await _member_rows(session, settings), status, q)
+    return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset}
+
+
+@member_reports_router.get("/member-register.csv")
+async def export_member_register(q: str = Query(default="", max_length=120), status: Literal["active", "all"] = "active",
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    rows = _filter_members(await _member_rows(session, settings), status, q)
+    session.add(AdminAudit(actor_id=admin.id, action="membership.register_exported", aggregate_type="member_register", aggregate_id=str(uuid4()), data={"count": len(rows), "status": status}))
+    await session.commit()
+    columns = ["社員編號", "姓名", "Email", "手機", "股號", "股數", "股金", "認股日期", "繳股日期", "會籍狀態", "入社日期", "出生日期", "性別", "籍貫", "職業", "現居地址", "戶籍地址", "通訊地址", "市話", "LINE ID", "緊急聯絡人"]
+    keys = ["member_number", "legal_name", "email", "phone", "share_certificate_number", "share_count", "share_capital_amount", "share_subscribed_on", "share_paid_on", "status", "activated_at", "birth_date", "gender", "place_of_origin", "occupation", "address", "registered_address", "correspondence_address", "landline_phone", "line_id", "emergency_contact"]
+    return csv_response("member-register.csv", columns, [[_local(row[key]) if key == "activated_at" else row.get(key) for key in keys] for row in rows])
+
+
+async def _payment_rows(session, settings):
+    cipher = _cipher(settings)
+    charges = list(await session.scalars(select(MembershipCharge).options(selectinload(MembershipCharge.membership), selectinload(MembershipCharge.user), selectinload(MembershipCharge.payment_attempts), selectinload(MembershipCharge.refunds))))
+    rows = []
+    for charge in charges:
+        payments = sorted([attempt for attempt in charge.payment_attempts if attempt.paid_at], key=lambda attempt: aware(attempt.paid_at), reverse=True)
+        attempt = payments[0] if payments else None
+        refund = sum(item.amount for item in charge.refunds if item.status == RefundStatus.COMPLETED)
+        received = sum(payment.amount for payment in payments) if payments else charge.amount if charge.paid_at else 0
+        rows.append({"id": charge.id, "source": "online", "member_number": charge.membership.member_number or charge.membership.trainee_number or "",
+            "name": charge.user.display_name, "email": charge.user.email or charge.user.notification_email or "", "kind": charge.charge_kind.value,
+            "amount": charge.amount, "received": received, "refunded": refund, "net": received - refund,
+            "status": charge.status.value, "paid_at": charge.paid_at, "receipt_number": charge.receipt_number,
+            "payment_method": attempt.provider if attempt else "", "reference": attempt.provider_trade_no if attempt else "", "recorded_at": charge.created_at})
+    receipts = list(await session.scalars(select(MembershipOfflineReceipt)))
+    members = {row["member_number"]: row for row in await _member_rows(session, settings)}
+    for receipt in receipts:
+        person = members.get(receipt.member_number, {})
+        received = 0 if receipt.voided_at else receipt.amount
+        rows.append({"id": receipt.id, "source": "offline", "member_number": receipt.member_number,
+            "name": person.get("legal_name", ""), "email": person.get("email", ""), "kind": receipt.charge_kind,
+            "amount": receipt.amount, "received": received, "refunded": 0, "net": received,
+            "status": "voided" if receipt.voided_at else "paid", "paid_at": receipt.paid_at, "receipt_number": receipt.receipt_number,
+            "payment_method": receipt.payment_method, "reference": cipher.decrypt_text(receipt.payer_reference_encrypted, associated_data=f"member-receipt:{receipt.id}") if receipt.payer_reference_encrypted else "", "recorded_at": receipt.recorded_at})
+    return rows
+
+
+async def _filtered_payments(session, settings, q, kind, starts_on, ends_on):
+    start, end = _range(starts_on, ends_on)
+    term = q.strip().lower()
+    rows = await _payment_rows(session, settings)
+    return sorted([row for row in rows if (kind == "all" or row["kind"] == kind) and
+        (not term or any(term in str(row.get(key) or "").lower() for key in ("member_number", "name", "email", "receipt_number", "reference"))) and
+        (not start or row["paid_at"] and aware(row["paid_at"]) >= start) and (not end or row["paid_at"] and aware(row["paid_at"]) < end)],
+        key=lambda row: aware(row["paid_at"] or row["recorded_at"]), reverse=True)
+
+
+@member_reports_router.get("/membership-payments")
+async def list_membership_payments(q: str = Query(default="", max_length=120), kind: Literal["all", "admission_fee", "share_capital"] = "all",
+    starts_on: date | None = None, ends_on: date | None = None, limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    rows = await _filtered_payments(session, settings, q, kind, starts_on, ends_on)
+    return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset,
+            "summary": {key: sum(row[key] for row in rows) for key in ("received", "refunded", "net")}}
+
+
+@member_reports_router.get("/membership-payments.csv")
+async def export_membership_payments(q: str = Query(default="", max_length=120), kind: Literal["all", "admission_fee", "share_capital"] = "all",
+    starts_on: date | None = None, ends_on: date | None = None,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    rows = await _filtered_payments(session, settings, q, kind, starts_on, ends_on)
+    session.add(AdminAudit(actor_id=admin.id, action="membership.payments_exported", aggregate_type="membership_payments", aggregate_id=str(uuid4()), data={"count": len(rows)}))
+    await session.commit()
+    return csv_response("membership-payments.csv", ["收據編號", "社員編號", "姓名", "Email", "款項", "應收金額", "實收", "已退款", "淨收款", "狀態", "收款日期", "收款方式", "收款資訊", "來源", "登錄時間"],
+        [[row["receipt_number"], row["member_number"], row["name"], row["email"], "入社費" if row["kind"] == "admission_fee" else "股金", row["amount"], row["received"], row["refunded"], row["net"], row["status"], _local(row["paid_at"]), row["payment_method"], row["reference"], row["source"], _local(row["recorded_at"])] for row in rows])
+
+
+class OfflineReceiptCreate(BaseModel):
+    idempotency_key: UUID
+    target_type: Literal["membership", "roster"]
+    target_id: str = Field(min_length=1, max_length=36)
+    kind: Literal["admission_fee", "share_capital"]
+    amount: int = Field(gt=0, le=100000000)
+    payment_method: Literal["cash", "bank_transfer", "other"]
+    paid_at: datetime
+    reference: str = Field(default="", max_length=500)
+    confirmed_received: Literal[True]
+
+    @field_validator("paid_at")
+    @classmethod
+    def validate_paid_at(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None or value > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise ValueError("收款日期須包含時區且不可在未來")
+        return value
+
+
+@member_reports_router.post("/membership-offline-receipts", status_code=201)
+async def create_offline_receipt(body: OfflineReceiptCreate, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    # A stable member lock also serializes duplicate receipt submissions.
+    if body.target_type == "membership":
+        member = await session.scalar(select(Membership).where(Membership.id == body.target_id).with_for_update())
+        if not member or not member.member_number:
+            raise HTTPException(status_code=409, detail="請先核對正式社員編號；線上申請款項請依原案件收款")
+        number, owner_id = member.member_number, member.user_id
+        outstanding = await session.scalar(select(MembershipCharge.id).where(MembershipCharge.membership_id == member.id, MembershipCharge.status.in_({MembershipChargeStatus.PENDING, MembershipChargeStatus.REFUND_PENDING})).limit(1))
+        if outstanding:
+            raise HTTPException(status_code=409, detail="此社員有待繳或退款中的線上款項，請先核對原案件，避免重複登錄")
+    else:
+        member = await session.scalar(select(MemberRosterEntry).where(MemberRosterEntry.id == body.target_id).with_for_update())
+        if not member:
+            raise HTTPException(status_code=404, detail="找不到社員名冊")
+        number, owner_id = member.member_number, member.claimed_user_id
+    if body.target_type == "roster" and owner_id:
+        outstanding = await session.scalar(select(MembershipCharge.id).where(MembershipCharge.user_id == owner_id, MembershipCharge.status.in_({MembershipChargeStatus.PENDING, MembershipChargeStatus.REFUND_PENDING})).limit(1))
+        if outstanding:
+            raise HTTPException(status_code=409, detail="此社員有待繳或退款中的線上款項，請先核對原案件")
+    cipher = _cipher(settings)
+    existing = await session.scalar(select(MembershipOfflineReceipt).where(MembershipOfflineReceipt.idempotency_key == str(body.idempotency_key)))
+    if existing:
+        same_target = existing.membership_id == body.target_id if body.target_type == "membership" else existing.roster_entry_id == body.target_id
+        previous_reference = cipher.decrypt_text(existing.payer_reference_encrypted, associated_data=f"member-receipt:{existing.id}") if existing.payer_reference_encrypted else ""
+        if previous_reference != body.reference or not same_target or existing.amount != body.amount or existing.charge_kind != body.kind or existing.payment_method != body.payment_method or aware(existing.paid_at) != body.paid_at:
+            raise HTTPException(status_code=409, detail="此收款請求已使用，請重新核對")
+        return {"id": existing.id, "receipt_number": existing.receipt_number, "status": "voided" if existing.voided_at else "paid"}
+    cipher, receipt_id = _cipher(settings), str(uuid4())
+    receipt = MembershipOfflineReceipt(id=receipt_id, idempotency_key=str(body.idempotency_key), member_number=number,
+        membership_id=body.target_id if body.target_type == "membership" else None, roster_entry_id=body.target_id if body.target_type == "roster" else None,
+        charge_kind=body.kind, amount=body.amount, payment_method=body.payment_method, paid_at=body.paid_at,
+        receipt_number=f"MRC{datetime.now(TAIPEI):%Y%m%d}{uuid4().hex[:10].upper()}", recorded_by_id=admin.id,
+        payer_reference_encrypted=cipher.encrypt_text(body.reference, associated_data=f"member-receipt:{receipt_id}") if body.reference else None)
+    session.add(receipt)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="此收款請求已登錄，請重新查詢核對") from exc
+    session.add(AdminAudit(actor_id=admin.id, action="membership.offline_receipt_created", aggregate_type="membership_receipt", aggregate_id=receipt.id, data={"amount": body.amount, "kind": body.kind, "member_number": number}))
+    if owner_id:
+        owner = await session.get(User, owner_id)
+        await NotificationService(SQLAlchemyNotificationRepository(session)).publish(NotificationCommand(user_id=owner_id, event_type="membership_payment_recorded", title="入社款項收款紀錄", body=f"{'入社費' if body.kind == 'admission_fee' else '股金'} NT${body.amount}，收款日期 {_local(body.paid_at)}，收據編號 {receipt.receipt_number}。", data={"receipt_id": receipt.id}, email=owner.notification_email or owner.email, dedupe_key=f"membership-receipt:{receipt.id}"))
+    await session.commit()
+    return {"id": receipt.id, "receipt_number": receipt.receipt_number, "status": "paid"}
+
+
+class ReceiptVoid(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def trim_reason(cls, value):
+        if not value.strip():
+            raise ValueError("請填寫作廢原因")
+        return value.strip()
+
+
+@member_reports_router.post("/membership-offline-receipts/{receipt_id}/void")
+async def void_offline_receipt(receipt_id: str, body: ReceiptVoid, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    receipt = await session.scalar(select(MembershipOfflineReceipt).where(MembershipOfflineReceipt.id == receipt_id).with_for_update())
+    if not receipt:
+        raise HTTPException(status_code=404, detail="找不到收款紀錄")
+    if receipt.voided_at is None:
+        receipt.voided_at = datetime.now(timezone.utc)
+        receipt.void_reason = body.reason
+        session.add(AdminAudit(actor_id=admin.id, action="membership.offline_receipt_voided", aggregate_type="membership_receipt", aggregate_id=receipt.id, reason=body.reason))
+    await session.commit()
+    return {"id": receipt.id, "status": "voided"}
+
+
+async def _point_rows(session):
+    balance = select(PointTransaction.account_id, func.sum(PointTransaction.amount).label("balance")).group_by(PointTransaction.account_id).subquery()
+    rows = (await session.execute(select(User, Membership, func.coalesce(balance.c.balance, 0)).outerjoin(Membership, Membership.user_id == User.id)
+        .outerjoin(PointAccount, PointAccount.user_id == User.id).outerjoin(balance, balance.c.account_id == PointAccount.id)
+        .where(Membership.status == MembershipStatus.ACTIVE).order_by(User.display_name, User.id))).all()
+    return [{"user_id": user.id, "name": user.display_name, "email": user.email or user.notification_email or "", "member_number": membership.member_number, "balance": int(points)} for user, membership, points in rows]
+
+
+@member_reports_router.get("/points-ledger")
+async def list_point_balances(_admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    rows = await _point_rows(session)
+    return {"items": rows, "total": len(rows), "purchase_rule": "正式社員每筆已確認付款消費滿 100 元累積 1 點；退款依原訂單扣回"}
+
+
+@member_reports_router.get("/points-ledger.csv")
+async def export_point_balances(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    rows = await _point_rows(session)
+    session.add(AdminAudit(actor_id=admin.id, action="points.exported", aggregate_type="point_account", aggregate_id=str(uuid4()), data={"count": len(rows)}))
+    await session.commit()
+    return csv_response("member-points.csv", ["社員編號", "姓名", "Email", "累積點數"], [[row[key] for key in ("member_number", "name", "email", "balance")] for row in rows])

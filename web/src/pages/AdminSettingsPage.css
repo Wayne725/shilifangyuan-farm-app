@@ -1,0 +1,9 @@
+.admin-settings-page form { max-width: 1040px; margin: 36px auto; }
+.admin-settings-section { padding-block: 32px; border-bottom: 1px solid var(--line); display: grid; gap: 22px; }
+.admin-settings-section h2, .admin-settings-section p { margin: 0; }
+.admin-settings-section dl { display: grid; gap: 14px; margin: 0; }
+.admin-settings-section dl > div { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: 20px; }
+.admin-settings-section dd { margin: 0; }
+.admin-settings-section .status-chip { justify-self: start; }
+.admin-settings-section .check-field { min-height: 48px; }
+@media (max-width: 680px) { .admin-settings-page form { margin-inline: 22px; } .admin-settings-section dl > div { grid-template-columns: 1fr; gap: 6px; } }
