@@ -732,6 +732,7 @@ class OrderRead(ApiModel):
     shipment: Optional["ShipmentRead"] = None
     meal_event: Optional["MealEventSummary"] = None
     invoice: Optional[InvoiceRead] = None
+    cancellation_request: Optional["MealCancellationRequestRead"] = None
 
 
 class CancelRequest(BaseModel):

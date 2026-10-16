@@ -1,8 +1,7 @@
 import { ArrowLeft } from "@phosphor-icons/react";
-import { useSearch } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 
-import { LineLoginButton } from "../components/LineLogin";
 import { LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { loginReturnTo } from "../lib/login-navigation";
@@ -15,7 +14,6 @@ export function LoginPage() {
   const { user, isAuthReady, login } = useAuth();
   const [email, setEmail] = useState(rememberedLoginEmail);
   const [rememberMe, setRememberMe] = useState(true);
-  const [lineIntent, setLineIntent] = useState<"member" | "nonmember">("nonmember");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => { if (isAuthReady && user) window.location.replace(returnTo); }, [isAuthReady, user, returnTo]);
@@ -39,8 +37,7 @@ export function LoginPage() {
     </form>
     <div className="login-links"><a href="/forgot-password">忘記密碼</a><a href="/register">註冊帳號</a></div>
     <div className="login-secondary">
-      <div className="line-membership-intent" role="group" aria-label="社員身分選擇"><button className={lineIntent === "member" ? "is-selected" : undefined} type="button" aria-pressed={lineIntent === "member"} onClick={() => setLineIntent("member")}>我是社員</button><button className={lineIntent === "nonmember" ? "is-selected" : undefined} type="button" aria-pressed={lineIntent === "nonmember"} onClick={() => setLineIntent("nonmember")}>我不是社員</button></div>
-      <LineLoginButton intent={lineIntent} rememberMe={rememberMe} returnTo={returnTo} />
+      <Link className="button button-quiet line-login-link" to="/line-consent" search={{ return_to: returnTo, remember_me: rememberMe }}>使用LINE登入</Link>
     </div>
     <p className="dialog-footnote"><a href="/verify-email">輸入或重寄驗證碼</a></p>
   </section>;

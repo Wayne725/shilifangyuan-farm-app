@@ -20,6 +20,7 @@ from ..controlled_product_payments import is_meals_test_product_order, meals_tes
 from ..sales_scope import require_sales_scope_allows
 from ..domain import (
     DomainError,
+    aware,
     ensure_self_cancel_allowed,
     included_tax_amount,
     member_sale_is_tax_exempt,
@@ -44,6 +45,7 @@ from ..models import (
     InventoryReservation,
     InvoiceBuyerType,
     MealEventOffering,
+    MealCancellationRequest,
     Notification,
     Order,
     OrderFulfillment,
@@ -61,6 +63,8 @@ from ..models import (
 )
 from ..schemas import (
     CancelRequest,
+    MealCancellationReview,
+    MealCancellationRequestRead,
     FulfillmentUpdate,
     OrderCreate,
     OrderQuoteLine,
@@ -86,6 +90,11 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         if fulfillment is not None
         else None
     )
+    requests = order.__dict__.get("cancellation_requests", [])
+    latest = max(requests, key=lambda request: (aware(request.requested_at), request.id), default=None)
+    actions = order_available_actions(order, viewer_is_admin)
+    if latest and latest.status == "pending":
+        actions = [action for action in actions if action not in {"cancel", "refund"}]
     return OrderRead(
         id=order.id,
         order_number=order.order_number,
@@ -110,7 +119,8 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         paid_at=order.paid_at,
         cancelled_at=order.cancelled_at,
         created_at=order.created_at,
-        available_actions=order_available_actions(order, viewer_is_admin),
+        available_actions=actions,
+        cancellation_request=MealCancellationRequestRead.model_validate(latest) if latest else None,
         items=order.items,
         fulfillment=fulfillment,
         shipment=shipment,
@@ -194,6 +204,7 @@ async def load_order(
             selectinload(Order.items),
             selectinload(Order.group_campaign),
             selectinload(Order.reservations),
+            selectinload(Order.cancellation_requests),
             selectinload(Order.invoice),
             selectinload(Order.meal_event),
             selectinload(Order.fulfillment).selectinload(
@@ -202,7 +213,7 @@ async def load_order(
         )
     )
     if lock:
-        query = query.with_for_update()
+        query = query.with_for_update().execution_options(populate_existing=True)
     order = await session.scalar(query)
     if order is None:
         raise HTTPException(status_code=404, detail="找不到訂單")
@@ -338,6 +349,7 @@ async def list_orders(
     session: AsyncSession = Depends(get_session),
 ) -> List[OrderRead]:
     query = select(Order).options(
+        selectinload(Order.cancellation_requests),
         selectinload(Order.items),
         selectinload(Order.group_campaign),
         selectinload(Order.meal_event),
@@ -521,31 +533,68 @@ async def cancel_order(
     order = await load_order(session, order_id, lock=True)
     if order.user_id != user.id:
         raise HTTPException(status_code=404, detail="找不到訂單")
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        raise HTTPException(status_code=409, detail="便當退單請由便當退單審核流程處理")
+    if any(request.status == "pending" for request in order.cancellation_requests):
+        return order_read(order, False)
     try:
         ensure_self_cancel_allowed(order, datetime.now(timezone.utc))
     except DomainError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if order.payment_status == PaymentStatus.PAID:
-        await request_order_refund(session, order, user, body.reason)
-    else:
-        await release_active_reservations(session, order)
-        order.payment_status = PaymentStatus.EXPIRED
-        order.fulfillment_status = FulfillmentStatus.CANCELLED
-        fulfillment = order.__dict__.get("fulfillment")
-        if fulfillment is not None:
-            fulfillment.status = FulfillmentState.CANCELLED
-        order.cancelled_at = datetime.now(timezone.utc)
-        order.cancellation_reason = body.reason
-    session.add(
-        OutboxEvent(
-            event_type="order.cancelled",
-            aggregate_type="order",
-            aggregate_id=order.id,
-            payload={"reason": body.reason},
-        )
-    )
+    if not body.reason.strip():
+        raise HTTPException(status_code=422, detail="請填寫退單原因")
+    request = MealCancellationRequest(order=order, requested_by_id=user.id, reason=body.reason.strip())
+    session.add(request)
+    await session.flush()
     await session.commit()
     return order_read(order, False)
+
+
+@orders_router.post("/{order_id}/admin/cancellation-requests/{request_id}/review", response_model=OrderRead)
+async def review_order_cancellation(
+    order_id: str,
+    request_id: str,
+    body: MealCancellationReview,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> OrderRead:
+    order = await load_order(session, order_id, lock=True)
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        raise HTTPException(status_code=409, detail="便當退單請由便當退單審核流程處理")
+    request = await session.scalar(select(MealCancellationRequest).where(
+        MealCancellationRequest.id == request_id, MealCancellationRequest.order_id == order_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if request is None:
+        raise HTTPException(status_code=404, detail="找不到退單申請")
+    result = "approved" if body.decision == "approve" else "rejected"
+    if request.status != "pending":
+        if request.status == result:
+            return order_read(order, True)
+        raise HTTPException(status_code=409, detail="此申請已完成審核，不能改成另一個結果")
+    if body.decision == "approve":
+        try:
+            ensure_self_cancel_allowed(order, datetime.now(timezone.utc))
+        except DomainError as exc:
+            raise HTTPException(status_code=409, detail="訂單目前不可核准退單，請核對後拒絕申請") from exc
+        if order.payment_status == PaymentStatus.PAID:
+            await request_order_refund(session, order, admin, request.reason)
+        else:
+            await release_active_reservations(session, order)
+            order.payment_status = PaymentStatus.EXPIRED
+            order.fulfillment_status = FulfillmentStatus.CANCELLED
+            if order.fulfillment is not None:
+                order.fulfillment.status = FulfillmentState.CANCELLED
+            order.cancelled_at = datetime.now(timezone.utc)
+            order.cancellation_reason = request.reason
+        session.add(OutboxEvent(event_type="order.cancelled", aggregate_type="order", aggregate_id=order.id, payload={"reason": request.reason}))
+    request.status = result
+    request.reviewed_by_id = admin.id
+    request.reviewed_at = datetime.now(timezone.utc)
+    request.review_reason = body.reason
+    session.add(AdminAudit(actor_id=admin.id, action=f"order_cancellation.{result}",
+        aggregate_type="order", aggregate_id=order.id, reason=body.reason, data={"request_id": request.id}))
+    await session.commit()
+    return order_read(order, True)
 
 
 @orders_router.post("/{order_id}/admin/refund", response_model=OrderRead)
@@ -558,6 +607,8 @@ async def refund_order(
     order = await load_order(session, order_id, lock=True)
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
         raise HTTPException(status_code=409, detail="便當退款請由便當退單審核流程處理")
+    if any(request.status == "pending" for request in order.cancellation_requests):
+        raise HTTPException(status_code=409, detail="此訂單有退單待審申請，請先完成退單審核")
     await request_order_refund(session, order, admin, body.reason)
     session.add(
         AdminAudit(

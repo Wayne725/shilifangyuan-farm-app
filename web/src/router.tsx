@@ -334,6 +334,10 @@ const lineLoginRoute = createRoute({
 const lineConsentRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/line-consent",
+  validateSearch: (search: Record<string, unknown>): { return_to?: string; remember_me?: boolean } => ({
+    return_to: typeof search.return_to === "string" ? search.return_to : undefined,
+    remember_me: search.remember_me === false || search.remember_me === "false" ? false : true,
+  }),
   component: page("./pages/LineConsentPage", "LineConsentPage"),
 });
 

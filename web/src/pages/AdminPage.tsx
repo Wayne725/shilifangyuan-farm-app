@@ -13,6 +13,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminNav } from "../components/AdminNav";
 import { AdminOperationsNav } from "../components/AdminOperationsNav";
+import { AdminOrderCancellationReview } from "../components/AdminOrderCancellationReview";
 import { AdminFailurePanel } from "../components/AdminFailurePanel";
 import { AdminInvoiceAdjustment } from "../components/AdminInvoiceAdjustment";
 import { AdminReasonChoices } from "../components/AdminReasonChoices";
@@ -51,6 +52,7 @@ export function AdminPage() {
   const [orderSearchInput, setOrderSearchInput] = useState(routeSearch.q || "");
   const [orderSearch, setOrderSearch] = useState(routeSearch.q || "");
   const [orderOffset, setOrderOffset] = useState(0);
+  const [cancellationPending, setCancellationPending] = useState(false);
   useEffect(() => {
     setOrderSearchInput(routeSearch.q || "");
     setOrderSearch(routeSearch.q || "");
@@ -69,8 +71,8 @@ export function AdminPage() {
         enabled: isAdmin && section === "locations",
       },
       {
-        queryKey: ["admin-orders", orderSearch, orderOffset],
-        queryFn: () => apiFetch<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12`),
+        queryKey: ["admin-orders", orderSearch, orderOffset, cancellationPending],
+        queryFn: () => apiFetch<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}`),
         enabled: isAdmin && section === "orders",
       },
     ],
@@ -119,6 +121,7 @@ export function AdminPage() {
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>
       <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} placeholder="訂單編號、Email 或統編" maxLength={120} /></label>
+      <label className="check-field"><input type="checkbox" checked={cancellationPending} onChange={(event) => { setCancellationPending(event.target.checked); setOrderOffset(0); }} />只看退單待審</label>
       <button className="button button-quiet" type="submit">搜尋</button>
     </form>
     <div className="operations-list">
@@ -144,6 +147,7 @@ export function AdminPage() {
             onShipment={(status) => advanceShipment.mutate({ orderId: order.id, status })}
             onRefund={(reason) => refundOrder.mutate({ orderId: order.id, reason })}
           />
+          <AdminOrderCancellationReview order={order} />
           <AdminInvoiceAdjustment order={order} />
           <AdminStatusQuery orderId={order.id} kind="payment" disabled={refundOrder.isPending} />
           {refundOrder.variables?.orderId === order.id && refundOrder.isSuccess && <p className="form-success" role="status">退款狀態：{adminPaymentStatusLabel(refundOrder.data.payment_status)}</p>}
@@ -224,7 +228,7 @@ function AdminOrderAction({
 }) {
   const [refundOpen, setRefundOpen] = useState(false);
   const [refundReason, setRefundReason] = useState("依買家申請退款");
-  const refundControl = order.available_actions.includes("refund") && (refundOpen ? <div className="operation-refund"><AdminReasonChoices label="退款原因" value={refundReason} onChange={setRefundReason} disabled={busy} choices={[{ label: "買家申請", value: "依買家申請退款" }, { label: "商品無法供應", value: "商品無法供應，申請退款" }, { label: "重複付款", value: "重複付款，申請退款" }]} /><button type="button" disabled={busy || !refundReason.trim()} onClick={() => onRefund(refundReason)}>確認退款 {formatMoney(order.amount_total)}</button><button type="button" onClick={() => setRefundOpen(false)}>取消</button></div> : <button type="button" disabled={busy} onClick={() => setRefundOpen(true)}>建立退款</button>);
+  const refundControl = order.available_actions.includes("refund") && (refundOpen ? <div className="operation-refund"><AdminReasonChoices label="退款原因" value={refundReason} onChange={setRefundReason} disabled={busy} choices={[{ label: "買家申請", value: "依買家申請退款" }, { label: "商品無法供應", value: "商品無法供應，申請退款" }, { label: "重複付款", value: "重複付款，申請退款" }]} /><button type="button" disabled={busy || !refundReason.trim()} onClick={() => onRefund(refundReason)}>核准退款 {formatMoney(order.amount_total)}</button><button type="button" onClick={() => setRefundOpen(false)}>取消</button></div> : <button type="button" disabled={busy} onClick={() => setRefundOpen(true)}>審核退款</button>);
   const invoiceControl = <AdminStatusQuery orderId={order.id} kind="invoice" disabled={busy} />;
   if (order.sales_channel === "meal_preorder") {
     return <div className="operation-actions"><Link className="button button-quiet" to="/admin/meals" search={{ tab: "orders", q: order.order_number }}>便當取餐與退單審核</Link>{invoiceControl}</div>;

@@ -128,14 +128,16 @@ export function MembershipApplicationPage() {
     return <section className="membership-page"><header className="membership-heading"><CheckCircle size={42} weight="light" /><p className="eyebrow">ACTIVE MEMBER / 正式社員</p><h1>你已是正式社員</h1><p>{membership.data.membership?.member_number || "社員資格已啟用"}</p><div><Link className="button button-primary" to="/social">進入社務系統</Link><Link className="button button-quiet" to="/account" search={{ membership_charge_id: undefined, payment: undefined }}>查看社員中心</Link></div></header></section>;
   }
 
-  const status = application.data?.status || "draft";
+  const previousStatus = application.data?.status || "draft";
+  const reapplying = membership.data?.membership?.status === "suspended" && ["approved", "rejected", "withdrawn"].includes(previousStatus);
+  const status = reapplying ? "draft" : previousStatus;
   const editable = ["draft", "needs_supplement"].includes(status);
 
   return (
     <section className="membership-page">
       <header className="workspace-heading membership-workspace-heading">
         <div><p className="eyebrow">MEMBERSHIP APPLICATION / 入社申請</p><h1>入社申請</h1></div>
-        <div className="application-status"><span>{applicationStatusLabel(status)}</span><small>填妥基本資料即可送出</small></div>
+        <div className="application-status"><span>{reapplying ? "重新申請" : applicationStatusLabel(status)}</span></div>
       </header>
 
       {application.data?.review_reason && <div className="return-banner failed"><IdentificationCard size={22} /><div><strong>審核意見</strong><span>{application.data.review_reason}</span></div></div>}
@@ -146,9 +148,9 @@ export function MembershipApplicationPage() {
           <div className="field-grid three-columns">
             <label className="field"><span>姓名</span><input required disabled={!editable} value={form.legal_name} onChange={(event) => setForm({ ...form, legal_name: event.target.value })} /></label>
             <label className="field"><span>出生日期</span><input required disabled={!editable} type="date" value={form.birth_date} onChange={(event) => setForm({ ...form, birth_date: event.target.value })} /></label>
-            <label className="field"><span>性別</span><select disabled={!editable} value={genderChoice} onChange={(event) => { const value = event.target.value; setGenderChoice(value); setForm({ ...form, gender: value === "__other" ? "" : value }); }}><option value="">請選擇</option>{genderOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他（請填寫）</option></select>{genderChoice === "__other" && <input disabled={!editable} aria-label="自填性別" placeholder="請填寫性別" value={form.gender} onChange={(event) => setForm({ ...form, gender: event.target.value })} />}</label>
-            <label className="field"><span>籍貫</span><select disabled={!editable} value={placeOfOriginChoice} onChange={(event) => { const value = event.target.value; setPlaceOfOriginChoice(value); setForm({ ...form, place_of_origin: value === "__other" ? "" : value }); }}><option value="">請選擇</option>{placeOfOriginOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他／國外（請填寫）</option></select>{placeOfOriginChoice === "__other" && <input disabled={!editable} aria-label="自填籍貫" placeholder="請填寫籍貫" value={form.place_of_origin} onChange={(event) => setForm({ ...form, place_of_origin: event.target.value })} />}</label>
-            <label className="field"><span>職業</span><select disabled={!editable} value={occupationChoice} onChange={(event) => { const value = event.target.value; setOccupationChoice(value); setForm({ ...form, occupation: value === "__other" ? "" : value }); }}><option value="">請選擇</option>{occupationOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他（請填寫）</option></select>{occupationChoice === "__other" && <input disabled={!editable} aria-label="自填職業" placeholder="請填寫職業" value={form.occupation} onChange={(event) => setForm({ ...form, occupation: event.target.value })} />}</label>
+            <label className="field"><span>性別</span><select disabled={!editable} value={genderChoice} onChange={(event) => { const value = event.target.value; setGenderChoice(value); setForm({ ...form, gender: value === "__other" ? "其他" : value }); }}><option value="">請選擇</option>{genderOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他</option></select></label>
+            <label className="field"><span>籍貫</span><select disabled={!editable} value={placeOfOriginChoice} onChange={(event) => { const value = event.target.value; setPlaceOfOriginChoice(value); setForm({ ...form, place_of_origin: value === "__other" ? "其他／國外" : value }); }}><option value="">請選擇</option>{placeOfOriginOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他／國外</option></select></label>
+            <label className="field"><span>職業</span><select disabled={!editable} value={occupationChoice} onChange={(event) => { const value = event.target.value; setOccupationChoice(value); setForm({ ...form, occupation: value === "__other" ? "其他" : value }); }}><option value="">請選擇</option>{occupationOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__other">其他</option></select></label>
             <label className="field"><span>手機</span><input required disabled={!editable} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
             <label className="field"><span>市話</span><input disabled={!editable} value={form.landline_phone} onChange={(event) => setForm({ ...form, landline_phone: event.target.value })} /></label>
             <label className="field"><span>LINE ID</span><input disabled={!editable} value={form.line_id} onChange={(event) => setForm({ ...form, line_id: event.target.value })} /></label>

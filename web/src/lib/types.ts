@@ -128,6 +128,7 @@ export interface AdminInvoiceQueryResult {
 }
 
 export interface Order {
+  cancellation_request?: MealCancellationRequest | null;
   id: string;
   order_number: string;
   order_kind: "regular" | "group";

@@ -8,7 +8,7 @@ import app.jobs as jobs
 from app.integrations.common import HTTPResponse
 from app.integrations.email_sender import EmailSendResult
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
-from app.models import Invoice, InvoiceStatus, PaymentStatus, User
+from app.models import Invoice, InvoiceStatus, PaymentStatus, User, UserRole
 from app.routers.notifications import notifications_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
@@ -121,7 +121,18 @@ async def test_verified_payment_invoice_mail_duplicate_and_refund_pipeline(
             f"/v1/orders/{order.id}/cancel", json={"reason": "Isolated acceptance test"},
             headers=auth_headers(order.user),
         )
-    assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["cancellation_request"]["status"] == "pending"
+        assert order.payment_status == PaymentStatus.PAID and order.cancelled_at is None
+        await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=3, seconds=30))
+        assert order.payment_status == PaymentStatus.PAID
+        assert not refund_adapter.calls
+        admin = User(email="audit-reviewer@example.com", display_name="隔離審核員", password_hash="unused", user_role=UserRole.ADMIN)
+        session.add(admin)
+        await session.commit()
+        request_id = cancelled.json()["cancellation_request"]["id"]
+        approved = await order_client.post(f"/v1/orders/{order.id}/admin/cancellation-requests/{request_id}/review", json={"decision": "approve", "reason": "Isolated administrator review"}, headers=auth_headers(admin))
+        assert approved.status_code == 200, approved.text
     await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=4))
     await session.refresh(order)
     await session.refresh(invoice)

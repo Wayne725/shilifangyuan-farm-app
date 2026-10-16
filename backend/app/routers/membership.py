@@ -115,7 +115,6 @@ def _ensure_user_can_apply(user: User, application: Optional[MembershipApplicati
     if membership is not None and membership.status in {
         MembershipStatus.TRAINEE,
         MembershipStatus.ACTIVE,
-        MembershipStatus.SUSPENDED,
     }:
         raise HTTPException(
             status_code=409,
@@ -345,7 +344,23 @@ async def _save_profile_and_application(
         user.id,
         for_update=True,
     )
+    membership = await session.scalar(select(Membership).where(Membership.user_id == user.id)
+        .execution_options(populate_existing=True).with_for_update())
+    user.membership = membership
     _ensure_user_can_apply(user, application)
+    if membership is not None and membership.status == MembershipStatus.SUSPENDED and application is not None and application.status in {
+        MembershipApplicationStatus.APPROVED, MembershipApplicationStatus.REJECTED, MembershipApplicationStatus.WITHDRAWN,
+    }:
+        session.add(AdminAudit(actor_id=user.id, action="membership.reapplication_started",
+            aggregate_type="membership_application", aggregate_id=application.id,
+            data={"previous_status": application.status.value, "previous_reviewed_by_id": application.reviewed_by_id,
+                  "previous_reviewed_at": application.reviewed_at.isoformat() if application.reviewed_at else None,
+                  "previous_review_reason": application.review_reason}))
+        application.status = MembershipApplicationStatus.DRAFT
+        application.submitted_at = None
+        application.reviewed_at = None
+        application.reviewed_by_id = None
+        application.review_reason = None
     if application is None:
         application = MembershipApplication(user_id=user.id)
         session.add(application)
@@ -435,6 +450,15 @@ async def _ensure_membership_charges(
         membership is not None and membership.status == MembershipStatus.TRAINEE
         and membership.application_id == application.id
     ):
+        return membership
+    if membership is not None and membership.status == MembershipStatus.SUSPENDED:
+        unsettled = await session.scalar(select(MembershipCharge.id).where(
+            MembershipCharge.membership_id == membership.id,
+            MembershipCharge.status.in_({MembershipChargeStatus.PENDING, MembershipChargeStatus.REFUND_PENDING, MembershipChargeStatus.REFUNDED}),
+        ).limit(1))
+        if unsettled is not None or not membership.member_number:
+            raise HTTPException(status_code=409, detail="原會籍有入社款項或資格待核對，請先完成原案件處理再恢復社員資格")
+        membership.application_id = application.id
         return membership
     if membership is None:
         membership = Membership(
@@ -1219,6 +1243,15 @@ async def approve_membership_application(
     if profile_id is None:
         raise HTTPException(status_code=409, detail="申請人基本資料尚未齊全，請先要求補件")
     membership = await _ensure_membership_charges(session, application)
+    if membership.status == MembershipStatus.SUSPENDED:
+        if not body.reason or not body.reason.strip():
+            raise HTTPException(status_code=422, detail="請填寫恢復社員資格的審核原因")
+        membership.status = MembershipStatus.ACTIVE
+        membership.suspended_at = None
+        membership.status_reason = body.reason
+        session.add(AdminAudit(actor_id=admin.id, action="membership.reinstated",
+            aggregate_type="membership", aggregate_id=membership.id, reason=body.reason,
+            data={"application_id": application.id}))
     application.status = MembershipApplicationStatus.APPROVED
     application.reviewed_by_id = admin.id
     application.reviewed_at = datetime.now(timezone.utc)
@@ -1280,10 +1313,10 @@ async def reject_membership_application(
     if membership is not None and (
         membership.status
         in {MembershipStatus.TRAINEE, MembershipStatus.ACTIVE}
-        or any(
+        or (membership.status != MembershipStatus.SUSPENDED and any(
             charge.status == MembershipChargeStatus.PAID
             for charge in membership.charges
-        )
+        ))
     ):
         raise HTTPException(
             status_code=409,

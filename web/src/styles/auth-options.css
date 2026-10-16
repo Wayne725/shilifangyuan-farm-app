@@ -157,3 +157,8 @@
   color: var(--paper-light);
   background: var(--moss-dark);
 }
+
+.account-login-page .line-login-link { min-height: 2.75rem; padding: .5rem 1rem; font-size: 1rem; }
+.line-consent-page .line-membership-intent { margin-block: 1.5rem; }
+.line-consent-page .line-membership-intent button.is-selected { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
+.line-consent-email { margin-top: 1.5rem; }

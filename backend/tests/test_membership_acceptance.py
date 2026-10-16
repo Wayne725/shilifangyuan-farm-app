@@ -131,3 +131,72 @@ async def test_member_profile_hides_share_holdings_but_admin_retains_records(v2_
     assert record["share_capital_amount"] == 5000
     assert record["share_count"] == 5
     assert member.membership.share_certificate_number == "LEGACY-CERT"
+
+
+@pytest.mark.parametrize("has_application", [False, True])
+async def test_removed_member_can_reapply_and_only_admin_review_restores_membership(v2_context, has_application):
+    from app.models import AdminAudit, Membership, MembershipApplication, MembershipApplicationStatus, MembershipCharge, MembershipStatus, PaymentAttempt, Refund
+    from sqlalchemy import func
+
+    c, session = v2_context, v2_context["session"]
+    applicant, admin = c["applicant"], c["admin"]
+    owner, reviewer = auth_headers(applicant), auth_headers(admin)
+    application = None
+    if has_application:
+        result = await c["client"].put("/v1/membership/application", headers=owner, json=PROFILE)
+        assert result.status_code == 200
+        application = await session.get(MembershipApplication, result.json()["id"])
+        application.status = MembershipApplicationStatus.APPROVED
+    membership = Membership(user=applicant, application_id=application.id if application else None, status=MembershipStatus.ACTIVE, member_number="REAPPLY-001", share_capital_amount=1000, share_count=1)
+    session.add(membership)
+    await session.commit()
+    removed = await c["client"].post(f"/v1/admin/members/{membership.id}/suspend", headers=reviewer, json={"reason": "移除資格後重新送審"})
+    assert removed.status_code == 200, removed.text
+    saved = await c["client"].put("/v1/membership/application", headers=owner, json=PROFILE)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["status"] == "draft"
+    assert (await c["client"].post("/v1/membership/application/submit", headers=owner)).status_code == 200
+    await session.refresh(membership)
+    assert membership.status == MembershipStatus.SUSPENDED
+    path = f"/v1/admin/membership-applications/{saved.json()['id']}/approve"
+    assert (await c["client"].post(path, headers=owner, json={"reason": "自行核准"})).status_code == 403
+    approved = await c["client"].post(path, headers=reviewer, json={"reason": "已核對，准予恢復"})
+    assert approved.status_code == 200, approved.text
+    await session.refresh(membership)
+    assert membership.status == MembershipStatus.ACTIVE
+    assert membership.member_number == "REAPPLY-001"
+    assert membership.share_capital_amount == 1000 and membership.share_count == 1
+    assert await session.scalar(select(func.count(Membership.id)).where(Membership.user_id == applicant.id)) == 1
+    for model in [MembershipCharge, PaymentAttempt, Refund]:
+        assert await session.scalar(select(func.count(model.id))) == 0
+    audit = await session.scalar(select(AdminAudit).where(AdminAudit.action == "membership.reinstated"))
+    assert audit.actor_id == admin.id
+    assert (await c["client"].put("/v1/membership/application", headers=owner, json=PROFILE)).status_code == 409
+
+
+@pytest.mark.parametrize("charge_status,can_restore", [("paid", True), ("refund_pending", False), ("refunded", False)])
+async def test_reapplication_preserves_historical_charges_and_blocks_unsettled_refunds(v2_context, charge_status, can_restore):
+    from app.models import Membership, MembershipCharge, MembershipChargeStatus, MembershipStatus, Refund
+    from sqlalchemy import func
+
+    c, session = v2_context, v2_context["session"]
+    applicant, admin = c["applicant"], c["admin"]
+    owner, reviewer = auth_headers(applicant), auth_headers(admin)
+    membership = Membership(user=applicant, status=MembershipStatus.SUSPENDED, member_number="HISTORY-001", share_capital_amount=1000, share_count=1)
+    schedule = MembershipFeeSchedule(charge_kind=MembershipChargeKind.SHARE_CAPITAL, amount=1000, effective_from=date(2026, 1, 1))
+    session.add_all([membership, schedule])
+    await session.commit()
+    saved = await c["client"].put("/v1/membership/application", headers=owner, json=PROFILE)
+    assert saved.status_code == 200
+    charge = MembershipCharge(user_id=applicant.id, application_id=saved.json()["id"], membership_id=membership.id, fee_schedule_id=schedule.id, charge_kind=MembershipChargeKind.SHARE_CAPITAL, amount=1000, status=MembershipChargeStatus(charge_status))
+    session.add(charge)
+    await session.commit()
+    assert (await c["client"].post("/v1/membership/application/submit", headers=owner)).status_code == 200
+    approved = await c["client"].post(f"/v1/admin/membership-applications/{saved.json()['id']}/approve", headers=reviewer, json={"reason": "已核對歷史款項"})
+    assert approved.status_code == (200 if can_restore else 409), approved.text
+    await session.refresh(charge)
+    await session.refresh(membership)
+    assert charge.status.value == charge_status
+    assert membership.status == (MembershipStatus.ACTIVE if can_restore else MembershipStatus.SUSPENDED)
+    assert await session.scalar(select(func.count(MembershipCharge.id)).where(MembershipCharge.user_id == applicant.id)) == 1
+    assert await session.scalar(select(func.count(Refund.id))) == 0

@@ -300,6 +300,11 @@ export function OrdersPage() {
                 ))}
               </div>
 
+              {selected.cancellation_request && <section className="order-cancellation-status" aria-label="退單申請狀態">
+                <strong>{selected.cancellation_request.status === "pending" ? "退單待管理員審核，訂單尚未取消" : selected.cancellation_request.status === "approved" ? "退單已核准" : "退單未核准"}</strong>
+                <p>申請原因：{selected.cancellation_request.reason}</p>
+                {selected.cancellation_request.review_reason && <p>審核原因：{selected.cancellation_request.review_reason}</p>}
+              </section>}
               {actionError && <p className="form-error">{actionError.message}</p>}
               <div className="order-actions">
                 {selectedPaymentIsConfirming && (
@@ -331,7 +336,7 @@ export function OrdersPage() {
                 )}
                 {!selectedPaymentIsConfirming && selected.available_actions.includes("cancel") && cancelId !== selected.id && (
                   <button className="button button-quiet" type="button" onClick={() => setCancelId(selected.id)}>
-                    取消訂單
+                    申請退單
                   </button>
                 )}
               </div>
@@ -339,15 +344,15 @@ export function OrdersPage() {
               {cancelId === selected.id && (
                 <div className="inline-confirm">
                   <button className="icon-button" type="button" aria-label="關閉取消訂單" onClick={() => setCancelId("")}><X size={16} /></button>
-                  <strong>確定取消這筆訂單？</strong>
-                  <label>取消原因<input value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} /></label>
+                  <strong>申請退單，交由管理員審核</strong>
+                  <label>退單原因<input value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} /></label>
                   <button
                     className="button button-danger"
                     type="button"
                     disabled={!cancelReason.trim() || cancelOrder.isPending}
                     onClick={() => cancelOrder.mutate(selected.id)}
                   >
-                    {cancelOrder.isPending ? "取消中…" : "確認取消"}
+                    {cancelOrder.isPending ? "送出中…" : "送出退單申請"}
                   </button>
                 </div>
               )}

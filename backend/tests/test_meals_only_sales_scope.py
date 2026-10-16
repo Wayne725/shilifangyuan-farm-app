@@ -217,7 +217,7 @@ async def test_old_nonmeal_checkout_blocked_but_status_read_retained(payment_ret
 
 
 @pytest.mark.asyncio
-async def test_old_nonmeal_callback_and_self_cancel_refund_still_work(payment_return_context):
+async def test_old_nonmeal_callback_and_self_cancel_requires_review(payment_return_context):
     client, session, order, attempt = payment_return_context
     settings = payment_settings().model_copy(update={"sales_scope": "meals_only", "environment": "production"})
     client._transport.app.dependency_overrides[get_settings] = lambda: settings
@@ -237,7 +237,9 @@ async def test_old_nonmeal_callback_and_self_cancel_refund_still_work(payment_re
         f"/v1/orders/{order_id}/cancel", headers=headers, json={"reason": "取消舊訂單"}
     )
     assert refund.status_code == 200, refund.text
-    assert refund.json()["payment_status"] == "refund_pending"
+    assert refund.json()["payment_status"] == "paid"
+    assert refund.json()["cancellation_request"]["status"] == "pending"
+    assert refund.json()["cancelled_at"] is None
 
 
 @pytest.mark.asyncio

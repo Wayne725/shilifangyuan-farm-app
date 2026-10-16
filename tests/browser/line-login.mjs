@@ -121,8 +121,10 @@ for (const width of [1440, 390]) {
     await page.goto(`${base}/account`); await enlarge(page);
     await page.getByRole('main').getByRole('button', { name: '帳號登入', exact: true }).click();
     const dialog = page.getByRole('main');
-    await dialog.getByText(/LINE登入尚未啟用/).waitFor();
+    await dialog.getByRole('link', { name: '使用LINE登入', exact: true }).click();
+    await page.getByText(/LINE登入尚未啟用/).waitFor();
     assert.equal(await dialog.getByRole('button', { name: /使用\s*LINE\s*登入/ }).isEnabled(), false);
+    await page.getByRole('link', { name: '使用 Email 登入', exact: true }).click();
     assert.equal(await dialog.getByRole('button', { name: '登入系統', exact: true }).isEnabled(), true);
     await dialog.getByLabel('電子信箱', { exact: true }).fill('buyer@example.test');
     await dialog.getByLabel('密碼', { exact: true }).fill('Isolated-test-only-123');
@@ -137,12 +139,14 @@ for (const width of [1440, 390]) {
   test(`${width}px 社員意願及保持登入傳入LINE，callback只送一次並清除授權參數`, async (t) => {
     const { page, state } = await fixture(t, width);
     const dialog = await openLogin(page);
+    await dialog.getByLabel('保持登入', { exact: true }).uncheck();
+    await dialog.getByRole('link', { name: '使用LINE登入', exact: true }).click();
     await dialog.getByRole('button', { name: '我是社員', exact: true }).click();
     assert.equal(await dialog.getByRole('button', { name: '我是社員', exact: true }).getAttribute('aria-pressed'), 'true');
-    await dialog.getByLabel('保持登入', { exact: true }).uncheck();
+    await dialog.getByRole('checkbox').check();
     await dialog.getByRole('button', { name: /使用\s*LINE\s*登入/ }).click();
     await page.getByRole('heading', { name: /測試買家/ }).waitFor();
-    assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'member', remember_me: false, mode: 'login', return_to: '/account' }]);
+    assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'member', remember_me: false, mode: 'login', data_consent_version: 'line-data-v1', return_to: '/account' }]);
     assert.deepEqual(calls(state, 'line/callback').map((call) => call.body), [{ state: 'isolated-state', code: 'isolated-code', error: '' }]);
     assert.equal(new URL(page.url()).search, '');
     assert.equal(calls(state, 'line/pending').length, 0);
@@ -152,10 +156,11 @@ for (const width of [1440, 390]) {
   test(`${width}px 原帳號連結LINE後仍為原使用者，不送出註冊或合併帳號`, async (t) => {
     const { page, state } = await fixture(t, width, { signedIn: true, callback: { status: 'linked', return_to: '/account', message: 'LINE已連結' } });
     await page.goto(`${base}/account`);
+    await page.getByRole('checkbox', { name: /我已閱讀並同意LINE登入資料使用說明/ }).check();
     await page.getByRole('button', { name: /連結\s*LINE/ }).click();
     await page.getByText(/已連結\s*LINE/).waitFor();
     assert.equal(new URL(page.url()).pathname, '/account');
-    assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'nonmember', remember_me: true, mode: 'link', return_to: '/account' }]);
+    assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'nonmember', remember_me: true, mode: 'link', data_consent_version: 'line-data-v1', return_to: '/account' }]);
     assert.equal(calls(state, 'line/start')[0].authorization, `Bearer ${session.access_token}`);
     assert.equal(calls(state, 'line/callback').length, 1);
     assert.equal(calls(state, 'line/register').length, 0);
@@ -212,11 +217,13 @@ test('既有LINE帳號登入即使選社員仍回原頁，不當成新註冊送�
 test('未選社員預設一般使用者與保持登入，start401不refresh或重試', async (t) => {
   const { page, state } = await fixture(t, 390, { startStatus: 401 });
   const dialog = await openLogin(page);
-  assert.equal(await dialog.getByRole('button', { name: '我不是社員', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.equal(await dialog.getByLabel('保持登入', { exact: true }).isChecked(), true);
+  await dialog.getByRole('link', { name: '使用LINE登入', exact: true }).click();
+  assert.equal(await dialog.getByRole('button', { name: '我不是社員', exact: true }).getAttribute('aria-pressed'), 'true');
+  await dialog.getByRole('checkbox').check();
   await dialog.getByRole('button', { name: /使用\s*LINE\s*登入/ }).click();
   await dialog.getByRole('alert').filter({ hasText: 'LINE授權已失效' }).waitFor();
-  assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'nonmember', remember_me: true, mode: 'login', return_to: '/account' }]);
+  assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'nonmember', remember_me: true, mode: 'login', data_consent_version: 'line-data-v1', return_to: '/account' }]);
   assert.equal(calls(state, 'refresh').length, 2);
   assert.equal(calls(state, 'line/callback').length, 0);
   await verify(page, state);

@@ -4047,6 +4047,18 @@ p {
   border-color: var(--line);
 }
 
+.membership-form .field { min-width: 0; }
+.membership-form .field select {
+  appearance: none;
+  box-sizing: border-box;
+  min-width: 0;
+  padding-right: 44px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%232b3931' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  background-size: 16px 16px;
+}
+
 .check-field,
 .switch-field {
   display: flex;

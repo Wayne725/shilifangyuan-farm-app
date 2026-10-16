@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -14,11 +14,13 @@ from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..identity_numbers import next_identity_number
+from ..failed_jobs import JOB_KINDS, job_details, job_error_expression, job_error_summary, job_order_id_expression, job_title_expression
 from ..integrations.common import IntegrationError
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..models import (
     AdminAudit,
     Order,
+    MealCancellationRequest,
     OrderFulfillment,
     OutboxEvent,
     OutboxStatus,
@@ -76,31 +78,39 @@ async def job_retry_blocker(session: AsyncSession, event: OutboxEvent) -> str:
     return "此工作需先人工核對，不提供直接重送"
 
 
-def job_error_summary(event: OutboxEvent) -> str:
-    error = (event.last_error or "").lower()
-    if "timeout" in error or "timed out" in error or "逾時" in error:
-        return "外部服務回應逾時；交易結果不明時請先查詢"
-    if any(word in error for word in ("credential", "api key", "apikey", "401", "403", "授權", "設定", "簽章")):
-        return "外部服務授權或設定檢查失敗"
-    return "工作處理失敗，請核對供應商狀態與伺服器紀錄"
-
-
 @operations_router.get("/v1/admin/failed-jobs")
 async def list_failed_jobs(
+    q: str = Query(default="", max_length=120),
+    kind: Literal["all", "invoice", "refund", "email", "other"] = "all",
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    query = select(OutboxEvent).where(OutboxEvent.status == OutboxStatus.FAILED)
+    query = select(OutboxEvent, Order).outerjoin(Order, Order.id == job_order_id_expression()).where(OutboxEvent.status == OutboxStatus.FAILED)
+    known_types = set().union(*JOB_KINDS.values())
+    if kind == "other":
+        query = query.where(OutboxEvent.event_type.not_in(known_types))
+    elif kind in JOB_KINDS:
+        query = query.where(OutboxEvent.event_type.in_(JOB_KINDS[kind]))
+    if term := q.strip():
+        query = query.where(or_(
+            OutboxEvent.id.icontains(term, autoescape=True),
+            OutboxEvent.aggregate_id.icontains(term, autoescape=True),
+            Order.order_number.icontains(term, autoescape=True),
+            OutboxEvent.event_type.icontains(term, autoescape=True),
+            job_title_expression().icontains(term, autoescape=True),
+            job_error_expression().icontains(term, autoescape=True),
+        ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
-    events = list(await session.scalars(query.order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc()).limit(limit).offset(offset)))
+    rows = (await session.execute(query.order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc()).limit(limit).offset(offset))).all()
     items = []
-    for event in events:
+    for event, order in rows:
         blocker = await job_retry_blocker(session, event)
         items.append({"id": event.id, "event_type": event.event_type, "aggregate_id": event.aggregate_id,
                       "status": event.status.value, "attempts": event.attempts,
-                      "error": job_error_summary(event), "retryable": not blocker, "retry_blocker": blocker})
+                      "error": job_error_summary(event), "retryable": not blocker, "retry_blocker": blocker,
+                      **job_details(event, order)})
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
@@ -140,6 +150,7 @@ class AdminOrderPage(BaseModel):
 @operations_router.get("/v1/admin/order-search", response_model=AdminOrderPage)
 async def search_admin_orders(
     q: str = Query(default="", max_length=120),
+    cancellation_pending: bool = False,
     limit: int = Query(default=12, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin),
@@ -148,6 +159,8 @@ async def search_admin_orders(
     from .orders import order_read
 
     query = select(Order)
+    if cancellation_pending:
+        query = query.where(Order.cancellation_requests.any(MealCancellationRequest.status == "pending"))
     if term := q.strip():
         query = query.where(or_(
             Order.order_number.icontains(term, autoescape=True),
@@ -156,6 +169,7 @@ async def search_admin_orders(
         ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     orders = await session.scalars(query.options(
+        selectinload(Order.cancellation_requests),
         selectinload(Order.items), selectinload(Order.group_campaign),
         selectinload(Order.meal_event), selectinload(Order.invoice),
         selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),

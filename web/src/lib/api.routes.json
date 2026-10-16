@@ -182,6 +182,7 @@
   "POST /v1/notifications/read-all",
   "POST /v1/orders",
   "POST /v1/orders/quote",
+  "POST /v1/orders/{order_id}/admin/cancellation-requests/{request_id}/review",
   "POST /v1/orders/{order_id}/admin/refund",
   "POST /v1/orders/{order_id}/cancel",
   "POST /v1/orders/{order_id}/fulfillment",
