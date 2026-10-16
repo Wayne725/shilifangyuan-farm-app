@@ -23,9 +23,8 @@ export function LineConsentPage() {
       </ul>
       <p>LINE 授權只提供畫面列出的 LINE 資料，不會因此自動取得社員資格。取消 LINE 授權也不會自動刪除網站已建立的帳號或訂單資料。</p>
     </section>
-    {user ? <div className="line-consent-signed-in"><p>你目前已登入網站帳號。若要將 LINE 連結至這個帳號，請前往帳號中心。</p><Link className="button button-primary" to="/account">前往帳號中心</Link></div>
+    {user ? <div className="line-consent-signed-in"><p>你已登入，可以直接開始訂餐。</p><div className="line-consent-actions"><Link className="button button-primary" to="/shop">開始訂餐</Link><Link className="text-link" to="/account">管理 LINE 連結</Link></div></div>
       : <LineLoginButton returnTo="/shop" consentLink={false} consentText="我已閱讀並同意十里方圓依上述用途使用及保存 LINE 登入資料。" />}
-    <p className="line-consent-note">不同意資料使用說明時，可返回網站使用 Email 帳號登入。</p>
-    <a className="text-link" href="/login?return_to=%2Fshop">使用 Email 登入</a>
+    {!user && <><p className="line-consent-note">不同意資料使用說明時，可返回網站使用 Email 帳號登入。</p><a className="text-link" href="/login?return_to=%2Fshop">使用 Email 登入</a></>}
   </section>;
 }
