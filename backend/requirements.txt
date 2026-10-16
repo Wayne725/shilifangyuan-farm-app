@@ -16,3 +16,4 @@ boto3>=1.35,<2
 pytest>=9.0.3,<10
 pytest-asyncio>=1.4,<2
 pytest-cov>=6,<8
+time-machine==3.5.1

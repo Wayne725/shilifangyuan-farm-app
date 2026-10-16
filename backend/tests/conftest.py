@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
+import time_machine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
@@ -15,3 +18,11 @@ async def database_session():
     async with factory() as session:
         yield session
     await engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def business_hours_clock():
+    # Integration cases start inside ordering hours; boundary tests supply their own clock.
+    today = datetime.now(timezone.utc).replace(hour=4, minute=0, second=0, microsecond=0)
+    with time_machine.travel(today, tick=True):
+        yield
