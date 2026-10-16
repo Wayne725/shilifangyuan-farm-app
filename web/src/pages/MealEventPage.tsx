@@ -1,7 +1,6 @@
 import {
   ArrowLeft,
   BowlFood,
-  CalendarBlank,
   MapPin,
   Minus,
   Plus,
@@ -333,7 +332,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             {confirmedQuote && <InvoiceTaxSummary items={confirmedQuote.items} memberTaxExempt={confirmedQuote.member_tax_exempt} taxAmount={confirmedQuote.tax_amount} />}
             <div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div>
           </dl>
-          {!confirmedQuote && selectedMeals.length > 0 && <p className="meal-selection-notice">預估金額依目前選擇計算；請完成取餐時間、必選項目與發票資料，以確認實際金額。</p>}
           <div className="meal-checkout-settings">
             <section className="meal-pickup-selection" aria-label="選擇取餐時間">
               <div className="checkout-step-title"><span>03</span><div><h2>選擇取餐時間</h2></div></div>
@@ -356,7 +354,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             </button>
           )}
           {checkout.isError && <p className="form-error">{checkout.error.message}</p>}
-          <p className="pickup-note"><CalendarBlank size={16} />付款完成後，取餐碼會保存在訂單中心。</p>
         </aside>
       </div>
       <nav className="meal-summary-shortcut" aria-label="餐點金額與明細入口">

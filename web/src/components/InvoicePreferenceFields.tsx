@@ -57,9 +57,6 @@ function InvoiceCarrierFields({
   const cloudTitle = value.buyerType === "personal"
     ? "Email 會員載具"
     : "Email 雲端交付";
-  const cloudDetail = value.buyerType === "personal"
-    ? "以發票 Email 作為會員載具識別"
-    : "由汎宇寄送公司發票通知";
 
   return (
     <div className="invoice-carrier-options">
@@ -70,7 +67,7 @@ function InvoiceCarrierFields({
           onChange={() => onChange({ ...value, carrierType: "cloud", carrierValue: undefined })}
           type="radio"
         />
-        <span><strong>{cloudTitle}</strong><small>{cloudDetail}</small></span>
+        <span><strong>{cloudTitle}</strong></span>
       </label>
       <label className={value.carrierType === "mobile_barcode" ? "selected" : ""}>
         <input
@@ -79,7 +76,7 @@ function InvoiceCarrierFields({
           onChange={() => onChange({ ...value, carrierType: "mobile_barcode", carrierValue: "" })}
           type="radio"
         />
-        <span><strong>手機條碼載具</strong><small>格式為 / 加 7 碼英數符號</small></span>
+        <span><strong>手機條碼載具</strong></span>
       </label>
       {value.carrierType === "mobile_barcode" && (
         <label className="invoice-barcode-field">
@@ -93,7 +90,6 @@ function InvoiceCarrierFields({
           />
         </label>
       )}
-      <p>中獎後請至全家 FamiPort 列印領獎；本平台不提供 7-ELEVEN 列印流程。</p>
     </div>
   );
 }
@@ -148,7 +144,7 @@ export function InvoicePreferenceFields({
 }) {
   const emailLimit = invoiceEmailLimit(value);
   const emailIsValid = invoiceEmailIsValid(value);
-  const emailDescriptionId = `invoice-email-description-${sectionNumber}`;
+  const emailErrorId = `invoice-email-error-${sectionNumber}`;
   const emailError = !value.buyerEmail.trim()
     ? "請填寫發票通知 Email"
     : value.buyerEmail.trim().length > emailLimit
@@ -176,7 +172,6 @@ export function InvoicePreferenceFields({
           type="button"
         >
           <strong>個人電子發票</strong>
-          <small>不寄送紙本</small>
         </button>
         <button
           aria-checked={value.buyerType === "company"}
@@ -192,7 +187,6 @@ export function InvoicePreferenceFields({
           type="button"
         >
           <strong>公司統編發票</strong>
-          <small>由汎宇寄送 PDF 至買方信箱</small>
         </button>
       </div>
 
@@ -217,7 +211,6 @@ export function InvoicePreferenceFields({
                 value={value.buyerName}
               />
             </label>
-            <p>統編與抬頭會依付款當下內容開立，送出前請再次確認。</p>
           </div>
         )}
 
@@ -225,7 +218,7 @@ export function InvoicePreferenceFields({
           <label className="invoice-email-field">
             發票通知 Email
             <input
-              aria-describedby={emailDescriptionId}
+              aria-describedby={emailError ? emailErrorId : undefined}
               aria-invalid={!emailIsValid}
               autoComplete="email"
               inputMode="email"
@@ -237,12 +230,7 @@ export function InvoicePreferenceFields({
               value={value.buyerEmail}
             />
           </label>
-          <p id={emailDescriptionId}>
-            {value.buyerType === "personal" && value.carrierType === "cloud"
-              ? "訂單與發票通知寄到此信箱，並作為會員載具識別。"
-              : "訂單與發票通知寄到此信箱。"}
-          </p>
-          {emailError && <p className="invoice-field-error">{emailError}</p>}
+          {emailError && <p id={emailErrorId} className="invoice-field-error">{emailError}</p>}
         </div>
 
         <InvoiceCarrierFields
