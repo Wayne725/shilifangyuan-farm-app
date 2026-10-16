@@ -169,3 +169,7 @@
 .registration-identity-summary > div { display: grid; grid-template-columns: 6rem minmax(0, 1fr); gap: 12px; }
 .registration-identity-summary dd { margin: 0; overflow-wrap: anywhere; }
 .registration-flow .line-consent-details { padding: 20px 0; }
+
+.registration-flow .auth-page-intro > div { margin-block: auto; padding-block: 2rem; }
+.registration-back { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; margin-bottom: 1.5rem; padding: 0; border: 0; border-bottom: 1px solid var(--line-strong); color: var(--ink-soft); background: transparent; font: inherit; cursor: pointer; }
+.registration-back:focus-visible { outline: 3px solid var(--moss-dark); outline-offset: 4px; }
