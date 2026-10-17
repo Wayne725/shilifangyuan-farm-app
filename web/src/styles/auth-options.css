@@ -12,7 +12,10 @@
   margin: 20px 0;
 }
 
-.line-membership-intent button {
+.line-membership-intent :is(a, button) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 1;
   min-height: 48px;
   padding: 12px;
@@ -162,6 +165,7 @@
 .line-consent-page .line-membership-intent { margin-block: 1.5rem; }
 .line-consent-page .line-membership-intent button.is-selected { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
 .line-consent-email { margin-top: 1.5rem; }
+.line-existing-login { margin-bottom: 1.5rem; background: transparent; font: inherit; cursor: pointer; }
 
 .registration-methods { display: grid; gap: 18px; margin-block: 28px; }
 .registration-flow .registration-choice-card { text-align: left; font: inherit; cursor: pointer; }

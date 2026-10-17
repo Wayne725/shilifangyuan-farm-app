@@ -492,11 +492,13 @@ async def test_client_exchanges_code_with_verifier_and_verifies_id_token_and_non
     {"iss": "https://evil.example"}, {"aud": "different-channel"}, {"nonce": "wrong-nonce"},
     {"sub": ""}, {"sub": 123}, {"sub": "U" * 256}, {"exp": 0},
     {"exp": math.nan}, {"exp": math.inf}, {"iat": math.nan}, {"iat": True},
-    {"iat": time.time() + 3600},
+    {"iat": "future"},
 ])
 @pytest.mark.asyncio
 async def test_client_rejects_invalid_verified_token_claims(settings, monkeypatch, bad_claims):
     now = time.time()
+    if bad_claims.get("iat") == "future":
+        bad_claims = {"iat": now + 3600, "exp": now + 7200}
 
     async def post(self, path, data):
         if path == "token":

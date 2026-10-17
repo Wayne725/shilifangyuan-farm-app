@@ -32,6 +32,8 @@ type RegisterIntent = "existing_member" | "nonmember";
 
 interface RegisterSearch {
   intent?: RegisterIntent;
+  return_to?: string;
+  remember_me?: boolean;
 }
 
 interface VerifyEmailSearch {
@@ -68,6 +70,8 @@ const registerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/register",
   validateSearch: (search: Record<string, unknown>): RegisterSearch => ({
+    return_to: typeof search.return_to === "string" ? search.return_to : undefined,
+    remember_me: search.remember_me === false || search.remember_me === "false" ? false : true,
     intent:
       search.intent === "existing_member" || search.intent === "member"
         ? "existing_member"
