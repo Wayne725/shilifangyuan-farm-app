@@ -1,14 +1,11 @@
 import {
   ArrowLeft,
   Check,
-  MapPin,
   Minus,
   Package,
   Plus,
   Receipt,
   ShieldCheck,
-  Storefront,
-  Truck,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -75,6 +72,7 @@ export function CheckoutPage() {
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
   });
+  const selectedPickupLocation = locations.data?.find((location) => location.id === pickupLocationId);
   const rates = useQuery({
     queryKey: ["shipping-rates"],
     queryFn: () => apiFetch<ShippingRate[]>("/v1/shipping-rates"),
@@ -123,6 +121,7 @@ export function CheckoutPage() {
           },
         });
       }
+      if (!selectedPickupLocation || locations.isError) throw new Error("請選擇可用的取貨地點");
       return beginCheckout({
         items,
         contactEmail: invoicePreference.buyerEmail.trim(),
@@ -146,8 +145,8 @@ export function CheckoutPage() {
   });
 
   useEffect(() => {
-    if (!pickupLocationId && locations.data?.[0]) {
-      setPickupLocationId(locations.data[0].id);
+    if (locations.data && !locations.data.some((location) => location.id === pickupLocationId)) {
+      setPickupLocationId(locations.data[0]?.id || "");
     }
   }, [locations.data, pickupLocationId]);
 
@@ -178,7 +177,7 @@ export function CheckoutPage() {
   const canSubmit = Boolean(
     quote.data && !quote.isFetching && !quote.isError &&
       invoicePreferenceIsValid(invoicePreference) &&
-      (checkoutMethod === "shipping" ? shippingReady : pickupLocationId),
+      (checkoutMethod === "shipping" ? shippingReady : selectedPickupLocation && !locations.isError),
   );
 
   return (
@@ -225,31 +224,30 @@ export function CheckoutPage() {
               <span>02</span>
               <div><small>FULFILLMENT</small><h2>選擇取貨方式</h2></div>
             </div>
-            <div className="fulfillment-switch" role="radiogroup" aria-label="取貨方式">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={checkoutMethod === "cooperative_pickup"}
-                className={checkoutMethod === "cooperative_pickup" ? "selected" : ""}
-                onClick={() => setCheckoutMethod("cooperative_pickup")}
-              >
-                <Storefront size={23} weight="light" />
-                <span><strong>合作社取貨</strong><small>到指定站點領取，不另計運費</small></span>
-                <i><Check size={14} /></i>
-              </button>
-              {logisticsEnabled && (
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={checkoutMethod === "shipping"}
-                  className={checkoutMethod === "shipping" ? "selected shipping" : "shipping"}
-                  onClick={() => setCheckoutMethod("shipping")}
-                  disabled={Boolean(eligibility.blockers.length)}
+            <div className="checkout-fulfillment">
+              <label className="field">
+                取貨方式
+                <select
+                  value={checkoutMethod}
+                  onChange={(event) => setCheckoutMethod(event.target.value as CheckoutMethod)}
                 >
-                  <Truck size={23} weight="light" />
-                  <span><strong>宅配／超商取貨</strong><small>串接綠界物流，依溫層計費</small></span>
-                  <i><Check size={14} /></i>
-                </button>
+                  <option value="cooperative_pickup">合作社取貨</option>
+                  {logisticsEnabled && <option value="shipping" disabled={Boolean(eligibility.blockers.length)}>宅配／超商取貨</option>}
+                </select>
+              </label>
+              {checkoutMethod === "cooperative_pickup" && (
+                <label className="field">
+                  取貨地點
+                  <select
+                    value={pickupLocationId}
+                    onChange={(event) => setPickupLocationId(event.target.value)}
+                    disabled={locations.isPending || locations.isError || !locations.data?.length}
+                    required
+                  >
+                    <option value="" disabled>{locations.isPending ? "載入取貨地點中…" : locations.isError ? "取貨點暫時無法使用" : !locations.data?.length ? "目前沒有可用的取貨地點" : "請選擇取貨地點"}</option>
+                    {!locations.isError && locations.data?.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                  </select>
+                </label>
               )}
             </div>
             {logisticsEnabled && eligibility.blockers.length > 0 && (
@@ -258,31 +256,10 @@ export function CheckoutPage() {
                 <p>{eligibility.blockers.join("；")}。這筆仍可選擇合作社取貨。</p>
               </div>
             )}
-
-            {checkoutMethod === "cooperative_pickup" ? (
-              <>
-                {locations.isPending && <LoadingLines count={2} />}
-                {locations.isError && (
-                  <DataState kind="error" title="取貨點暫時無法使用" detail="請稍後再試。" />
-                )}
-                <div className="pickup-options">
-                  {locations.data?.map((location) => (
-                    <label key={location.id} className={pickupLocationId === location.id ? "selected" : ""}>
-                      <input
-                        type="radio"
-                        name="pickup-location"
-                        value={location.id}
-                        checked={pickupLocationId === location.id}
-                        onChange={() => setPickupLocationId(location.id)}
-                      />
-                      <MapPin size={21} weight="light" />
-                      <span><strong>{location.name}</strong><small>{location.instructions || location.address || "取貨時間另行通知"}</small></span>
-                      <i><Check size={14} /></i>
-                    </label>
-                  ))}
-                </div>
-              </>
-            ) : (
+            {checkoutMethod === "cooperative_pickup" && locations.isError && (
+              <DataState kind="error" title="取貨點暫時無法使用" detail="請稍後再試。" />
+            )}
+            {checkoutMethod === "shipping" && (
               <div className="shipping-form">
                 <div className="shipping-temperature">
                   <span>本筆溫層</span>
@@ -335,7 +312,6 @@ export function CheckoutPage() {
                     />
                   </label>
                 </div>
-                <p className="shipping-help">建立訂單後會前往綠界選擇門市或確認宅配，再回到訂單中心付款。</p>
               </div>
             )}
 
@@ -370,6 +346,12 @@ export function CheckoutPage() {
                       <dt>取貨方式</dt>
                       <dd>{checkoutMethod === "shipping" ? "綠界物流" : "合作社取貨"}</dd>
                     </div>
+                    {checkoutMethod === "cooperative_pickup" && (
+                      <div className="summary-pickup">
+                        <dt>取貨地點</dt>
+                        <dd>{locations.isError ? "暫時無法使用" : selectedPickupLocation?.name || (locations.isPending ? "載入中…" : "尚未選擇")}</dd>
+                      </div>
+                    )}
                     <InvoicePreferenceSummary value={invoicePreference} />
                     {quote.data && <InvoiceTaxSummary
                       items={quote.data.items}
@@ -413,7 +395,6 @@ export function CheckoutPage() {
                   </button>
                 </>
               )}
-              <p className="summary-note">若中途離開，可從訂單中心繼續完成付款或物流選擇。</p>
             </div>
           </aside>
         </div>

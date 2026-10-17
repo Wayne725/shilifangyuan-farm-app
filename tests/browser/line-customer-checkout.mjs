@@ -31,8 +31,9 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
       if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
       if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'line-buyer', display_name: 'LINE顧客', email: null, notification_email: saved ? 'saved@example.com' : null, membership_type: 'nonmember', user_role: 'customer' } } });
       if (request.method() === 'GET') {
+        if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (path === '/v1/orders') return route.fulfill({ json: [] });
-        if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'pickup', name: '合作社', address: '測試取貨點', is_active: true }] });
+        if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'pickup', name: '合作社', address: '測試取貨點', is_active: true }, { id: 'pickup-campus', name: '教育學院大樓', address: '另一測試取貨點', is_active: true }] });
         if (path === '/v1/meal-events/line-meal') return route.fulfill({ json: event });
         if (path === '/v1/group-campaigns/line-group') return route.fulfill({ json: campaign });
       }
@@ -65,11 +66,16 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
       assert.equal(await pay.isEnabled(), false);
       await email.fill('checkout@example.com');
     }
+    if (channel === 'regular') {
+      await page.getByRole('combobox', { name: '取貨地點', exact: true }).selectOption('pickup-campus');
+      assert.equal(await page.locator('.summary-lines').getByText('教育學院大樓', { exact: true }).count(), 1);
+    }
     await pay.click();
     await page.waitForURL(`${base}/isolated-line-payment`);
     assert.deepEqual(writes.map((entry) => entry.path), [orderPath, '/v1/orders/line-order/payment-attempts']);
     assert.equal(writes[0].body.contact_email, saved ? 'saved@example.com' : 'checkout@example.com');
     assert.equal(writes[0].body.invoice_buyer_email, writes[0].body.contact_email);
+    if (channel === 'regular') assert.equal(writes[0].body.pickup_location_id, 'pickup-campus');
     assert.deepEqual(unknown, []);
     assert.deepEqual(errors, []);
   });

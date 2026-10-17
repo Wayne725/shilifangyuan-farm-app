@@ -1662,6 +1662,16 @@ p {
   border-color: var(--moss);
 }
 
+.checkout-fulfillment {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.checkout-fulfillment .field {
+  min-width: 0;
+}
+
 .fulfillment-switch {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3286,6 +3296,18 @@ p {
   white-space: nowrap;
 }
 
+.summary-lines .summary-pickup {
+  display: grid;
+  align-items: start;
+  grid-template-columns: 5em minmax(0, 1fr);
+}
+
+.summary-lines .summary-pickup dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
 .summary-lines .summary-membership {
   margin-top: 16px;
   color: var(--sage);
@@ -4048,7 +4070,8 @@ p {
 }
 
 .membership-form .field { min-width: 0; }
-.membership-form .field select {
+.membership-form .field select,
+.checkout-fulfillment .field select {
   appearance: none;
   box-sizing: border-box;
   min-width: 0;

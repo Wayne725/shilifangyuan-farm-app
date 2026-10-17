@@ -65,6 +65,7 @@ async function fixture(t, selected) {
           user: { id: 'isolated-buyer', email: buyerEmail, display_name: '隔離買家', user_role: 'customer' } } });
       }
       if (method === 'GET') {
+        if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (url.pathname === '/v1/products') return route.fulfill({ json: catalog });
         if (['/v1/group-campaigns', '/v1/meal-events', '/v1/shipping-rates'].includes(url.pathname)) return route.fulfill({ json: [] });
         if (url.pathname === '/v1/pickup-locations') return route.fulfill({ json: [{ id: pickupId,
@@ -117,10 +118,8 @@ for (const selected of products) {
     assert.equal(await checkout.locator('.checkout-item .quantity-control span').innerText(), '1');
     const other = products.find((product) => product.id !== selected.id);
     assert.equal(await checkout.getByRole('heading', { name: other.name, exact: true }).count(), 0);
-    const pickup = checkout.getByRole('radio', { name: /合作社取貨/ });
-    await pickup.click();
-    assert.equal(await pickup.getAttribute('aria-checked'), 'true');
-    await checkout.getByRole('radio', { name: /隔離自取點/ }).check();
+    await checkout.getByRole('combobox', { name: '取貨方式', exact: true }).selectOption('cooperative_pickup');
+    await checkout.getByRole('combobox', { name: '取貨地點', exact: true }).selectOption(pickupId);
     await checkout.getByRole('radio', { name: /個人電子發票/ }).click();
     await checkout.getByRole('radio', { name: /Email 會員載具/ }).check();
     await checkout.getByLabel('發票通知 Email', { exact: true }).fill(invoiceEmail);
@@ -134,7 +133,7 @@ for (const selected of products) {
     await page.getByRole('heading', { name: '隔離商品付款頁', exact: true }).waitFor();
     await page.getByText(selected.sku, { exact: true }).waitFor();
     assert.deepEqual(state.mutations, [{ path: '/v1/orders', body: {
-      items: [{ product_id: selected.id, quantity: 1 }], contact_email: buyerEmail,
+      items: [{ product_id: selected.id, quantity: 1 }], contact_email: invoiceEmail,
       invoice_buyer_type: 'personal', invoice_buyer_email: invoiceEmail, invoice_carrier_type: 'cloud',
       fulfillment_method: 'cooperative_pickup', pickup_location_id: pickupId,
     } }, { path: paymentPath }]);
