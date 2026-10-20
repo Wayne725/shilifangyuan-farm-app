@@ -52,7 +52,7 @@ for (const width of [1440, 816, 390]) {
     await page.getByRole('button', {name: '儲存連結並核對', exact: true}).click();
     await page.getByRole('status').filter({hasText: '訂單連結已更新'}).waitFor();
     assert.equal(state.writes[0].order_id, 'order1');
-    for (const label of ['下載原格式明細', '匯出對帳結果 CSV']) {
+    for (const label of ['下載上傳原檔', '匯出對帳結果 CSV']) {
       const download = page.waitForEvent('download'); await page.getByRole('button', {name: label, exact: true}).click(); await download;
     }
     await page.getByLabel('原始明細檔', {exact: false}).setInputFiles({name: 'sample.csv', mimeType: 'text/csv', buffer: Buffer.from('header\ndata')});

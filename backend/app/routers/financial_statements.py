@@ -1,4 +1,5 @@
 import hashlib
+from datetime import date
 from pathlib import Path
 from decimal import Decimal
 from typing import Literal
@@ -19,6 +20,7 @@ from ..database import get_session
 from ..models import AdminAudit, FinancialStatementImport, Order, User
 from ..statement_formats import MAX_FILE_BYTES, SOURCES, parse_statement
 from ..statement_reconciliation import reconcile_statement, statement_summary
+from ..accounting_exports import export_accounting, accounting_response
 
 router = APIRouter(prefix='/v1/admin/financial-statements', tags=['financial-statements'])
 Source = Literal['newebpay', 'jkopay', 'esun', 'linepay', 'invoice']
@@ -44,10 +46,25 @@ async def get_batch(session, batch_id, *, include_rows=False):
 
 
 @router.get('')
-async def list_statements(limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0),
+async def list_statements(limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0), source: Source | None = None,
                           _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    batches = await session.scalars(select(FinancialStatementImport).order_by(FinancialStatementImport.created_at.desc(), FinancialStatementImport.id).limit(limit).offset(offset))
-    return {'items': [metadata(batch) for batch in batches], 'total': await session.scalar(select(func.count(FinancialStatementImport.id)))}
+    query = select(FinancialStatementImport)
+    count = select(func.count(FinancialStatementImport.id))
+    if source:
+        query = query.where(FinancialStatementImport.source == source)
+        count = count.where(FinancialStatementImport.source == source)
+    batches = await session.scalars(query.order_by(FinancialStatementImport.created_at.desc(), FinancialStatementImport.id).limit(limit).offset(offset))
+    return {'items': [metadata(batch) for batch in batches], 'total': await session.scalar(count)}
+
+
+@router.get('/accounting-export')
+async def download_accounting(source: Source, starts_on: date, ends_on: date, batch_id: str | None = Query(default=None, max_length=36),
+                              admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    body, count = await export_accounting(session, source, starts_on, ends_on, batch_id)
+    session.add(AdminAudit(actor_id=admin.id, action='accounting.exported', aggregate_type='accounting_export', aggregate_id=str(uuid4()),
+        data={'source': source, 'starts_on': starts_on.isoformat(), 'ends_on': ends_on.isoformat(), 'batch_id': batch_id, 'count': count}))
+    await session.commit()
+    return accounting_response(body, source, starts_on, ends_on)
 
 
 @router.post('', status_code=201)

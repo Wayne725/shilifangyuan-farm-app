@@ -146,7 +146,7 @@ export async function downloadApiFile(path: string, filename: string): Promise<v
   };
   let response = await request();
   if (response.status === 401 && await restoreSession()) response = await request();
-  if (!response.ok) throw new ApiError(response.status, "報表下載失敗");
+  if (!response.ok) throw await errorFromResponse(response);
   const objectUrl = URL.createObjectURL(await response.blob());
   const anchor = document.createElement("a");
   anchor.href = objectUrl;

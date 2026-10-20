@@ -1,0 +1,10 @@
+.accounting-export { margin-block: 32px; padding-block: 28px; border-block: 1px solid var(--line); font-size: 1.125rem; }
+.accounting-export header, .accounting-export-pages { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; }
+.accounting-export h2 { margin: 0; font-size: 1.5rem; }
+.accounting-export form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: end; margin-top: 24px; }
+.accounting-export-source { grid-column: span 2; }
+.accounting-export :is(input, select, button) { min-height: 48px; font-size: 1.125rem; }
+.accounting-export select { max-width: 100%; min-width: 0; }
+.accounting-export .field { min-width: 0; }
+.accounting-export-pages { justify-content: start; margin-top: 20px; }
+@media (max-width: 700px) { .accounting-export form { grid-template-columns: 1fr; } .accounting-export-source { grid-column: auto; } }

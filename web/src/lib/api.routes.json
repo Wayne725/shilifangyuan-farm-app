@@ -18,6 +18,7 @@
   "GET /v1/admin/finance/tax-ledger",
   "GET /v1/admin/finance/tax-ledger.csv",
   "GET /v1/admin/financial-statements",
+  "GET /v1/admin/financial-statements/accounting-export",
   "GET /v1/admin/financial-statements/order-options",
   "GET /v1/admin/financial-statements/{batch_id}",
   "GET /v1/admin/financial-statements/{batch_id}/original",
