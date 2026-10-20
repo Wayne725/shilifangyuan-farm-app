@@ -5,7 +5,6 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { AdminNav } from "../components/AdminNav";
-import { AccountingExport } from "../components/AccountingExport";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, downloadApiFile, formatMoney } from "../lib/api";
@@ -47,15 +46,15 @@ export function AdminFinancePage() {
   return <section className="admin-module-page meal-finance-page">
     <header className="workspace-heading"><div><p className="eyebrow">SALES REPORT / 財務報表</p><h1>銷售明細與統整</h1></div></header>
     <AdminNav />
-    <AccountingExport />
+
     <div className="meal-finance-presets" aria-label="常用查詢期間">{(["today", "week", "month"] as const).map((mode) => <button key={mode} type="button" className="button button-quiet" onClick={() => applyPreset(mode)}>{{ today: "今天", week: "本週", month: "本月" }[mode]}</button>)}</div>
     <form className="meal-finance-filters" onSubmit={(event) => {
       event.preventDefault();
       if (!draft.startsOn || !draft.endsOn || draft.startsOn > draft.endsOn) { setFormError("請確認起訖日期，結束日期不能早於開始日期。"); return; }
       setFilters({ ...draft, search: draft.search.trim() }); setOffset(0); setFormError("");
     }}>
-      <label className="field"><span>開始日期</span><input type="date" required value={draft.startsOn} onChange={(event) => setDraft({ ...draft, startsOn: event.target.value })} /></label>
-      <label className="field"><span>結束日期</span><input type="date" required value={draft.endsOn} onChange={(event) => setDraft({ ...draft, endsOn: event.target.value })} /></label>
+      <label className="field"><span>收退款日期起</span><input type="date" required value={draft.startsOn} onChange={(event) => setDraft({ ...draft, startsOn: event.target.value })} /></label>
+      <label className="field"><span>收退款日期迄</span><input type="date" required value={draft.endsOn} onChange={(event) => setDraft({ ...draft, endsOn: event.target.value })} /></label>
       <label className="field"><span>銷售類型</span><select value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value })}>{Object.entries(channelNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
       <label className="field"><span>訂單或買家</span><input placeholder="訂單編號、姓名或電子信箱" value={draft.search} maxLength={100} onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
       <button className="button button-primary" type="submit">查詢</button>

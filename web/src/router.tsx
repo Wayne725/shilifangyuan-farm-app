@@ -306,6 +306,8 @@ const adminMealsRoute = createRoute({
   component: page("./pages/AdminMealsPage", "AdminMealsPage"),
 });
 
+const adminAccountingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/accounting", component: page("./pages/AdminAccountingPage", "AdminAccountingPage") });
+
 const adminFinanceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/finance",
@@ -388,6 +390,7 @@ const routeTree = rootRoute.addChildren([
   adminGroupsRoute,
   adminMealsRoute,
   adminFinanceRoute,
+  adminAccountingRoute,
   adminKitchenRoute,
   adminUsersRoute,
   adminSettingsRoute,

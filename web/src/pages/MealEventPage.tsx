@@ -252,23 +252,18 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           <p className="meal-event-status">{mealBookingStatus(mealEvent, now)}</p>
           <p className="eyebrow">MEAL PREORDER / 便當預訂</p>
           <h1>選餐點與份數</h1>
-          <dl>
-            <div><dt>取餐日期</dt><dd>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}</dd></div>
-            <div><dt>取餐地點</dt><dd>{mealEvent.location}</dd></div>
-            <div><dt>預訂截止</dt><dd>{formatMealDateTime(mealEvent.booking_ends_at || mealEvent.ordering_ends_at)}</dd></div>
-            <div><dt>取餐方式</dt><dd>到指定地點現場領餐</dd></div>
-          </dl>
+          <p className="meal-booking-deadline">預訂截止：{formatMealDateTime(mealEvent.booking_ends_at || mealEvent.ordering_ends_at)}</p>
         </div>
       </div>
 
       <div className="offer-checkout meal-checkout">
         <div>
           <section className="meal-selected-date" aria-label="已選取餐日期">
-            <div className="checkout-step-title"><span>01</span><div><h2>取餐日期</h2></div></div>
-            <p><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}{pickupReady && ` · ${pickupAt.slice(11)}`}</strong><Link className="text-link" to="/shop">更換取餐時間</Link></p>
+            <h2>取餐安排</h2>
+            <p><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}{pickupReady && ` · ${pickupAt.slice(11)}`} · {mealEvent.location}</strong><Link className="text-link" to="/shop">更換取餐時間</Link></p>
           </section>
           {draftAdjusted && <p className="meal-selection-notice" role="status">選餐已依最新庫存或可選時段調整，請再次確認餐點、份數與取餐時間。</p>}
-          <div className="checkout-step-title"><span>02</span><div><h2>選擇餐點與份數</h2></div></div>
+          <div className="checkout-step-title"><span>01</span><div><h2>選擇餐點與份數</h2></div></div>
           <div className="meal-offering-list">
             {activeOfferings.map((offering) => {
               const quantity = quantities[offering.id] || 0;
@@ -322,7 +317,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         <aside className="offer-summary meal-summary" id="meal-order-summary" tabIndex={-1} aria-labelledby="meal-summary-heading">
           <BowlFood size={29} weight="light" />
           <h2 id="meal-summary-heading">確認訂單明細</h2>
-          <div className="pickup-window"><MapPin size={19} /><div><strong>{mealEvent.location}</strong><small>取餐日期：{mealServiceDate(mealEvent).replaceAll("-", "/")}</small>{pickupReady && <small>預計取餐：{formatMealDateTime(taipeiInputToIso(pickupAt))}</small>}</div></div>
+          <div className="pickup-window"><MapPin size={19} /><div><strong>{mealEvent.location}</strong><small>{mealServiceDate(mealEvent).replaceAll("-", "/")}{pickupReady && ` · ${pickupAt.slice(11)}`}</small></div></div>
           {quote.isFetching && <LoadingLines count={2} />}
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}
@@ -347,15 +342,15 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           </dl>
           <div className="meal-coupon-field"><label className="field"><span>優惠碼</span><input maxLength={32} value={couponInput} onChange={event => setCouponInput(event.target.value.toUpperCase())} /></label><button className="button button-quiet" type="button" onClick={() => setCouponCode(couponInput.trim())}>套用優惠碼</button>{couponCode && <button type="button" className="text-link" onClick={() => {setCouponCode(""); setCouponInput("");}}>移除優惠碼</button>}</div>
           <div className="meal-checkout-settings">
-            <section className="meal-pickup-selection" aria-label="選擇取餐時間">
-              <div className="checkout-step-title"><span>03</span><div><h2>選擇取餐時間</h2></div></div>
+            <details className="meal-pickup-selection" open={!pickupReady ? true : undefined}><summary>修改取餐時間</summary>
+
               <div className="meal-pickup-options" role="group" aria-label="預計取餐時間（台灣時間）">{pickupOptions.map((option) => <button key={option.value} type="button" aria-pressed={pickupAt === option.value} disabled={!orderingOpen} onClick={() => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: option.value })); void navigate({ search: { pickup_at: option.value }, replace: true }); }}>{option.label}</button>)}</div>
               {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
               {pickupReady && <p className="meal-pickup-confirmation" role="status">已選取餐時間：{formatMealDateTime(taipeiInputToIso(pickupAt))}</p>}
-            </section>
+            </details>
             <InvoicePreferenceFields
               onChange={setInvoicePreference}
-              sectionNumber="04"
+              sectionNumber="02"
               value={invoicePreference}
             />
           </div>

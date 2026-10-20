@@ -33,6 +33,8 @@ async function fixture(t, width) {
     if (!path.startsWith('/v1/')) return req.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'admin', user_role: 'admin', display_name: '測試管理員', email: 'admin@example.com' } } });
     if (req.method() === 'GET') {
+      if (path === '/v1/admin/platform') return route.fulfill({json:{orders_open:true,closed_message:'',printer_brand:'',printer_model:'',printer_connection:'unknown',kitchen_sound:false,invoice_provider:'fanyu'}});
+      if (path === '/v1/admin/meal-cancellation-summary') return route.fulfill({json:{requests:2,orders:2,pending:2,approved:0,rejected:0,pending_amount:240,approved_amount:0,refund_pending:0,refunded:0,refund_failed:0}});
       state.reads.push({ path, ...Object.fromEntries(url.searchParams) });
       if (path === '/v1/admin/meal-events') return route.fulfill({ json: state.events });
       if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/meals'].includes(path)) return route.fulfill({ json: [] });
@@ -194,10 +196,10 @@ for (const width of [1440, 390]) {
     await responseAfter(page, (r) => r.url().endsWith('/invoice/query'), () => page.getByRole('button', { name: '查詢開立狀態', exact: true }).click());
     await page.getByText('查詢付款', { exact: true }).click();
     await responseAfter(page, (r) => r.url().endsWith('/payment/query'), () => page.getByRole('button', { name: '查詢付款狀態', exact: true }).click());
-    await page.getByRole('button', { name: '建立退款', exact: true }).click();
+    await page.getByRole('button', { name: '審核退款', exact: true }).click();
     await page.getByRole('button', { name: '商品無法供應', exact: true }).click();
     assert.equal(state.writes.filter((r) => r.path.endsWith('/refund')).length, 0);
-    await responseAfter(page, (r) => r.url().endsWith('/admin/refund'), () => page.getByRole('button', { name: /確認退款.*240/ }).click());
+    await responseAfter(page, (r) => r.url().endsWith('/admin/refund'), () => page.getByRole('button', { name: /核准退款.*240/ }).click());
     assert.deepEqual(state.writes.map((r) => r.body.reason), ['客服核對發票狀態', '客服核對付款狀態', '商品無法供應，申請退款']);
     await page.getByRole('button', { name: '放大', exact: true }).click();
     await page.waitForFunction(() => getComputedStyle(document.documentElement).fontSize === '20px');

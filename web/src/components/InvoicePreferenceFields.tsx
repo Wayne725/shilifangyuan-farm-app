@@ -157,7 +157,7 @@ export function InvoicePreferenceFields({
     <div className="invoice-preference">
       <div className="checkout-step-title invoice-title">
         <span>{sectionNumber}</span>
-        <div><small>CLOUD INVOICE</small><h2>電子發票</h2></div>
+        <div><p className="eyebrow">CLOUD INVOICE / 電子發票</p><h2>電子發票</h2></div>
       </div>
       <div className="invoice-type-switch" role="radiogroup" aria-label="發票身分">
         <button

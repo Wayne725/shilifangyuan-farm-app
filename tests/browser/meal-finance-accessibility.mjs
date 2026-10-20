@@ -36,6 +36,7 @@ async function fixture(t, width) {
     if (!path.startsWith('/v1/')) return req.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.com', display_name: '隔離買家', user_role: 'admin' } } });
     if (req.method() === 'GET') {
+      if (path === '/v1/platform') return route.fulfill({json:{orders_open:true,closed_message:''}});
       if (['/v1/products', '/v1/group-campaigns'].includes(path)) return route.fulfill({ json: [] });
       if (path === '/v1/meal-events') return route.fulfill({ json: events });
       const event = events.find((row) => path === `/v1/meal-events/${row.id}`);
@@ -91,14 +92,17 @@ for (const width of [1440, 390]) {
     await page.getByRole('button', { name: '增加蔬食便當', exact: true }).click();
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();
     assert.equal(state.quotes.at(-1).body.pickup_at, '2030-01-03T10:00:00.000Z');
+    await page.getByText('修改取餐時間', {exact:true}).click();
     await page.getByRole('button', { name: '17:30', exact: true }).click();
     await page.waitForURL(/pickup_at=.*17%3A30/);
     await page.reload();
+    await page.getByText('修改取餐時間', {exact:true}).click();
     await page.getByRole('button', { name: '17:30', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '17:30', exact: true }).getAttribute('aria-pressed'), 'true');
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();
     assert.equal(await page.locator('html').getAttribute('data-text-size'), 'large');
     await verify(page, state);
+    if(process.env.BROWSER_SCREENSHOT_DIR) await page.screenshot({path:`${process.env.BROWSER_SCREENSHOT_DIR}/meal-compact-${width}.png`,fullPage:true});
     await page.getByRole('button', { name: '清空選餐與取餐時間', exact: true }).click();
     await page.reload();
     await page.getByRole('heading', { name: '選餐點與份數', exact: true }).waitFor();

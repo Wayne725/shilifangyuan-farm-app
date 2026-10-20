@@ -29,7 +29,7 @@ for (const width of [1440, 816, 390]) {
       unknown.push(path); return route.fulfill({status: 404, json: {detail: '未定義的隔離請求'}});
     });
     const page = await context.newPage(); page.setDefaultTimeout(7000); page.on('pageerror', error => errors.push(error.message));
-    await page.goto(`${base}/admin/invoices`);
+    await page.goto(`${base}/admin/accounting`);
     await page.getByRole('heading', {name: '會計格式匯出', exact: true}).waitFor();
     await page.getByRole('button', {name: '放大', exact: true}).click();
     const form = page.locator('.accounting-export');

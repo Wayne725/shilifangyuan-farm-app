@@ -116,7 +116,6 @@ export function AdminPage() {
   }
 
   const orderContent = <section className="admin-orders-panel">
-    <SectionHeading eyebrow="ORDER OPERATIONS / 訂單營運" title="訂單、付款與發票" />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>

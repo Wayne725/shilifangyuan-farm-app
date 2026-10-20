@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { SocialActionButton } from "../components/SocialActionButton";
 import { AdminNav } from "../components/AdminNav";
 import { RosterCsvImport } from "../components/RosterCsvImport";
 import { useAuth } from "../context/AuthContext";
@@ -22,6 +23,7 @@ interface ShareholdingRecord {
 
 interface AdminMembership extends ShareholdingRecord {
   user_id: string;
+  display_name?: string;
   status: string;
   member_number?: string | null;
   trainee_number?: string | null;
@@ -48,6 +50,9 @@ interface MemberRosterEntry extends ShareholdingRecord {
 export function AdminSocialPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
+  const [reviewScope, setReviewScope] = useState("pending");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [memberStatus, setMemberStatus] = useState("");
   const queryClient = useQueryClient();
   const [activities, proposals, applications, wishes, meetings, memberships, roster] = useQueries({ queries: [
     { queryKey: ["admin-activities"], queryFn: () => apiFetch<Activity[]>("/v1/admin/activities"), enabled: isAdmin },
@@ -68,11 +73,18 @@ export function AdminSocialPage() {
   const pendingApplications = applications.data?.filter((item) => ["submitted", "needs_supplement"].includes(item.status)) || [];
   const traineeMemberships = memberships.data?.filter((item) => item.status === "trainee") || [];
 
+  const filterReviews = <T,>(items: T[] | undefined, pending: (item: T) => boolean) => (items || []).filter(item => reviewScope === "all" || (reviewScope === "pending" ? pending(item) : !pending(item)));
+  const visibleActivities = filterReviews(activities.data, item => item.status === "pending_review");
+  const visibleProposals = filterReviews(proposals.data, item => item.status === "pending_review");
+  const visibleApplications = filterReviews(applications.data, item => ["submitted", "needs_supplement"].includes(item.status));
+  const visibleTrainees = reviewScope === "done" ? [] : traineeMemberships;
+  const visibleMembers = (memberships.data || []).map(item => ({...item, display_name: roster.data?.find(entry => entry.member_number === item.member_number)?.legal_name ?? item.display_name})).filter(item => (!memberStatus || item.status === memberStatus) && `${item.display_name || ""} ${item.member_number || ""} ${item.trainee_number || ""} ${item.user_id}`.toLowerCase().includes(memberSearch.trim().toLowerCase()));
+
   return (
     <section className="admin-social-page">
       <header className="workspace-heading">
         <div><p className="eyebrow">SOCIAL OPERATIONS / 社務管理</p><h1>審核、排程與社員服務</h1></div>
-        <p>{pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length} 件待處理事項</p>
+        <p>{[activities, proposals, applications, memberships].some(query => query.isPending) ? "讀取待辦中…" : [activities, proposals, applications, memberships].some(query => query.isError) ? "待辦資料未完整載入" : `${pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length} 件待處理事項`}</p>
       </header>
       <AdminNav />
 
@@ -81,24 +93,33 @@ export function AdminSocialPage() {
           <Tabs.Trigger value="reviews">審核工作</Tabs.Trigger>
           <Tabs.Trigger value="wishes">願望管理</Tabs.Trigger>
           <Tabs.Trigger value="meetings">會議管理</Tabs.Trigger>
+          <Tabs.Trigger value="members">會籍管理</Tabs.Trigger>
           <Tabs.Trigger value="roster">社員名冊</Tabs.Trigger>
         </Tabs.List>
 
         <Tabs.Content className="tab-content" value="reviews">
-          <AdminReviewSection icon={CalendarBlank} title="活動管理" count={activities.data?.length || 0} pending={activities.isPending} error={activities.error?.message} empty="目前沒有社員活動">
-            {activities.data?.map((activity) => <ActivityReviewCard key={activity.id} activity={activity} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-activities"] })} />)}
-          </AdminReviewSection>
-          <AdminReviewSection icon={NotePencil} title="提案管理" count={proposals.data?.length || 0} pending={proposals.isPending} error={proposals.error?.message} empty="目前沒有社員提案">
-            {proposals.data?.map((proposal) => <ProposalReviewCard key={proposal.id} proposal={proposal} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-proposals"] })} />)}
-          </AdminReviewSection>
-          <AdminReviewSection icon={IdentificationCard} title="入社審核" count={applications.data?.length || 0} pending={applications.isPending} error={applications.error?.message} empty="目前沒有入社申請">
-            {applications.data?.map((application) => <MembershipReviewCard key={application.id} application={application} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-membership-applications"] })} />)}
-          </AdminReviewSection>
-          <AdminReviewSection icon={UsersThree} title="會籍管理" count={memberships.data?.length || 0} pending={memberships.isPending} error={memberships.error?.message} empty="目前沒有會籍">
-            {memberships.data?.map((membership) => <MembershipStatusCard key={membership.id} membership={membership} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-members"] })} />)}
-          </AdminReviewSection>
+          <div className="admin-quick-buttons social-review-scope" role="group" aria-label="審核範圍">{[["pending", "待處理"], ["all", "全部"], ["done", "已處理"]].map(([value, label]) => <button type="button" className="button button-quiet" key={value} aria-pressed={reviewScope === value} onClick={() => setReviewScope(value)}>{label}</button>)}</div>
+          {(reviewScope !== "pending" || visibleActivities.length > 0 || activities.isPending || activities.isError) && <AdminReviewSection icon={CalendarBlank} title="活動管理" count={visibleActivities.length} pending={activities.isPending} error={activities.error?.message} empty="沒有符合條件的活動">
+            {visibleActivities.map((activity) => <ActivityReviewCard key={activity.id} activity={activity} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-activities"] })} />)}
+          </AdminReviewSection>}
+          {(reviewScope !== "pending" || visibleProposals.length > 0 || proposals.isPending || proposals.isError) && <AdminReviewSection icon={NotePencil} title="提案管理" count={visibleProposals.length} pending={proposals.isPending} error={proposals.error?.message} empty="沒有符合條件的提案">
+            {visibleProposals.map((proposal) => <ProposalReviewCard key={proposal.id} proposal={proposal} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-proposals"] })} />)}
+          </AdminReviewSection>}
+          {(reviewScope !== "pending" || visibleApplications.length > 0 || applications.isPending || applications.isError) && <AdminReviewSection icon={IdentificationCard} title="入社審核" count={visibleApplications.length} pending={applications.isPending} error={applications.error?.message} empty="沒有符合條件的申請">
+            {visibleApplications.map((application) => <MembershipReviewCard key={application.id} application={application} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-membership-applications"] })} />)}
+          </AdminReviewSection>}
+
+          {reviewScope === "pending" && ![activities, proposals, applications, memberships].some(query => query.isPending || query.isError) && pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length === 0 && <p role="status">目前沒有待處理事項</p>}
+          {memberships.isError && <p role="alert" className="form-error">會籍待辦無法讀取：{memberships.error.message}</p>}
+          {visibleTrainees.length > 0 && <AdminReviewSection icon={UsersThree} title="待轉正式社員" count={visibleTrainees.length} pending={memberships.isPending} empty="沒有待轉正式社員">{visibleTrainees.map(membership => <MembershipStatusCard key={membership.id} membership={membership} onDone={() => queryClient.invalidateQueries({queryKey: ["admin-members"]})} />)}</AdminReviewSection>}
         </Tabs.Content>
 
+        <Tabs.Content className="tab-content" value="members">
+          <div className="social-member-filters"><label className="field"><span>姓名、社員編號或會員識別碼</span><input type="search" value={memberSearch} onChange={event => setMemberSearch(event.target.value)} /></label><label className="field"><span>會籍狀態</span><select value={memberStatus} onChange={event => setMemberStatus(event.target.value)}><option value="">全部狀態</option>{["trainee", "active", "suspended", "resigned", "terminated"].map(value => <option key={value} value={value}>{membershipStatusLabel(value)}</option>)}</select></label></div>
+          <AdminReviewSection icon={UsersThree} title="會籍管理" count={visibleMembers.length} pending={memberships.isPending} error={memberships.error?.message} empty="目前沒有會籍">
+            {visibleMembers.map((membership) => <MembershipStatusCard key={membership.id} membership={membership} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-members"] })} />)}
+          </AdminReviewSection>
+        </Tabs.Content>
         <Tabs.Content className="tab-content" value="wishes">
           <AdminReviewSection icon={HandHeart} title="社員願望" count={wishes.data?.length || 0} pending={wishes.isPending} error={wishes.error?.message} empty="目前沒有社員願望">
             {wishes.data?.map((wish) => <WishAdminCard key={wish.id} wish={wish} onDone={() => queryClient.invalidateQueries({ queryKey: ["wishes"] })} />)}
@@ -124,7 +145,7 @@ export function AdminSocialPage() {
 }
 
 function AdminReviewSection({ icon: Icon, title, count, pending, error, empty, children }: { icon: typeof CalendarBlank; title: string; count: number; pending: boolean; error?: string; empty: string; children: React.ReactNode }) {
-  return <section className="admin-review-section"><div className="section-title-row"><div><p className="eyebrow">WORK QUEUE / 待辦事項</p><h2>{title}</h2></div><span><Icon size={20} />{count}</span></div>{pending && <LoadingLines count={2} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && <DataState title={empty} detail="新的項目送出後會出現在這裡。" />}<div className="admin-review-list">{children}</div></section>;
+  return <section className="admin-review-section"><div className="section-title-row"><div><h2>{title}</h2></div><span><Icon size={20} />{count}</span></div>{pending && <LoadingLines count={2} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && <DataState title={empty} detail="" />}<div className="admin-review-list">{children}</div></section>;
 }
 
 function RosterEntryCard({ entry }: { entry: MemberRosterEntry }) {
@@ -225,7 +246,6 @@ function ShareholdingEditor({ record, source }: { record: ShareholdingRecord; so
 }
 
 function ActivityReviewCard({ activity, onDone }: { activity: Activity; onDone: () => void }) {
-  const [reason, setReason] = useState("");
   const [showRegistrations, setShowRegistrations] = useState(false);
   const queryClient = useQueryClient();
   const registrations = useQuery({
@@ -234,7 +254,7 @@ function ActivityReviewCard({ activity, onDone }: { activity: Activity; onDone: 
     enabled: showRegistrations,
   });
   const action = useMutation({
-    mutationFn: (decision: "approve" | "reject" | "cancel" | "complete") => apiFetch(`/v1/admin/activities/${activity.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
+    mutationFn: ({decision, reason}: {decision: "approve" | "reject" | "cancel" | "complete"; reason: string}) => apiFetch(`/v1/admin/activities/${activity.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
     onSuccess: onDone,
   });
   const attendance = useMutation({
@@ -246,15 +266,15 @@ function ActivityReviewCard({ activity, onDone }: { activity: Activity; onDone: 
     <article className="admin-review-card admin-review-card-expandable">
       <div className="review-card-copy"><span className="status-chip">{activityAdminStatus(activity.status)}</span><h3>{activity.title}</h3><p>{formatDateTime(activity.starts_at)} · {activity.location} · {activity.registration_count}/{activity.capacity} 人</p><small>{activity.description}</small></div>
       <div className="review-card-actions">
-        <label className="field"><span>處理意見</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+
         <div>
-          {activity.status === "pending_review" && <button type="button" disabled={action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />核准</button>}
-          {activity.status === "pending_review" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("reject")}>駁回</button>}
-          {activity.status === "published" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("cancel")}>取消活動</button>}
-          {canComplete && <button type="button" disabled={action.isPending} onClick={() => action.mutate("complete")}>完成活動</button>}
+          {activity.status === "pending_review" && <SocialActionButton disabled={action.isPending} action="approve" requireReason={false} onConfirm={reason => action.mutate({decision: "approve", reason})}><CheckCircle size={16} />核准</SocialActionButton>}
+          {activity.status === "pending_review" && <SocialActionButton disabled={action.isPending} action="reject" requireReason={true} onConfirm={reason => action.mutate({decision: "reject", reason})}>駁回</SocialActionButton>}
+          {activity.status === "published" && <SocialActionButton disabled={action.isPending} action="cancel" requireReason={true} onConfirm={reason => action.mutate({decision: "cancel", reason})}>取消活動</SocialActionButton>}
+          {canComplete && <SocialActionButton disabled={action.isPending} action="complete" requireReason={false} onConfirm={reason => action.mutate({decision: "complete", reason})}>完成活動</SocialActionButton>}
           {activity.status !== "pending_review" && <button type="button" onClick={() => setShowRegistrations((value) => !value)}>{showRegistrations ? "收起名單" : "報名名單"}</button>}
         </div>
-        {(action.isError || attendance.isError) && <p className="form-error">{action.error?.message || attendance.error?.message}</p>}
+        {action.isSuccess && <p role="status">處理完成</p>}{(action.isError || attendance.isError) && <p className="form-error">{action.error?.message || attendance.error?.message}</p>}
       </div>
       {showRegistrations && (
         <div className="registration-admin-list">
@@ -270,23 +290,21 @@ function ActivityReviewCard({ activity, onDone }: { activity: Activity; onDone: 
 }
 
 function ProposalReviewCard({ proposal, onDone }: { proposal: Proposal; onDone: () => void }) {
-  const [reason, setReason] = useState("");
   const [minimumVoters, setMinimumVoters] = useState(10);
   const [discussionEndsAt, setDiscussionEndsAt] = useState("");
   const [votingEndsAt, setVotingEndsAt] = useState("");
   const action = useMutation({
-    mutationFn: (decision: "approve" | "reject" | "close") => apiFetch(`/v1/admin/member-proposals/${proposal.id}/${decision}`, {
+    mutationFn: ({decision, reason}: {decision: "approve" | "reject" | "close"; reason: string}) => apiFetch(`/v1/admin/member-proposals/${proposal.id}/${decision}`, {
       method: "POST",
       body: JSON.stringify(decision === "approve" ? { minimum_voters: minimumVoters, discussion_ends_at: new Date(discussionEndsAt).toISOString(), voting_ends_at: new Date(votingEndsAt).toISOString() } : { reason }),
     }),
     onSuccess: onDone,
   });
-  return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{proposalStatusLabel(proposal.status)}</span><h3>{proposal.title}</h3><p>提案人 {proposal.created_by_name} · {proposal.tally.total} 票</p><small>{proposal.body}</small></div><div className="review-card-actions schedule-fields">{proposal.status === "pending_review" && <><label className="field"><span>討論截止</span><input type="datetime-local" value={discussionEndsAt} onChange={(event) => setDiscussionEndsAt(event.target.value)} /></label><label className="field"><span>投票截止</span><input type="datetime-local" value={votingEndsAt} onChange={(event) => setVotingEndsAt(event.target.value)} /></label><label className="field"><span>最低投票數</span><input min={1} type="number" value={minimumVoters} onChange={(event) => setMinimumVoters(Number(event.target.value))} /></label></>}<label className="field"><span>{["passed", "rejected"].includes(proposal.status) ? "結案說明" : "駁回原因"}</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label><div>{proposal.status === "pending_review" && <button type="button" disabled={!discussionEndsAt || !votingEndsAt || action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />核准排程</button>}{proposal.status === "pending_review" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("reject")}>駁回</button>}{["passed", "rejected"].includes(proposal.status) && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("close")}>完成結案</button>}<Link to="/proposals/$proposalId" params={{ proposalId: proposal.id }}>查看提案</Link></div>{action.isError && <p className="form-error">{action.error.message}</p>}</div></article>;
+  return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{proposalStatusLabel(proposal.status)}</span><h3>{proposal.title}</h3><p>提案人 {proposal.created_by_name} · {proposal.tally.total} 票</p><small>{proposal.body}</small></div><div className="review-card-actions schedule-fields">{proposal.status === "pending_review" && <><label className="field"><span>討論截止</span><input type="datetime-local" value={discussionEndsAt} onChange={(event) => setDiscussionEndsAt(event.target.value)} /></label><label className="field"><span>投票截止</span><input type="datetime-local" value={votingEndsAt} onChange={(event) => setVotingEndsAt(event.target.value)} /></label><label className="field"><span>最低投票數</span><input min={1} type="number" value={minimumVoters} onChange={(event) => setMinimumVoters(Number(event.target.value))} /></label></>}<div>{proposal.status === "pending_review" && <SocialActionButton disabled={!discussionEndsAt || !votingEndsAt || action.isPending} action="approve" requireReason={false} onConfirm={reason => action.mutate({decision: "approve", reason})}><CheckCircle size={16} />核准排程</SocialActionButton>}{proposal.status === "pending_review" && <SocialActionButton disabled={action.isPending} action="reject" requireReason={true} onConfirm={reason => action.mutate({decision: "reject", reason})}>駁回</SocialActionButton>}{["passed", "rejected"].includes(proposal.status) && <SocialActionButton disabled={action.isPending} action="close" requireReason={true} onConfirm={reason => action.mutate({decision: "close", reason})}>完成結案</SocialActionButton>}<Link to="/proposals/$proposalId" params={{ proposalId: proposal.id }}>查看提案</Link></div>{action.isSuccess && <p role="status">處理完成</p>}{action.isError && <p className="form-error" role="alert">{action.error.message}</p>}</div></article>;
 }
 
 function MembershipReviewCard({ application, onDone }: { application: MembershipApplication; onDone: () => void }) {
-  const [reason, setReason] = useState("");
-  const action = useMutation({ mutationFn: (decision: "approve" | "request-supplement" | "reject") => apiFetch(`/v1/admin/membership-applications/${application.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) }), onSuccess: onDone });
+  const action = useMutation({ mutationFn: ({decision, reason}: {decision: "approve" | "request-supplement" | "reject"; reason: string}) => apiFetch(`/v1/admin/membership-applications/${application.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) }), onSuccess: onDone });
   const openDocument = useMutation({
     mutationFn: (documentId: string) => apiFetch<{ download_url: string }>(`/v1/admin/membership-applications/${application.id}/documents/${documentId}/download-url`),
     onSuccess: ({ download_url }) => window.open(download_url, "_blank", "noopener,noreferrer"),
@@ -313,26 +331,24 @@ function MembershipReviewCard({ application, onDone }: { application: Membership
         </div>
       </div>
       <div className="review-card-actions">
-        <label className="field"><span>審核意見</span><input disabled={!reviewable} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+
         <div>
-          {application.status === "submitted" && <button type="button" disabled={action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />核准</button>}
-          {application.status === "submitted" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("request-supplement")}>要求補件</button>}
-          {reviewable && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("reject")}>駁回</button>}
+          {application.status === "submitted" && <SocialActionButton disabled={action.isPending} action="approve" requireReason={false} onConfirm={reason => action.mutate({decision: "approve", reason})}><CheckCircle size={16} />核准</SocialActionButton>}
+          {application.status === "submitted" && <SocialActionButton disabled={action.isPending} action="request-supplement" requireReason={true} onConfirm={reason => action.mutate({decision: "request-supplement", reason})}>要求補件</SocialActionButton>}
+          {reviewable && <SocialActionButton disabled={action.isPending} action="reject" requireReason={true} onConfirm={reason => action.mutate({decision: "reject", reason})}>駁回</SocialActionButton>}
         </div>
-        {(action.isError || openDocument.isError) && <p className="form-error">{action.error?.message || openDocument.error?.message}</p>}
+        {action.isSuccess && <p role="status">處理完成</p>}{(action.isError || openDocument.isError) && <p className="form-error">{action.error?.message || openDocument.error?.message}</p>}
       </div>
     </article>
   );
 }
 
 function MembershipStatusCard({ membership, onDone }: { membership: AdminMembership; onDone: () => void }) {
-  const [reason, setReason] = useState("");
   const action = useMutation({
-    mutationFn: (nextAction: "activate" | "suspend" | "resign" | "terminate" | "share-capital-return") => apiFetch(`/v1/admin/members/${membership.id}/${nextAction}`, { method: "POST", body: JSON.stringify({ reason }) }),
+    mutationFn: ({nextAction, reason}: {nextAction: "activate" | "suspend" | "resign" | "terminate" | "share-capital-return"; reason: string}) => apiFetch(`/v1/admin/members/${membership.id}/${nextAction}`, { method: "POST", body: JSON.stringify({ reason }) }),
     onSuccess: onDone,
   });
-  const canChange = ["trainee", "active", "suspended", "resigned"].includes(membership.status);
-  return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{membershipStatusLabel(membership.status)}</span><h3>{membership.member_number || membership.trainee_number || "待編號"}</h3><p>股金 {membership.share_capital_amount} 元 · {membership.share_count} 股</p><small>會籍 ID {membership.id}</small></div><div className="review-card-actions"><label className="field"><span>處理原因</span><input disabled={!canChange} value={reason} onChange={(event) => setReason(event.target.value)} /></label><div>{membership.status === "trainee" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("activate")}><CheckCircle size={16} />轉為正式社員</button>}{membership.status === "active" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("suspend")}>暫停會籍</button>}{["active", "suspended"].includes(membership.status) && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("resign")}>辦理退社</button>}{["trainee", "active", "suspended", "resigned"].includes(membership.status) && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("terminate")}>終止會籍</button>}{membership.status === "resigned" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("share-capital-return")}>返還股金</button>}</div>{action.isError && <p className="form-error">{action.error.message}</p>}<ShareholdingEditor record={membership} source="membership" /></div></article>;
+  return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{membershipStatusLabel(membership.status)}</span><h3>{membership.display_name && `${membership.display_name} · `}{membership.member_number || membership.trainee_number || "待編號"}</h3><p>股金 {membership.share_capital_amount} 元 · {membership.share_count} 股</p><details><summary>會籍詳細資料</summary><small>會籍 ID {membership.id}</small></details></div><div className="review-card-actions"><div>{membership.status === "trainee" && <SocialActionButton disabled={action.isPending} action="activate" requireReason={true} onConfirm={reason => action.mutate({nextAction: "activate", reason})}><CheckCircle size={16} />轉為正式社員</SocialActionButton>}{membership.status === "active" && <SocialActionButton disabled={action.isPending} action="suspend" requireReason={true} onConfirm={reason => action.mutate({nextAction: "suspend", reason})}>暫停會籍</SocialActionButton>}{["active", "suspended"].includes(membership.status) && <SocialActionButton disabled={action.isPending} action="resign" requireReason={true} onConfirm={reason => action.mutate({nextAction: "resign", reason})}>辦理退社</SocialActionButton>}{["trainee", "active", "suspended", "resigned"].includes(membership.status) && <SocialActionButton disabled={action.isPending} action="terminate" requireReason={true} onConfirm={reason => action.mutate({nextAction: "terminate", reason})}>終止會籍</SocialActionButton>}{membership.status === "resigned" && <SocialActionButton disabled={action.isPending} action="share-capital-return" requireReason={true} onConfirm={reason => action.mutate({nextAction: "share-capital-return", reason})}>返還股金</SocialActionButton>}</div>{action.isSuccess && <p role="status">處理完成</p>}{action.isError && <p className="form-error" role="alert">{action.error.message}</p>}<ShareholdingEditor record={membership} source="membership" /></div></article>;
 }
 
 function WishAdminCard({ wish, onDone }: { wish: Wish; onDone: () => void }) {
