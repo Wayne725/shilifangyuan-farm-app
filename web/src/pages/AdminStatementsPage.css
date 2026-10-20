@@ -1,0 +1,17 @@
+.statement-page { font-size: 1.125rem; }
+.statement-page input, .statement-page select, .statement-page button { min-height: 48px; font-size: 1.125rem; }
+.statement-links, .statement-actions, .statement-filters { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; }
+.statement-links a { text-decoration: underline; text-underline-offset: 5px; }
+.statement-actions { margin-block: 24px; }
+.statement-filters { margin-block: 28px; border-bottom: 1px solid var(--line); }
+.statement-filters button { border: 0; border-bottom: 3px solid transparent; }
+.statement-filters button[aria-pressed="true"] { border-bottom-color: var(--moss); color: var(--ink); }
+.statement-page select { max-width: 100%; }
+.statement-page .admin-records-table { max-width: 100%; }
+.statement-page .admin-records-table table { min-width: 1100px; }
+.statement-page .admin-records-table td:nth-child(3), .statement-page .admin-records-table td:nth-child(5), .statement-page .admin-records-table .button { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.statement-page .admin-records-table :is(th, td):last-child { position: sticky; right: 0; z-index: 1; background: var(--paper); border-left: 1px solid var(--line); min-width: 140px; }
+.statement-page .statement-filters button[aria-pressed="false"]:hover { border-bottom-color: transparent; }
+.statement-page .admin-records-form { scroll-margin-top: 120px; }
+.statement-page :is(input, select, button, a):focus-visible { outline: 3px solid var(--moss); outline-offset: 4px; }
+@media (max-width: 600px) { .statement-page .admin-records-filters { align-items: stretch; } .statement-page .admin-records-filters .field { flex-basis: 100%; } .statement-actions { align-items: stretch; } .statement-actions > .field { width: 100%; } }

@@ -323,6 +323,7 @@ const adminRecordsRoute = createRoute({ getParentRoute: () => rootRoute, path: "
 const adminPromotionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/promotions", component: page("./pages/AdminPromotionsPage", "AdminPromotionsPage") });
 
 const adminInvoicesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/invoices", component: page("./pages/AdminInvoicesPage", "AdminInvoicesPage") });
+const adminStatementsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/statements", component: page("./pages/AdminStatementsPage", "AdminStatementsPage") });
 
 const adminSettingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/settings", component: page("./pages/AdminSettingsPage", "AdminSettingsPage") });
 
@@ -391,6 +392,7 @@ const routeTree = rootRoute.addChildren([
   adminUsersRoute,
   adminSettingsRoute,
   adminInvoicesRoute,
+  adminStatementsRoute,
   adminPromotionsRoute,
   adminRecordsRoute,
   adminSocialRoute,

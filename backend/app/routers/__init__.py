@@ -21,8 +21,10 @@ from .proposals import proposals_router
 from .promotions import promotions_router
 
 from .invoice_reports import invoice_reports_router
+from .financial_statements import router as financial_statements_router
 
 ALL_ROUTERS = [
+    financial_statements_router,
     invoice_reports_router,
     promotions_router,
     platform_router,

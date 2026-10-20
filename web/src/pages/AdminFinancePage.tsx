@@ -46,6 +46,7 @@ export function AdminFinancePage() {
   return <section className="admin-module-page meal-finance-page">
     <header className="workspace-heading"><div><p className="eyebrow">SALES REPORT / 財務報表</p><h1>銷售明細與統整</h1></div></header>
     <AdminNav />
+    <p><Link className="text-link" to="/admin/statements">匯入金流／銀行／發票明細與對帳</Link></p>
     <div className="meal-finance-presets" aria-label="常用查詢期間">{(["today", "week", "month"] as const).map((mode) => <button key={mode} type="button" className="button button-quiet" onClick={() => applyPreset(mode)}>{{ today: "今天", week: "本週", month: "本月" }[mode]}</button>)}</div>
     <form className="meal-finance-filters" onSubmit={(event) => {
       event.preventDefault();

@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -2809,3 +2810,19 @@ class MemberBadge(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     badge_id: Mapped[str] = mapped_column(ForeignKey("badge_definitions.id", ondelete="CASCADE"), index=True)
     granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FinancialStatementImport(Base):
+    __tablename__ = 'financial_statement_imports'
+    __table_args__ = (UniqueConstraint('source', 'checksum', name='uq_statement_source_checksum'),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    source: Mapped[str] = mapped_column(String(20))
+    filename: Mapped[str] = mapped_column(String(255))
+    checksum: Mapped[str] = mapped_column(String(64))
+    file_content: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+    rows: Mapped[List[Dict[str, Any]]] = mapped_column(JSON, deferred=True)
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_rows: Mapped[int] = mapped_column(Integer, default=0)
+    uploaded_by_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='RESTRICT'))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
