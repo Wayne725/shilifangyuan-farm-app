@@ -15,3 +15,15 @@
 .statement-page .admin-records-form { scroll-margin-top: 120px; }
 .statement-page :is(input, select, button, a):focus-visible { outline: 3px solid var(--moss); outline-offset: 4px; }
 @media (max-width: 600px) { .statement-page .admin-records-filters { align-items: stretch; } .statement-page .admin-records-filters .field { flex-basis: 100%; } .statement-actions { align-items: stretch; } .statement-actions > .field { width: 100%; } }
+@media (max-width: 600px) {
+  .statement-page .admin-records-totals { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .statement-page .admin-records-totals div { padding: 16px 6px; }
+  .statement-page .admin-records-totals dd { font-size: 1.125rem; }
+  .statement-page .admin-records-table table, .statement-page .admin-records-table tbody { display: block; min-width: 0; }
+  .statement-page .admin-records-table thead { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+  .statement-page .admin-records-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-block: 20px; border-bottom: 1px solid var(--line); }
+  .statement-page .admin-records-table td { min-width: 0; max-width: none; padding: 4px 0; border: 0; }
+  .statement-page .admin-records-table td::before { content: attr(data-label); display: block; margin-bottom: 6px; color: var(--ink-soft); font-size: 1rem; }
+  .statement-page .admin-records-table td:nth-child(3), .statement-page .admin-records-table td:nth-child(4), .statement-page .admin-records-table td:nth-child(6), .statement-page .admin-records-table td:nth-child(7) { grid-column: 1 / -1; white-space: normal; }
+  .statement-page .admin-records-table :is(th, td):last-child { position: static; min-width: 0; background: transparent; border: 0; }
+}

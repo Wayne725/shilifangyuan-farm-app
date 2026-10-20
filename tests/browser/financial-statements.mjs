@@ -42,6 +42,7 @@ for (const width of [1440, 816, 390]) {
     assert.equal(await page.getByRole('cell', {name: /2\.1234567/}).count(), 1);
     await page.getByRole('button', {name: '放大', exact: true}).click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    if (width === 390) assert.equal(await page.getByRole('region', {name: '對帳明細', exact: true}).evaluate(element => element.scrollWidth <= element.clientWidth + 1), true);
     await page.getByRole('button', {name: '有差異', exact: true}).click();
     await page.getByRole('cell', {name: /交易金額不符/}).waitFor();
     assert.equal(await page.getByRole('cell', {name: /0000123456789012345678/}).count(), 0);
