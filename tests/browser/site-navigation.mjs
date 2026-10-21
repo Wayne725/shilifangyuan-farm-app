@@ -28,6 +28,7 @@ async function fixture(t, width, sample) {
     state.reads.push(path);
     if (path === '/v1/auth/refresh') return route.fulfill({ status: state.signedIn ? 200 : 401, json: state.signedIn ? { access_token: 'isolated', user } : { detail: '尚未登入' } });
     if (path === '/v1/auth/logout') { state.signedIn = false; return route.fulfill({ status: 204, body: '' }); }
+    if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: sample.confirmedMembership || (sample.social ? 'member' : user?.membership_type || 'nonmember'), membership: { status: 'active' } } });
     if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/meal-orders', '/v1/activities', '/v1/membership/charges', '/v1/notifications', '/v1/me/badges', '/v1/me/surplus-distributions'].includes(path)) return route.fulfill({ json: [] });
     if (path === '/v1/me/points') return route.fulfill({ json: { balance: 0 } });
@@ -65,10 +66,12 @@ for (const width of [1440, 1024, 390]) for (const sample of cases) {
     }, Boolean(sample.user));
     assert.equal(await page.locator('a[href="/social"]').count() > 0, sample.social);
     assert.equal(state.reads.includes('/v1/activities'), sample.social);
+    await page.locator('.reading-menu > summary').click();
     const reading = page.getByRole('group', { name: '文字大小', exact: true });
     assert.doesNotMatch(await reading.innerText(), /字體大小/);
     assert.deepEqual(await reading.getByRole('button').allTextContents(), ['標準', '放大']);
     for (const size of ['標準', '放大']) {
+      if (size === '放大') await page.locator('.reading-menu > summary').click();
       await reading.getByRole('button', { name: size, exact: true }).click();
       await page.waitForFunction((large) => document.documentElement.dataset.textSize === (large ? 'large' : 'standard'), size === '放大');
       await verifyLayout(page, width);
@@ -93,7 +96,9 @@ for (const width of [1440, 1024, 390]) for (const sample of cases) {
     await menu.getByRole('link', { name: '常見問題', exact: true }).click();
     await page.waitForURL(`${base}/help`);
     assert.equal(await menu.count(), 0);
+    await page.locator('.reading-menu > summary').click();
     assert.equal(await reading.getByRole('button', { name: '放大', exact: true }).getAttribute('aria-pressed'), 'true');
+    await page.locator('.reading-menu > summary').click();
     if (['訪客', '非社員', '實習社員'].includes(sample.name)) {
       await toggle.click();
       await menu.getByRole('link', { name: '社務系統', exact: true }).click();

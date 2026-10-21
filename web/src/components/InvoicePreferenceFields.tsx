@@ -94,7 +94,7 @@ function InvoiceCarrierFields({
   );
 }
 
-export function InvoicePreferenceSummary({ value }: { value: InvoicePreference }) {
+export function InvoicePreferenceSummary({ value, typeLabel = "電子發票" }: { value: InvoicePreference; typeLabel?: string }) {
   const invoiceLabel = value.buyerType === "company"
     ? `公司統編發票${value.carrierType === "mobile_barcode" ? "＋手機載具" : ""}`
     : value.carrierType === "mobile_barcode"
@@ -104,7 +104,7 @@ export function InvoicePreferenceSummary({ value }: { value: InvoicePreference }
   return (
     <>
       <div className="invoice-summary-line">
-        <dt>電子發票</dt>
+        <dt>{typeLabel}</dt>
         <dd>{invoiceLabel}</dd>
       </div>
       {value.buyerType === "company" && (
@@ -137,10 +137,12 @@ export function InvoicePreferenceFields({
   value,
   onChange,
   sectionNumber = "03",
+  showHeading = true,
 }: {
   value: InvoicePreference;
   onChange: (value: InvoicePreference) => void;
   sectionNumber?: string;
+  showHeading?: boolean;
 }) {
   const emailLimit = invoiceEmailLimit(value);
   const emailIsValid = invoiceEmailIsValid(value);
@@ -155,10 +157,10 @@ export function InvoicePreferenceFields({
 
   return (
     <div className="invoice-preference">
-      <div className="checkout-step-title invoice-title">
+      {showHeading && <div className="checkout-step-title invoice-title">
         <span>{sectionNumber}</span>
         <div><p className="eyebrow">CLOUD INVOICE / 電子發票</p><h2>電子發票</h2></div>
-      </div>
+      </div>}
       <div className="invoice-type-switch" role="radiogroup" aria-label="發票身分">
         <button
           aria-checked={value.buyerType === "personal"}

@@ -28,6 +28,7 @@ export function AppShell() {
   const { user, isAuthReady, sessionError, retrySession, openLogin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
+  const readingMenu = useRef<HTMLDetailsElement>(null);
   const socialAccess = useSocialAccess(user);
   const visibleNavItems = navItems.filter((item) => item.to !== "/social" || socialAccess);
   useEffect(() => {
@@ -47,6 +48,13 @@ export function AppShell() {
     document.documentElement.dataset.textSize = largeText ? "large" : "standard";
     try { localStorage.setItem("slf_text_size", largeText ? "large" : "standard"); } catch { /* The current size still applies when storage is unavailable. */ }
   }, [largeText]);
+  const changeTextSize = (large: boolean) => {
+    setLargeText(large);
+    if (readingMenu.current) {
+      readingMenu.current.open = false;
+      readingMenu.current.querySelector("summary")?.focus();
+    }
+  };
 
   return (
     <div className="site-frame">
@@ -76,6 +84,18 @@ export function AppShell() {
         </nav>
 
         <div className="header-actions">
+          <details className="reading-menu" ref={readingMenu} onKeyDown={(event) => {
+            if (event.key === "Escape" && readingMenu.current) {
+              readingMenu.current.open = false;
+              readingMenu.current.querySelector("summary")?.focus();
+            }
+          }}>
+            <summary aria-label="文字大小"><span aria-hidden="true">Aa</span><span className="reading-menu-label">字級</span></summary>
+            <div className="reading-controls" role="group" aria-label="文字大小">
+              <button type="button" aria-pressed={!largeText} onClick={() => changeTextSize(false)}>標準</button>
+              <button type="button" aria-pressed={largeText} onClick={() => changeTextSize(true)}>放大</button>
+            </div>
+          </details>
           {user && (
             <Link className="orders-link" to="/orders" search={{ order_id: undefined, result: undefined, message: undefined }} aria-label="查看我的訂單">
               <Receipt size={20} weight="light" />
@@ -167,11 +187,6 @@ export function AppShell() {
           )}
         </nav>
       )}
-
-      <div className="reading-controls" role="group" aria-label="文字大小">
-        <button type="button" aria-pressed={!largeText} onClick={() => setLargeText(false)}>標準</button>
-        <button type="button" aria-pressed={largeText} onClick={() => setLargeText(true)}>放大</button>
-      </div>
 
       <main id="main-content">
         {sessionError ? (

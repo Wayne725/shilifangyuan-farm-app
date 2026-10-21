@@ -57,14 +57,14 @@ for (const width of [1440,816,390]) {
  });
  test(`${width}px 社員帳冊、收款與點數切換，手機不溢出`,async t=>{
   const {page,state}=await fixture(t,width,{admin:true});await page.goto(`${base}/admin/records`);
-  await page.getByText('SH001',{exact:true}).waitFor();await page.getByRole('button',{name:'放大',exact:true}).click();await layout(page,state);
+  await page.getByText('SH001',{exact:true}).waitFor();await page.locator('.reading-menu > summary').click();await page.getByRole('button',{name:'放大',exact:true}).click();await layout(page,state);
   await page.getByRole('button',{name:'入社費與股金',exact:true}).click();await page.getByRole('cell',{name:/MRC001/}).waitFor();await layout(page,state);
   await page.getByRole('button',{name:'累積點數',exact:true}).click();await page.getByRole('cell',{name:'12',exact:true}).waitFor();await layout(page,state);assert.deepEqual(state.writes,[]);
  });
  test(`${width}px 平台設定與便當促銷維持原風格及操作邊界`,async t=>{
   const {page,state}=await fixture(t,width,{admin:true});await page.goto(`${base}/admin/settings`);await page.getByText('每天晚上 20:00（台灣時間）',{exact:true}).waitFor();
   await page.getByLabel('接受新訂單',{exact:true}).uncheck();await page.getByRole('button',{name:'儲存平台設定',exact:true}).click();await page.getByText('設定已儲存',{exact:true}).waitFor();assert.equal(state.writes[0].body.orders_open,false);await layout(page,state);
-  await page.goto(`${base}/admin/promotions`);await page.getByRole('button',{name:'新增促銷活動',exact:true}).click();await page.getByLabel('活動名稱',{exact:true}).fill('隔離優惠');await page.getByRole('button',{name:'放大',exact:true}).click();await layout(page,state);
+  await page.goto(`${base}/admin/promotions`);await page.getByRole('button',{name:'新增促銷活動',exact:true}).click();await page.getByLabel('活動名稱',{exact:true}).fill('隔離優惠');await page.locator('.reading-menu > summary').click();await page.getByRole('button',{name:'放大',exact:true}).click();await layout(page,state);
  });
  test(`${width}px 暫停接單顯示狀態並保留原訂單入口`,async t=>{
   const {page,state}=await fixture(t,width,{closed:true});await page.goto(`${base}/shop`);await page.getByRole('heading',{name:'目前暫停接受新訂單',exact:true}).waitFor();await layout(page,state);

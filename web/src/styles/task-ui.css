@@ -1,0 +1,97 @@
+.reading-menu { position: relative; }
+.reading-menu > summary { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; min-width: 48px; padding: 8px; cursor: pointer; list-style: none; }
+.reading-menu > summary::-webkit-details-marker { display: none; }
+.reading-menu > summary > span:first-child { font-family: var(--serif); font-size: 1.25rem; }
+.reading-menu-label { font-size: 1rem; white-space: nowrap; }
+.reading-menu[open] > summary { background: var(--paper-deep); }
+.site-header .reading-controls { position: absolute; inset: calc(100% + 8px) 0 auto auto; width: max-content; flex-wrap: nowrap; padding: 8px; border: 1px solid var(--line-strong); background: var(--paper-light); box-shadow: 0 8px 20px rgb(28 36 30 / 10%); }
+.site-header .reading-controls button { min-height: 48px; }
+.site-header .reading-controls button[aria-pressed="true"] { color: var(--paper-light); background: var(--moss-dark); }
+
+.meal-offer-page { padding-top: 16px; }
+.meal-offer-page > .text-link { margin-bottom: 12px; }
+.meal-offer-page .meal-offer-hero { margin: 12px 0 16px; border: 0; border-bottom: 1px solid var(--line); background: transparent; }
+.meal-offer-page .offer-copy { display: block; padding: 0 0 16px; background: transparent; }
+.meal-offer-page .offer-copy .eyebrow { margin-bottom: 4px; }
+.meal-offer-page .offer-copy h1 { margin: 0 0 8px; }
+.meal-booking-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.meal-offer-page .offer-copy .meal-event-status { margin: 0; padding: 4px 8px; font-size: 1rem; }
+.meal-offer-page .offer-copy .meal-booking-deadline { margin: 0; font-size: 1rem; }
+.meal-offer-page .meal-checkout { padding-top: 0; gap: 28px; }
+.meal-offer-page .meal-selected-date { margin: 0 0 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.meal-pickup-label { color: var(--ink-soft); font-size: 1rem; }
+.meal-selected-date > p { margin: 4px 0 0; gap: 4px 16px; }
+.meal-selected-date .text-link { min-height: 44px; }
+.meal-offer-page .meal-offering-list { border-top: 0; }
+
+.meal-shop-intro { padding-block: 24px; }
+.market-tabs > .tab-list { padding-top: 0; }
+.meal-booking-content { padding-top: 24px; }
+.meal-booking-content > .section-heading { margin-bottom: 16px; }
+.meal-booking-content > .section-heading h2 { font-size: clamp(1.5rem, 3vw, 2rem); }
+.meal-booking-content > .section-heading .eyebrow { margin-bottom: 4px; }
+.meal-date-navigation { gap: 12px; padding-top: 16px; }
+.meal-date-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; }
+.meal-date-summary strong { font-size: 1.25rem; font-weight: 600; }
+.meal-date-summary .meal-date-status { color: var(--ink-soft); }
+.meal-date-navigation .meal-time-selection { margin-top: 0; }
+.meal-time-location { padding-block: 12px; }
+.meal-time-location h4 { margin-bottom: 12px; }
+
+.admin-operations-intro { padding-top: 20px; padding-bottom: 14px; }
+.admin-operations-intro .admin-intro-meta { display: none; }
+.admin-navigation { margin-bottom: 12px; }
+.admin-navigation .admin-workspace-links { gap: 4px; padding-block: 8px; border-bottom: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.admin-navigation .admin-workspace-links a { flex: 0 0 auto; min-height: 48px; padding: 10px 14px; border: 1px solid transparent; font-size: 1rem; white-space: nowrap; }
+.admin-navigation .admin-workspace-links a.active { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
+.admin-navigation .admin-section-links { flex-wrap: nowrap; gap: 0 8px; overflow-x: auto; scrollbar-width: thin; }
+.admin-navigation .admin-section-links a { flex: 0 0 auto; font-size: 1rem; white-space: nowrap; }
+.admin-operation-nav.tab-list { justify-content: flex-start; gap: 4px 20px; margin-top: 0; padding-top: 4px; border-bottom: 0; overflow-x: auto; }
+.admin-operation-nav.tab-list a { flex: 0 0 auto; min-height: 48px; padding: 10px 0; font-size: 1rem; border-bottom: 0; white-space: nowrap; }
+.admin-operation-nav.tab-list a[data-state="active"] { color: var(--moss-dark); font-weight: 600; text-decoration: underline; text-underline-offset: 6px; }
+.admin-operation-page.content-section { padding-top: 0; }
+.admin-order-search { margin-top: 8px; }
+
+.operation-state .order-status-badge { display: inline-flex; gap: 6px; align-items: center; padding: 6px 10px; border: 1px solid transparent; font-size: 1rem; line-height: 1.5; }
+.order-status-badge > svg { flex-shrink: 0; }
+.operation-state .status-attention { color: #694c20; background: #f2e3c5; border-color: #cbb17f; }
+.operation-state .status-progress { color: #365a63; background: #e2ecec; border-color: #a8bfc1; }
+.operation-state .status-complete { color: #31543d; background: #e2ebdd; border-color: #b4c8a8; }
+.operation-state .status-exception { color: #853e2b; background: #f4e0d7; border-color: #d3a18d; }
+.operation-state .status-neutral { color: var(--ink-soft); background: transparent; border-color: var(--line); }
+
+.meal-summary .meal-coupon-disclosure > summary,
+.meal-summary .meal-pickup-selection > summary { min-height: 48px; padding-block: 12px; cursor: pointer; font-size: 1rem; color: var(--ink-soft); }
+.meal-summary .meal-coupon-field { margin: 8px 0 16px; }
+.meal-summary .meal-pickup-selection { margin-bottom: 0; }
+.meal-invoice-settings { padding-block: 12px; border-top: 1px solid var(--line); }
+.meal-invoice-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.meal-invoice-heading h3 { margin: 0; font-family: var(--sans); font-size: 1.125rem; font-weight: 500; }
+.meal-invoice-heading .text-link { min-height: 48px; }
+.meal-invoice-heading button.text-link,
+.meal-coupon-field button.text-link { padding: 4px 0; border: 0; border-bottom: 1px solid var(--line-strong); background: transparent; color: var(--ink-soft); cursor: pointer; }
+.meal-summary .meal-invoice-summary { margin-block: 0; }
+.meal-summary .meal-invoice-summary > div { border: 0; padding-block: 4px; }
+.meal-invoice-settings .invoice-preference { margin-top: 8px; }
+.meal-invoice-settings [hidden] { display: none; }
+.meal-summary .meal-payment-action { padding-top: 16px; border-top: 1px solid var(--line-strong); }
+.meal-summary .meal-payment-total { margin: 0 0 16px; }
+.meal-summary .meal-payment-total > .offer-total { margin: 0; padding-top: 0; border: 0; }
+.meal-summary .meal-draft-reset { display: flex; margin: 16px auto 0; padding: 8px; min-height: 44px; background: transparent; border: 0; color: var(--ink-soft); font-size: 1rem; font-weight: 400; }
+.meal-summary .meal-draft-reset:disabled { opacity: .48; cursor: not-allowed; }
+
+@media (max-width: 1180px) { .reading-menu-label { display: none; } }
+@media (max-width: 700px) {
+  .site-header .header-actions { gap: 4px; }
+  .site-header .reading-menu > summary { padding-inline: 6px; }
+  .reading-menu-label { display: inline; font-size: .875rem; }
+  .meal-offer-page .meal-offer-hero { margin-block: 8px 12px; }
+  .meal-offer-page .offer-copy { padding-bottom: 12px; }
+  .meal-selected-date > p { display: grid; gap: 0; }
+  .meal-offer-page .meal-selected-date .text-link { justify-self: start; }
+  .meal-shop-intro { gap: 12px; padding-block: 20px; }
+  .admin-navigation .admin-workspace-links a { padding-inline: 12px; }
+  .admin-navigation .admin-section-links a { padding-inline: 10px; }
+  .admin-operation-nav.tab-list { gap: 18px; }
+}
+@media print { .reading-menu { display: none; } }

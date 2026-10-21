@@ -1,7 +1,5 @@
 import {
   Buildings,
-  CreditCard,
-  FileText,
   MapPin,
   Package,
   Truck,
@@ -18,6 +16,7 @@ import { AdminFailurePanel } from "../components/AdminFailurePanel";
 import { AdminInvoiceAdjustment } from "../components/AdminInvoiceAdjustment";
 import { AdminReasonChoices } from "../components/AdminReasonChoices";
 import { AdminStatusQuery } from "../components/AdminStatusQuery";
+import { OrderStatusBadge } from "../components/OrderStatusBadge";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import "./AdminOrderOperations.css";
 import { useAuth } from "../context/AuthContext";
@@ -25,8 +24,6 @@ import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import { shippingChannelLabels } from "../lib/commerce";
 import {
   adminPaymentStatusLabel,
-  fulfillmentStatusLabel,
-  invoiceStatusLabel,
 } from "../lib/labels";
 import type {
   Order,
@@ -132,9 +129,9 @@ export function AdminPage() {
             <small>{formatMoney(order.amount_total)}</small>
           </div>
           <div className="operation-state">
-            <span><CreditCard size={16} />{adminPaymentStatusLabel(order.payment_status)}</span>
-            <span><Package size={16} />{fulfillmentStatusLabel(order.fulfillment_status)}</span>
-            <span><FileText size={16} />{invoiceStatusLabel(order.invoice_status)}</span>
+            <OrderStatusBadge kind="payment" status={order.payment_status} />
+            <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} />
+            <OrderStatusBadge kind="invoice" status={order.invoice_status} />
             {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {order.shipment.status}</span>}
           </div>
           <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} />

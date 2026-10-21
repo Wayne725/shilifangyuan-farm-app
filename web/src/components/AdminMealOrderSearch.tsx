@@ -7,6 +7,7 @@ import { invoiceStatusLabel, paymentStatusLabel } from "../lib/labels";
 import { formatMealDateTime, shiftMealDate, taipeiDate } from "../lib/meal-time";
 import type { MealAdminOrderItem, MealAdminOrderPage, MealOperationsSummary } from "../lib/types";
 import { InvoiceTaxSummary } from "./InvoiceTaxSummary";
+import { OrderStatusBadge } from "./OrderStatusBadge";
 import { DataState, LoadingLines } from "./Shared";
 
 const pageSize = 20;
@@ -96,7 +97,7 @@ function MealOperationOrder({ item, onReviewOrder }: { item: MealAdminOrderItem;
     <p><strong>預計取餐：{formatMealDateTime(order.pickup_at || order.pickup_start)}</strong>{!order.pickup_at && "（舊訂單未指定，顯示場次開始時間）"}</p>
     <p>{order.meal_event_title} · {item.meal_period === "lunch" ? "午餐" : item.meal_period === "dinner" ? "晚餐" : "未標餐別"} · {order.venue_name}</p>
     <p>{order.items.map((meal) => `${meal.meal_name} × ${meal.quantity}`).join("、")}</p>
-    <p>付款：{paymentStatusLabel(order.payment_status)}　履約：{order.cancelled_at ? "已取消" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"}　發票：{invoiceStatusLabel(order.invoice_status)}</p>
+    <div className="operation-state"><OrderStatusBadge kind="payment" status={order.payment_status} /><OrderStatusBadge kind="fulfillment" status={order.cancelled_at ? "cancelled" : order.fulfillment_status} label={order.cancelled_at ? "已取消" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"} /><OrderStatusBadge kind="invoice" status={order.invoice_status} /></div>
     {order.cancellation_request && <p className="meal-order-review-status">{reviewLabels[order.cancellation_request.status]}{order.cancellation_request.status === "pending" && "，訂單尚未取消"}</p>}
     <details><summary>查看餐點、發票與退單明細</summary>
       <ul>{order.items.map((meal, index) => <li key={`${meal.offering_id}-${index}`}>{meal.meal_name} × {meal.quantity} · {formatMoney(meal.subtotal)}{meal.selections.length > 0 && <span>（{meal.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join("、")}）</span>}</li>)}</ul>

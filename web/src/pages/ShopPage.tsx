@@ -3,13 +3,12 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { ArrowRight, BowlFood, Package, UsersThree } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
 import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
 import { apiFetch, formatDate } from "../lib/api";
-import { shiftMealDate, taipeiDate } from "../lib/meal-time";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
@@ -17,19 +16,10 @@ export function ShopPage() {
   const { addToCart, itemCount } = useCommerce();
   const [activeTab, setActiveTab] = useState("meals");
   const [now, setNow] = useState(Date.now);
-  const today = taipeiDate(now);
-  const previousToday = useRef(today);
-  const [mealDate, setMealDate] = useState(() => shiftMealDate(today, 1));
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
     return () => window.clearInterval(timer);
   }, []);
-  useEffect(() => {
-    if (previousToday.current !== today) {
-      setMealDate(shiftMealDate(today, 1));
-      previousToday.current = today;
-    }
-  }, [today]);
   const products = useQuery({
     queryKey: ["products"],
     queryFn: () => apiFetch<Product[]>("/v1/products"),
@@ -137,8 +127,7 @@ export function ShopPage() {
             eyebrow="MEAL PREORDER / 便當預訂"
             title="選取餐時間"
           />
-          {meals.isSuccess && <MealDateNavigation events={upcomingMeals} selectedDate={mealDate}
-            onDateChange={setMealDate} now={now} />}
+          {meals.isSuccess && <MealDateNavigation events={upcomingMeals} now={now} />}
           {meals.isPending && <LoadingLines count={2} />}
           {meals.isError && (
             <DataState

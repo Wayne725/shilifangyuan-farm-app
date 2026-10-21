@@ -7,6 +7,7 @@ import { AuthProvider } from "./context/AuthContext";
 import { CommerceProvider } from "./context/CommerceContext";
 import { router } from "./router";
 import "./styles.css";
+import "./styles/task-ui.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {

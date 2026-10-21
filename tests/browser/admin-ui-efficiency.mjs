@@ -35,7 +35,7 @@ for (const width of [1280, 816, 390]) test(`${width}px 社務待辦、搜尋、�
   assert.equal(await nav.locator('a.active').count(),1);
   assert.deepEqual(await nav.getByRole('link').allTextContents(),['訂餐營運','商品','會員社務','財務','設定']);
   if(width===1280) { const box=await page.getByRole('heading',{name:'待審活動',exact:true}).boundingBox();assert.ok(box.y<720,`待辦在第一屏: ${box.y}`); }
-  await page.getByRole('button',{name:'放大',exact:true}).click();
+  await page.locator('.reading-menu > summary').click();await page.getByRole('button',{name:'放大',exact:true}).click();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
   if(process.env.BROWSER_SCREENSHOT_DIR) await page.screenshot({path:`${process.env.BROWSER_SCREENSHOT_DIR}/social-pending-${width}.png`,fullPage:true});
   await page.getByRole('button',{name:'全部',exact:true}).click();

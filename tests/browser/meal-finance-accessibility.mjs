@@ -70,6 +70,7 @@ async function verify(page, state) {
   assert.equal(overlaps, false, '標頭導覽不能重疊');
 }
 async function large(page) {
+  await page.locator('.reading-menu > summary').click();
   await page.getByRole('group', { name: '文字大小' }).getByRole('button', { name: '放大', exact: true }).click();
   assert.equal(await page.locator('html').getAttribute('data-text-size'), 'large');
   await page.waitForFunction(() => getComputedStyle(document.documentElement).fontSize === '20px', null, { timeout: 3000 });
