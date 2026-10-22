@@ -44,6 +44,7 @@ from ..models import (
     OrderKind,
     OutboxEvent,
     PaymentAttempt,
+    PaymentMethod,
     PaymentStatus,
     PointAccount,
     PointSourceType,
@@ -323,6 +324,25 @@ async def reverse_order_purchase_points(
         )
 
 
+async def award_order_purchase_points(session: AsyncSession, order: Order) -> None:
+    if order.membership_type_snapshot != MembershipType.MEMBER:
+        return
+    account = await session.scalar(select(PointAccount).where(PointAccount.user_id == order.user_id))
+    if account is None:
+        account = PointAccount(user_id=order.user_id)
+        session.add(account)
+        await session.flush()
+    existing = await session.scalar(select(PointTransaction.id).where(
+        PointTransaction.account_id == account.id,
+        PointTransaction.source_type == PointSourceType.PURCHASE,
+        PointTransaction.reference_id == order.id,
+    ))
+    earned = order.amount_total // 100
+    if existing is None and earned > 0:
+        session.add(PointTransaction(account_id=account.id, amount=earned,
+            source_type=PointSourceType.PURCHASE, reference_id=order.id, note="消費累積"))
+
+
 async def remaining_subject_payment_status(
     session: AsyncSession,
     attempt: PaymentAttempt,
@@ -408,6 +428,10 @@ async def create_provider_aware_refund(
         )
     if payment_attempt is None and not allow_unbound_local_completion:
         raise PaymentApplicationError("找不到可退款的付款交易")
+    if order is not None and order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+        from ..cash_payments import request_cash_refund
+        return await request_cash_refund(session, order, payment_attempt, amount=amount,
+            reason=reason, actor_id=requested_by_id)
     provider = payment_attempt.provider if payment_attempt is not None else "ecpay"
     requires_provider_refund = (
         provider == RAYGATE_PAYMENT_PROVIDER or defer_completion
@@ -565,6 +589,8 @@ async def create_payment_attempt(
     )
     if order is None:
         raise PaymentApplicationError("找不到訂單")
+    if order.payment_method != PaymentMethod.ONLINE:
+        raise PaymentApplicationError("現場付款訂單不可使用線上付款")
     await ensure_order_payment_runtime_enabled(session, settings, order)
     if order.cancelled_at is not None or order.fulfillment_status == FulfillmentStatus.CANCELLED:
         raise PaymentApplicationError("此訂單已取消，無法付款")
@@ -943,6 +969,8 @@ class SQLAlchemyPaymentCallbackRepository:
             raise PaymentApplicationError("找不到付款嘗試")
         if attempt.provider != provider:
             raise PaymentApplicationError("付款服務與付款嘗試不符")
+        if attempt.order is not None and attempt.order.payment_method != PaymentMethod.ONLINE:
+            raise PaymentApplicationError("現場付款訂單不可套用金流回傳")
         try:
             received_amount = int(payload.get("TradeAmt", ""))
         except ValueError as exc:
@@ -1440,32 +1468,7 @@ class SQLAlchemyPaymentCallbackRepository:
             order,
             trigger="payment_confirmed",
         )
-        if order.membership_type_snapshot == MembershipType.MEMBER:
-            account = await self.session.scalar(
-                select(PointAccount).where(PointAccount.user_id == order.user_id)
-            )
-            if account is None:
-                account = PointAccount(user_id=order.user_id)
-                self.session.add(account)
-                await self.session.flush()
-            existing_points = await self.session.scalar(
-                select(PointTransaction.id).where(
-                    PointTransaction.account_id == account.id,
-                    PointTransaction.source_type == PointSourceType.PURCHASE,
-                    PointTransaction.reference_id == order.id,
-                )
-            )
-            earned = order.amount_total // 100
-            if existing_points is None and earned > 0:
-                self.session.add(
-                    PointTransaction(
-                        account_id=account.id,
-                        amount=earned,
-                        source_type=PointSourceType.PURCHASE,
-                        reference_id=order.id,
-                        note="消費累積",
-                    )
-                )
+        await award_order_purchase_points(self.session, order)
         await self._publish_payment_notification(
             order,
             attempt,

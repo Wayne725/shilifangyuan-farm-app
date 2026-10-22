@@ -69,6 +69,8 @@ from .models import (
     OutboxEvent,
     OutboxStatus,
     PaymentAttempt,
+    PaymentMethod,
+    InventoryReservation,
     PaymentStatus,
     ProposalStatus,
     Refund,
@@ -139,6 +141,7 @@ async def reconcile_once(
     report.payment_attempts = await _reconcile_expired_payments(
         session, active_settings, current, limit
     )
+    await _reconcile_expired_cash_orders(session, current, limit)
     report.proposals = await _reconcile_proposals(session, current, limit)
     report.campaigns = await _reconcile_campaigns(
         session, active_settings, current, limit
@@ -321,6 +324,7 @@ async def _reconcile_expired_payments(
             select(PaymentAttempt.id)
             .where(
                 due,
+                PaymentAttempt.provider.in_({"raygate", "ecpay"}),
                 or_(
                     (
                         (PaymentAttempt.status == PaymentStatus.PENDING)
@@ -743,9 +747,32 @@ async def _reconcile_meal_events(
                 trigger="legacy_meal_no_show",
             )
         event.status = MealEventStatus.COMPLETED
+        from .cash_payments import expire_cash_order
+        pending_cash = list(await session.scalars(select(Order).where(
+            Order.meal_event_id == event.id, Order.payment_method == PaymentMethod.CASH_ON_PICKUP,
+            Order.payment_status == PaymentStatus.PENDING,
+        ).options(selectinload(Order.reservations), selectinload(Order.fulfillment)).with_for_update()))
+        for order in pending_cash:
+            await expire_cash_order(session, order, now)
         changed += 1
     await session.commit()
     return changed
+
+
+async def _reconcile_expired_cash_orders(session: AsyncSession, now: datetime, limit: int) -> None:
+    from .cash_payments import expire_cash_order
+    orders = list(await session.scalars(select(Order).where(
+        Order.payment_method == PaymentMethod.CASH_ON_PICKUP,
+        Order.payment_status == PaymentStatus.PENDING,
+        Order.reservations.any(
+            (InventoryReservation.expires_at <= now)
+            & (InventoryReservation.status == ReservationStatus.ACTIVE)
+        ),
+    ).options(selectinload(Order.reservations), selectinload(Order.fulfillment))
+      .order_by(Order.id).limit(limit).with_for_update()))
+    for order in orders:
+        await expire_cash_order(session, order, now)
+    await session.commit()
 
 
 async def _reconcile_campaigns(
@@ -1230,6 +1257,8 @@ async def _process_refund_event(
         if attempt is not None
         else refund.provider or resolved_settings.payment_provider
     )
+    if provider in {"cash", "onsite"}:
+        raise ValueError("現金退款必須由管理員確認實際退還，不可送金流")
     if attempt is None and resolved_settings.environment == "production":
         raise ValueError("正式環境找不到可退款的原付款交易")
     if provider == "raygate" and (

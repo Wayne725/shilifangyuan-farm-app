@@ -7535,6 +7535,25 @@ p {
 .admin-failure-panel { margin: 24px auto; padding: 24px; max-width: 1440px; }
 .failed-job { padding: 16px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 
+.payment-method-fields { border: 0; padding: 0; margin: 32px 0; min-width: 0; }
+.payment-method-options { display: grid; gap: 12px; }
+.payment-method-options label { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); padding: 16px; cursor: pointer; }
+.payment-method-options label.selected { border-color: currentColor; background: var(--paper); }
+.payment-method-options input, .cash-confirmation input { flex: 0 0 auto; width: auto; }
+.payment-method-options span { display: grid; gap: 5px; min-width: 0; }
+.payment-method-options small, .meal-cash-operations > p, .cash-payment-pending small { color: var(--ink-soft); line-height: 1.7; }
+.meal-payment-method { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.meal-cash-operations { padding: 20px; border: 1px solid var(--line); border-top: 0; }
+.cash-confirmation { display: flex; align-items: flex-start; gap: 10px; margin: 14px 0; line-height: 1.6; }
+.cash-confirmation input { margin-top: 5px; }
+.meal-cash-orders { display: grid; gap: 16px; padding-top: 20px; }
+.cash-order-card { padding-top: 16px; border-top: 1px solid var(--line); min-width: 0; }
+.cash-order-card > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+.admin-cash-payment { margin: 14px 0; min-width: 0; }
+.admin-cash-payment form { display: grid; gap: 12px; padding: 18px; border: 1px solid var(--line); }
+.admin-cash-payment p { line-height: 1.7; }
+.admin-cash-payment .field input { min-width: 0; width: 100%; }
+
 .meal-offer-page .meal-offer-hero {
   display: block;
   min-height: 0;
@@ -8517,3 +8536,5 @@ html[data-text-size="large"] { font-size: 20px; }
   .admin-social-tabs > .tab-list, .admin-meals-workspace > .admin-social-tabs > .tab-list { flex-wrap: nowrap; overflow-x: auto; }
   .admin-social-tabs > .tab-list button { white-space: nowrap; flex: 0 0 auto; }
 }
+
+.meal-kitchen-note { white-space: pre-wrap; overflow-wrap: anywhere; }

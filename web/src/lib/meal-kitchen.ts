@@ -2,6 +2,7 @@ export interface KitchenOrder {
   id: string;
   order_number: string;
   customer_name: string;
+  kitchen_note?: string | null;
   meal_event_id: string;
   event_title: string;
   meal_period?: string | null;

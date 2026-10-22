@@ -57,6 +57,7 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
     await page.goto(`${base}${channel === 'regular' ? '/checkout' : channel === 'meal' ? '/meals/line-meal?pickup_at=2030-01-03T11%3A00' : '/groups/line-group'}`);
     if (channel === 'meal') await page.getByRole('button', { name: '增加隔離便當', exact: true }).click();
     const email = page.getByRole('textbox', { name: '發票通知 Email', exact: true });
+    if (channel === 'meal' && await page.getByRole('button', { name: '修改發票設定', exact: true }).count()) await page.getByRole('button', { name: '修改發票設定', exact: true }).click();
     const pay = page.getByRole('button', { name: /^(前往線上付款|預訂並前往線上付款|參加並前往付款)$/ });
     await email.waitFor();
     if (saved) await page.waitForFunction(() => document.querySelector('input[type=email]')?.value === 'saved@example.com');

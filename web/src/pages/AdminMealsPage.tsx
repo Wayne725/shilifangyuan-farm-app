@@ -4,6 +4,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
+import { AdminCashPayment } from "../components/AdminCashPayment";
 import { AdminNav } from "../components/AdminNav";
 import { AdminMealCancellations } from "../components/AdminMealCancellations";
 import { AdminMealOrderSearch } from "../components/AdminMealOrderSearch";
@@ -20,6 +21,7 @@ import type { Meal, MealEvent, MealOrder } from "../lib/types";
 
 interface EventDraft {
   title: string;
+  allow_cash_payment?: boolean;
   location: string;
   ordering_starts_at: string;
   ordering_ends_at: string;
@@ -141,8 +143,17 @@ function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal
     {action.isError && <p className="form-error">{action.error.message}</p>}
     <div className="form-actions"><button className="button button-quiet" type="button" disabled={event.can_edit !== true || action.isPending} onClick={() => setEditing(!editing)}>{editing ? "收起場次編輯" : "手動編輯場次"}</button>{event.can_edit !== true && <span className="field-help">已有訂單或場次已截止，不能修改原場次。</span>}</div>
     {editing && <EventCreateForm key={event.id} meals={meals} initial={event} onCancel={() => setEditing(false)} onDone={() => { setEditing(false); onDone(); }} />}
+    <MealPaymentOptions event={event} onDone={onDone} />
     <EventPickupOrders eventId={event.id} />
   </article>;
+}
+
+function MealPaymentOptions({ event, onDone }: { event: MealEvent; onDone: () => void }) {
+  const update = useMutation({
+    mutationFn: (allow: boolean) => apiFetch(`/v1/admin/meal-events/${event.id}/payment-options`, { method: "PATCH", body: JSON.stringify({ allow_cash_payment: allow }) }),
+    onSuccess: onDone,
+  });
+  return <div className="meal-payment-options"><label className="check-field"><input type="checkbox" checked={Boolean(event.allow_cash_payment)} disabled={update.isPending || ["cancelled", "completed"].includes(event.status)} onChange={input => update.mutate(input.target.checked)} />開放合作社現場付款</label>{update.isError && <p className="form-error" role="alert">{update.error.message}</p>}</div>;
 }
 
 function EventPickupOrders({ eventId }: { eventId: string }) {
@@ -161,6 +172,8 @@ function EventPickupOrders({ eventId }: { eventId: string }) {
       {orders.data?.length === 0 && <p>本場目前沒有訂單。</p>}
       <div className="admin-review-list">{orders.data?.map((order) => <article className="admin-record-card" key={order.id}>
         <h4 className="order-number">{order.order_number}</h4>
+        <p>付款方式：{order.payment_method === "cash_on_pickup" ? "合作社現場付款" : "線上付款"}</p>
+        <AdminCashPayment order={order} onDone={() => { void orders.refetch(); }} />
         {order.cancellation_request && <p className="meal-cancellation-reason"><strong>{order.cancellation_request.status === "pending" ? "退單待審，訂單尚未取消" : order.cancellation_request.status === "approved" ? "退單已核准" : "退單未核准"}</strong>：{order.cancellation_request.reason}</p>}
         <p>預計取餐：{order.pickup_at ? formatMealDateTime(order.pickup_at) : "未指定，依場次供餐時段"}</p>
         <p>{order.items.map((item) => `${item.meal_name} × ${item.quantity}`).join("、")}</p>
@@ -194,7 +207,7 @@ function eventDraft(event: MealEvent): EventDraft {
 
 function shiftEvent(event: MealEvent): EventDraft {
   const shift = (value: string) => localInput(new Date(value).getTime() + 86400000);
-  return { title: `${event.title}（隔日）`, location: event.location, ordering_starts_at: shift(event.ordering_starts_at), ordering_ends_at: shift(event.ordering_ends_at), pickup_starts_at: shift(event.pickup_starts_at), pickup_ends_at: shift(event.pickup_ends_at), offerings: event.offerings.map((item) => ({ meal_id: item.meal_id, price: item.price, capacity: item.capacity, position: item.position })) };
+  return { title: `${event.title}（隔日）`, allow_cash_payment: Boolean(event.allow_cash_payment), location: event.location, ordering_starts_at: shift(event.ordering_starts_at), ordering_ends_at: shift(event.ordering_ends_at), pickup_starts_at: shift(event.pickup_starts_at), pickup_ends_at: shift(event.pickup_ends_at), offerings: event.offerings.map((item) => ({ meal_id: item.meal_id, price: item.price, capacity: item.capacity, position: item.position })) };
 }
 
 function eventPayload(draft: EventDraft) {

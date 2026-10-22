@@ -42,7 +42,36 @@ def normalize_email(value: str) -> str:
 
 
 def normalize_phone(value: str) -> str:
-    return re.sub(r"\D", "", unicodedata.normalize("NFKC", value))
+    digits = re.sub(r"\D", "", unicodedata.normalize("NFKC", value))
+    return f"0{digits[3:]}" if digits.startswith("886") else digits
+
+
+async def verified_roster_contact(
+    session: AsyncSession,
+    cipher: VersionedPIICipher,
+    *,
+    phone: str,
+    email: str,
+) -> MemberRosterEntry:
+    matches = []
+    entries = await session.scalars(
+        select(MemberRosterEntry).where(MemberRosterEntry.is_active.is_(True))
+    )
+    for entry in entries:
+        aad = roster_aad(entry.id)
+        if (
+            _secure_equal(normalize_email(cipher.decrypt_text(entry.email_encrypted, associated_data=aad)), normalize_email(email))
+            and _secure_equal(normalize_phone(cipher.decrypt_text(entry.phone_encrypted, associated_data=aad)), normalize_phone(phone))
+        ):
+            matches.append(entry)
+    if len(matches) != 1:
+        raise MemberClaimError("mismatch")
+    entry = matches[0]
+    return await verified_roster_entry(
+        session, cipher, member_number=entry.member_number,
+        legal_name=cipher.decrypt_text(entry.legal_name_encrypted, associated_data=roster_aad(entry.id)),
+        email=email, phone=phone,
+    )
 
 
 def _secure_equal(left: str, right: str) -> bool:
@@ -67,6 +96,7 @@ async def verified_roster_entry(
             == normalize_member_number(member_number)
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if entry is None or not entry.is_active:
         raise MemberClaimError("mismatch")

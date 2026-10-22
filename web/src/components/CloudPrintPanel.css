@@ -1,0 +1,13 @@
+.cloud-print-panel { margin: 24px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.cloud-print-panel summary { display: flex; justify-content: space-between; gap: 16px; padding: 20px; cursor: pointer; font-weight: 700; }
+.cloud-print-panel summary small { margin-left: 8px; font-size: .7rem; letter-spacing: .1em; }
+.cloud-print-body { padding: 0 20px 20px; }
+.cloud-print-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+.cloud-print-jobs { list-style: none; padding: 0; }
+.cloud-print-jobs li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 0; border-top: 1px solid var(--line); }
+.cloud-print-jobs li div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.cloud-print-preview { border-top: 2px solid var(--ink); padding-top: 20px; }
+.cloud-print-preview pre { max-height: 420px; overflow: auto; padding: 16px; background: white; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.cloud-print-preview form { display: grid; gap: 16px; max-width: 480px; }
+.cloud-print-ack { display: flex; gap: 8px; align-items: flex-start; }
+@media (max-width: 600px) { .cloud-print-panel summary, .cloud-print-jobs li { align-items: flex-start; flex-direction: column; } }

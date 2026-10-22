@@ -16,6 +16,7 @@ from .models import (
     MembershipType,
     Order,
     OrderKind,
+    PaymentMethod,
     PaymentStatus,
     Product,
     ProposalStatus,
@@ -332,7 +333,7 @@ def order_available_actions(
                 in {ShipmentStatus.READY_TO_CREATE, ShipmentStatus.CREATED}
             )
         )
-        if payment_ready and (
+        if payment_ready and order.payment_method in {None, PaymentMethod.ONLINE} and (
             not is_meal
             or (not meal_fulfillment_closed and meal_payment_window_open(order, current))
         ):
@@ -363,6 +364,18 @@ def order_available_actions(
     ):
         actions.append("request_cancellation")
     if viewer_is_admin:
+        event = order.__dict__.get("meal_event")
+        if (order.payment_method == PaymentMethod.CASH_ON_PICKUP
+            and order.payment_status == PaymentStatus.PENDING and not meal_fulfillment_closed
+            and event is not None and event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED, MealEventStatus.DRAFT}
+            and current < aware(event.pickup_ends_at)):
+            actions.append("confirm_cash_payment")
+        if (order.payment_method == PaymentMethod.CASH_ON_PICKUP
+            and order.payment_status == PaymentStatus.PAID and not meal_fulfillment_closed
+            and not order_fulfillment_is_irreversible(order)):
+            actions.append("mark_cash_unpaid")
+        if order.payment_method == PaymentMethod.CASH_ON_PICKUP and order.payment_status == PaymentStatus.REFUND_PENDING:
+            actions.append("confirm_cash_refund")
         if (
             order.payment_status == PaymentStatus.PAID
             and not order_fulfillment_is_irreversible(order)

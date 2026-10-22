@@ -10,12 +10,12 @@
 4. 非社員略過社員表單，選 LINE 或 Email 建帳。自選身分不授予會籍。
 5. 已有網站帳號，直接登入後由帳號中心連結 LINE，沿用原訂單及資格。
 
-LINE 圖文選單目前依使用者要求暫緩設定；網站已備妥的兩個入口：
+2026-10-22 已在 LINE 官方帳號「十里方圓(測試版)」儲存雙入口圖文選單：
 
-- 既有社員：`https://shilifangyuan.com/register?intent=existing_member`
-- 非社員：`https://shilifangyuan.com/register?intent=nonmember`
+- 左側社員登入：`https://shilifangyuan.com/register?intent=existing_member&return_to=%2Fshop&remember_me=true`
+- 右側非社員登入：`https://shilifangyuan.com/register?intent=nonmember&return_to=%2Fshop&remember_me=true`
 
-登入中的使用者會前往帳號中心；不會重複建立帳號。LINE 官方帳號選單發布狀態須另行確認，網站路由就緒不等於 LINE 選單已更新。
+已登入者不會重複建立帳號。兩個網址已以未登入視窗核對，並在官方後台「目前顯示的選單」確認儲存。社員電話／Email 新版仍待網站部署；目前正式表單維持上列姓名／社員編號／Email。
 
 ## 平台與接單
 

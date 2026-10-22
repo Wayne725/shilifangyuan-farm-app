@@ -8,7 +8,7 @@ from typing import Literal
 from urllib.parse import urlsplit, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, TypeAdapter, field_validator
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,7 @@ from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationConfigurationError, IntegrationError
 from ..integrations.line_login import LineLoginClient, LineProfile
 from ..models import ExternalIdentity, LineOAuthState, User, Membership, MembershipStatus
-from ..member_claims import MemberClaimError, verified_roster_entry, reserve_roster_claim
+from ..member_claims import MemberClaimError, verified_roster_entry, verified_roster_contact, reserve_roster_claim
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..schemas import ExistingMemberIdentity
 from ..rate_limit import LOGIN_RULE, client_key, enforce
@@ -35,13 +35,35 @@ COOKIE_PATH = "/v1/auth/line"
 LINE_DATA_CONSENT_VERSION = "line-data-v1"
 
 
+class LineMemberContact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phone: str = Field(min_length=8, max_length=24)
+    email: EmailStr
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        from ..member_claims import normalize_phone
+        if not 8 <= len(normalize_phone(value)) <= 15:
+            raise ValueError("電話號碼格式不正確")
+        return value.strip()
+
+
+LineMemberClaim = LineMemberContact | ExistingMemberIdentity
+
+
+async def _verify_member_claim(session, cipher, claim: LineMemberClaim):
+    verifier = verified_roster_contact if isinstance(claim, LineMemberContact) else verified_roster_entry
+    return await verifier(session, cipher, **claim.model_dump(mode="json"))
+
+
 class LineStart(BaseModel):
     intent: Literal["member", "nonmember"] = "nonmember"
     remember_me: bool = True
     return_to: str = Field(default="/shop", max_length=500)
     mode: Literal["login", "link"] = "login"
     data_consent_version: Literal["line-data-v1"]
-    member_claim: ExistingMemberIdentity | None = None
+    member_claim: LineMemberClaim | None = None
 
 
 class LineCallback(BaseModel):
@@ -144,10 +166,10 @@ async def line_start(body: LineStart, request: Request, response: Response,
             raise HTTPException(status_code=422, detail="社員資料只適用於既有社員註冊")
         try:
             cipher = pii_cipher_from_settings(settings)
-            await verified_roster_entry(session, cipher, **body.member_claim.model_dump(mode="json"))
+            await _verify_member_claim(session, cipher, body.member_claim)
             record.member_claim_encrypted = cipher.encrypt_text(body.member_claim.model_dump_json(), associated_data=f"line-member-claim:{record.state_hash}")
         except MemberClaimError as exc:
-            raise HTTPException(status_code=409, detail="社員資料無法核對或已認領，請確認姓名、社員編號與 Email，已有帳號請直接登入") from exc
+            raise HTTPException(status_code=409, detail="社員資料無法核對或已認領，請確認電話號碼與 Email，已有帳號請直接登入") from exc
         except IntegrationError as exc:
             raise HTTPException(status_code=503, detail="社員名冊驗證服務尚未完成設定") from exc
     session.add(record)
@@ -178,7 +200,7 @@ async def _prepare_member_registration(account: User, record: LineOAuthState, se
         return
     try:
         cipher = pii_cipher_from_settings(settings)
-        claim = ExistingMemberIdentity.model_validate_json(cipher.decrypt_text(record.member_claim_encrypted, associated_data=f"line-member-claim:{record.state_hash}"))
+        claim = TypeAdapter(LineMemberClaim).validate_json(cipher.decrypt_text(record.member_claim_encrypted, associated_data=f"line-member-claim:{record.state_hash}"))
         email = str(claim.email).lower()
         if account.email and account.email != email:
             raise HTTPException(status_code=409, detail="LINE 已連結不同信箱的帳號，請登入原帳號核對社員資格")
@@ -188,7 +210,7 @@ async def _prepare_member_registration(account: User, record: LineOAuthState, se
         membership = await session.scalar(select(Membership).where(Membership.user_id == account.id))
         if membership is not None:
             raise HTTPException(status_code=409, detail="此帳號已有會籍紀錄，請由管理員核對原會籍")
-        entry = await verified_roster_entry(session, cipher, **claim.model_dump(mode="json"))
+        entry = await _verify_member_claim(session, cipher, claim)
         account.email = email
         account.pending_member_claim = True
         await reserve_roster_claim(session, entry, account, datetime.now(timezone.utc) + timedelta(minutes=10))
@@ -289,6 +311,7 @@ async def line_callback(body: LineCallback, request: Request, response: Response
             if account is None or not account.is_active:
                 raise HTTPException(status_code=403, detail="此帳號已停用，請洽管理員")
             identity.last_login_at = now
+            account.display_name = profile.display_name
             identity.data_consent_version = record.data_consent_version
             identity.data_consented_at = record.data_consented_at
             if record.member_claim_encrypted:

@@ -127,6 +127,8 @@ export interface AdminInvoiceQueryResult {
   message: string;
 }
 
+export type PaymentMethod = "online" | "cash_on_pickup" | "cash_on_delivery";
+
 export interface Order {
   cancellation_request?: MealCancellationRequest | null;
   id: string;
@@ -148,6 +150,7 @@ export interface Order {
   invoice_carrier_type: "ecpay" | "cloud" | "mobile_barcode";
   fulfillment_status: string;
   payment_status: string;
+  payment_method?: PaymentMethod;
   invoice_status: InvoiceStatus;
   paid_at?: string | null;
   cancelled_at?: string | null;
@@ -465,6 +468,7 @@ export interface MealEvent {
   ordering_starts_at: string;
   ordering_ends_at: string;
   status: string;
+  allow_cash_payment?: boolean;
   offerings: Array<{
     id: string;
     meal_id: string;
@@ -567,6 +571,8 @@ export interface MealAdminOrderPage {
 }
 
 export interface MealOrder {
+  kitchen_note?: string | null;
+  onsite_payment?: { method: string; reference: string; paid_at: string } | null;
   promotion?: {name: string; discount: number; original_amount: number} | null;
   id: string;
   order_number: string;
@@ -581,6 +587,7 @@ export interface MealOrder {
   pickup_code?: string | null;
   pickup_qr_payload?: string | null;
   payment_status: string;
+  payment_method?: PaymentMethod;
   invoice_status: string;
   invoice_number?: string | null;
   invoice_date?: string | null;

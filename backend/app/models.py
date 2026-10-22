@@ -165,6 +165,12 @@ class FulfillmentMethod(str, enum.Enum):
     ECPAY_LOGISTICS = "ecpay_logistics"
 
 
+class PaymentMethod(str, enum.Enum):
+    ONLINE = "online"
+    CASH_ON_PICKUP = "cash_on_pickup"
+    CASH_ON_DELIVERY = "cash_on_delivery"
+
+
 class PaymentStatus(str, enum.Enum):
     PENDING = "pending"
     PAID = "paid"
@@ -290,6 +296,7 @@ class MealEventStatus(str, enum.Enum):
 
 
 class InvoiceStatus(str, enum.Enum):
+    EXTERNAL = "external"
     NOT_ELIGIBLE = "not_eligible"
     PENDING = "pending"
     ISSUED = "issued"
@@ -1631,6 +1638,7 @@ class MealEvent(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(160))
+    allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     location: Mapped[str] = mapped_column(String(240))
     schedule_template_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("meal_schedule_templates.id", ondelete="RESTRICT"), nullable=True, index=True
@@ -1752,13 +1760,49 @@ class Promotion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class PrintJob(Base):
+    __tablename__ = "print_jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','sending','submitted','printed','failed','unknown','simulated')", name="valid_status"),
+        CheckConstraint("mode IN ('dry_run','live')", name="valid_mode"),
+        CheckConstraint("kind IN ('order','cancellation')", name="valid_kind"),
+        Index("ix_print_jobs_due", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    event_key: Mapped[str] = mapped_column(String(120), unique=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), index=True)
+    reprint_of_id: Mapped[Optional[str]] = mapped_column(ForeignKey("print_jobs.id", ondelete="RESTRICT"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    mode: Mapped[str] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    printer_fingerprint: Mapped[str] = mapped_column(String(64))
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    vendor_order_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(String(240), nullable=True)
+    last_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    lease_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_token: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
         CheckConstraint("amount_total >= 0", name="amount_total_nonnegative"),
+        UniqueConstraint("user_id", "client_request_id", name="uq_orders_user_client_request"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    client_request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    kitchen_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     order_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     order_kind: Mapped[OrderKind] = mapped_column(
         enum_type(OrderKind, "order_kind"),
@@ -1827,6 +1871,12 @@ class Order(Base):
         default=FulfillmentStatus.PENDING_CONFIRMATION,
         index=True,
         comment="Legacy compatibility cache; OrderFulfillment.status is authoritative.",
+    )
+    payment_method: Mapped[PaymentMethod] = mapped_column(
+        enum_type(PaymentMethod, "payment_method"),
+        default=PaymentMethod.ONLINE,
+        server_default="online",
+        index=True,
     )
     payment_status: Mapped[PaymentStatus] = mapped_column(
         enum_type(PaymentStatus, "payment_status"),

@@ -64,3 +64,35 @@
 - 測試僅使用隔離回應與本機資料庫，不為驗收建立真實付款或發票。
 
 相關：[便當管理員手冊](MEAL_ADMIN_MANUAL.md)、[需求狀態](MEAL_REQUIREMENTS_STATUS.md)。
+
+
+## 2026-10-21 社員入口變更（本機，尚未部署）
+
+選 LINE →「我是社員」後，沿用 `/register?intent=existing_member`，只輸入電話號碼與名冊 Email，不需姓名、社員編號或另一組密碼。顯示名稱使用 LINE profile 的名稱；名冊法定姓名與社員編號不因顯示名稱而變更。
+
+後端解密核對既有社員名冊，電話會去除空白與分隔符號，支援臺灣 `+886` 與本地格式對應。必須唯一匹配有效、未被認領的名冊紀錄；有歧義時拒絕。LINE 授權返回時再核對一次，並保留原信箱六位數驗證碼完成後才啟用正式社員資格。選擇社員意向、LINE 驗證、名冊比對與 Email 持有驗證仍為不同事實。
+
+既有 LINE 連結帳號登入時更新網站顯示名稱；既有訂單及會籍沿用原帳號。舊三欄 LINE API 請求仍可辨識，以兼容短期舊頁面及既有授權狀態；新版頁面僅傳 `phone` 與 `email`。
+
+查核依據：[LINE 登入安全流程](https://developers.line.biz/en/docs/line-login/secure-login-process/)及[ID token 驗證](https://developers.line.biz/en/reference/line-login/#verify-id-token)。本次沿用既有 state、PKCE、nonce、HttpOnly cookie 與一次性 callback，不另建登入協定。
+
+## 2026-10-22 官方帳號圖文選單連結已儲存
+
+已登入 LINE Official Account Manager，在「十里方圓(測試版)」`@939gjjuy` 編輯既有圖文選單 `20138677`，儲存後回到「目前顯示的選單」，確認兩個網址皆已更新：
+
+- A／左側「社員登入」：`https://shilifangyuan.com/register?intent=existing_member&return_to=%2Fshop&remember_me=true`
+- B／右側「非社員登入」：`https://shilifangyuan.com/register?intent=nonmember&return_to=%2Fshop&remember_me=true`
+
+後台管理標題改為「社員／非社員登入」，動作標籤與圖片上的兩個入口一致。沿用原圖片、雙區版型、選單列「選單」、預設顯示及 2026/09/04 00:00–2026/12/31 23:59 使用期間。修改前兩個動作實際皆為舊 Render `/shop`，本次依後台實際狀態修正，沒有建立新選單或發送群發訊息。
+
+以 Safari 私密視窗核對兩個正式網址：社員可開啟社員資料頁；非社員直接進入註冊方式選擇並可前進 LINE 資料同意頁，沒有提交身分資料或真正開始 LINE 授權。正式社員表單目前仍為姓名／社員編號／Email；上述 2026-10-21 電話／Email 新版仍未部署，圖文選單更新不等於網站程式部署。
+
+儲存證據：`/Users/liuweiwei/.codex/visualizations/2026/10/21/01a15e97-6c04-7be3-9d92-b836ffce1c8b/line-richmenu-member-entries.png`。
+
+### 同日改用純文字圖片
+
+依使用者要求，將同一選單圖片換成米色底、深綠字，左側「社員登入」、右側「非社員登入」，保留上述兩個連結與生效設定。已上傳並儲存，後台「目前顯示的選單」確認新圖生效。
+
+- 上傳檔：[純文字 PNG](design/line-richmenu-text-only.png)，2500 × 843 px，使用 Heiti TC 字型排版。
+- 可編輯來源：[SVG](design/line-richmenu-text-only.svg)。
+- 儲存證據：`/Users/liuweiwei/.codex/visualizations/2026/10/21/01a15e97-6c04-7be3-9d92-b836ffce1c8b/line-richmenu-text-only-saved.png`。

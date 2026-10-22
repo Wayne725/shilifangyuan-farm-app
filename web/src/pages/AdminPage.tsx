@@ -9,6 +9,7 @@ import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
+import { AdminCashPayment } from "../components/AdminCashPayment";
 import { AdminNav } from "../components/AdminNav";
 import { AdminOperationsNav } from "../components/AdminOperationsNav";
 import { AdminOrderCancellationReview } from "../components/AdminOrderCancellationReview";
@@ -145,7 +146,8 @@ export function AdminPage() {
           />
           <AdminOrderCancellationReview order={order} />
           <AdminInvoiceAdjustment order={order} />
-          <AdminStatusQuery orderId={order.id} kind="payment" disabled={refundOrder.isPending} />
+          <AdminCashPayment order={order} />
+          {(!order.payment_method || order.payment_method === "online") && <AdminStatusQuery orderId={order.id} kind="payment" disabled={refundOrder.isPending} />}
           {refundOrder.variables?.orderId === order.id && refundOrder.isSuccess && <p className="form-success" role="status">退款狀態：{adminPaymentStatusLabel(refundOrder.data.payment_status)}</p>}
           {refundOrder.variables?.orderId === order.id && refundOrder.isError && <p className="form-error" role="alert">{refundOrder.error.message}</p>}
         </article>

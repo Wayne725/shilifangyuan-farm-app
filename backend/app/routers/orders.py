@@ -44,6 +44,7 @@ from ..models import (
     GroupCampaign,
     GroupDecisionStatus,
     InventoryReservation,
+    MealEvent,
     InvoiceBuyerType,
     MealEventOffering,
     MealCancellationRequest,
@@ -54,6 +55,7 @@ from ..models import (
     OrderKind,
     OutboxEvent,
     PaymentStatus,
+    PaymentMethod,
     PickupLocation,
     Product,
     ReservationStatus,
@@ -64,6 +66,7 @@ from ..models import (
 )
 from ..schemas import (
     CancelRequest,
+    CashConfirmationRequest,
     MealCancellationReview,
     MealCancellationRequestRead,
     FulfillmentUpdate,
@@ -116,8 +119,9 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         invoice_carrier_type=order.invoice_carrier_type,
         fulfillment_status=order.fulfillment_status,
         payment_status=order.payment_status,
+        payment_method=order.payment_method,
         invoice_status=order.invoice_status,
-        paid_at=order.paid_at,
+        paid_at=aware(order.paid_at) if order.paid_at is not None else None,
         cancelled_at=order.cancelled_at,
         created_at=order.created_at,
         available_actions=actions,
@@ -196,7 +200,7 @@ async def quote_products(
 
 
 async def load_order(
-    session: AsyncSession, order_id: str, lock: bool = False
+    session: AsyncSession, order_id: str, lock: bool = False, refresh: bool = False
 ) -> Order:
     query = (
         select(Order)
@@ -215,6 +219,8 @@ async def load_order(
     )
     if lock:
         query = query.with_for_update().execution_options(populate_existing=True)
+    if refresh:
+        query = query.execution_options(populate_existing=True)
     order = await session.scalar(query)
     if order is None:
         raise HTTPException(status_code=404, detail="找不到訂單")
@@ -255,6 +261,8 @@ async def create_order(
     ):
         require_sales_scope_allows(settings)
     await require_accepting_orders(session)
+    if body.payment_method != PaymentMethod.ONLINE:
+        raise HTTPException(status_code=422, detail="一般商品貨到付款尚未啟用，現場付款目前僅限便當")
     if body.fulfillment_method not in {
         FulfillmentMethod.COOPERATIVE_PICKUP,
         FulfillmentMethod.ECPAY_LOGISTICS,
@@ -282,6 +290,7 @@ async def create_order(
     order = Order(
         order_number=make_order_number(),
         order_kind=OrderKind.REGULAR,
+        payment_method=body.payment_method,
         invoice_provider_context=invoice_context_from_settings(settings),
         sales_channel=SalesChannel.REGULAR,
         fulfillment_method=body.fulfillment_method,
@@ -386,7 +395,7 @@ async def release_active_reservations(
     session: AsyncSession, order: Order
 ) -> None:
     now = datetime.now(timezone.utc)
-    for reservation in order.reservations:
+    for reservation in sorted(order.reservations, key=lambda row: row.source_meal_offering_id or row.source_product_id or row.group_campaign_id or ""):
         if reservation.status != ReservationStatus.ACTIVE:
             continue
         reservation.status = ReservationStatus.RELEASED
@@ -458,11 +467,11 @@ async def request_order_refund(
     except PaymentApplicationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     group_release_quantity = 0
-    for reservation in order.reservations:
+    for reservation in sorted(order.reservations, key=lambda row: row.source_meal_offering_id or row.source_product_id or row.group_campaign_id or ""):
         if reservation.status == ReservationStatus.ACTIVE:
             await release_active_reservations(session, order)
             break
-    for reservation in order.reservations:
+    for reservation in sorted(order.reservations, key=lambda row: row.source_meal_offering_id or row.source_product_id or row.group_campaign_id or ""):
         if reservation.status != ReservationStatus.CONSUMED:
             continue
         if (
@@ -621,6 +630,61 @@ async def refund_order(
             reason=body.reason,
         )
     )
+    await session.commit()
+    return order_read(order, True)
+
+
+@orders_router.post("/{order_id}/admin/cash-payment", response_model=OrderRead)
+async def receive_cash_payment(
+    order_id: str, body: CashConfirmationRequest,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> OrderRead:
+    from ..cash_payments import confirm_cash_payment
+    event_id = await session.scalar(select(Order.meal_event_id).where(Order.id == order_id))
+    if event_id is not None:
+        await session.scalar(select(MealEvent).where(MealEvent.id == event_id).with_for_update())
+    order = await load_order(session, order_id, lock=True, refresh=True)
+    try:
+        await confirm_cash_payment(session, order, amount=body.amount, reason=body.reason,
+            actor_id=admin.id, settings=settings, now=datetime.now(timezone.utc), collection_method=body.collection_method, reference=body.reference)
+    except PaymentApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return order_read(order, True)
+
+
+@orders_router.post("/{order_id}/admin/cash-unpaid", response_model=OrderRead)
+async def correct_cash_payment(
+    order_id: str, body: CashConfirmationRequest,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+) -> OrderRead:
+    from ..cash_payments import mark_cash_unpaid
+    event_id = await session.scalar(select(Order.meal_event_id).where(Order.id == order_id))
+    if event_id is not None:
+        await session.scalar(select(MealEvent).where(MealEvent.id == event_id).with_for_update())
+    order = await load_order(session, order_id, lock=True, refresh=True)
+    try:
+        await mark_cash_unpaid(session, order, amount=body.amount, reason=body.reason,
+            actor_id=admin.id, now=datetime.now(timezone.utc))
+    except PaymentApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return order_read(order, True)
+
+
+@orders_router.post("/{order_id}/admin/cash-refund", response_model=OrderRead)
+async def return_cash_payment(
+    order_id: str, body: CashConfirmationRequest,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+) -> OrderRead:
+    from ..cash_payments import confirm_cash_refund
+    order = await load_order(session, order_id, lock=True, refresh=True)
+    try:
+        await confirm_cash_refund(session, order, amount=body.amount, reason=body.reason,
+            actor_id=admin.id, now=datetime.now(timezone.utc))
+    except PaymentApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
     return order_read(order, True)
 

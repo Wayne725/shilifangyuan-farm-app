@@ -6,7 +6,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4193');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname) || target.pathname !== '/') throw new Error('Use isolated local LINE entry');
 const base = target.origin;
-const identity = { legal_name: '隔離社員', member_number: 'M001', email: 'member@example.test' };
+const identity = { phone: '0912345678', email: 'member@example.test' };
 const registrationConsent = '我已閱讀並同意 LINE 登入及社員資料的使用說明。';
 async function fixture(t, width, { rejected = false } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
@@ -22,7 +22,7 @@ async function fixture(t, width, { rejected = false } = {}) {
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: false } });
     if (path === '/v1/auth/line/start' && request.method() === 'POST') {
       writes.push(request.postDataJSON());
-      return route.fulfill(rejected ? { status: 409, json: { detail: '社員資料無法核對，請確認姓名、社員編號與 Email' } } : { json: { authorization_url: `${base}/isolated-authorize` } });
+      return route.fulfill(rejected ? { status: 409, json: { detail: '社員資料無法核對，請確認電話號碼與 Email' } } : { json: { authorization_url: `${base}/isolated-authorize` } });
     }
     unknown.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated route' } });
@@ -35,28 +35,31 @@ async function fixture(t, width, { rejected = false } = {}) {
 }
 async function openMemberRegistration(page) {
   await page.getByRole('link', { name: '我是社員', exact: true }).click();
-  await page.getByRole('heading', { name: '填寫社員資料', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '社員資料驗證', exact: true }).waitFor();
 }
 async function fillMemberIdentity(page) {
-  await page.getByLabel('姓名', { exact: true }).fill(identity.legal_name);
-  await page.getByLabel('社員編號', { exact: true }).fill(identity.member_number);
+  assert.equal(await page.getByLabel('姓名', { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel('社員編號', { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel('密碼', { exact: true }).count(), 0);
+  await page.getByLabel('電話號碼', { exact: true }).fill(identity.phone);
   await page.getByLabel('Email', { exact: true }).fill(identity.email);
-  await page.getByRole('button', { name: '繼續選擇註冊方式', exact: true }).click();
-  await page.getByRole('button', { name: '使用 LINE 註冊', exact: true }).click();
+  await page.getByRole('button', { name: '繼續使用 LINE', exact: true }).click();
 }
 for (const width of [1440, 390]) {
-  test(`${width}px 我是社員直接進既有社員註冊，不得略過三項資料直接LINE建帳`, async (t) => {
+  test(`${width}px 我是社員直接進既有社員註冊，只填電話與Email即可繼續LINE，不要求姓名或社員編號`, async (t) => {
     const { page, writes, unknown, errors } = await fixture(t, width);
     const member = page.getByRole('link', { name: '我是社員', exact: true });
     assert.equal(await member.count(), 1, '社員按鈕未連到既有社員註冊');
     await openMemberRegistration(page);
     assert.equal(new URL(page.url()).searchParams.get('intent'), 'existing_member');
     assert.equal(new URL(page.url()).searchParams.get('return_to'), '/checkout');
-    assert.equal(await page.getByRole('button', { name: '繼續選擇註冊方式', exact: true }).isEnabled(), false);
+    assert.equal(await page.getByRole('button', { name: '繼續使用 LINE', exact: true }).isEnabled(), false);
     assert.deepEqual(writes, []);
+    if (process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/line-member-${width}.png`, fullPage: true });
     await fillMemberIdentity(page);
     assert.equal(await page.getByRole('button', { name: '使用LINE登入', exact: true }).isEnabled(), false);
     await page.getByLabel(registrationConsent, { exact: true }).check();
+    await page.locator('summary[aria-label="文字大小"]').click();
     await page.getByRole('button', { name: '放大', exact: true }).click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     await page.getByRole('button', { name: '使用LINE登入', exact: true }).click();

@@ -75,6 +75,7 @@ async function fixture(t, width, options = {}) {
 
 function calls(state, path) { return state.calls.filter((call) => call.path === `/v1/auth/${path}`); }
 async function enlarge(page) {
+  await page.locator('.reading-menu > summary').click();
   await page.getByRole('button', { name: '放大', exact: true }).click();
   await page.waitForFunction(() => getComputedStyle(document.documentElement).fontSize === '20px');
 }
@@ -138,21 +139,19 @@ for (const width of [1440, 390]) {
     await verify(page, state);
   });
 
-  test(`${width}px 社員三項資料及保持登入傳入LINE，callback只送一次並清除授權參數`, async (t) => {
+  test(`${width}px 社員電話與Email及保持登入傳入LINE，callback只送一次並清除授權參數`, async (t) => {
     const { page, state } = await fixture(t, width);
     const dialog = await openLogin(page);
     await dialog.getByLabel('保持登入', { exact: true }).uncheck();
     await dialog.getByRole('link', { name: '使用LINE登入', exact: true }).click();
     await dialog.getByRole('link', { name: '我是社員', exact: true }).click();
-    await page.getByLabel('姓名', { exact: true }).fill('隔離社員');
-    await page.getByLabel('社員編號', { exact: true }).fill('M001');
+    await page.getByLabel('電話號碼', { exact: true }).fill('0912345678');
     await page.getByLabel('Email', { exact: true }).fill('member@example.test');
-    await page.getByRole('button', { name: '繼續選擇註冊方式', exact: true }).click();
-    await page.getByRole('button', { name: '使用 LINE 註冊', exact: true }).click();
+    await page.getByRole('button', { name: '繼續使用 LINE', exact: true }).click();
     await dialog.getByRole('checkbox').check();
     await dialog.getByRole('button', { name: /使用\s*LINE\s*登入/ }).click();
     await page.getByRole('heading', { name: /測試買家/ }).waitFor();
-    assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'member', remember_me: false, mode: 'login', member_claim: { legal_name: '隔離社員', member_number: 'M001', email: 'member@example.test' }, data_consent_version: 'line-data-v1', return_to: '/account' }]);
+    assert.deepEqual(calls(state, 'line/start').map((call) => call.body), [{ intent: 'member', remember_me: false, mode: 'login', member_claim: { phone: '0912345678', email: 'member@example.test' }, data_consent_version: 'line-data-v1', return_to: '/account' }]);
     assert.deepEqual(calls(state, 'line/callback').map((call) => call.body), [{ state: 'isolated-state', code: 'isolated-code', error: '' }]);
     assert.equal(new URL(page.url()).search, '');
     assert.equal(calls(state, 'line/pending').length, 0);

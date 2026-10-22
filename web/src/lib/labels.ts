@@ -55,6 +55,7 @@ export const fulfillmentStatusLabel = createLabeler({
 });
 
 export const invoiceStatusLabel = createLabeler({
+  external: "合作社現場開票",
   not_eligible: "尚未符合開立條件",
   pending: "等待開立",
   issued: "已開立",

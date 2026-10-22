@@ -44,6 +44,7 @@ def kitchen_order_read(order):
     pickup_at = order.fulfillment.pickup_at or order.meal_event.pickup_starts_at
     return {
         "id": order.id, "order_number": order.order_number, "customer_name": order.user.display_name,
+        "kitchen_note": order.kitchen_note,
         "meal_event_id": order.meal_event_id, "event_title": order.meal_event.title,
         "meal_period": order.meal_event.meal_period, "location": order.meal_event.location,
         "pickup_at": aware(pickup_at), "pickup_time_confirmed": order.fulfillment.pickup_at is not None,

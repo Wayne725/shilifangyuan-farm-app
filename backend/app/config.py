@@ -8,7 +8,7 @@ from typing import List, Literal
 from urllib.parse import urlparse
 from uuid import UUID
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .integrations.fanyu_endpoints import is_fanyu_api_base_url
@@ -39,6 +39,21 @@ R2_REQUIRED_SETTINGS = (
 
 
 class Settings(BaseSettings):
+    printer_enabled: bool = False
+    printer_dry_run: bool = True
+    printer_worker_enabled: bool = True
+    feie_user: SecretStr = SecretStr("")
+    feie_ukey: SecretStr = SecretStr("")
+    feie_printer_sn: SecretStr = SecretStr("")
+    feie_api_base_url: str = "https://api.jp.feieyun.com/Api/Open/"
+    feie_ukey_rotated: bool = False
+    feie_ap_endpoint_verified: bool = False
+    printer_timeout_seconds: float = Field(default=10, ge=1, le=30)
+    printer_poll_seconds: float = Field(default=2, ge=0.1, le=60)
+    printer_query_seconds: int = Field(default=15, ge=1, le=300)
+    printer_lease_seconds: int = Field(default=120, ge=60, le=600)
+    printer_max_attempts: int = Field(default=3, ge=1, le=8)
+    printer_line_width: int = Field(default=32, ge=24, le=32)
     app_name: str = "十里方圓 API"
     environment: str = Field(
         default="development",

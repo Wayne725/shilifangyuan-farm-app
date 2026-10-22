@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 import re
 from datetime import date, datetime, time, timezone
 from typing import Any, Dict, List, Literal, Optional
@@ -38,6 +40,7 @@ from .models import (
     MembershipType,
     OrderKind,
     PaymentStatus,
+    PaymentMethod,
     ProductCategory,
     ProposalStatus,
     SalesChannel,
@@ -613,6 +616,7 @@ class OrderQuoteRead(ApiModel):
 
 
 class OrderCreate(InvoicePreferenceInput):
+    payment_method: PaymentMethod = PaymentMethod.ONLINE
     items: List[OrderLineInput] = Field(min_length=1, max_length=100)
     contact_email: EmailStr
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
@@ -709,6 +713,7 @@ class InvoiceRead(ApiModel):
 
 
 class OrderRead(ApiModel):
+    payment_method: PaymentMethod = PaymentMethod.ONLINE
     id: str
     order_number: str
     order_kind: OrderKind
@@ -747,6 +752,20 @@ class CancelRequest(BaseModel):
 
 class RefundRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class CashConfirmationRequest(BaseModel):
+    collection_method: Literal["cash", "pos", "qr"] = "cash"
+    reference: str = Field(default="", max_length=100)
+    amount: int = Field(gt=0, strict=True)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("請填寫確認說明")
+        return value.strip()
 
 
 class FulfillmentUpdate(BaseModel):
@@ -1209,6 +1228,7 @@ class MealOfferingInput(BaseModel):
 
 
 class MealEventCreate(BaseModel):
+    allow_cash_payment: bool = False
     title: str = Field(min_length=1, max_length=160)
     location: str = Field(min_length=1, max_length=240)
     ordering_starts_at: datetime
@@ -1279,6 +1299,10 @@ class MealScheduleRead(MealScheduleInput, ApiModel):
     created_at: datetime
 
 
+class MealPaymentOptionsUpdate(BaseModel):
+    allow_cash_payment: bool
+
+
 class MealOfferingRead(ApiModel):
     id: str
     meal_id: str
@@ -1304,6 +1328,7 @@ class MealEventSummary(ApiModel):
 
 
 class MealEventRead(MealEventSummary):
+    allow_cash_payment: bool = False
     ordering_starts_at: datetime
     ordering_ends_at: datetime
     status: MealEventStatus
@@ -1325,6 +1350,9 @@ class MealOrderLineInput(BaseModel):
 
 
 class MealOrderCreate(InvoicePreferenceInput):
+    client_request_id: Optional[UUID] = None
+    kitchen_note: Optional[str] = Field(default=None, max_length=500)
+    payment_method: PaymentMethod = PaymentMethod.ONLINE
     coupon_code: str = Field(default="", max_length=32, pattern=r"^[A-Za-z0-9_-]*$")
     expected_total: Optional[int] = Field(default=None, ge=1)
     items: List[MealOrderLineInput] = Field(min_length=1, max_length=20)
@@ -1421,6 +1449,9 @@ class MealCancellationRequestRead(ApiModel):
 
 
 class MealOrderRead(ApiModel):
+    kitchen_note: Optional[str] = None
+    onsite_payment: Optional[dict] = None
+    payment_method: PaymentMethod = PaymentMethod.ONLINE
     promotion: Optional[dict] = None
     id: str
     order_number: str

@@ -297,9 +297,12 @@ export async function beginGroupCheckout(
 
 export type MealCheckoutOutcome =
   | { kind: "redirect"; orderId: string; url: string }
+  | { kind: "reserved"; orderId: string }
   | { kind: "resume"; orderId: string; message: string };
 
 export async function beginMealCheckout(input: {
+  clientRequestId?: string;
+  kitchenNote?: string;
   couponCode?: string;
   expectedTotal?: number;
   eventId: string;
@@ -311,21 +314,32 @@ export async function beginMealCheckout(input: {
   }>;
   contactEmail: string;
   invoicePreference: InvoicePreference;
+  paymentMethod?: "online" | "cash_on_pickup";
 }): Promise<MealCheckoutOutcome> {
-  const order = await apiFetch<{ id: string }>(
+  const paymentMethod = input.paymentMethod || "online";
+  const order = await apiFetch<{ id: string; payment_method?: string }>(
     `/v1/meal-events/${input.eventId}/orders`,
     {
       method: "POST",
       body: JSON.stringify({
+        ...(input.clientRequestId ? {client_request_id: input.clientRequestId} : {}),
+        ...(input.kitchenNote ? {kitchen_note: input.kitchenNote} : {}),
         items: input.items,
         ...(input.couponCode ? {coupon_code: input.couponCode} : {}),
         ...(input.expectedTotal !== undefined ? {expected_total: input.expectedTotal} : {}),
         pickup_at: input.pickupAt,
         contact_email: input.contactEmail,
-        ...invoicePreferencePayload(input.invoicePreference),
+        payment_method: paymentMethod,
+        ...(paymentMethod === "online" ? invoicePreferencePayload(input.invoicePreference) : {}),
       }),
     },
   );
+  if (paymentMethod === "cash_on_pickup") {
+    if (order.payment_method !== "cash_on_pickup") {
+      return { kind: "resume", orderId: order.id, message: "現場付款預訂尚未確認，請聯絡合作社核對，勿重複下單。" };
+    }
+    return { kind: "reserved", orderId: order.id };
+  }
   try {
     const payment = await httpCommerceGateway.createPaymentAttempt(order.id);
     return { kind: "redirect", orderId: order.id, url: payment.payment_url };

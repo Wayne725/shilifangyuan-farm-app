@@ -25,6 +25,8 @@ from .jobs import (
 from .routers import ALL_ROUTERS
 from .routers.meal_finance import meal_finance_router
 from .routers.meal_kitchen import meal_kitchen_router
+from .routers.printers import printers_router
+from .printer_worker import periodic_printing
 from .seed import seed_demo_data
 
 
@@ -44,7 +46,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if settings.environment.strip().lower() in {"development", "test"}:
         async with SessionLocal() as session:
             await seed_demo_data(session)
-    async with periodic_reconciliation(settings):
+    async with periodic_reconciliation(settings), periodic_printing(settings):
         yield
 
 
@@ -97,6 +99,7 @@ def create_app() -> FastAPI:
         application.include_router(router)
     application.include_router(meal_finance_router)
     application.include_router(meal_kitchen_router)
+    application.include_router(printers_router)
     application.include_router(jobs_router)
 
     @application.middleware("http")

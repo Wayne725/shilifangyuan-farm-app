@@ -17,7 +17,7 @@ type LineLoginProps = {
   returnTo?: string;
   consentText?: string;
   consentLink?: boolean;
-  memberClaim?: { member_number: string; legal_name: string; email: string };
+  memberClaim?: { phone: string; email: string };
 };
 
 export function LineLoginButton({ intent = "nonmember", rememberMe = true, mode = "login", returnTo, memberClaim,

@@ -21,6 +21,7 @@ from ..models import (
     OrderFulfillment,
     OutboxEvent,
     PaymentStatus,
+    PaymentMethod,
     Refund,
     TaxType,
 )
@@ -144,6 +145,9 @@ def enqueue_invoice_issue(
     *,
     trigger: str,
 ) -> bool:
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+        order.invoice_status = InvoiceStatus.EXTERNAL
+        return False
     if order.payment_status != PaymentStatus.PAID:
         return False
     if order.invoice_status in {
@@ -170,6 +174,8 @@ def enqueue_invoice_adjustment_after_refund(
     order: Order,
     refund: Refund,
 ) -> bool:
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+        return False
     invoice = order.__dict__.get("invoice")
     if invoice is None or invoice.status not in {
         InvoiceStatus.PENDING,
@@ -510,6 +516,8 @@ async def issue_paid_order_invoice(
     )
     if order is None:
         raise InvoiceApplicationError("找不到發票訂單")
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+        raise InvoiceApplicationError("現場付款發票由合作社 POS 處理")
     if order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以開立發票")
 
@@ -555,6 +563,8 @@ async def issue_paid_order_invoice(
     )
     if order is None or order.invoice is None:
         raise InvoiceApplicationError("找不到發票開立意圖")
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+        raise InvoiceApplicationError("現場付款發票由合作社 POS 處理")
     if order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以開立發票")
     _ensure_provider_binding(order, adapter)

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="843" viewBox="0 0 2500 843">
+  <rect width="2500" height="843" fill="#F5F1E8"/>
+  <path d="M1250 180V663" stroke="#CECFC1" stroke-width="3"/>
+  <g fill="#254334" font-family="Heiti TC, PingFang TC, sans-serif" font-size="160" font-weight="500" text-anchor="middle" dominant-baseline="central">
+    <text x="625" y="421.5">社員登入</text>
+    <text x="1875" y="421.5">非社員登入</text>
+  </g>
+</svg>

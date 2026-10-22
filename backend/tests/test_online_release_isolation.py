@@ -91,18 +91,19 @@ def test_online_product_exception_rejects_skus_longer_than_eighty_characters():
 def test_core_release_keeps_one_linear_migration_head():
     backend = Path(__file__).resolve().parents[1]
     migrations = ScriptDirectory(str(backend / "alembic"))
-    assert migrations.get_heads() == ["0028_financial_statements"]
+    assert migrations.get_heads() == ["0030_feie_print_jobs"]
+    assert migrations.get_revision("0030_feie_print_jobs").down_revision == "0029_onsite_payments"
     assert migrations.get_revision("0024_line_data_consent").down_revision == "0023_meal_option_images"
     assert migrations.get_revision("0022_line_customer_email").down_revision == "0021_line_login"
     assert migrations.get_revision("0021_line_login").down_revision == "0020_meal_booking_deadline"
 
 
-def test_online_release_models_do_not_add_cash_payment_fields():
-    assert "payment_method" not in Order.__table__.columns
-    assert "allow_cash_payment" not in MealEvent.__table__.columns
+def test_onsite_release_defaults_keep_existing_orders_online_and_events_opt_in():
+    assert Order.__table__.columns.payment_method.server_default.arg == "online"
+    assert MealEvent.__table__.columns.allow_cash_payment.default.arg is False
 
 
-def test_online_release_public_api_excludes_cash_routes_and_schemas():
+def test_onsite_release_exposes_admin_collection_and_preserves_online_payment_api():
     application = FastAPI()
     for router in ALL_ROUTERS:
         application.include_router(router)
@@ -110,12 +111,11 @@ def test_online_release_public_api_excludes_cash_routes_and_schemas():
     paths = schema["paths"]
     assert "/v1/meal-events" in paths
     assert "/v1/orders/{order_id}/payment-attempts" in paths
-    assert not [path for path in paths if "cash" in path.lower() or "payment-options" in path]
+    for operation in ("cash-payment", "cash-unpaid", "cash-refund"):
+        assert f"/v1/orders/{{order_id}}/admin/{operation}" in paths
+    assert "/v1/admin/meal-events/{event_id}/payment-options" in paths
     models = schema["components"]["schemas"]
-    assert "MealOrderRead" in models
-    assert "PaymentMethod" not in models
-    assert not [name for name in models if "cash" in name.lower()]
-    for name in ("MealOrderCreate", "MealOrderRead", "MealEventCreate", "MealEventRead", "OrderRead"):
-        properties = models[name].get("properties", {})
-        assert "payment_method" not in properties, name
-        assert "allow_cash_payment" not in properties, name
+    for name in ("MealOrderCreate", "MealOrderRead", "OrderRead"):
+        assert "payment_method" in models[name]["properties"]
+    for name in ("MealEventCreate", "MealEventRead"):
+        assert models[name]["properties"]["allow_cash_payment"]["default"] is False

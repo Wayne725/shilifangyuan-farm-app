@@ -106,6 +106,18 @@ services:
         sync: false
       - key: EMAIL_FROM_NAME
         value: 十里方圓
+      - key: PRINTER_ENABLED
+        value: "false"
+      - key: PRINTER_DRY_RUN
+        value: "true"
+      - key: PRINTER_WORKER_ENABLED
+        value: "true"
+      - key: FEIE_API_BASE_URL
+        value: https://api.jp.feieyun.com/Api/Open/
+      - key: FEIE_UKEY_ROTATED
+        value: "false"
+      - key: FEIE_AP_ENDPOINT_VERIFIED
+        value: "false"
 
   - type: web
     name: shilifangyuan-web

@@ -1,4 +1,4 @@
-import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, QrCode, Receipt, X } from "@phosphor-icons/react";
+import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, Money, QrCode, Receipt, X } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
@@ -67,6 +67,7 @@ export function MealOrdersPage() {
         <div><Clock size={20} /><span>預計取餐時間（台灣時間）</span><strong>{selected.pickup_at ? formatMealDateTime(selected.pickup_at) : "舊訂單未指定時間，請於供餐時段內取餐"}</strong></div>
       </div>
       <section className="meal-order-lines" aria-label="訂單餐點明細"><h3>餐點明細</h3><div className="order-lines">{selected.items.map((item, index) => <div key={item.offering_id}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.meal_name}</strong><small>{item.quantity} 份 × {formatMoney(item.unit_price)} · {taxTypeLabel(item.tax_type)}{item.selections.length > 0 && <em>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</em>}</small><b>{formatMoney(item.subtotal)}</b></div>)}</div></section>
+      {selected.kitchen_note && <p className="meal-kitchen-note"><strong>餐點備註：</strong>{selected.kitchen_note}</p>}
       {selected.promotion && <p className="meal-order-discount">{selected.promotion.name} · 已折抵 {formatMoney(selected.promotion.discount)}</p>}
       <p className="meal-order-payment-status" aria-live="polite">付款狀態：<strong>{paymentStatus(selected.payment_status)}</strong></p>
       <MealCancellationStatus order={selected} />
@@ -81,6 +82,15 @@ export function MealOrdersPage() {
 }
 
 function MealOrderState({ order, onPay, paying }: { order: MealOrder; onPay: () => void; paying: boolean }) {
+  if (order.payment_method === "cash_on_pickup" && order.payment_status === "pending" && !order.cancelled_at && !["picked_up", "no_show", "cancelled"].includes(order.fulfillment_status)) {
+    return <div className="credential-pending cash-payment-pending"><Money size={34} weight="light" /><h3>預訂成功・待現場付款</h3><p>已保留餐點，尚未確認收款。應付金額 {formatMoney(order.amount_total)}。</p></div>;
+  }
+  if (order.payment_method === "cash_on_pickup" && order.payment_status === "refund_pending") {
+    return <div className="credential-pending"><Money size={34} weight="light" /><h3>待現場退款</h3><p>退款尚未完成，等待合作社確認。</p></div>;
+  }
+  if (order.payment_method && order.payment_method !== "online" && order.payment_status === "pending") {
+    return <div className="credential-pending"><BowlFood size={34} weight="light" /><h3>{fulfillmentStatus(order.fulfillment_status)}</h3><p>此現場付款訂單目前無法付款或取得取餐憑證，請聯絡合作社確認。</p></div>;
+  }
   if (order.payment_status === "pending" && order.available_actions.includes("pay")) return <div className="credential-pending"><CreditCard size={34} weight="light" /><h3>付款後顯示取餐憑證</h3><p>付款確認成功後，這裡會顯示 QR 與六位取餐碼。發票狀態會另外更新。</p><button className="button button-primary" type="button" disabled={paying} onClick={onPay}>{paying ? "準備付款頁…" : `前往付款 ${formatMoney(order.amount_total)}`}</button></div>;
   return <div className="credential-pending"><BowlFood size={34} weight="light" /><h3>{fulfillmentStatus(order.fulfillment_status)}</h3><p>為避免重複核銷，這筆訂單目前不顯示取餐憑證。</p></div>;
 }
@@ -102,7 +112,7 @@ function MealCancellationStatus({ order }: { order: MealOrder }) {
 }
 
 function MealInvoiceStatus({ order }: { order: MealOrder }) {
-  const labels: Record<string, string> = { not_eligible: "尚未開立", pending: "開立處理中", issued: "已開立", failed: "開立待處理", void_pending: "作廢處理中", voided: "已作廢" };
+  const labels: Record<string, string> = { external: "合作社現場開票", not_eligible: "尚未開立", pending: "開立處理中", issued: "已開立", failed: "開立待處理", void_pending: "作廢處理中", voided: "已作廢" };
   return <section className="invoice-summary-card" aria-label="電子發票"><Receipt size={27} weight="light" /><div><small>電子發票</small><strong>{labels[order.invoice_status] || "狀態確認中"}</strong>{["pending", "failed"].includes(order.invoice_status) && <span>發票正由系統處理，不影響已付款訂單的取餐資格；請勿為了發票重新付款。</span>}</div><dl>{order.invoice_number && <div><dt>發票號碼</dt><dd className="order-number">{order.invoice_number}</dd></div>}{order.invoice_date && <div><dt>開立時間</dt><dd>{formatDateTime(order.invoice_date)}</dd></div>}</dl></section>;
 }
 
