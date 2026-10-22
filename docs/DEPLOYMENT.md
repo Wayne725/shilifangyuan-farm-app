@@ -10,7 +10,9 @@
 
 根目錄的 `render.yaml` 已定義三個 Render 資源。免費 Web Service 閒置後會休眠，免費 PostgreSQL 會在建立 30 天後到期，因此免費方案只適合展示與測試；正式營運需使用持久化資料庫、備份與不中斷服務方案。
 
-目前 Blueprint 預設使用 `APP_ENV=preview`：只建立虛擬展示資料，預設會明確拒絕建立或開啟任何線上付款頁，物流與真實證件上傳也維持停用。金流 provider 預設選用雷門，但 `RAYGATE_PAYMENT_*` 只提供空白的 `sync: false` 佔位，不含規格文件裡的範例憑證。正式 NT$10 驗收可擇一設定指定訂單或專用測試商品 SKU；兩種白名單不可同時啟用，且完成後必須立即清空。Preview 必須填妥 Resend，否則 API 會拒絕啟動；同時仍要求平台產生強 JWT／reconciliation 密鑰與三組非預設展示密碼。升級 Sandbox 或 Production 前必須改用獨立的 `PII_ENCRYPTION_KEYS_JSON`。
+Blueprint 的執行環境、公開網址、金流／發票環境旗標及出單啟用設定改由 Render 手動管理（`sync: false`），避免程式發布時覆蓋既有正式設定。新增服務時需自行填妥這些值；本機與展示範例仍見 `.env.example`。`plan` 不指定，讓既有服務保留目前規格；新增服務的預設方案須在建立前核對。規則依 [Render Blueprint 官方文件](https://render.com/docs/blueprint-spec)。
+
+Preview 只建立虛擬展示資料，預設拒絕一般線上付款，物流與真實證件上傳也維持停用。正式 NT$10 驗收可擇一設定指定訂單或專用測試商品 SKU；兩種白名單不可同時啟用，完成後須清空。Preview 必須填妥 Resend，且要求強 JWT／reconciliation 密鑰與三組非預設展示密碼。升級 Sandbox 或 Production 前必須改用獨立的 `PII_ENCRYPTION_KEYS_JSON`。
 
 ## 建立 Render Blueprint
 
@@ -231,7 +233,7 @@ Repository Settings → Secrets and variables → Actions 新增：
 
 ## 2026-09-05 修復版部署檢查（本機完成，雲端待執行）
 
-1. 核對待部署 commit、API／Web 的部署分支及現有 Render 付費方案；`render.yaml` 仍有 `plan: free` 歷史值，不可未核對就整份套用 Blueprint，避免影響已購買的方案。這輪沒有更動雲端或計費。
+1. 核對待部署 commit、API／Web 的部署分支及現有 Render 付費方案；歷史版本含 `plan: free`、preview 與測試發票值，不可重新套用舊 Blueprint。2026-10-22 已移除方案覆寫，環境相關設定改為 `sync: false`；仍須核對 Dashboard 的 Blueprint 自動同步與實際設定。
 2. 先保留可還原的資料庫備份，在隔離 PostgreSQL 上驗證 migration，再升級至 `0013_payment_poll_schedule` 後啟動新版 API。新 migration 只加 nullable 欄位與索引；舊 0001～0012 必須完整保留，不可改名、刪除或以 stamp 跳過。這輪 SQLite 往返及 PostgreSQL 離線 DDL 通過，但不等於已在 PostgreSQL 實際升級成功。
 3. 先檢查既有待付款、退款、發票與 Email Outbox 的範圍及供應商設定。啟用定期工作會真正處理既有待辦，可能呼叫付款查詢、退款、開票及寄信，不是唯讀健康檢查。
 4. 常駐 API 設定 `RECONCILIATION_ENABLED=true`、`RECONCILIATION_INTERVAL_SECONDS=60`。程式與本機範例預設關閉；`render.yaml` 的新部署範本提供啟用值，但本機修改不會自動改變既有 Render 環境變數。

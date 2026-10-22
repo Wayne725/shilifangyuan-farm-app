@@ -75,7 +75,7 @@ test("Render API 明確要求 Resend 寄信設定", () => {
   assert.match(apiService, /- key: EMAIL_FROM_NAME\n\s+value: 十里方圓/);
 });
 
-test("Render 明確使用汎宇測試發票且不把憑證寫進 Git", () => {
+test("Render 保留汎宇環境設定且不把憑證寫進 Git", () => {
   const apiService = renderBlueprint.match(/  - type: web[\s\S]*?\n  - type: web/)?.[0] ?? "";
 
   assert.match(apiService, /- key: INVOICE_PROVIDER\n\s+value: fanyu/);
@@ -85,15 +85,19 @@ test("Render 明確使用汎宇測試發票且不把憑證寫進 Git", () => {
     "FANYU_INVOICE_AUTH_PASSWORD",
     "FANYU_INVOICE_API_KEY",
     "FANYU_INVOICE_SELLER_ID",
+    "FANYU_INVOICE_STAGE",
+    "FANYU_INVOICE_BASE_URL",
+    "FANYU_INVOICE_SIGNATURE_VERIFIED",
   ]) {
     assert.match(apiService, new RegExp(`- key: ${key}\\n\\s+sync: false`));
   }
-  assert.match(apiService, /- key: FANYU_INVOICE_STAGE\n\s+value: "true"/);
-  assert.match(
-    apiService,
-    /- key: FANYU_INVOICE_BASE_URL\n\s+value: https:\/\/webtest\.einvoice\.com\.tw\/einv/,
-  );
-  assert.match(apiService, /- key: FANYU_INVOICE_SIGNATURE_VERIFIED\n\s+value: "true"/);
+});
+
+test("Render 同步不得將既有服務降規或覆蓋正式環境、網域與金流旗標", () => {
+  assert.doesNotMatch(renderBlueprint, /^\s+plan:/m);
+  for (const key of ["APP_ENV", "APP_BASE_URL", "WEB_BASE_URL", "RAYGATE_PAYMENT_STAGE", "RAYGATE_PAYMENT_CONTRACT_VERIFIED", "VITE_APP_ENV", "PRINTER_ENABLED", "PRINTER_DRY_RUN"]) {
+    assert.match(renderBlueprint, new RegExp(`- key: ${key}\\n\\s+sync: false`));
+  }
 });
 
 test("Render 通過 CI 才部署，API 啟動具備可追蹤的資料庫準備程序", () => {

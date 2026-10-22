@@ -11,7 +11,6 @@ services:
     branch: codex/v2-social-commerce
     autoDeployTrigger: checksPass
     runtime: python
-    plan: free
     region: singapore
     rootDir: backend
     buildCommand: pip install -r requirements.txt
@@ -25,7 +24,7 @@ services:
           name: shilifangyuan-db
           property: connectionString
       - key: APP_ENV
-        value: preview
+        sync: false
       - key: DATABASE_POOL_SIZE
         value: "5"
       - key: DATABASE_MAX_OVERFLOW
@@ -43,9 +42,9 @@ services:
       - key: STARTUP_MIGRATION_RETRY_SECONDS
         value: "2"
       - key: APP_BASE_URL
-        value: https://shilifangyuan-api.onrender.com
+        sync: false
       - key: WEB_BASE_URL
-        value: https://shilifangyuan-web.onrender.com
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: RECONCILE_SECRET
@@ -73,9 +72,9 @@ services:
       - key: RAYGATE_PAYMENT_ALLOWED_HOSTNAME
         sync: false
       - key: RAYGATE_PAYMENT_STAGE
-        value: "false"
+        sync: false
       - key: RAYGATE_PAYMENT_CONTRACT_VERIFIED
-        value: "false"
+        sync: false
       - key: RAYGATE_PAYMENT_RECONCILE_HOURS
         value: "24"
       - key: RAYGATE_PAYMENT_ACCEPTANCE_ORDER_ID
@@ -95,11 +94,11 @@ services:
       - key: FANYU_INVOICE_SELLER_ID
         sync: false
       - key: FANYU_INVOICE_STAGE
-        value: "true"
+        sync: false
       - key: FANYU_INVOICE_BASE_URL
-        value: https://webtest.einvoice.com.tw/einv
+        sync: false
       - key: FANYU_INVOICE_SIGNATURE_VERIFIED
-        value: "true"
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM_EMAIL
@@ -107,17 +106,17 @@ services:
       - key: EMAIL_FROM_NAME
         value: 十里方圓
       - key: PRINTER_ENABLED
-        value: "false"
+        sync: false
       - key: PRINTER_DRY_RUN
-        value: "true"
+        sync: false
       - key: PRINTER_WORKER_ENABLED
-        value: "true"
+        sync: false
       - key: FEIE_API_BASE_URL
         value: https://api.jp.feieyun.com/Api/Open/
       - key: FEIE_UKEY_ROTATED
-        value: "false"
+        sync: false
       - key: FEIE_AP_ENDPOINT_VERIFIED
-        value: "false"
+        sync: false
 
   - type: web
     name: shilifangyuan-web
@@ -130,7 +129,7 @@ services:
       - key: VITE_API_BASE_URL
         value: ""
       - key: VITE_APP_ENV
-        value: preview
+        sync: false
       - key: VITE_LOGISTICS_ENABLED
         value: "false"
     routes:

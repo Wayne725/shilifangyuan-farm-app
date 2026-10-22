@@ -20,4 +20,10 @@
 
 ## 部署與正式驗收
 
-發布完成後補記雲端 CI、前後端 Live SHA、正式 LINE 分流及授權流程實測結果。隔離測試不等同真實 LINE 帳號與 Email 驗證。
+`50d1569` 的雲端 CI [39756632831](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/39756632831) 全部通過：後端 1,683 項、PostgreSQL 29 項、前端 68 項與 API 契約；完整 pytest 中的現場付款 PostgreSQL 測試未略過。本機 50 項 LINE／現場付款／出單瀏覽器測試通過。
+
+發布分支已快轉至 `50d1569`。Blueprint 自動同步觸發的 `dep-dbctl7tg1s2s73eght30` 失敗；該同步把 `APP_ENV`、`WEB_BASE_URL` 及原本正式金流／發票設定套回舊範例，並嘗試改免費規格。部署未取代先前成功的 `0d98f80`；實際 Compute 仍為原 `$7/月、0.5 CPU／512 MB`，未另購方案。重複排隊的手動部署已取消。
+
+修正 Blueprint：移除 `plan`；將執行環境、網域、金流／發票旗標及出單開關設成 `sync: false`，保留現有設定。新增回歸防止重新覆寫。原正式設定依既有 [便當發布紀錄](MEALS_PRODUCTION_RELEASE_2026-09-12.md) 核對；自動審核要求明確授權恢復金流旗標，等待使用者回覆後儲存並重新部署。未更換密鑰、未手動呼叫付款／退款或開票。
+
+正式成功版本與 LINE 實測結果完成後續補。隔離測試不等同真實 LINE 帳號與 Email 驗證。教師操作見 [LINE 測試說明](LINE_TEST_GUIDE.md)。
