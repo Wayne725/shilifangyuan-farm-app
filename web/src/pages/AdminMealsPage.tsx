@@ -208,7 +208,7 @@ function eventDraft(event: MealEvent): EventDraft {
 
 function shiftEvent(event: MealEvent): EventDraft {
   const shift = (value: string) => localInput(new Date(value).getTime() + 86400000);
-  return { title: `${event.title}（隔日）`, allow_cash_payment: Boolean(event.allow_cash_payment), location: event.location, ordering_starts_at: shift(event.ordering_starts_at), ordering_ends_at: shift(event.ordering_ends_at), pickup_starts_at: shift(event.pickup_starts_at), pickup_ends_at: shift(event.pickup_ends_at), offerings: event.offerings.map((item) => ({ meal_id: item.meal_id, price: item.price, capacity: item.capacity, position: item.position })) };
+  return { title: event.title.replace(/(?:（隔日）)+$/u, ""), allow_cash_payment: Boolean(event.allow_cash_payment), location: event.location, ordering_starts_at: shift(event.ordering_starts_at), ordering_ends_at: shift(event.ordering_ends_at), pickup_starts_at: shift(event.pickup_starts_at), pickup_ends_at: shift(event.pickup_ends_at), offerings: event.offerings.map((item) => ({ meal_id: item.meal_id, price: item.price, capacity: item.capacity, position: item.position })) };
 }
 
 function eventPayload(draft: EventDraft) {

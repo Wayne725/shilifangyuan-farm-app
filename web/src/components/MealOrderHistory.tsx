@@ -13,7 +13,7 @@ import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import { createOrderPayment } from "../lib/commerce";
 import { taxTypeLabel } from "../lib/invoice-tax";
-import { formatMealDateTime } from "../lib/meal-time";
+import { formatMealDate, formatMealDateTime } from "../lib/meal-time";
 import type { MealOrder, MealPickupCredential } from "../lib/types";
 
 export function MealOrderHistory({ orderId, embedded = false }: { orderId?: string; embedded?: boolean }) {
@@ -69,7 +69,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       {orders.isPending && <LoadingLines count={4} />}
       {orders.isError && <DataState kind="error" title="便當訂單無法讀取" detail={orders.error.message} onAction={() => orders.refetch()} />}
       {orders.data?.length === 0 && <DataState title="目前沒有便當訂單" detail="可先查看明天的餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />}
-      {visibleOrders.length > 0 && <div className="orders-layout"><div className="order-index" aria-label="選擇便當訂單">{visibleOrders.map((order) => <button className={order.id === selected?.id ? "selected" : ""} aria-pressed={order.id === selected?.id} key={order.id} type="button" onClick={() => { setSelectedId(order.id); setCancelOpen(false); cancel.reset(); setReason("行程變更"); }}><span>取餐 {formatMealDateTime(order.pickup_at || order.pickup_start)}</span><strong>{order.meal_event_title}</strong><small className="order-number">訂單編號：{order.order_number}</small><small>{formatMoney(order.amount_total)}</small><i className={`order-state ${order.payment_status}`}>{paymentStatus(order.payment_status)}</i></button>)}</div>{selected ? <article className="order-detail meal-order-detail"><div className="order-detail-head"><div><h2>{selected.meal_event_title}</h2><span className="order-number">訂單編號：{selected.order_number}</span></div><strong>{formatMoney(selected.amount_total)}</strong></div>
+      {visibleOrders.length > 0 && <div className="orders-layout"><div className="order-index" aria-label="選擇便當訂單">{visibleOrders.map((order) => <button className={order.id === selected?.id ? "selected" : ""} aria-pressed={order.id === selected?.id} key={order.id} type="button" onClick={() => { setSelectedId(order.id); setCancelOpen(false); cancel.reset(); setReason("行程變更"); }}><span>{order.venue_name}</span><strong>{formatMealDate(order.pickup_at || order.pickup_start)}</strong><small className="order-number">訂單編號：{order.order_number}</small><small>{formatMoney(order.amount_total)}</small><i className={`order-state ${order.payment_status}`}>{paymentStatus(order.payment_status)}</i></button>)}</div>{selected ? <article className="order-detail meal-order-detail"><div className="order-detail-head"><div><h2>{formatMealDate(selected.pickup_at || selected.pickup_start)}</h2><span className="order-number">訂單編號：{selected.order_number}</span></div><strong>{formatMoney(selected.amount_total)}</strong></div>
       <div className="meal-pickup-info">
         <div><MapPin size={20} /><span>取餐地點</span><strong>{selected.venue_name}</strong></div>
         <div><Clock size={20} /><span>預計取餐時間（台灣時間）</span><strong>{selected.pickup_at ? formatMealDateTime(selected.pickup_at) : "舊訂單未指定時間，請於供餐時段內取餐"}</strong></div>

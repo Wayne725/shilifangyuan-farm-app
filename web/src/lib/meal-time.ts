@@ -40,6 +40,10 @@ export function formatMealDateTime(value?: string | null): string {
   }).format(new Date(value));
 }
 
+export function formatMealDate(value?: string | null): string {
+  return value ? taipeiDate(value).replaceAll("-", "/") : "日期待公告";
+}
+
 export function validPickupTime(value: string, event: MealEvent, now = Date.now()): boolean {
   return pickupTimeOptions(event, now).some((option) => option.value === value);
 }
