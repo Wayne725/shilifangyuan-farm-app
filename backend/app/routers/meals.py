@@ -122,7 +122,7 @@ meals_router = APIRouter(tags=["meals"])
 def _require_live_meal_event(event_id: str, settings: Settings) -> None:
     if (
         settings.environment == "production"
-        and settings.sales_scope == "meals_only"
+        and settings.sales_scope in {"meals_only", "pickup"}
         and event_id in DEMO_MEAL_EVENT_IDS
     ):
         raise HTTPException(status_code=409, detail="展示場次不可正式下單，請等待正式場次公告")

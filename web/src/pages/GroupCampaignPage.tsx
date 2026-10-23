@@ -13,6 +13,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { storefrontCapabilities, storefrontOrderBlockReason, useStorefrontStatus } from "../components/StorefrontStatus";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import {
   defaultInvoicePreference,
@@ -47,6 +48,8 @@ const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
 export function GroupCampaignPage() {
   const { campaignId } = useParams({ from: "/groups/$campaignId" });
   const { user, openLogin } = useAuth();
+  const platform = useStorefrontStatus();
+  const shippingEnabled = logisticsEnabled && storefrontCapabilities(platform.data).shipping;
   const notificationEmail = user?.notification_email || user?.email || "";
   const [quantity, setQuantity] = useState(1);
   const [method, setMethod] = useState<"pickup" | "shipping">("pickup");
@@ -58,6 +61,8 @@ export function GroupCampaignPage() {
   const [invoicePreference, setInvoicePreference] = useState(
     () => defaultInvoicePreference(notificationEmail),
   );
+  const orderBlockReason = storefrontOrderBlockReason(platform.data, "group")
+    || (method === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
   const campaign = useQuery({
     queryKey: ["group-campaign", campaignId],
     queryFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaignId}`),
@@ -77,11 +82,12 @@ export function GroupCampaignPage() {
         shipping_channel: method === "shipping" ? shippingChannel : null,
       }),
     }),
-    enabled: Boolean(user && campaign.data && (method === "pickup" || shippingChannel)),
+    enabled: Boolean(user && campaign.data && !orderBlockReason && (method === "pickup" || shippingChannel)),
   });
   const checkout = useMutation({
     mutationFn: () => {
       if (!user || !campaign.data) throw new Error("請先登入");
+      if (orderBlockReason) throw new Error(orderBlockReason);
       if (method === "shipping") {
         if (!shippingChannel || !campaign.data.shipping_temperature) throw new Error("請選擇配送通路");
         return beginGroupCheckout({
@@ -141,7 +147,7 @@ export function GroupCampaignPage() {
   const item = campaign.data;
   const shippingReady = Boolean(shippingChannel && recipientName.trim() && recipientPhone.trim() && shippingAddress.trim());
   const submitReady = Boolean(
-    quote.data && !quote.isFetching && !quote.isError &&
+    !orderBlockReason && quote.data && !quote.isFetching && !quote.isError &&
       invoicePreferenceIsValid(invoicePreference) &&
       (method === "pickup" ? pickupLocationId : shippingReady),
   );
@@ -167,6 +173,7 @@ export function GroupCampaignPage() {
         </div>
       </div>
 
+      {orderBlockReason && <p className="form-error" role="status">{orderBlockReason}</p>}
       <div className="offer-checkout">
         <div>
           <div className="checkout-step-title"><span>01</span><div><small>QUANTITY</small><h2>選擇數量</h2></div></div>
@@ -180,7 +187,7 @@ export function GroupCampaignPage() {
           <div className="checkout-step-title pickup-title"><span>02</span><div><small>FULFILLMENT</small><h2>取貨方式</h2></div></div>
           <div className="fulfillment-switch">
             <button type="button" className={method === "pickup" ? "selected" : ""} onClick={() => setMethod("pickup")}><Storefront size={22} /><span><strong>合作社取貨</strong><small>依預計取貨窗口領取</small></span><i><Check size={14} /></i></button>
-            {logisticsEnabled && <button type="button" className={method === "shipping" ? "selected shipping" : "shipping"} onClick={() => setMethod("shipping")} disabled={!item.can_ship}><Truck size={22} /><span><strong>宅配／超商取貨</strong><small>{item.can_ship ? `${temperatureLabels[item.shipping_temperature || "ambient"]}配送` : "此團購未開放配送"}</small></span><i><Check size={14} /></i></button>}
+            {(shippingEnabled || method === "shipping") && <button type="button" className={method === "shipping" ? "selected shipping" : "shipping"} onClick={() => setMethod("shipping")} disabled={!shippingEnabled || !item.can_ship}><Truck size={22} /><span><strong>宅配／超商取貨</strong><small>{!shippingEnabled ? "目前未開放配送" : item.can_ship ? `${temperatureLabels[item.shipping_temperature || "ambient"]}配送` : "此團購未開放配送"}</small></span><i><Check size={14} /></i></button>}
           </div>
 
           {method === "pickup" ? (
@@ -224,12 +231,12 @@ export function GroupCampaignPage() {
             <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後取得正式價格</button>
           ) : (
             <>
-              {quote.isPending && <LoadingLines count={2} />}
+              {quote.isPending && !orderBlockReason && <LoadingLines count={2} />}
               {quote.isError && <p className="form-error">{quote.error.message}</p>}
               <dl>
                 <div><dt>社員單價</dt><dd>{formatMoney(quote.data?.unit_price || item.member_price)}</dd></div>
                 <div><dt>商品小計</dt><dd>{formatMoney(quote.data?.product_subtotal || 0)}</dd></div>
-                {logisticsEnabled && <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>}
+                {shippingEnabled && <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>}
                 <InvoicePreferenceSummary value={invoicePreference} />
                 {quote.data && <InvoiceTaxSummary items={[{ tax_type: quote.data.tax_type }]} memberTaxExempt={quote.data.member_tax_exempt} shippingFee={quote.data.shipping_fee} taxAmount={quote.data.tax_amount} />}
                 <div className="offer-total"><dt>合計</dt><dd>{formatMoney(quote.data?.amount_total || 0)}</dd></div>

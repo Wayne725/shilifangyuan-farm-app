@@ -26,6 +26,8 @@ async function fixture(t, { width = 960, large = false, state = 'ready' } = {}) 
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.test', display_name: '隔離買家', user_role: 'customer', membership_type: 'nonmember' } } });
+    if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
+    if (path === '/v1/shipping-rates') return route.fulfill({ json: [] });
     if (path === '/v1/orders/quote') return route.fulfill({ json: { amount_total: 300, membership_type: 'nonmember', items: [{ product_id: product.id, product_name: product.name, quantity: 1, unit_price: 300, subtotal: 300, tax_type: 'tax_exempt' }] } });
     if (path === '/v1/pickup-locations') {
       if (state === 'loading') await locationGate;
@@ -39,7 +41,11 @@ async function fixture(t, { width = 960, large = false, state = 'ready' } = {}) 
   page.setDefaultTimeout(6000);
   await page.goto(`${base}/checkout`);
   await page.locator('.summary-total dd').getByText('$300', { exact: true }).waitFor();
-  if (large) await page.getByRole('button', { name: '放大', exact: true }).click();
+  if (large) {
+    await page.locator('.reading-menu > summary').click();
+    await page.getByRole('button', { name: '放大', exact: true }).click();
+    await page.locator('.reading-menu > summary').click();
+  }
   return { page, unknown, writes, releaseLocations };
 }
 

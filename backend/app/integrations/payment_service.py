@@ -194,14 +194,22 @@ async def ensure_order_payment_runtime_enabled(
         sales_channel=order.sales_channel,
         meal_event_id=order.meal_event_id,
     )
-    if settings.sales_scope == "meals_only":
+    if settings.sales_scope in {"meals_only", "pickup"}:
         if (
             settings.environment.strip().lower() == "production"
             and order.invoice_provider_context != invoice_context_from_settings(settings)
         ):
+            purchase = "便當" if order.sales_channel == SalesChannel.MEAL_PREORDER else "商品"
             raise PaymentApplicationError(
-                "此訂單的發票平台資料已過期或未設定，無法付款；請重新訂購便當"
+                f"此訂單的發票平台資料已過期或未設定，無法付款；請重新訂購{purchase}"
             )
+        if order.sales_channel != SalesChannel.MEAL_PREORDER:
+            if (
+                order.fulfillment is None
+                or order.fulfillment.method != FulfillmentMethod.COOPERATIVE_PICKUP
+            ):
+                raise PaymentApplicationError("商品訂單取貨資料不完整，無法付款")
+            return
         if (
             order.order_kind != OrderKind.REGULAR
             or order.group_campaign_id is not None

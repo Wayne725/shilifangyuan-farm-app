@@ -252,7 +252,10 @@ async def create_order(
 ) -> OrderRead:
     controlled_product = meals_test_product_enabled(settings)
     if not controlled_product:
-        require_sales_scope_allows(settings)
+        require_sales_scope_allows(
+            settings, sales_channel=SalesChannel.REGULAR,
+            fulfillment_method=body.fulfillment_method,
+        )
     elif (
         len(body.items) != 1
         or body.items[0].product_id not in meals_test_product_pairs(settings)
