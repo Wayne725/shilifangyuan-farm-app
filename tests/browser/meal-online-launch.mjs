@@ -80,9 +80,10 @@ async function fixture(t) {
           user: { id: 'isolated-launch-buyer', email: 'buyer@example.test', display_name: '隔離買家', user_role: 'customer' } } });
       }
       if (method === 'GET') {
+        if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', support_phone: '' } });
         if (url.pathname === `/v1/meal-events/${eventId}`) return route.fulfill({ json: mealEvent });
         if (url.pathname === '/v1/meal-events') return route.fulfill({ json: [mealEvent] });
-        if (['/v1/products', '/v1/group-campaigns'].includes(url.pathname)) return route.fulfill({ json: [] });
+        if (['/v1/products', '/v1/group-campaigns', '/v1/pickup-locations'].includes(url.pathname)) return route.fulfill({ json: [] });
         if (url.pathname === '/v1/meal-orders') return route.fulfill({ json: [order] });
         if (url.pathname === `/v1/meal-orders/${orderId}`) return route.fulfill({ json: order });
         if (url.pathname === '/v1/orders') return route.fulfill({ json: [{ ...order,

@@ -2,8 +2,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 
@@ -26,6 +28,7 @@ interface AuthContextValue {
   openLogin: () => void;
   login: (email: string, password: string, rememberMe: boolean) => Promise<void>;
   logout: () => Promise<void>;
+  saveMobileBarcode: (barcode: string | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -36,6 +39,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [sessionError, setSessionError] = useState("");
   const [sessionAttempt, setSessionAttempt] = useState(0);
+  const currentUser = useRef(user);
+  currentUser.current = user;
+  const preferenceQueue = useRef(Promise.resolve());
+
+  const saveMobileBarcode = useCallback((barcode: string | null) => {
+    const ownerId = user?.id;
+    const normalized = barcode?.trim().toUpperCase() || null;
+    const saving = preferenceQueue.current.then(async () => {
+      if (!ownerId || currentUser.current?.id !== ownerId) throw new Error("請先登入");
+      if ((currentUser.current.saved_mobile_barcode || null) === normalized) return;
+      const updated = await apiFetch<User>("/v1/auth/preferences", {
+        method: "PATCH",
+        headers: { "X-Expected-User-ID": ownerId },
+        body: JSON.stringify({ saved_mobile_barcode: normalized }),
+      });
+      if (currentUser.current?.id !== ownerId || updated.id !== ownerId) {
+        throw new Error("登入帳號已變更，請重新整理後再試");
+      }
+      currentUser.current = { ...currentUser.current, saved_mobile_barcode: updated.saved_mobile_barcode };
+      setUser((current) => current?.id === ownerId
+        ? { ...current, saved_mobile_barcode: updated.saved_mobile_barcode }
+        : current);
+    });
+    preferenceQueue.current = saving.catch(() => {});
+    return saving;
+  }, [user?.id]);
 
   useEffect(() => {
     let active = true;
@@ -63,6 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     saveSession(session);
     rememberLoginEmail(email, rememberMe);
     queryClient.clear();
+    currentUser.current = session.user;
     setUser(session.user);
     setIsAuthReady(true);
     setSessionError("");
@@ -80,12 +110,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       clearSession();
       queryClient.clear();
+      currentUser.current = null;
       setUser(null);
     }
   };
 
   return <AuthContext.Provider value={{ user, isAuthReady, sessionError,
-    retrySession: () => setSessionAttempt((value) => value + 1), openLogin, login, logout }}>
+    retrySession: () => setSessionAttempt((value) => value + 1), openLogin, login, logout, saveMobileBarcode }}>
     {children}
   </AuthContext.Provider>;
 }

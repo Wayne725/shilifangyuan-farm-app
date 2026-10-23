@@ -50,6 +50,12 @@ export function HomePage() {
               進入生活消費
               <ArrowRight size={19} weight="light" />
             </Link>
+            <Link className="button button-quiet" to="/activities">
+              永續活動
+            </Link>
+            <Link className="button button-quiet" to="/membership">
+              加入合作社
+            </Link>
             {socialAccess && <Link className="button button-quiet" to="/social">
               查看本月社務
             </Link>}
@@ -152,7 +158,7 @@ export function HomePage() {
               <div>
                 <small>{activityStatusLabel(activity.status)}</small>
                 <h3>{activity.title}</h3>
-                <p>{activity.description || activity.location || "社員活動資訊"}</p>
+                <p>{activity.description || activity.location || "永續活動資訊"}</p>
               </div>
             </article>
           ))}

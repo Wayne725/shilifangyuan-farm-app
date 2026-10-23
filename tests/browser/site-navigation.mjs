@@ -134,7 +134,7 @@ for (const width of [1440, 390]) {
     const { page, state } = await fixture(t, width, cases.find((row) => row.name === '非社員'));
     await page.goto(`${base}/shop`);
     await page.getByRole('heading', { name: '我要訂餐', exact: true }).waitFor();
-    for (const [tabName, title] of [['共同團購', '共同團購'], ['日常選品', '日常選品'], ['便當預購', '我要訂餐']]) {
+    for (const [tabName, title] of [['共同購買', '共同購買'], ['日常選品', '日常選品'], ['便當預購', '我要訂餐']]) {
       await page.getByRole('tab', { name: tabName, exact: true }).click();
       assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), title);
       assert.equal(await page.getByRole('link', { name: '我的便當訂單', exact: true }).count(), tabName === '便當預購' ? 1 : 0);
@@ -144,7 +144,7 @@ for (const width of [1440, 390]) {
     assert.equal(await page.getByRole('link', { name: /常見問題/ }).count(), 1);
     await page.getByRole('button', { name: '關閉導覽', exact: true }).click();
     await page.getByRole('link', { name: '我的便當訂單', exact: true }).click();
-    await page.getByRole('heading', { name: '我的便當訂單', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '餐點訂單', exact: true }).waitFor();
     assert.equal(await page.getByRole('link', { name: /常見問題/ }).count(), 0);
     if (process.env.BROWSER_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/meal-orders-heading-${width}.png`, fullPage: true });
     assert.deepEqual(state.errors, []); assert.deepEqual(state.unknown, []);

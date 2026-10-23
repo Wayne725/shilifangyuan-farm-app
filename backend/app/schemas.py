@@ -83,11 +83,17 @@ class UserRead(ApiModel):
     customer_number: Optional[str] = None
     email: Optional[EmailStr] = None
     notification_email: Optional[EmailStr] = None
+    saved_mobile_barcode: Optional[str] = None
     display_name: str
     user_role: UserRole
     membership_type: MembershipType
     email_verified_at: Optional[datetime] = None
     membership_status: Optional[MembershipStatus] = None
+
+
+class UserPreferencesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    saved_mobile_barcode: Optional[str] = Field(max_length=32)
 
 
 class RegisterRequest(BaseModel):
@@ -1409,6 +1415,8 @@ class MealOrderCreate(InvoicePreferenceInput):
     items: List[MealOrderLineInput] = Field(min_length=1, max_length=20)
     contact_email: EmailStr
     pickup_at: Optional[datetime] = None
+    pickup_location_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
+    needs_utensils: bool = False
 
     @field_validator("pickup_at")
     @classmethod
@@ -1441,6 +1449,9 @@ class MealOrderQuoteItemRead(ApiModel):
 
 class MealPickupWindowRead(ApiModel):
     location: str
+    location_id: Optional[str] = None
+    address: str = ""
+    instructions: str = ""
     starts_at: datetime
     ends_at: datetime
 
@@ -1458,6 +1469,7 @@ class MealOrderQuoteRead(ApiModel):
     amount_total: int
     pickup: MealPickupWindowRead
     pickup_at: datetime
+    needs_utensils: bool = False
 
 
 class MealOrderItemRead(ApiModel):
@@ -1511,6 +1523,10 @@ class MealOrderRead(ApiModel):
     meal_event_id: str
     meal_event_title: str
     venue_name: str
+    pickup_location_id: Optional[str] = None
+    pickup_address: str = ""
+    pickup_instructions: str = ""
+    needs_utensils: bool = False
     pickup_start: datetime
     pickup_end: datetime
     pickup_at: Optional[datetime] = None
@@ -1628,6 +1644,9 @@ class OrderFulfillmentRead(ApiModel):
     status: FulfillmentState
     pickup_location_id: Optional[str] = None
     pickup_location: Optional[str]
+    pickup_address: str = ""
+    pickup_instructions: str = ""
+    needs_utensils: bool = False
     pickup_starts_at: Optional[datetime]
     pickup_ends_at: Optional[datetime]
     pickup_at: Optional[datetime] = None

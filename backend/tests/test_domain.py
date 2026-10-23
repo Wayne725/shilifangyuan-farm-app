@@ -283,7 +283,7 @@ def test_post_deadline_refund_returns_campaign_to_settling() -> None:
     assert campaign.confirmation_deadline is None
 
 
-def test_regular_paid_order_can_cancel_only_before_preparing() -> None:
+def test_regular_paid_order_can_only_be_cancelled_by_admin_before_delivery() -> None:
     order = Order(
         id="order-1",
         order_number="TEST001",
@@ -295,9 +295,13 @@ def test_regular_paid_order_can_cancel_only_before_preparing() -> None:
         payment_status=PaymentStatus.PAID,
         fulfillment_status="pending_confirmation",
     )
-    assert "cancel" in order_available_actions(order, now=NOW)
+    assert "cancel" not in order_available_actions(order, now=NOW)
+    assert "cancel" in order_available_actions(order, True, now=NOW)
     order.fulfillment_status = "preparing"
     assert "cancel" not in order_available_actions(order, now=NOW)
+    assert "cancel" in order_available_actions(order, True, now=NOW)
+    order.fulfillment_status = "picked_up"
+    assert "cancel" not in order_available_actions(order, True, now=NOW)
 
 
 def test_admin_fulfillment_actions_match_route_guards() -> None:

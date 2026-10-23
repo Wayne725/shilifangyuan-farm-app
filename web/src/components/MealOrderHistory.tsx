@@ -1,5 +1,5 @@
-import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, Money, QrCode, Receipt, X } from "@phosphor-icons/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, Money, QrCode, Receipt } from "@phosphor-icons/react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
@@ -8,6 +8,7 @@ import { OrderSearch } from "../components/OrderSearch";
 import { filterOrders } from "../lib/order-search";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
+import { OrderCancellationContact } from "./OrderCancellationContact";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
@@ -20,10 +21,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
   const { user, openLogin, isAuthReady } = useAuth();
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState("");
-  const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState(orderId || "");
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const [reason, setReason] = useState("行程變更");
   const orders = useQuery({
     queryKey: ["meal-orders", user?.id],
     queryFn: () => apiFetch<MealOrder[]>("/v1/meal-orders"),
@@ -42,10 +40,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
   });
   const credential = { ...credentialQuery, data: credentialAvailable && !credentialQuery.isError ? credentialQuery.data : undefined };
   const pay = useMutation({ mutationFn: createOrderPayment, onSuccess: (url, orderId) => openOrderHandoff(url, orderId) });
-  const cancel = useMutation({
-    mutationFn: (orderId: string) => apiFetch(`/v1/meal-orders/${orderId}/cancellation-requests`, { method: "POST", body: JSON.stringify({ reason }) }),
-    onSuccess: () => { setCancelOpen(false); queryClient.removeQueries({ queryKey: ["meal-pickup-credential"] }); queryClient.invalidateQueries({ queryKey: ["meal-orders"] }); },
-  });
+
 
   useEffect(() => {
     if (orderId) setSelectedId(orderId);
@@ -55,7 +50,6 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
     if (!selectedId && orders.data?.[0]) setSelectedId(orders.data[0].id);
   }, [orders.data, selectedId]);
 
-  useEffect(() => { setCancelOpen(false); setReason("行程變更"); }, [selected?.id]);
 
   if (!isAuthReady) return <section className="orders-page meal-orders-page" aria-label="正在恢復登入"><LoadingLines count={3} /></section>;
   if (!user) return <section className="account-gate meal-orders-page"><BowlFood size={45} weight="light" /><h1>我的便當訂單</h1><p>登入後可查看餐點明細、付款狀態與取餐碼。</p><button className="button button-primary" type="button" onClick={openLogin}>登入查看訂單</button><Link className="text-link" to="/shop">先查看明天的餐點</Link></section>;
@@ -69,11 +63,12 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       {orders.isPending && <LoadingLines count={4} />}
       {orders.isError && <DataState kind="error" title="便當訂單無法讀取" detail={orders.error.message} onAction={() => orders.refetch()} />}
       {orders.data?.length === 0 && <DataState title="目前沒有便當訂單" detail="可先查看明天的餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />}
-      {visibleOrders.length > 0 && <div className="orders-layout"><div className="order-index" aria-label="選擇便當訂單">{visibleOrders.map((order) => <button className={order.id === selected?.id ? "selected" : ""} aria-pressed={order.id === selected?.id} key={order.id} type="button" onClick={() => { setSelectedId(order.id); setCancelOpen(false); cancel.reset(); setReason("行程變更"); }}><span>{order.venue_name}</span><strong>{formatMealDate(order.pickup_at || order.pickup_start)}</strong><small className="order-number">訂單編號：{order.order_number}</small><small>{formatMoney(order.amount_total)}</small><i className={`order-state ${order.payment_status}`}>{paymentStatus(order.payment_status)}</i></button>)}</div>{selected ? <article className="order-detail meal-order-detail"><div className="order-detail-head"><div><h2>{formatMealDate(selected.pickup_at || selected.pickup_start)}</h2><span className="order-number">訂單編號：{selected.order_number}</span></div><strong>{formatMoney(selected.amount_total)}</strong></div>
+      {visibleOrders.length > 0 && <div className="orders-layout"><div className="order-index" aria-label="選擇便當訂單">{visibleOrders.map((order) => <button className={order.id === selected?.id ? "selected" : ""} aria-pressed={order.id === selected?.id} key={order.id} type="button" onClick={() => setSelectedId(order.id)}><span>{order.venue_name}</span><strong>{formatMealDate(order.pickup_at || order.pickup_start)}</strong><small className="order-number">訂單編號：{order.order_number}</small><small>{formatMoney(order.amount_total)}</small><i className={`order-state ${order.payment_status}`}>{paymentStatus(order.payment_status)}</i></button>)}</div>{selected ? <article className="order-detail meal-order-detail"><div className="order-detail-head"><div><h2>{formatMealDate(selected.pickup_at || selected.pickup_start)}</h2><span className="order-number">訂單編號：{selected.order_number}</span></div><strong>{formatMoney(selected.amount_total)}</strong></div>
       <div className="meal-pickup-info">
-        <div><MapPin size={20} /><span>取餐地點</span><strong>{selected.venue_name}</strong></div>
+        <div><MapPin size={20} /><span>取餐點</span><strong>{selected.venue_name}{selected.pickup_address && <small>{selected.pickup_address}</small>}</strong></div>
         <div><Clock size={20} /><span>預計取餐時間（台灣時間）</span><strong>{selected.pickup_at ? formatMealDateTime(selected.pickup_at) : "舊訂單未指定時間，請於供餐時段內取餐"}</strong></div>
       </div>
+      <p className="meal-kitchen-note"><strong>餐具：</strong>{selected.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
       <section className="meal-order-lines" aria-label="訂單餐點明細"><h3>餐點明細</h3><div className="order-lines">{selected.items.map((item, index) => <div key={item.offering_id}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.meal_name}</strong><small>{item.quantity} 份 × {formatMoney(item.unit_price)} · {taxTypeLabel(item.tax_type)}{item.selections.length > 0 && <em>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</em>}</small><b>{formatMoney(item.subtotal)}</b></div>)}</div></section>
       {selected.kitchen_note && <p className="meal-kitchen-note"><strong>餐點備註：</strong>{selected.kitchen_note}</p>}
       {selected.promotion && <p className="meal-order-discount">{selected.promotion.name} · 已折抵 {formatMoney(selected.promotion.discount)}</p>}
@@ -83,7 +78,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       <MealInvoiceStatus order={selected} />
       <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} taxAmount={selected.tax_amount} />
       <p className="meal-order-created-at">下單時間：{formatDateTime(selected.created_at)}</p>
-      {(pay.isError || cancel.isError) && <p className="form-error">{pay.error?.message || cancel.error?.message}</p>}{selected.available_actions.includes("request_cancellation") && !cancelOpen && <button className="button button-quiet" type="button" onClick={() => setCancelOpen(true)}>申請取消這筆便當</button>}{cancelOpen && <div className="inline-confirm"><button className="icon-button" type="button" aria-label="關閉退單申請" onClick={() => setCancelOpen(false)}><X size={20} /></button><strong>送出後由管理員審核；核准前訂單仍有效，不會立即退款或作廢發票。</strong><label>退單原因<textarea required maxLength={2000} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /></label><button className="button button-danger" type="button" disabled={!reason.trim() || cancel.isPending} onClick={() => cancel.mutate(selected.id)}>{cancel.isPending ? "送出申請中…" : "送出退單申請"}</button></div>}</article> : <DataState title="找不到這筆便當訂單" detail="請從左方或上方的訂單清單選擇一筆訂單。" />}</div>}
+      {pay.isError && <p className="form-error">{pay.error.message}</p>}<OrderCancellationContact /></article> : <DataState title="找不到這筆便當訂單" detail="請從左方或上方的訂單清單選擇一筆訂單。" />}</div>}
       <div className="orders-footnote"><Link className="button button-quiet" to="/shop">我要訂餐</Link></div>
     </section>
   );
@@ -115,7 +110,7 @@ function MealCancellationStatus({ order }: { order: MealOrder }) {
     {request.reviewed_at && <p>審核時間：{formatDateTime(request.reviewed_at)}</p>}
     <p>{request.status === "pending" ? "申請尚未核准，訂單仍依原安排處理。"
       : request.status === "approved" ? "訂單已取消；退款與發票進度請查看本頁各自的狀態。"
-      : order.available_actions.includes("request_cancellation") ? "原訂單仍依目前狀態處理；若需要補充理由，可再提出申請。" : "原訂單仍依目前狀態處理；需要協助請洽管理員。"}</p>
+      : "原訂單仍依目前狀態處理。"}</p>
   </section>;
 }
 

@@ -16,7 +16,6 @@ const orderNumber = 'SLF-MEAL-ISOLATED';
 const pickupCode = '316927';
 const credentialPath = `/v1/meal-orders/${orderId}/pickup-credential`;
 const paymentPath = `/v1/orders/${orderId}/payment-attempts`;
-const cancelPath = `/v1/meal-orders/${orderId}/cancel`;
 
 function mealOrder(overrides = {}) {
   return {
@@ -27,7 +26,7 @@ function mealOrder(overrides = {}) {
     pickup_code: null, pickup_qr_payload: null, paid_at: null, cancelled_at: null,
     payment_status: 'pending', invoice_status: 'not_eligible', invoice_number: null, invoice_date: null,
     fulfillment_status: 'pending', amount_total: 120, created_at: '2026-09-12T01:00:00Z',
-    available_actions: ['pay', 'cancel'],
+    available_actions: ['pay'],
     items: [{
       offering_id: 'offering-isolated', meal_id: 'meal-isolated', meal_name: '隔離蔬食便當',
       quantity: 1, base_price: 120, option_price: 0, unit_price: 120, subtotal: 120, selections: [],
@@ -41,7 +40,7 @@ function paidOrder(overrides = {}) {
     payment_status: 'paid', paid_at: '2026-09-14T03:00:00Z', fulfillment_status: 'ready',
     pickup_code: pickupCode, pickup_qr_payload: 'isolated-opaque-qr-token',
     invoice_status: 'issued', invoice_number: 'AB12345678', invoice_date: '2026-09-14T03:00:00Z',
-    available_actions: ['cancel'],
+    available_actions: [],
     ...overrides,
   });
 }
@@ -72,6 +71,7 @@ async function fixture(t, initialOrder) {
       });
     }
     if (!url.pathname.startsWith('/v1/')) return route.continue();
+    if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', support_phone: '' } });
     if (url.pathname === '/v1/auth/refresh') {
       return route.fulfill({ json: {
         access_token: 'isolated-meal-token',
@@ -105,13 +105,6 @@ async function fixture(t, initialOrder) {
     if (request.method() === 'POST' && url.pathname === '/v1/payment-attempts/attempt-isolated/refresh') {
       state.refreshReads++;
       return route.fulfill({ json: { id: 'attempt-isolated', order_id: orderId, status: state.refreshStatus } });
-    }
-    if (request.method() === 'POST' && url.pathname === cancelPath) {
-      state.mutations.push({ path: cancelPath, body: request.postDataJSON() });
-      state.order = { ...state.order, payment_status: 'refund_pending', fulfillment_status: 'cancelled',
-        cancelled_at: '2026-09-14T03:01:00Z', pickup_code: null, pickup_qr_payload: null, available_actions: [] };
-      state.credentialStatus = 409;
-      return route.fulfill({ json: state.order });
     }
     state.unknownApi.push(`${request.method()} ${url.pathname}`);
     return route.fulfill({ status: 404, json: { detail: '未定義的隔離 API，禁止連線真實後端' } });
@@ -213,16 +206,16 @@ test('取餐憑證補查回覆 409 時立即移除舊 QR，重新查詢成功才
   await verifyIsolation(page, state);
 });
 
-test('已付款取消便當只送一次原因，退款中立即撤下取餐 QR', { timeout: 20000 }, async (t) => {
+test('已付款便當僅電話聯絡退單，不自行取消或撤下取餐 QR', { timeout: 20000 }, async (t) => {
   const { page, state, qr } = await fixture(t, paidOrder());
   await visibleCredential(page, qr);
-  await page.getByRole('button', { name: '取消這筆便當預購', exact: true }).click();
-  await page.getByLabel('取消原因', { exact: true }).fill('隔離驗收取消原因');
-  await page.getByRole('button', { name: '確認取消', exact: true }).click();
-  await noCredential(page, qr);
-  await page.getByText('退款中', { exact: true }).waitFor();
-  assert.deepEqual(state.mutations, [{ path: cancelPath, body: { reason: '隔離驗收取消原因' } }]);
-  assert.equal(await page.getByRole('button', { name: '確認取消', exact: true }).count(), 0);
+  const phone = page.getByRole('button', { name: '退單聯絡電話尚未設定', exact: true });
+  await phone.waitFor();
+  assert.equal(await phone.isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: /申請取消|取消這筆便當|確認取消|送出退單申請/ }).count(), 0);
+  assert.equal(await qr.isVisible(), true);
+  assert.deepEqual(state.mutations, []);
+  assert.equal(state.order.payment_status, 'paid');
   await verifyIsolation(page, state);
 });
 
@@ -305,7 +298,10 @@ async function scheduleFixture(t, { admin = false } = {}) {
     const path = url.pathname;
     const method = request.method();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-schedule-token', user: { id: 'schedule-user', email: 'schedule@example.test', display_name: '隔離使用者', user_role: admin ? 'admin' : 'customer' } } });
-    if (method === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/orders', '/v1/meal-orders'].includes(path)) return route.fulfill({ json: [] });
+    if (method === 'GET' && path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
+    if (method === 'GET' && path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { pending_cancellation: 0, refund_attention: 0, invoice_attention: 0, today_pickup: 0 } });
+    if (method === 'GET' && path === '/v1/admin/meal-orders') return route.fulfill({ json: { items: [], total: 0, limit: 20, offset: 0 } });
+    if (method === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/orders', '/v1/meal-orders', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
     if (method === 'GET' && ['/v1/meal-events', '/v1/admin/meal-events'].includes(path)) {
       if (path === '/v1/admin/meal-events') state.adminEventReads++;
       return route.fulfill({ json: state.events });

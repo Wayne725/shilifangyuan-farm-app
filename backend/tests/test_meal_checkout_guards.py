@@ -64,19 +64,20 @@ def test_fulfilled_meal_never_advertises_self_cancel(state):
     assert "cancel" not in order_available_actions(order, now=NOW)
 
 
-def test_unredeemed_paid_meal_requires_review_until_pickup_ends():
+def test_unredeemed_paid_meal_can_only_be_cancelled_by_admin_until_pickup_ends():
     order = meal_order()
     order.payment_status = PaymentStatus.PAID
     order.paid_at = NOW - timedelta(minutes=5)
     assert "cancel" not in order_available_actions(order, now=NOW)
-    assert "request_cancellation" in order_available_actions(order, now=NOW)
+    assert "request_cancellation" not in order_available_actions(order, now=NOW)
+    assert "cancel" in order_available_actions(order, True, now=NOW)
     assert "cancel" not in order_available_actions(order, now=NOW + timedelta(minutes=26))
     order.paid_at = NOW - timedelta(minutes=1)
     order.meal_event.ordering_ends_at = NOW
-    assert "request_cancellation" in order_available_actions(order, now=NOW)
+    assert "cancel" in order_available_actions(order, True, now=NOW)
     assert "cancel" not in order_available_actions(order, now=NOW + timedelta(microseconds=1))
-    assert "request_cancellation" in order_available_actions(order, now=NOW + timedelta(minutes=26))
-    assert "request_cancellation" not in order_available_actions(order, now=order.meal_event.pickup_ends_at)
+    assert "cancel" in order_available_actions(order, True, now=NOW + timedelta(minutes=26))
+    assert "cancel" not in order_available_actions(order, True, now=order.meal_event.pickup_ends_at)
 
 
 @pytest.fixture

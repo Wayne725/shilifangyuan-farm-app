@@ -15,7 +15,7 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { storefrontCapabilities, storefrontOrderBlockReason, useStorefrontStatus } from "../components/StorefrontStatus";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import {
-  defaultInvoicePreference,
+  useInvoicePreference,
   InvoicePreferenceFields,
   InvoicePreferenceSummary,
   invoicePreferenceIsValid,
@@ -44,7 +44,7 @@ type CheckoutMethod = Extract<FulfillmentMethod, "cooperative_pickup"> | "shippi
 const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
 
 export function CheckoutPage() {
-  const { user, openLogin } = useAuth();
+  const { user, openLogin, saveMobileBarcode } = useAuth();
   const platform = useStorefrontStatus();
   const shippingEnabled = logisticsEnabled && storefrontCapabilities(platform.data).shipping;
   const notificationEmail = user?.notification_email || user?.email || "";
@@ -57,9 +57,7 @@ export function CheckoutPage() {
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
-  const [invoicePreference, setInvoicePreference] = useState(
-    () => defaultInvoicePreference(notificationEmail),
-  );
+  const [invoicePreference, setInvoicePreference] = useInvoicePreference(notificationEmail);
   const items = useMemo(
     () =>
       cart.map((item) => ({
@@ -106,9 +104,12 @@ export function CheckoutPage() {
         )
       : 0;
   const createOrder = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!user) throw new Error("請先登入");
       if (orderBlockReason) throw new Error(orderBlockReason);
+      if (invoicePreference.carrierType === "mobile_barcode") {
+        await saveMobileBarcode(invoicePreference.carrierValue || "");
+      }
       if (checkoutMethod === "shipping") {
         if (!shippingChannel || !eligibility.temperature) {
           throw new Error("這筆商品目前無法使用配送");
@@ -164,13 +165,6 @@ export function CheckoutPage() {
       setShippingChannel(eligibility.availableChannels[0] || null);
     }
   }, [eligibility.availableChannels, shippingChannel]);
-
-  useEffect(() => {
-    if (!notificationEmail) return;
-    setInvoicePreference((current) =>
-      current.buyerEmail ? current : { ...current, buyerEmail: notificationEmail },
-    );
-  }, [notificationEmail]);
 
   const shippingReady = Boolean(
     shippingChannel &&

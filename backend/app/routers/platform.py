@@ -22,6 +22,7 @@ async def read_platform(response: Response, session: AsyncSession = Depends(get_
     current = await platform_settings(session)
     response.headers["Cache-Control"] = "no-store"
     return {"orders_open": current.orders_open, "closed_message": current.closed_message,
+            "support_phone": current.support_phone,
             **sales_capabilities(settings),
             "meal_cutoff_time": "20:00", "timezone": "Asia/Taipei"}
 
@@ -43,6 +44,8 @@ async def update_platform(body: PlatformUpdate, admin: User = Depends(require_ad
         row = SystemSetting(key=PLATFORM_KEY)
         session.add(row)
     row.value = body.model_dump(exclude={"reason"})
+    if "support_phone" not in body.model_fields_set:
+        row.value = {**row.value, "support_phone": previous["support_phone"]}
     row.updated_by_id = admin.id
     session.add(AdminAudit(actor_id=admin.id, action="platform.settings_updated", aggregate_type="system_setting", aggregate_id=PLATFORM_KEY,
                            reason=body.reason, data={"previous": previous, "current": row.value}))

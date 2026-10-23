@@ -44,8 +44,13 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
         lines.append("＊＊ 模擬列印 ＊＊")
     lines.extend([
         f"訂單：{snapshot['order_number']}", f"姓名：{snapshot['customer_name']}",
-        f"取餐：{snapshot['pickup_at']}", f"地點：{snapshot['location']}", "-" * width,
+        f"取餐：{snapshot['pickup_at']}", f"地點：{snapshot['location']}",
     ])
+    if snapshot.get("pickup_address"):
+        lines.append(f"地址：{snapshot['pickup_address']}")
+    if "needs_utensils" in snapshot:
+        lines.append(f"餐具：{'需要提供' if snapshot['needs_utensils'] else '不需要'}")
+    lines.append("-" * width)
     for item in snapshot["items"]:
         lines.extend([item["name"], f"{item['quantity']} 份 × ${item['unit_price']} = ${item['subtotal']}"])
         lines.extend(f"  {option}" for option in item.get("options", []))
@@ -78,6 +83,8 @@ def enqueue_order_print(session: AsyncSession, order: Order, user: User, setting
         "kind": "order", "order_number": order.order_number, "customer_name": user.display_name,
         "pickup_at": pickup.astimezone(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M"),
         "location": order.fulfillment.pickup_location, "amount_total": order.amount_total,
+        "pickup_address": order.fulfillment.pickup_address,
+        "needs_utensils": bool(order.fulfillment.needs_utensils),
         "note": order.kitchen_note, **payment_snapshot(order),
         "items": [{"name": item.product_name, "quantity": item.quantity, "unit_price": item.unit_price,
                    "subtotal": item.subtotal, "options": [f"{option.group_name}：{option.option_name}" for option in item.selected_options]}

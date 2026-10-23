@@ -38,7 +38,8 @@ async function fixture(t, width) {
     if (req.method() === 'GET') {
       if (path === '/v1/platform') return route.fulfill({json:{orders_open:true,closed_message:''}});
       if (['/v1/products', '/v1/group-campaigns'].includes(path)) return route.fulfill({ json: [] });
-      if (path === '/v1/meal-events') return route.fulfill({ json: events });
+      if (path === '/v1/pickup-locations') return route.fulfill({ json: [] });
+    if (path === '/v1/meal-events') return route.fulfill({ json: events });
       const event = events.find((row) => path === `/v1/meal-events/${row.id}`);
       if (event) return route.fulfill({ json: event });
       if (path === '/v1/admin/finance/meal-sales') { state.reads.push(Object.fromEntries(url.searchParams)); return route.fulfill({ json: report }); }

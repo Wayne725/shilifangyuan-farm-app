@@ -5,6 +5,7 @@ import { apiFetch } from "../lib/api";
 export interface StorefrontStatus {
   orders_open: boolean;
   closed_message: string;
+  support_phone?: string;
   sales_scope?: "all" | "meals_only" | "pickup";
   regular_orders_enabled?: boolean;
   group_orders_enabled?: boolean;

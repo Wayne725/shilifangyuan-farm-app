@@ -20,7 +20,7 @@ const approvalReasons = [
 const rejectionReasons = [
   { label: "已開始製作", value: "餐點已開始製作，無法取消。" },
   { label: "已完成取餐", value: "訂單已完成取餐，無法取消。" },
-  { label: "需聯絡確認", value: "請聯絡合作社確認訂單後再申請。" },
+  { label: "需聯絡確認", value: "請電話聯絡合作社確認訂單。" },
 ];
 
 export function AdminMealCancellations({ initialSearch = "" }: { initialSearch?: string }) {
@@ -70,8 +70,7 @@ function CancellationReviewCard({ item }: { item: MealCancellationQueueItem }) {
     }),
     onSuccess: async () => {
       setDecision(""); setReason("");
-      await Promise.all(["admin-meal-cancellations", "meal-cancellation-summary", "admin-meal-orders", "admin-meal-operations-summary", "admin-meal-event-orders", "admin-meal-events", "meal-orders", "orders", "admin-orders", "meal-pickup-credential", "meal-events", "meal-event", "meal-sales-report", "meal-kitchen", "meal-kitchen-ticket"]
-        .map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      await queryClient.invalidateQueries();
     },
     onError: () => { void queryClient.invalidateQueries({ queryKey: ["admin-meal-cancellations"] }); },
   });

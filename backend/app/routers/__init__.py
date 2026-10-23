@@ -12,6 +12,7 @@ from .meals import meals_router
 from .membership import membership_router
 from .notifications import notifications_router
 from .orders import orders_router
+from .order_summary import order_summary_router
 from .operations import operations_router
 from .payments import payments_router
 from .platform import platform_router
@@ -43,6 +44,7 @@ ALL_ROUTERS = [
     proposals_router,
     groups_router,
     orders_router,
+    order_summary_router,
     operations_router,
     payments_router,
     invoices_router,
@@ -63,6 +65,7 @@ __all__ = [
     "membership_router",
     "notifications_router",
     "orders_router",
+    "order_summary_router",
     "operations_router",
     "payments_router",
     "proposals_router",

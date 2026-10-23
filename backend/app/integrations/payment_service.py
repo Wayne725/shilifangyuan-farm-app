@@ -382,6 +382,20 @@ async def remaining_subject_payment_status(
     return None
 
 
+async def lock_order_payment_subject(session: AsyncSession, order_id: str) -> None:
+    """Lock the meal/campaign parent before its order and payment attempts."""
+    parent = (await session.execute(
+        select(Order.meal_event_id, Order.group_campaign_id).where(Order.id == order_id)
+    )).first()
+    if parent is None:
+        return
+    if parent.meal_event_id is not None:
+        await session.execute(select(MealEvent.id).where(MealEvent.id == parent.meal_event_id).with_for_update())
+    elif parent.group_campaign_id is not None:
+        await session.execute(select(GroupCampaign.id).where(GroupCampaign.id == parent.group_campaign_id).with_for_update())
+    await session.execute(select(Order.id).where(Order.id == order_id).with_for_update())
+
+
 async def create_provider_aware_refund(
     session: AsyncSession,
     *,
@@ -581,6 +595,12 @@ async def create_payment_attempt(
     now: Optional[datetime] = None,
 ) -> PaymentAttempt:
     current = now or datetime.now(timezone.utc)
+    owned_order_id = await session.scalar(
+        select(Order.id).where(Order.id == order_id, Order.user_id == user.id)
+    )
+    if owned_order_id is None:
+        raise PaymentApplicationError("找不到訂單")
+    await lock_order_payment_subject(session, owned_order_id)
     order = await session.scalar(
         select(Order)
         .where(Order.id == order_id, Order.user_id == user.id)
@@ -593,6 +613,7 @@ async def create_payment_attempt(
                 OrderFulfillment.shipment
             ),
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if order is None:
@@ -943,6 +964,13 @@ class SQLAlchemyPaymentCallbackRepository:
                 await self.session.rollback()
             return "tombstoned"
 
+        order_id = await self.session.scalar(
+            select(PaymentAttempt.order_id).where(
+                PaymentAttempt.merchant_trade_no == payload["MerchantTradeNo"]
+            )
+        )
+        if order_id is not None:
+            await lock_order_payment_subject(self.session, order_id)
         attempt = await self.session.scalar(
             select(PaymentAttempt)
             .where(

@@ -4,6 +4,7 @@ export interface User {
   id: string;
   email: string | null;
   notification_email?: string | null;
+  saved_mobile_barcode?: string | null;
   display_name: string;
   user_role: UserRole;
   membership_type?: "nonmember" | "trainee" | "member";
@@ -83,6 +84,8 @@ export interface OrderFulfillment {
   status: string;
   pickup_location_id?: string | null;
   pickup_location?: string | null;
+  pickup_address?: string;
+  needs_utensils?: boolean;
   pickup_starts_at?: string | null;
   pickup_ends_at?: string | null;
   pickup_code?: string | null;
@@ -584,6 +587,10 @@ export interface MealOrder {
   meal_event_id: string;
   meal_event_title: string;
   venue_name: string;
+  pickup_location_id?: string | null;
+  pickup_address?: string;
+  pickup_instructions?: string;
+  needs_utensils?: boolean;
   pickup_start: string;
   pickup_end: string;
   pickup_at?: string | null;

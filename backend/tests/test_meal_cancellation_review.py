@@ -85,9 +85,15 @@ async def review_context(database_session):
 
 
 async def submit(context, reason="行程變更", legacy=False):
-    response = await context.client.post(f"/v1/meal-orders/{context.order.id}/{'cancel' if legacy else 'cancellation-requests'}", json={"reason": reason}, headers=auth_headers(context.buyer))
-    assert response.status_code == 201, response.text
-    return response.json()
+    request = await context.session.scalar(select(MealCancellationRequest).where(
+        MealCancellationRequest.order_id == context.order.id, MealCancellationRequest.status == "pending",
+    ))
+    if request is None:
+        request = MealCancellationRequest(order=context.order, requested_by_id=context.buyer.id, reason=reason.strip())
+        context.session.add(request)
+        await context.session.commit()
+    from app.schemas import MealCancellationRequestRead
+    return MealCancellationRequestRead.model_validate(request).model_dump(mode="json")
 
 
 async def review(context, request, decision="approve", reason="已核對，可退單"):
@@ -100,7 +106,7 @@ async def count(context, model):
 
 @pytest.mark.parametrize("paid", [False, True])
 @pytest.mark.asyncio
-async def test_request_and_legacy_alias_only_register_one_pending_application(review_context, paid):
+async def test_existing_pending_application_remains_visible_without_financial_effects(review_context, paid):
     c = review_context
     if paid:
         await mark_paid(c)
@@ -276,7 +282,7 @@ async def test_failed_refund_creation_keeps_application_and_order_unchanged(revi
 async def test_permissions_validation_queue_search_and_generic_cancel_bypass(review_context):
     c = review_context
     path = f"/v1/meal-orders/{c.order.id}/cancellation-requests"
-    assert (await c.client.post(path, json={"reason": "他人訂單"}, headers=auth_headers(c.other))).status_code == 404
+    assert (await c.client.post(path, json={"reason": "他人訂單"}, headers=auth_headers(c.other))).status_code == 403
     for reason in ["", "  ", "x" * 2001]:
         assert (await c.client.post(path, json={"reason": reason}, headers=auth_headers(c.buyer))).status_code == 422
     request = await submit(c)
@@ -284,9 +290,9 @@ async def test_permissions_validation_queue_search_and_generic_cancel_bypass(rev
     assert (await c.client.post(review_path, json={"decision": "approve", "reason": "自行核准"}, headers=auth_headers(c.buyer))).status_code == 403
     assert (await c.client.get("/v1/admin/meal-cancellation-requests", headers=auth_headers(c.buyer))).status_code == 403
     assert (await c.client.post(review_path, json={"decision": "approve", "reason": " "}, headers=auth_headers(c.admin))).status_code == 422
-    assert (await c.client.post(f"/v1/orders/{c.order.id}/cancel", json={"reason": "繞過審核"}, headers=auth_headers(c.buyer))).status_code == 409
+    assert (await c.client.post(f"/v1/orders/{c.order.id}/cancel", json={"reason": "繞過審核"}, headers=auth_headers(c.buyer))).status_code == 403
     await mark_paid(c)
-    assert (await c.client.post(f"/v1/orders/{c.order.id}/cancel", json={"reason": "已付款仍不能繞過"}, headers=auth_headers(c.buyer))).status_code == 409
+    assert (await c.client.post(f"/v1/orders/{c.order.id}/cancel", json={"reason": "已付款仍不能繞過"}, headers=auth_headers(c.buyer))).status_code == 403
     await review(c, request, "reject", "請補充資料")
     await submit(c, "新申請")
     for status, expected in [("pending", 1), ("rejected", 1), ("approved", 0), ("all", 2)]:

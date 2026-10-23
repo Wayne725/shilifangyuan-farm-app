@@ -221,9 +221,9 @@ const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
   component: page("./pages/AdminPage", "AdminPage"),
-  validateSearch: (search: Record<string, unknown>): { q?: string; section?: "orders" | "issues" | "suppliers" | "locations" } => ({
+  validateSearch: (search: Record<string, unknown>): { q?: string; section?: "orders" | "summary" | "issues" | "suppliers" | "locations" } => ({
     q: typeof search.q === "string" ? search.q.trim().slice(0, 100) : undefined,
-    section: search.section === "issues" || search.section === "suppliers" || search.section === "locations" ? search.section : "orders",
+    section: search.section === "summary" || search.section === "issues" || search.section === "suppliers" || search.section === "locations" ? search.section : "orders",
   }),
 });
 

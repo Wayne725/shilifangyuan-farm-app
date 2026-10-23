@@ -10,7 +10,7 @@ export function AdminOrderCancellationReview({ order }: { order: Order }) {
   const request = order.cancellation_request;
   const review = useMutation({
     mutationFn: (decision: "approve" | "reject") => apiFetch<Order>(`/v1/orders/${order.id}/admin/cancellation-requests/${request?.id}/review`, { method: "POST", body: JSON.stringify({ decision, reason }) }),
-    onSuccess: () => Promise.all(["admin-orders", "orders", "meal-sales-report"].map((key) => client.invalidateQueries({ queryKey: [key] }))),
+    onSuccess: () => client.invalidateQueries(),
   });
   if (order.sales_channel === "meal_preorder" || !request) return null;
   return <section className="order-cancellation-review" aria-label="退單審核">

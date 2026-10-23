@@ -93,7 +93,7 @@ export function SocialPage() {
             <div className="social-feature-grid">
               <Link className="social-feature primary" to="/activities">
                 <CalendarBlank size={28} weight="light" />
-                <span>社員活動</span>
+                <span>永續活動</span>
                 <strong>{activities.data?.length ?? 0}</strong>
                 <small>場近期活動</small>
                 <ArrowRight size={20} />

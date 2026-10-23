@@ -40,7 +40,7 @@ async def test_other_customer_cannot_read_or_mutate_order_payment(
         response = await client.request(
             method, paths[target], headers=auth_headers(other), json={"reason": "audit"}
         )
-    assert response.status_code == 404, response.text
+    assert response.status_code == (403 if target == "cancel" else 404), response.text
     await session.refresh(order)
     assert order.payment_status == PaymentStatus.PENDING
 
@@ -121,8 +121,7 @@ async def test_verified_payment_invoice_mail_duplicate_and_refund_pipeline(
             f"/v1/orders/{order.id}/cancel", json={"reason": "Isolated acceptance test"},
             headers=auth_headers(order.user),
         )
-        assert cancelled.status_code == 200, cancelled.text
-        assert cancelled.json()["cancellation_request"]["status"] == "pending"
+        assert cancelled.status_code == 403, cancelled.text
         assert order.payment_status == PaymentStatus.PAID and order.cancelled_at is None
         await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=3, seconds=30))
         assert order.payment_status == PaymentStatus.PAID
@@ -130,9 +129,11 @@ async def test_verified_payment_invoice_mail_duplicate_and_refund_pipeline(
         admin = User(email="audit-reviewer@example.com", display_name="隔離審核員", password_hash="unused", user_role=UserRole.ADMIN)
         session.add(admin)
         await session.commit()
-        request_id = cancelled.json()["cancellation_request"]["id"]
-        approved = await order_client.post(f"/v1/orders/{order.id}/admin/cancellation-requests/{request_id}/review", json={"decision": "approve", "reason": "Isolated administrator review"}, headers=auth_headers(admin))
+        approved = await order_client.post(f"/v1/orders/{order.id}/admin/cancel", json={"reason": "Isolated telephone cancellation"}, headers=auth_headers(admin))
         assert approved.status_code == 200, approved.text
+        assert approved.json()["cancellation_request"]["status"] == "approved"
+        assert order.payment_status == PaymentStatus.REFUND_PENDING
+        assert invoice.status == InvoiceStatus.ISSUED
     await jobs.reconcile_once(session, settings, now=now + timedelta(minutes=4))
     await session.refresh(order)
     await session.refresh(invoice)

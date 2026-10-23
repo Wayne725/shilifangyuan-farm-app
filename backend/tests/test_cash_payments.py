@@ -70,9 +70,7 @@ async def received_total(c):
 
 
 async def approve_cancellation(c, order_id):
-    requested = await c.client.post(f"/v1/meal-orders/{order_id}/cancellation-requests", headers=auth_headers(c.buyer), json={"reason": "取消預訂"})
-    assert requested.status_code == 201, requested.text
-    approved = await c.client.post(f"/v1/admin/meal-cancellation-requests/{requested.json()['id']}/review", headers=auth_headers(c.admin), json={"decision": "approve", "reason": "核准"})
+    approved = await c.client.post(f"/v1/admin/meal-orders/{order_id}/cancel", headers=auth_headers(c.admin), json={"reason": "電話取消預訂"})
     assert approved.status_code == 200, approved.text
 
 
