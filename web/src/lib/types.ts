@@ -364,6 +364,7 @@ export interface MembershipApplication {
 
 export interface GroupCampaign {
   id: string;
+  source_proposal_id?: string | null;
   title: string;
   description: string;
   image_url?: string | null;

@@ -9,6 +9,40 @@ from tests.test_group_campaign_shipping import campaign_context, campaign_payloa
 
 
 @pytest.mark.asyncio
+async def test_admin_quantity_settings_apply_to_proposal_campaign_and_lock_after_payment(campaign_context):
+    from app.domain import apply_paid_quantity
+
+    ctx = campaign_context
+    client, session = ctx["client"], ctx["session"]
+    admin = auth_headers(ctx["admin"])
+    opened = await client.post(f"/v1/vote-proposals/{ctx['proposal'].id}/admin/open-direct", headers=admin,
+                               json=campaign_payload(ctx["product"].id, min_paid_quantity=10, per_user_cap=5))
+    assert opened.status_code == 201, opened.text
+    campaign_id = opened.json()["id"]
+    path = f"/v1/group-campaigns/{campaign_id}"
+    settings = {"per_user_cap": 2, "min_paid_quantity": 4, "supply_cap": 12}
+    assert (await client.patch(path, headers=auth_headers(ctx["proposer"]), json=settings)).status_code == 403
+    updated = await client.patch(path, headers=admin, json=settings)
+    assert updated.status_code == 200, updated.text
+    persisted = (await client.get(path)).json()
+    assert {key: persisted[key] for key in settings} == settings
+    assert persisted["source_proposal_id"] == ctx["proposal"].id
+    assert persisted["member_price"] == opened.json()["member_price"]
+    too_many = await client.post(f"{path}/join", headers=auth_headers(ctx["proposer"]),
+                                 json={"quantity": 3, "contact_email": "proposer@example.com"})
+    assert too_many.status_code == 409 and "每人最多" in too_many.json()["detail"], too_many.text
+    campaign = await session.get(GroupCampaign, campaign_id)
+    apply_paid_quantity(campaign, 2, datetime.now(timezone.utc))
+    await session.commit()
+    assert (await client.get(path)).json()["decision_status"] == "recruiting"
+    locked = await client.patch(path, headers=admin, json={"per_user_cap": 3, "min_paid_quantity": 6})
+    assert locked.status_code == 409 and "首筆付款" in locked.json()["detail"]
+    apply_paid_quantity(campaign, 2, datetime.now(timezone.utc))
+    await session.commit()
+    assert (await client.get(path)).json()["decision_status"] == "pending_confirmation"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("custom", [False, True])
 async def test_admin_can_open_pending_proposal_without_votes_once(campaign_context, custom):
     ctx = campaign_context
