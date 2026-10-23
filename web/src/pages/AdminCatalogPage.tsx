@@ -9,6 +9,7 @@ import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
+import { PhotoPicker, savePhoto } from "../components/PhotoPicker";
 import { AdminNav } from "../components/AdminNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
@@ -47,7 +48,6 @@ interface ProductDraft {
   description: string;
   category: string;
   unit: string;
-  image_url: string;
   member_price: number;
   nonmember_price: number;
   stock_quantity: number;
@@ -66,7 +66,6 @@ const emptyProduct: ProductDraft = {
   description: "",
   category: "當季蔬果",
   unit: "份",
-  image_url: "",
   member_price: 0,
   nonmember_price: 0,
   stock_quantity: 0,
@@ -197,14 +196,23 @@ function AdminSection({ title, count, pending, error, children }: { title: strin
 function ProductCreateForm({ suppliers, onDone }: { suppliers: Supplier[]; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<ProductDraft>(emptyProduct);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [createdId, setCreatedId] = useState("");
   const create = useMutation({
-    mutationFn: () => apiFetch<Product>("/v1/products", { method: "POST", body: JSON.stringify(productPayload(draft)) }),
-    onSuccess: () => { setDraft(emptyProduct); setOpen(false); onDone(); },
+    mutationFn: async () => {
+      const product = createdId
+        ? await apiFetch<Product>(`/v1/products/${createdId}`, { method: "PATCH", body: JSON.stringify(productPayload(draft)) })
+        : await apiFetch<Product>("/v1/products", { method: "POST", body: JSON.stringify(productPayload(draft)) });
+      setCreatedId(product.id);
+      try { await savePhoto(`/v1/admin/products/${product.id}/photo`, photo, false); }
+      catch (error) { onDone(); throw new Error(`商品已儲存，照片尚未完成：${(error as Error).message}`); }
+    },
+    onSuccess: () => { setDraft(emptyProduct); setPhoto(null); setCreatedId(""); setOpen(false); onDone(); },
   });
   return (
     <section className="admin-create-block">
       <button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />新增商品</button>
-      {open && <ProductForm title="上架新商品" draft={draft} suppliers={suppliers} busy={create.isPending} error={create.error?.message} onChange={setDraft} onCancel={() => setOpen(false)} onSubmit={() => create.mutate()} />}
+      {open && <ProductForm title="上架新商品" draft={draft} photo={photo} removePhoto={false} onPhotoChange={(file) => setPhoto(file)} suppliers={suppliers} busy={create.isPending} error={create.error?.message} onChange={setDraft} onCancel={() => { setOpen(false); setDraft(emptyProduct); setPhoto(null); setCreatedId(""); create.reset(); onDone(); }} onSubmit={() => create.mutate()} />}
     </section>
   );
 }
@@ -213,16 +221,22 @@ function ProductEditor({ product, suppliers, onDone }: { product: Product; suppl
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<ProductDraft>(() => ({
     product_number: product.product_number || "", sku: product.sku || "", supplier_id: product.supplier_id || "", name: product.name,
-    description: product.description, category: product.category, unit: product.unit, image_url: product.image_url || "",
+    description: product.description, category: product.category, unit: product.unit,
     member_price: product.member_price, nonmember_price: product.nonmember_price, stock_quantity: product.stock_quantity,
     tax_type: product.tax_type, can_ship: product.can_ship, shipping_temperature: product.shipping_temperature || "ambient",
     allowed_shipping_channels: product.allowed_shipping_channels, is_active: product.is_active,
   }));
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [removePhoto, setRemovePhoto] = useState(false);
   const update = useMutation({
-    mutationFn: () => apiFetch<Product>(`/v1/products/${product.id}`, { method: "PATCH", body: JSON.stringify(productPayload(draft)) }),
-    onSuccess: () => { setEditing(false); onDone(); },
+    mutationFn: async () => {
+      await apiFetch<Product>(`/v1/products/${product.id}`, { method: "PATCH", body: JSON.stringify(productPayload(draft)) });
+      try { await savePhoto(`/v1/admin/products/${product.id}/photo`, photo, removePhoto); }
+      catch (error) { throw new Error(`商品資料已儲存，照片尚未完成：${(error as Error).message}`); }
+    },
+    onSuccess: () => { setEditing(false); setPhoto(null); setRemovePhoto(false); onDone(); },
   });
-  if (editing) return <ProductForm title={product.name} draft={draft} suppliers={suppliers} busy={update.isPending} error={update.error?.message} onChange={setDraft} onCancel={() => setEditing(false)} onSubmit={() => update.mutate()} />;
+  if (editing) return <ProductForm title={product.name} draft={draft} currentPhoto={product.image_url} photo={photo} removePhoto={removePhoto} onPhotoChange={(file, remove) => { setPhoto(file); setRemovePhoto(remove); }} suppliers={suppliers} busy={update.isPending} error={update.error?.message} onChange={setDraft} onCancel={() => { setEditing(false); setPhoto(null); setRemovePhoto(false); update.reset(); }} onSubmit={() => update.mutate()} />;
   return (
     <article className="admin-record-card">
       <span className={`status-chip ${product.is_active ? "passed" : ""}`}>{product.is_active ? "上架" : "下架"}</span>
@@ -234,7 +248,7 @@ function ProductEditor({ product, suppliers, onDone }: { product: Product; suppl
   );
 }
 
-function ProductForm({ title, draft, suppliers, busy, error, onChange, onCancel, onSubmit }: { title: string; draft: ProductDraft; suppliers: Supplier[]; busy: boolean; error?: string; onChange: (draft: ProductDraft) => void; onCancel: () => void; onSubmit: () => void }) {
+function ProductForm({ title, draft, photo, removePhoto, currentPhoto, onPhotoChange, suppliers, busy, error, onChange, onCancel, onSubmit }: { title: string; draft: ProductDraft; photo: File | null; removePhoto: boolean; currentPhoto?: string | null; onPhotoChange: (file: File | null, remove: boolean) => void; suppliers: Supplier[]; busy: boolean; error?: string; onChange: (draft: ProductDraft) => void; onCancel: () => void; onSubmit: () => void }) {
   const submit = (event: FormEvent) => { event.preventDefault(); onSubmit(); };
   const toggleChannel = (channel: ShippingChannel) => onChange({ ...draft, allowed_shipping_channels: draft.allowed_shipping_channels.includes(channel) ? draft.allowed_shipping_channels.filter((item) => item !== channel) : [...draft.allowed_shipping_channels, channel] });
   return (
@@ -251,7 +265,7 @@ function ProductForm({ title, draft, suppliers, busy, error, onChange, onCancel,
         <label className="field"><span>一般價</span><input min={0} type="number" value={draft.nonmember_price} onChange={(event) => onChange({ ...draft, nonmember_price: Number(event.target.value) })} /></label>
         <label className="field"><span>庫存</span><input min={0} type="number" value={draft.stock_quantity} onChange={(event) => onChange({ ...draft, stock_quantity: Number(event.target.value) })} /></label>
         <label className="field"><span>稅別</span><select value={draft.tax_type} onChange={(event) => onChange({ ...draft, tax_type: event.target.value as ProductDraft["tax_type"] })}><option value="taxable">應稅</option><option value="tax_exempt">免稅</option></select></label>
-        <label className="field wide"><span>圖片網址</span><input value={draft.image_url} onChange={(event) => onChange({ ...draft, image_url: event.target.value })} /></label>
+        <PhotoPicker label="商品照片" current={currentPhoto} file={photo} remove={removePhoto} disabled={busy} onChange={onPhotoChange} />
         <label className="field wide"><span>商品說明</span><textarea rows={4} value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} /></label>
       </div>
       <div className="admin-option-row"><label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />上架商品</label><label className="switch-field"><input type="checkbox" checked={draft.can_ship} onChange={(event) => onChange({ ...draft, can_ship: event.target.checked, allowed_shipping_channels: event.target.checked ? draft.allowed_shipping_channels : [] })} />開放配送</label></div>
@@ -265,7 +279,7 @@ function ProductForm({ title, draft, suppliers, busy, error, onChange, onCancel,
 }
 
 function productPayload(draft: ProductDraft) {
-  return { ...draft, product_number: draft.product_number || null, sku: draft.sku || null, supplier_id: draft.supplier_id || null, image_url: draft.image_url || null, shipping_temperature: draft.can_ship ? draft.shipping_temperature : null, allowed_shipping_channels: draft.can_ship ? draft.allowed_shipping_channels : [] };
+  return { ...draft, product_number: draft.product_number || null, sku: draft.sku || null, supplier_id: draft.supplier_id || null, shipping_temperature: draft.can_ship ? draft.shipping_temperature : null, allowed_shipping_channels: draft.can_ship ? draft.allowed_shipping_channels : [] };
 }
 
 function SupplierCreateForm({ onDone }: { onDone: () => void }) {

@@ -2894,3 +2894,17 @@ class FinancialStatementImport(Base):
     skipped_rows: Mapped[int] = mapped_column(Integer, default=0)
     uploaded_by_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='RESTRICT'))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class ProfilePhotoAsset(Base):
+    __tablename__ = "profile_photo_assets"
+    __table_args__ = (
+        CheckConstraint("length(content) BETWEEN 1 AND 1048576", name="profile_photo_size_valid"),
+        CheckConstraint("(product_id IS NULL) != (user_id IS NULL)", name="profile_photo_single_owner"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=True, unique=True)
+    user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, unique=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

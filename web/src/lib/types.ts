@@ -720,6 +720,7 @@ export interface MembershipSummary {
     trainee_number?: string | null;
   } | null;
   directory?: {
+    avatar_url?: string | null;
     nickname?: string;
     expertise?: string;
     bio?: string;

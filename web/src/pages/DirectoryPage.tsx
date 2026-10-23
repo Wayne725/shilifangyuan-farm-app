@@ -3,19 +3,22 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
+import { PhotoImage, PhotoPicker, savePhoto } from "../components/PhotoPicker";
 import { SocialNav } from "../components/SocialNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
 import type { MemberDirectoryEntry, MembershipSummary } from "../lib/types";
 
-const emptyForm = { is_public: false, nickname: "", avatar_url: "", expertise: "", bio: "" };
+const emptyForm = { is_public: false, nickname: "", expertise: "", bio: "" };
 
 export function DirectoryPage() {
   const { user, openLogin } = useAuth();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [removePhoto, setRemovePhoto] = useState(false);
   const membership = useQuery({
     queryKey: ["membership-me", user?.id],
     queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
@@ -31,23 +34,23 @@ export function DirectoryPage() {
 
   useEffect(() => {
     const source = mine || membership.data?.directory;
-    if (!source) return;
+    if (!source || editing) return;
     setForm({
       is_public: Boolean(source.is_public),
       nickname: source.nickname || user?.display_name || "",
-      avatar_url: mine?.avatar_url || "",
       expertise: source.expertise || "",
       bio: source.bio || "",
     });
-  }, [mine, membership.data?.directory, user?.display_name]);
+  }, [mine, membership.data?.directory, user?.display_name, editing]);
 
   const saveProfile = useMutation({
-    mutationFn: () => apiFetch<MemberDirectoryEntry>("/v1/members/me/directory", {
-      method: "PUT",
-      body: JSON.stringify({ ...form, avatar_url: form.avatar_url || null }),
-    }),
+    mutationFn: async () => {
+      await apiFetch<MemberDirectoryEntry>("/v1/members/me/directory", { method: "PUT", body: JSON.stringify(form) });
+      try { await savePhoto("/v1/members/me/photo", photo, removePhoto); }
+      catch (error) { throw new Error(`文字資料已儲存，照片尚未完成：${(error as Error).message}`); }
+    },
     onSuccess: () => {
-      setEditing(false);
+      setEditing(false); setPhoto(null); setRemovePhoto(false);
       queryClient.invalidateQueries({ queryKey: ["member-directory"] });
       queryClient.invalidateQueries({ queryKey: ["membership-me"] });
     },
@@ -77,12 +80,12 @@ export function DirectoryPage() {
               <div className="form-heading"><div><p className="eyebrow">MY DIRECTORY PROFILE / 我的通訊錄資料</p><h2>我的公開資料</h2></div><label className="switch-field"><input type="checkbox" checked={form.is_public} onChange={(event) => setForm({ ...form, is_public: event.target.checked })} /><span>{form.is_public ? "公開中" : "不公開"}</span></label></div>
               <div className="field-grid two-columns">
                 <label className="field"><span>顯示名稱</span><input required maxLength={80} value={form.nickname} onChange={(event) => setForm({ ...form, nickname: event.target.value })} /></label>
-                <label className="field"><span>頭像網址</span><input type="url" maxLength={500} placeholder="https://" value={form.avatar_url} onChange={(event) => setForm({ ...form, avatar_url: event.target.value })} /></label>
+                <PhotoPicker label="社員頭像" current={(mine || membership.data?.directory)?.avatar_url} file={photo} remove={removePhoto} disabled={saveProfile.isPending} onChange={(file, remove) => { setPhoto(file); setRemovePhoto(remove); }} />
                 <label className="field wide"><span>專長</span><input maxLength={240} value={form.expertise} onChange={(event) => setForm({ ...form, expertise: event.target.value })} /></label>
                 <label className="field wide"><span>自我介紹</span><textarea rows={5} maxLength={2000} value={form.bio} onChange={(event) => setForm({ ...form, bio: event.target.value })} /></label>
               </div>
               {saveProfile.isError && <p className="form-error">{saveProfile.error.message}</p>}
-              <div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setEditing(false)}>取消</button><button className="button button-primary" disabled={saveProfile.isPending}>儲存資料</button></div>
+              <div className="form-actions"><button className="button button-quiet" type="button" onClick={() => { setEditing(false); setPhoto(null); setRemovePhoto(false); saveProfile.reset(); }}>取消</button><button className="button button-primary" disabled={saveProfile.isPending}>儲存資料</button></div>
             </form>
           )}
 
@@ -93,7 +96,7 @@ export function DirectoryPage() {
           <div className="directory-grid">
             {directory.data?.map((entry) => (
               <article key={entry.user_id}>
-                <div className="directory-avatar">{entry.avatar_url ? <img src={entry.avatar_url} alt="" /> : <UserCircle size={44} weight="light" />}</div>
+                <div className="directory-avatar">{entry.avatar_url ? <PhotoImage src={entry.avatar_url} alt={`${entry.nickname}的頭像`} /> : <UserCircle size={44} weight="light" />}</div>
                 <small>{entry.user_id === user.id ? "這是你" : "社員"}</small>
                 <h2>{entry.nickname}</h2>
                 {entry.expertise && <strong>{entry.expertise}</strong>}

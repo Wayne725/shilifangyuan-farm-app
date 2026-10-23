@@ -91,7 +91,7 @@ def test_online_product_exception_rejects_skus_longer_than_eighty_characters():
 def test_core_release_keeps_one_linear_migration_head():
     backend = Path(__file__).resolve().parents[1]
     migrations = ScriptDirectory(str(backend / "alembic"))
-    assert migrations.get_heads() == ["0031_meal_photos_custom_requests"]
+    assert migrations.get_heads() == ["0032_product_member_photos"]
     assert migrations.get_revision("0030_feie_print_jobs").down_revision == "0029_onsite_payments"
     assert migrations.get_revision("0024_line_data_consent").down_revision == "0023_meal_option_images"
     assert migrations.get_revision("0022_line_customer_email").down_revision == "0021_line_login"

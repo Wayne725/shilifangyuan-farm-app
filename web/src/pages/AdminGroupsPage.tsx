@@ -2,7 +2,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { Buildings, CheckCircle, Package, Plus } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { AdminNav } from "../components/AdminNav";
 import { DataState, LoadingLines } from "../components/Shared";
@@ -31,7 +31,7 @@ export function AdminGroupsPage() {
 
   return (
     <section className="admin-module-page">
-      <header className="workspace-heading"><div><p className="eyebrow">GROUP OPERATIONS / 團購管理</p><h1>需求投票與正式團購</h1></div><p>投票確認需求，管理端審核後建立可付款、可配送的正式團購。</p></header>
+      <header className="workspace-heading"><div><p className="eyebrow">GROUP OPERATIONS / 團購管理</p><h1>需求投票與正式團購</h1></div></header>
       <AdminNav />
       <Tabs.Root className="admin-social-tabs" defaultValue="proposals">
         <Tabs.List className="tab-list" aria-label="團購管理分類"><Tabs.Trigger value="proposals">提案審核</Tabs.Trigger><Tabs.Trigger value="campaigns">正式團購</Tabs.Trigger><Tabs.Trigger value="bundles">固定套組</Tabs.Trigger></Tabs.List>
@@ -65,54 +65,54 @@ function GroupProposalReview({ proposal, products, bundles, onDone }: { proposal
   const [threshold, setThreshold] = useState(proposal.threshold || 10);
   const [deadline, setDeadline] = useState(localDateTime(7));
   const [reason, setReason] = useState("");
-  const [customTarget, setCustomTarget] = useState("");
-  const targetType = proposal.target_type === "custom" ? customTarget.split(":")[0] as "product" | "bundle" : proposal.target_type;
-  const targetId = proposal.target_type === "custom" ? customTarget.split(":")[1] : proposal.target_id;
-  const target = targetType === "product" ? products.find((item) => item.id === targetId) : bundles.find((item) => item.id === targetId);
   const action = useMutation({
-    mutationFn: async (decision: "approve" | "reject" | "convert") => {
+    mutationFn: async (decision: "approve" | "reject") => {
       if (decision === "approve") return apiFetch(`/v1/vote-proposals/${proposal.id}/admin/approve`, { method: "POST", body: JSON.stringify({ threshold, deadline: new Date(deadline).toISOString() }) });
       if (decision === "reject") return apiFetch(`/v1/vote-proposals/${proposal.id}/admin/reject`, { method: "POST", body: JSON.stringify({ reason }) });
-      if (!target) throw new Error("找不到提案對應項目");
-      return apiFetch(`/v1/vote-proposals/${proposal.id}/admin/convert`, { method: "POST", body: JSON.stringify(campaignPayloadFromTarget(proposal, target, targetType)) });
+
     },
     onSuccess: onDone,
   });
   return (
-    <article className="admin-review-card">
+    <article className="admin-review-card group-proposal-card">
       <div className="review-card-copy"><span className="status-chip">{groupProposalStatus(proposal.status)}</span><h3>{proposal.target_name}</h3>{proposal.request_details && <p className="group-request-details">{proposal.request_details}</p>}<p>{proposal.vote_count}/{proposal.threshold} 人 · 預估 {proposal.estimated_quantity} 組</p><small>{proposal.deadline ? `${formatDateTime(proposal.deadline)} 截止` : "待審核設定期限"}</small></div>
       <div className="review-card-actions schedule-fields">
         {proposal.status === "pending_review" && <><label className="field"><span>門檻人數</span><input min={1} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /></label><label className="field"><span>投票截止</span><input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label></>}
-        {proposal.target_type === "custom" && proposal.status === "conversion_pending" && <label className="field"><span>正式開團商品或套組</span><select required value={customTarget} onChange={(event) => setCustomTarget(event.target.value)}><option value="">選擇供應項目</option>{products.filter((item) => item.is_active).map((item) => <option key={item.id} value={`product:${item.id}`}>商品 · {item.name}</option>)}{bundles.filter((item) => item.is_active).map((item) => <option key={item.id} value={`bundle:${item.id}`}>套組 · {item.name}</option>)}</select></label>}
+
         <label className="field"><span>處理原因</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label>
-        <div>{proposal.status === "pending_review" && <button type="button" disabled={!deadline || action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />通過並開放投票</button>}{proposal.status === "pending_review" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("reject")}>不通過</button>}{proposal.status === "conversion_pending" && <button type="button" disabled={!target || action.isPending} onClick={() => action.mutate("convert")}>建立正式團購</button>}</div>
+        <div>{proposal.status === "pending_review" && <button type="button" disabled={!deadline || action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />通過並開放投票</button>}{proposal.status === "pending_review" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("reject")}>不通過</button>}</div>
         {action.isError && <p className="form-error">{action.error.message}</p>}
       </div>
+        {["pending_review", "voting", "conversion_pending"].includes(proposal.status) && <CampaignCreateForm proposal={proposal} products={products} bundles={bundles} onDone={onDone} />}
     </article>
   );
 }
 
-function CampaignCreateForm({ products, bundles, onDone }: { products: Product[]; bundles: GroupBundle[]; onDone: () => void }) {
+function CampaignCreateForm({ products, bundles, proposal, onDone }: { products: Product[]; bundles: GroupBundle[]; proposal?: GroupVoteProposal; onDone: () => void }) {
   const [open, setOpen] = useState(false);
-  const [targetType, setTargetType] = useState<"product" | "bundle">("product");
-  const [targetId, setTargetId] = useState("");
-  const [minQuantity, setMinQuantity] = useState(10);
+  const [targetType, setTargetType] = useState<"product" | "bundle">(proposal?.target_type === "bundle" ? "bundle" : "product");
+  const [targetId, setTargetId] = useState(proposal?.target_id || "");
+  const [minQuantity, setMinQuantity] = useState(proposal ? 1 : 10);
+  const [memberPrice, setMemberPrice] = useState(0);
+  const [nonmemberPrice, setNonmemberPrice] = useState(0);
   const [supplyCap, setSupplyCap] = useState(30);
   const [perUserCap, setPerUserCap] = useState(5);
   const [deadline, setDeadline] = useState(localDateTime(7));
   const [pickupStart, setPickupStart] = useState(localDateTime(10));
   const [pickupEnd, setPickupEnd] = useState(localDateTime(11));
-  const targets = targetType === "product" ? products : bundles;
+  const targets = (targetType === "product" ? products : bundles).filter((item) => item.is_active);
   const target = targets.find((item) => item.id === targetId);
+  useEffect(() => { setMemberPrice(target?.member_price || 0); setNonmemberPrice(target?.nonmember_price || 0); }, [target?.id, target?.member_price, target?.nonmember_price]);
   const create = useMutation({
     mutationFn: () => {
       if (!target) throw new Error("請選擇團購項目");
       const product = targetType === "product" ? target as Product : null;
-      return apiFetch<GroupCampaign>("/v1/group-campaigns", { method: "POST", body: JSON.stringify({ target_type: targetType, target_id: target.id, title: `${target.name}共同購買`, description: target.description || "由管理員直接開放共同購買。", image_url: target.image_url || null, member_price: target.member_price, nonmember_price: target.nonmember_price, min_paid_quantity: minQuantity, supply_cap: supplyCap, per_user_cap: perUserCap, deadline: new Date(deadline).toISOString(), estimated_pickup_start: new Date(pickupStart).toISOString(), estimated_pickup_end: new Date(pickupEnd).toISOString(), can_ship: product?.can_ship || false, shipping_temperature: product?.can_ship ? product.shipping_temperature : null, allowed_shipping_channels: product?.can_ship ? product.allowed_shipping_channels : [] }) });
+      const path = proposal ? `/v1/vote-proposals/${proposal.id}/admin/open-direct` : "/v1/group-campaigns";
+      return apiFetch<GroupCampaign>(path, { method: "POST", body: JSON.stringify({ target_type: targetType, target_id: target.id, title: `${target.name}共同購買`, description: target.description || "由管理員直接開放共同購買。", image_url: target.image_url || null, member_price: memberPrice, nonmember_price: nonmemberPrice, min_paid_quantity: minQuantity, supply_cap: supplyCap, per_user_cap: perUserCap, deadline: new Date(deadline).toISOString(), estimated_pickup_start: new Date(pickupStart).toISOString(), estimated_pickup_end: new Date(pickupEnd).toISOString(), can_ship: product?.can_ship || false, shipping_temperature: product?.can_ship ? product.shipping_temperature : null, allowed_shipping_channels: product?.can_ship ? product.allowed_shipping_channels : [] }) });
     },
     onSuccess: () => { setOpen(false); setTargetId(""); onDone(); },
   });
-  return <section className="admin-create-block"><button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />直接建立正式團購</button>{open && <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><div className="form-heading"><div><p className="eyebrow">DIRECT CAMPAIGN / 直接開團</p><h2>直接開團</h2></div><span>不經投票，直接使用既有商品或套組。</span></div><div className="field-grid three-columns"><label className="field"><span>項目類型</span><select value={targetType} onChange={(event) => { setTargetType(event.target.value as "product" | "bundle"); setTargetId(""); }}><option value="product">單一商品</option><option value="bundle">固定套組</option></select></label><label className="field"><span>團購項目</span><select required value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">選擇項目</option>{targets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>付款門檻</span><input min={1} type="number" value={minQuantity} onChange={(event) => setMinQuantity(Number(event.target.value))} /></label><label className="field"><span>供應上限</span><input min={1} type="number" value={supplyCap} onChange={(event) => setSupplyCap(Number(event.target.value))} /></label><label className="field"><span>每人上限</span><input min={1} type="number" value={perUserCap} onChange={(event) => setPerUserCap(Number(event.target.value))} /></label><label className="field"><span>付款截止</span><input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label><label className="field"><span>預計取貨開始</span><input type="datetime-local" value={pickupStart} onChange={(event) => setPickupStart(event.target.value)} /></label><label className="field"><span>預計取貨結束</span><input type="datetime-local" value={pickupEnd} onChange={(event) => setPickupEnd(event.target.value)} /></label></div>{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={!target || create.isPending}>建立團購</button></div></form>}</section>;
+  return <section className="admin-create-block"><button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />{proposal ? "直接確認並開團" : "直接建立正式團購"}</button>{open && <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><div className="form-heading"><div><p className="eyebrow">DIRECT CAMPAIGN / 直接開團</p><h2>直接開團</h2></div></div><div className="field-grid three-columns"><label className="field"><span>項目類型</span><select disabled={Boolean(proposal && proposal.target_type !== "custom")} value={targetType} onChange={(event) => { setTargetType(event.target.value as "product" | "bundle"); setTargetId(""); }}><option value="product">單一商品</option><option value="bundle">固定套組</option></select></label><label className="field"><span>團購項目</span><select required disabled={Boolean(proposal && proposal.target_type !== "custom")} value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">選擇項目</option>{targets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="field"><span>社員價</span><input type="number" min={0} required value={memberPrice} onChange={(event) => setMemberPrice(Number(event.target.value))} /></label><label className="field"><span>一般價</span><input type="number" min={0} required value={nonmemberPrice} onChange={(event) => setNonmemberPrice(Number(event.target.value))} /></label><label className="field"><span>付款門檻</span><input min={1} type="number" value={minQuantity} onChange={(event) => setMinQuantity(Number(event.target.value))} /></label><label className="field"><span>供應上限</span><input min={1} type="number" value={supplyCap} onChange={(event) => setSupplyCap(Number(event.target.value))} /></label><label className="field"><span>每人上限</span><input min={1} type="number" value={perUserCap} onChange={(event) => setPerUserCap(Number(event.target.value))} /></label><label className="field"><span>付款截止</span><input type="datetime-local" required value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label><label className="field"><span>預計取貨開始</span><input type="datetime-local" required value={pickupStart} onChange={(event) => setPickupStart(event.target.value)} /></label><label className="field"><span>預計取貨結束</span><input type="datetime-local" required value={pickupEnd} onChange={(event) => setPickupEnd(event.target.value)} /></label></div>{memberPrice > nonmemberPrice && <p className="form-error">社員價不可高於一般價</p>}{supplyCap < minQuantity && <p className="form-error">供應上限不可低於付款門檻</p>}{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={!target || memberPrice > nonmemberPrice || supplyCap < minQuantity || create.isPending}>{proposal ? "確認開放團購" : "建立團購"}</button></div></form>}</section>;
 }
 
 function CampaignAdminCard({ campaign, onDone }: { campaign: GroupCampaign; onDone: () => void }) {
@@ -135,12 +135,6 @@ function BundleCreateForm({ products, onDone }: { products: Product[]; onDone: (
   const validItems = useMemo(() => items.filter((item) => item.product_id), [items]);
   const create = useMutation({ mutationFn: () => apiFetch<GroupBundle>("/v1/group-bundles", { method: "POST", body: JSON.stringify({ name, description, member_price: memberPrice, nonmember_price: nonmemberPrice, items: validItems, is_active: true }) }), onSuccess: () => { setOpen(false); setName(""); setDescription(""); setItems([{ product_id: "", quantity: 1 }]); onDone(); } });
   return <section className="admin-create-block"><button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />建立固定套組</button>{open && <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><div className="form-heading"><div><p className="eyebrow">BUNDLE RECORD / 商品套組</p><h2>建立固定套組</h2></div></div><div className="field-grid two-columns"><label className="field"><span>套組名稱</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>社員價</span><input min={0} type="number" value={memberPrice} onChange={(event) => setMemberPrice(Number(event.target.value))} /></label><label className="field"><span>一般價</span><input min={0} type="number" value={nonmemberPrice} onChange={(event) => setNonmemberPrice(Number(event.target.value))} /></label><label className="field wide"><span>說明</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></label></div><div className="bundle-item-editor">{items.map((item, index) => <div key={index}><label className="field"><span>商品</span><select value={item.product_id} onChange={(event) => setItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, product_id: event.target.value } : row))}><option value="">選擇商品</option>{products.filter((product) => product.is_active).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><label className="field"><span>數量</span><input min={1} type="number" value={item.quantity} onChange={(event) => setItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, quantity: Number(event.target.value) } : row))} /></label><button type="button" onClick={() => setItems((current) => current.filter((_, rowIndex) => rowIndex !== index))}>移除</button></div>)}</div><button className="button button-quiet" type="button" onClick={() => setItems((current) => [...current, { product_id: "", quantity: 1 }])}><Plus size={16} />加入商品</button>{memberPrice > nonmemberPrice && <p className="form-error">社員價不可高於一般價</p>}{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={!name.trim() || validItems.length === 0 || memberPrice > nonmemberPrice || create.isPending}>儲存套組</button></div></form>}</section>;
-}
-
-function campaignPayloadFromTarget(proposal: GroupVoteProposal, target: Product | GroupBundle, targetType: "product" | "bundle") {
-  const now = Date.now();
-  const product = targetType === "product" ? target as Product : null;
-  return { source_proposal_id: proposal.id, target_type: targetType, target_id: target.id, title: `${proposal.target_name}共同購買`, description: "依投票需求開放付款，達門檻後由合作社確認成團。", image_url: target.image_url || null, member_price: Math.round(target.member_price * 0.92), nonmember_price: Math.round(target.nonmember_price * 0.95), min_paid_quantity: Math.max(proposal.threshold, 1), supply_cap: Math.max(proposal.estimated_quantity, proposal.threshold * 3, 1), per_user_cap: 5, deadline: new Date(now + 7 * 86400000).toISOString(), estimated_pickup_start: new Date(now + 10 * 86400000).toISOString(), estimated_pickup_end: new Date(now + 11 * 86400000).toISOString(), can_ship: product?.can_ship || false, shipping_temperature: product?.can_ship ? product.shipping_temperature : null, allowed_shipping_channels: product?.can_ship ? product.allowed_shipping_channels : [] };
 }
 
 function localDateTime(daysAhead: number) {

@@ -44,6 +44,13 @@ def test_catalog_migration_preserves_existing_votes_and_guards_new_requests(tmp_
         command.upgrade(config, "head")
         command.check(config)
         with engine.begin() as connection:
+            user_id = connection.scalar(text("SELECT id FROM users LIMIT 1"))
+            connection.execute(text("INSERT INTO profile_photo_assets (id, user_id, content, created_at) VALUES ('photo-guard', :user_id, :content, CURRENT_TIMESTAMP)"), {"user_id": user_id, "content": b"photo"})
+        with pytest.raises(RuntimeError, match="已有商品或社員照片"):
+            command.downgrade(config, "0031_meal_photos_custom_requests")
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM profile_photo_assets WHERE id='photo-guard'"))
+        with engine.begin() as connection:
             assert connection.execute(text("SELECT id, proposer_id, target_type, target_id, target_name_snapshot, status FROM vote_proposals")).all() == before
             assert connection.execute(text("SELECT id, proposal_id, user_id, estimated_quantity FROM votes")).all() == votes
             connection.execute(text("UPDATE vote_proposals SET target_type='custom', target_id=NULL, request_details='其他需求內容'"))

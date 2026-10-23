@@ -137,17 +137,21 @@ export async function apiFetch<T>(
   return response.json() as Promise<T>;
 }
 
-export async function downloadApiFile(path: string, filename: string): Promise<void> {
+export async function fetchApiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
   const request = () => {
     const headers = new Headers();
     const token = getAccessToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    return requestApi(path, { headers });
+    return requestApi(path, { headers, signal });
   };
   let response = await request();
   if (response.status === 401 && await restoreSession()) response = await request();
   if (!response.ok) throw await errorFromResponse(response);
-  const objectUrl = URL.createObjectURL(await response.blob());
+  return response.blob();
+}
+
+export async function downloadApiFile(path: string, filename: string): Promise<void> {
+  const objectUrl = URL.createObjectURL(await fetchApiBlob(path));
   const anchor = document.createElement("a");
   anchor.href = objectUrl;
   anchor.download = filename;
@@ -157,7 +161,7 @@ export async function downloadApiFile(path: string, filename: string): Promise<v
 
 export function resolveAsset(imageUrl?: string | null): string {
   if (!imageUrl) return "/products/generic-product.jpg";
-  if (imageUrl.startsWith("/v1/meal-photos/")) return apiUrl(imageUrl);
+  if (imageUrl.startsWith("/v1/meal-photos/") || imageUrl.startsWith("/v1/product-photos/")) return apiUrl(imageUrl);
   return imageUrl.replace(/^\/assets/, "");
 }
 
