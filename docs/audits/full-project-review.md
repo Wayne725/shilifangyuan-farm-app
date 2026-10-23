@@ -6,7 +6,7 @@
 
 ## 先看這裡
 
-**非便當商品的阻擋已在本機修正；使用者已授權部署，目前準備發布。正式站完成驗收後才標示已恢復。**
+**商品自取銷售政策已於 2026-10-23 正式生效：一般商品與團購已開放，兩款測試品白名單限制已解除。12:47 正式 API 與網站代理均回傳正確能力，36 項公開唯讀檢查全部通過。真實付款未在本次執行。**
 
 正式網站公開目錄的 **28 項在架且有庫存商品**，已複製公開商品資料到記憶體資料庫，逐項通過「試算 200 → 建單 201 → 建立付款嘗試 201 → 付款頁轉址 303」。沒有建立正式訂單、占用正式庫存、扣款、開票或更動商品上下架。
 
@@ -26,12 +26,12 @@
 
 本次聊天原始工作樹是早期 Expo 版 `219405a`；確認近期部署筆記與正式分支後，已在此乾淨工作樹建立新分支，對齊 Vite 正式基準。沒有覆蓋主目錄的本機資料。
 
-目前限制分為兩層：
+修復前的限制分為兩層：
 
 1. 管理後台的 `orders_open` 只表示是否接受新訂單。正式公開 `/v1/platform` 實測是 `true`。
 2. 伺服器 `SALES_SCOPE=meals_only` 另外拒絕非便當，只有兩組精確商品 ID／SKU、10 元、單件、自取的驗收品例外。後台原本看不到此範圍。
 
-公開目錄與 quote 沒有同樣限制，所以使用者會先看見商品、加入清單、完成試算，到建單才遇到 409。隔離測試已重現：一般白米 2 包試算 240 元成功，建單回「目前僅開放便當訂購；其他新交易暫未開放」。歷史發布紀錄確認曾為上述兩品放行，並非開放全部一般商品。本次未直接讀取正式環境變數，因此正式 `SALES_SCOPE` 即時值仍需發布時確認，不能把歷史設定當即時量測。
+公開目錄與 quote 沒有同樣限制，所以使用者會先看見商品、加入清單、完成試算，到建單才遇到 409。隔離測試已重現：一般白米 2 包試算 240 元成功，建單回「目前僅開放便當訂購；其他新交易暫未開放」。歷史發布紀錄確認曾為上述兩品放行，並非開放全部一般商品。發布前已從 Render 直接確認 API 與 Web 均為 `5c061a7`，API 的實際 `SALES_SCOPE=meals_only`；其他秘密值保持遮罩。
 
 ## 本次實作
 
@@ -89,13 +89,34 @@ flowchart TD
 
 - 原始症狀：新回歸測試在舊 `meals_only` 設定下，quote 200、order 409；已保存重現結果於本次對話。
 - 28 項公開商品隔離重播：全部通過，結果在 `outputs/catalog-pickup-results.json`；腳本 [catalog-pickup-repro.py](catalog-pickup-repro.py)。付款頁只產生指向假金流主機的轉址，未跟隨轉址。
-- 後端完整套件：1,703 passed、4 skipped；另 10 項 TLS 測試受沙箱綁定本機埠限制，允許本機伺服器後單獨重跑 10 passed，合計 **1,713 項通過、4 項 PostgreSQL 測試略過**。未在本機執行 PostgreSQL／migration 往返或 GitHub CI。
-- 前端 **73 項通過**；TypeScript 與 Vite production build 通過。Node 使用 22.23.4；後端本機 Python 3.12.14，精確部署版 Python 3.12.15 需 CI 驗證。
+- 後端本機完整套件：1,703 passed、4 skipped；另 10 項 TLS 測試受沙箱綁定本機埠限制，允許本機伺服器後單獨重跑 10 passed，合計 **1,713 項通過、4 項 PostgreSQL 測試略過**。
+- [GitHub CI 39900306298](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/39900306298) 全數成功：精確 Python 3.12.15 下完整後端 **1,717 passed**，PostgreSQL 付款／發票併發專項 **29 passed**，migration 升級／完整降版／再升級與依賴掃描通過。後端全套耗時 9 分 28 秒，日誌持續推進，沒有死鎖或 timeout。CI 測試提交為 `a7a67626a4d7c1c5754dcddc646d49057eccedac`。
+- 合併後針對實際發布提交 `888a0a00a313941c4619d69b1a805f6f359a1557` 的 [CI 39901422338](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/39901422338) 也全數成功。
+- 前端 **73 項通過**；TypeScript、Vite production build 與 API 路徑契約在本機及 CI 通過。Node 使用 22.23.4；後端本機 Python 3.12.14，CI 使用正式版 3.12.15。
 - 隔離 Chromium **17 項通過**：7 項銷售範圍、8 項自取／字級／缺取貨點、2 項既有驗收品；含 390px 手機視窗。API 都由假資料攔截，不能當成正式金流或手機真機通過。
 - 業務報告額外六項缺陷有可執行隔離重現；[business-flow-repro.py](business-flow-repro.py) 成功代表症狀重現，不代表行為正確。
-- 正式站僅唯讀檢查公開頁面及既有登入畫面；手機真機、真實付款、正式資料庫、跨分頁登入競態與外部供應商均未在此驗收。
+- 正式站部署後 **36 項唯讀檢查通過**，包含 `/health`、`/ready`、公開商品／團購／便當／取貨 API、頁面與圖片、未登入權限與 CORS。API 直連與網站代理的 `/v1/platform` 均符合下列發布結果；原有 28 項商品 ID 全數保留，且仍在架、有庫存。證據：`outputs/catalog-pickup-live-smoke.json`、`outputs/catalog-pickup-live-capabilities.json`。
+- 正式 Safari 商店有 28 個商品加入入口，沒有停用或銷售範圍阻擋。當時未登入、結帳清單為空，正常呈現空狀態；未為驗收加入商品，也未宣稱正式登入後試算、建單或付款完成。後台需要登入，正式後台畫面本次未驗收；其能力展示已由隔離瀏覽器測試覆蓋。Safari 已留在正式商店，使用者原有其他分頁保留。
+- 正式站僅唯讀檢查公開頁面及既有登入畫面；手機真機、真實付款、正式交易資料庫、跨分頁登入競態與外部供應商均未在此驗收。
 
-## 發布方式
+## 發布紀錄
+
+[PR #3](https://github.com/Wayne725/shilifangyuan-farm-app/pull/3) 已於台灣時間 2026-10-23 12:38 合併；發布提交 `888a0a00a313941c4619d69b1a805f6f359a1557` 與通過 CI 的提交具有相同 Git tree `02ce5c572e96d8a1fbd4473f2a1aecc727f0f184`。
+
+正式站驗收時間：台灣時間 2026-10-23 12:47。先部署支援新範圍的 API，再將唯一環境值 `SALES_SCOPE` 從 `meals_only` 改為 `pickup` 並重新部署；Web 使用同一發布提交。未變更商品資料或其他環境值。
+
+Render 最終均為 Live：API `dep-dbdecoui0phs739griog`、Web `dep-dbdebgjncjis739tfb70`。指定提交部署暫時停用自動部署後，兩端均已恢復原有 `After CI Checks Pass`，正式分支保持 `codex/v2-social-commerce`。發布收據在 `outputs/catalog-pickup-deployment.json`，畫面證據在 `outputs/deployment/`。
+
+| 正式能力 | 驗收結果 |
+|---|---|
+| `orders_open` | `true` |
+| `sales_scope` | `pickup` |
+| `regular_orders_enabled` | `true` |
+| `group_orders_enabled` | `true` |
+| `shipping_enabled` | `false` |
+| `limited_product_ids` | `[]` |
+
+下列原則保留供日後部署與回退使用：
 
 發布需同時包含 **已測程式**與 API 服務的 **`SALES_SCOPE=pickup`**。只部署程式而保留 `meals_only`，一般商品仍會被後端拒絕；只將舊版設定改成 `pickup`，舊版不識別此值，會啟動失敗。這兩者必須作為同一次發布處理。
 
