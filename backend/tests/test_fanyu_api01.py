@@ -172,7 +172,7 @@ async def test_fanyu_default_transport_stops_on_redirect_without_forwarding_cred
             calls.append(request.full_url)
             raise HTTPError(request.full_url, 302, 'Found', {'Location': 'https://other.example/einv/queryInvoice'}, BytesIO(b''))
 
-    def build_opener(handler):
+    def build_opener(handler, https_handler):
         assert handler.redirect_request(None, None, 302, 'Found', {}, 'https://other.example') is None
         return FakeOpener()
 

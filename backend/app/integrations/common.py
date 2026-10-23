@@ -7,7 +7,9 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener, urlopen
+
+from .tls import create_tls_context
 
 
 class IntegrationError(RuntimeError):
@@ -139,11 +141,12 @@ async def _urlopen(
 ) -> HTTPResponse:
     def send() -> HTTPResponse:
         request = Request(url=url, data=body, headers=dict(headers), method="POST")
+        context = create_tls_context()
         try:
             response_context = (
-                urlopen(request, timeout=timeout_seconds)
+                urlopen(request, timeout=timeout_seconds, context=context)
                 if allow_redirects
-                else build_opener(_NoRedirectHandler()).open(
+                else build_opener(_NoRedirectHandler(), HTTPSHandler(context=context)).open(
                     request,
                     timeout=timeout_seconds,
                 )

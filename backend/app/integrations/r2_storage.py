@@ -10,6 +10,7 @@ from typing import Any, Dict, Mapping, Optional, Protocol, Sequence
 
 from ..config import Settings
 from .common import IntegrationConfigurationError, IntegrationResponseError
+from .tls import ca_bundle_path
 
 
 MAX_MEMBERSHIP_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -442,6 +443,7 @@ class R2DocumentStorage:
             aws_access_key_id=settings.access_key_id,
             aws_secret_access_key=settings.secret_access_key,
             region_name="auto",
+            verify=ca_bundle_path(),
             config=Config(
                 signature_version="s3v4",
                 s3={"addressing_style": "path"},

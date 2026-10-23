@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..config import Settings
+from .tls import create_tls_context
 
 
 class FeieError(Exception):
@@ -80,7 +81,7 @@ class FeieClient:
         try:
             async with httpx.AsyncClient(
                 timeout=self.settings.printer_timeout_seconds,
-                follow_redirects=False, transport=self.transport,
+                follow_redirects=False, transport=self.transport, verify=create_tls_context(),
             ) as client:
                 response = await client.post(self.settings.feie_api_base_url, data={
                     "user": user, "stime": stime, "sig": signature,

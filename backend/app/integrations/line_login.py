@@ -13,6 +13,7 @@ from email_validator import EmailNotValidError, validate_email
 
 from ..config import Settings
 from .common import IntegrationConfigurationError, IntegrationError, IntegrationResponseError
+from .tls import create_tls_context
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,9 @@ class LineLoginClient:
 
     async def _post(self, path: str, data: dict[str, str]) -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=15, follow_redirects=False, verify=create_tls_context(),
+            ) as client:
                 response = await client.post(f"https://api.line.me/oauth2/v2.1/{path}", data=data)
                 if response.status_code != 200:
                     raise IntegrationResponseError("LINE authorization could not be verified")

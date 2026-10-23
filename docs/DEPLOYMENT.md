@@ -14,6 +14,23 @@ Blueprint 的執行環境、公開網址、金流／發票環境旗標及出單�
 
 Preview 只建立虛擬展示資料，預設拒絕一般線上付款，物流與真實證件上傳也維持停用。正式 NT$10 驗收可擇一設定指定訂單或專用測試商品 SKU；兩種白名單不可同時啟用，完成後須清空。Preview 必須填妥 Resend，且要求強 JWT／reconciliation 密鑰與三組非預設展示密碼。升級 Sandbox 或 Production 前必須改用獨立的 `PII_ENCRYPTION_KEYS_JSON`。
 
+## 執行環境與憑證更新
+
+Node.js 固定為 `.nvmrc` 的 `22.23.4`，Python 固定為 `backend/.python-version` 的 `3.12.15`；CI 使用相同版本檔。Render 的 `NODE_VERSION`、`PYTHON_VERSION` 環境變數優先於版本檔，因此既有服務也必須同步更新這兩個值。
+
+API Build Command 使用 `python scripts/bootstrap_pip.py && python -m pip install -r requirements.txt`。Bootstrap 依 Python 安全公告，以附 SHA256 的官方 wheel 安裝 pip `26.2.2`，避免透過舊憑證庫下載未驗證完整性的更新；requirements 另要求 `certifi>=2026.10.19`。本機建立 Python 環境後亦依序執行這兩個指令。
+
+金流、發票與郵件的 urllib 傳輸（含禁止轉址路徑）、LINE 的 HTTPX，以及 R2 SDK 明確採用 certifi bundle，保留憑證鏈與主機名稱驗證。這些客戶端不再以 `SSL_CERT_FILE`、`SSL_CERT_DIR` 或 `AWS_CA_BUNDLE` 加入其他信任根；若日後需要私有 CA，應另外設計及測試信任政策。
+
+Render 原生環境的系統 CA 仍需透過新的 build 更新；Python 修補版與應用程式 certifi 無法代替系統 CA。既有正式服務僅同步本次版本與 Build Command，保留其目前的 `APP_ENV`、供應商環境及其他營運設定，其值由 Render 手動管理（sync: false）。
+
+部署後核對實際 Python、Node、pip、certifi 版本，並從執行中的服務使用實際 HTTP client 驗證以下兩個端點都因憑證驗證失敗而遭拒，不能以 DNS 失敗或 timeout 當作通過：
+
+- `https://dv-g3b-emudhra.we-have-a-problem.com/`
+- `https://dv-g3b-aaa-emudhra.we-have-a-problem.com/`
+
+測試不得附帶金流／發票帳密或訂單內容，另確認正常端點仍可連線。系統與 pip 的有效信任庫也須核對；本機測試不能取代正式環境驗收。來源及風險說明見 [Render 資安公告查證](research/render-security-advisories.md)。
+
 ## 建立 Render Blueprint
 
 1. 將專案推送到私人 GitHub repository。
