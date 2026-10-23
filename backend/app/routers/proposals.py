@@ -13,12 +13,14 @@ from ..database import get_session
 from ..config import get_settings
 from ..domain import apply_proposal_clock, aware, validate_campaign_schedule
 from ..models import (
+    AdminAudit,
     GroupBundle,
     GroupCampaign,
     Notification,
     OutboxEvent,
     Product,
     ProposalStatus,
+    ProposalTargetType,
     TargetType,
     User,
     UserRole,
@@ -85,6 +87,7 @@ def proposal_read(
         target_type=proposal.target_type,
         target_id=proposal.target_id,
         target_name=proposal.target_name_snapshot,
+        request_details=proposal.request_details,
         status=proposal.status,
         threshold=proposal.threshold,
         deadline=proposal.deadline,
@@ -233,10 +236,12 @@ async def create_proposal(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ProposalRead:
-    target_name, _ = await resolve_target(
-        session, body.target_type, body.target_id
-    )
-    duplicate = await session.scalar(
+    is_custom = body.target_type == ProposalTargetType.CUSTOM
+    if is_custom:
+        target_name = body.request_name
+    else:
+        target_name, _ = await resolve_target(session, body.target_type, body.target_id)
+    duplicate = None if is_custom else await session.scalar(
         select(VoteProposal)
         .where(
             VoteProposal.target_type == body.target_type,
@@ -258,6 +263,7 @@ async def create_proposal(
         target_type=body.target_type,
         target_id=body.target_id,
         target_name_snapshot=target_name,
+        request_details=body.request_details,
         status=ProposalStatus.PENDING_REVIEW,
     )
     session.add(proposal)
@@ -426,6 +432,20 @@ async def convert_proposal(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> CampaignRead:
+    return await open_proposal_campaign(proposal_id, body, admin, session, direct=False)
+
+
+@proposals_router.post("/{proposal_id}/admin/open-direct", response_model=CampaignRead, status_code=201)
+async def open_proposal_directly(
+    proposal_id: str,
+    body: CampaignCreate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> CampaignRead:
+    return await open_proposal_campaign(proposal_id, body, admin, session, direct=True)
+
+
+async def open_proposal_campaign(proposal_id: str, body: CampaignCreate, admin: User, session: AsyncSession, *, direct: bool) -> CampaignRead:
     proposal = await get_proposal_with_votes(session, proposal_id, lock=True)
     if proposal is None:
         raise HTTPException(status_code=404, detail="找不到投票提案")
@@ -436,14 +456,13 @@ async def convert_proposal(
         proposal.status == ProposalStatus.VOTING
         and len(proposal.votes) >= proposal.threshold
     )
-    if (
-        proposal.status != ProposalStatus.CONVERSION_PENDING
-        and not can_convert_early
-    ):
+    can_open_directly = direct and proposal.status in OPEN_PROPOSAL_STATUSES
+    if not (can_open_directly or (not direct and (proposal.status == ProposalStatus.CONVERSION_PENDING or can_convert_early))):
         if changed:
             await session.commit()
         raise HTTPException(status_code=409, detail="此提案尚未進入開團階段")
-    if (
+    await resolve_target(session, body.target_type, body.target_id)
+    if proposal.target_type != ProposalTargetType.CUSTOM and (
         body.target_type != proposal.target_type
         or body.target_id != proposal.target_id
     ):
@@ -465,6 +484,8 @@ async def convert_proposal(
     proposal.status = ProposalStatus.CONVERTED
     session.add(campaign)
     await session.flush()
+    session.add(AdminAudit(actor_id=admin.id, action="proposal.open_direct" if direct else "proposal.convert", aggregate_type="vote_proposal", aggregate_id=proposal.id,
+                           data={"campaign_id": campaign.id, "vote_count": len(proposal.votes), "threshold": proposal.threshold}))
     session.add(
         OutboxEvent(
             event_type="group.opened",

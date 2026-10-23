@@ -1130,6 +1130,12 @@ class GroupBundleItem(Base):
     product: Mapped[Product] = relationship(lazy="joined")
 
 
+class ProposalTargetType(str, enum.Enum):
+    PRODUCT = "product"
+    BUNDLE = "bundle"
+    CUSTOM = "custom"
+
+
 class VoteProposal(Base):
     __tablename__ = "vote_proposals"
     __table_args__ = (
@@ -1146,11 +1152,12 @@ class VoteProposal(Base):
     proposer_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
-    target_type: Mapped[TargetType] = mapped_column(
-        enum_type(TargetType, "proposal_target_type")
+    target_type: Mapped[ProposalTargetType] = mapped_column(
+        enum_type(ProposalTargetType, "proposal_target_type")
     )
-    target_id: Mapped[str] = mapped_column(String(36), index=True)
+    target_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     target_name_snapshot: Mapped[str] = mapped_column(String(120))
+    request_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[ProposalStatus] = mapped_column(
         enum_type(ProposalStatus, "proposal_status"),
         default=ProposalStatus.PENDING_REVIEW,
@@ -1566,6 +1573,17 @@ class Meal(Base):
         cascade="all, delete-orphan",
         order_by="MealOptionGroup.position",
     )
+
+
+class MealPhotoAsset(Base):
+    __tablename__ = "meal_photo_assets"
+    __table_args__ = (CheckConstraint("length(content) BETWEEN 1 AND 1048576", name="photo_size_valid"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    meal_id: Mapped[str] = mapped_column(ForeignKey("meals.id", ondelete="CASCADE"), index=True)
+    option_id: Mapped[Optional[str]] = mapped_column(ForeignKey("meal_options.id", ondelete="CASCADE"), nullable=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class MealOptionGroup(Base):
@@ -2876,3 +2894,17 @@ class FinancialStatementImport(Base):
     skipped_rows: Mapped[int] = mapped_column(Integer, default=0)
     uploaded_by_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='RESTRICT'))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class ProfilePhotoAsset(Base):
+    __tablename__ = "profile_photo_assets"
+    __table_args__ = (
+        CheckConstraint("length(content) BETWEEN 1 AND 1048576", name="profile_photo_size_valid"),
+        CheckConstraint("(product_id IS NULL) != (user_id IS NULL)", name="profile_photo_single_owner"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    product_id: Mapped[Optional[str]] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), nullable=True, unique=True)
+    user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, unique=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

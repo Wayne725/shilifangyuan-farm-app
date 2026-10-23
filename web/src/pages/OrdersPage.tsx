@@ -14,6 +14,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
+import * as Tabs from "@radix-ui/react-tabs";
+import { MealOrderHistory } from "../components/MealOrderHistory";
+import { OrderSearch } from "../components/OrderSearch";
+import { filterOrders } from "../lib/order-search";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { useAuth } from "../context/AuthContext";
@@ -51,6 +55,9 @@ export function OrdersPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const confirmationStartedAt = useRef(Date.now());
+  const [orderType, setOrderType] = useState(search.order_id ? "regular" : "meal");
+  const [query, setQuery] = useState("");
+  const [payment, setPayment] = useState("");
   const [selectedId, setSelectedId] = useState(search.order_id || "");
   const [cancelId, setCancelId] = useState("");
   const [cancelReason, setCancelReason] = useState("行程變更");
@@ -102,7 +109,7 @@ export function OrdersPage() {
   }, [search.attempt_id]);
 
   useEffect(() => {
-    if (search.order_id) setSelectedId(search.order_id);
+    if (search.order_id) { setSelectedId(search.order_id); setOrderType("regular"); }
   }, [search.order_id]);
 
   useEffect(() => {
@@ -118,7 +125,10 @@ export function OrdersPage() {
     }
   }, [queryClient, refreshedPaymentStatus]);
 
-  const selected = orders.data?.find((order) => order.id === selectedId);
+  const generalOrders = (orders.data || []).filter((order) => order.sales_channel !== "meal_preorder");
+  const visibleOrders = filterOrders(generalOrders, query, payment);
+  const selected = visibleOrders.find((order) => order.id === selectedId) || visibleOrders[0];
+  const returnedOrder = orders.data?.find((order) => order.id === search.order_id);
   const returnedMeal = useQuery({
     queryKey: ["returned-meal-order", user?.id, search.order_id],
     queryFn: async () => {
@@ -129,12 +139,12 @@ export function OrdersPage() {
         throw error;
       }
     },
-    enabled: Boolean(user && search.order_id && selected?.id === search.order_id && selected.sales_channel === "meal_preorder"),
+    enabled: Boolean(user && search.order_id && returnedOrder?.sales_channel === "meal_preorder"),
     retry: false,
   });
   const storedPaymentStatus =
-    selected && selected.id === search.order_id
-      ? selected.payment_status
+    returnedOrder
+      ? returnedOrder.payment_status
       : undefined;
   const returnResult =
     refreshedPaymentStatus
@@ -146,8 +156,7 @@ export function OrdersPage() {
         ? storedPaymentStatus
         : search.result || search.payment || search.logistics;
   const selectedPaymentIsConfirming = Boolean(
-    selected
-      && selected.id === search.order_id
+    returnedOrder
       && returnResult === "confirming",
   );
   const actionError =
@@ -185,9 +194,8 @@ export function OrdersPage() {
       <header className="workspace-heading">
         <div>
           <p className="eyebrow">ORDERS / 訂單中心</p>
-          <h1>每筆交易，<br />都看得見下一步。</h1>
+          <h1>訂單中心</h1>
         </div>
-        <p>付款、備貨與配送進度會集中顯示在這裡。</p>
       </header>
 
       {returnResult && (
@@ -200,23 +208,30 @@ export function OrdersPage() {
         </div>
       )}
 
+      {returnedOrder?.sales_channel === "meal_preorder" && selectedPaymentIsConfirming ? <DataState title="正在確認餐點付款結果" detail="確認完成後將開啟這筆餐點訂單。" /> : <Tabs.Root value={orderType} onValueChange={setOrderType} className="order-center-tabs">
+        <Tabs.List className="tab-list" aria-label="訂單分類"><Tabs.Trigger value="meal">餐點訂單</Tabs.Trigger><Tabs.Trigger value="regular">一般訂單</Tabs.Trigger></Tabs.List>
+        <Tabs.Content value="meal"><MealOrderHistory embedded /></Tabs.Content>
+        <Tabs.Content value="regular">
+      <OrderSearch query={query} payment={payment} onQuery={setQuery} onPayment={setPayment} count={visibleOrders.length} />
+      {orders.data && generalOrders.length > 0 && visibleOrders.length === 0 && <DataState title="沒有符合條件的一般訂單" detail="請調整關鍵字或付款狀態。" />}
       {orders.isPending && <LoadingLines count={4} />}
       {returnedMeal.isError && <DataState kind="error" title="便當取餐頁暫時無法開啟" detail={returnedMeal.error.message} />}
       {orders.isError && (
         <DataState kind="error" title="訂單暫時無法讀取" detail={orders.error.message} />
       )}
-      {orders.data?.length === 0 && (
-        <DataState title="目前還沒有訂單" detail="從生活消費選擇商品，第一筆交易會出現在這裡。" />
+      {orders.isSuccess && generalOrders.length === 0 && (
+        <DataState title="目前還沒有一般訂單" detail="從生活消費選擇商品，第一筆交易會出現在這裡。" />
       )}
 
-      {orders.data && orders.data.length > 0 && (
+      {visibleOrders.length > 0 && (
         <div className="orders-layout">
           <div className="order-index" aria-label="訂單清單">
-            {orders.data.map((order) => (
+            {visibleOrders.map((order) => (
               <button
                 key={order.id}
                 type="button"
-                className={selectedId === order.id ? "selected" : ""}
+                aria-pressed={selected?.id === order.id}
+                className={selected?.id === order.id ? "selected" : ""}
                 onClick={() => setSelectedId(order.id)}
               >
                 <span>{formatDate(order.created_at)}</span>
@@ -367,6 +382,8 @@ export function OrdersPage() {
         <Link className="text-link" to="/meal-orders">便當取餐憑證</Link>
         <Link className="text-link" to="/shop">繼續選購</Link>
       </div>
+        </Tabs.Content>
+      </Tabs.Root>}
     </section>
   );
 }

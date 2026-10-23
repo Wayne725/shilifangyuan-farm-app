@@ -5,13 +5,14 @@ import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
 import { loginReturnTo } from "../lib/login-navigation";
 import { LineLoginButton } from "../components/LineLogin";
+import { LoadingLines } from "../components/Shared";
 import type { AuthActionResponse } from "../lib/types";
 import "../styles/auth-options.css";
 
 type Intent = "existing_member" | "nonmember";
 export function RegisterPage() {
   const search = useSearch({ from: "/register" });
-  const { user, openLogin } = useAuth();
+  const { user, isAuthReady, openLogin } = useAuth();
   const returnTo = loginReturnTo(search.return_to || "/shop");
   const [intent, setIntent] = useState<Intent | undefined>(search.intent);
   const [step, setStep] = useState<"identity" | "method" | "email" | "line">(search.intent === "nonmember" ? "method" : "identity");
@@ -25,7 +26,8 @@ export function RegisterPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<AuthActionResponse | null>(null);
-  if (user) return <Navigate to="/account" replace />;
+  if (!isAuthReady) return <section className="auth-page" aria-label="正在確認登入"><LoadingLines count={3} /></section>;
+  if (user) return <Navigate from="/register" href={returnTo} replace />;
   const member = intent === "existing_member";
   const lineClaim = { phone: phone.trim(), email: email.trim() };
   const claim = { member_number: memberNumber.trim(), legal_name: legalName.trim(), email: email.trim() };

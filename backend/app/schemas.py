@@ -43,6 +43,7 @@ from .models import (
     PaymentMethod,
     ProductCategory,
     ProposalStatus,
+    ProposalTargetType,
     SalesChannel,
     ShipmentStatus,
     ShippingChannel,
@@ -347,8 +348,20 @@ class BundleRead(ApiModel):
 
 
 class ProposalCreate(BaseModel):
-    target_type: TargetType
-    target_id: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+    target_type: ProposalTargetType
+    target_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
+    request_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    request_details: Optional[str] = Field(default=None, min_length=1, max_length=3000)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "ProposalCreate":
+        if self.target_type == ProposalTargetType.CUSTOM:
+            if self.target_id or not self.request_name or not self.request_details:
+                raise ValueError("其他需求請填寫需求名稱與內容，不可指定既有項目")
+        elif not self.target_id or self.request_name or self.request_details:
+            raise ValueError("請選擇既有提案項目；新需求請改選其他需求")
+        return self
 
 
 class ProposalReview(BaseModel):
@@ -367,9 +380,10 @@ class VoteUpsert(BaseModel):
 class ProposalRead(ApiModel):
     id: str
     proposer_id: str
-    target_type: TargetType
-    target_id: str
+    target_type: ProposalTargetType
+    target_id: Optional[str]
     target_name: str
+    request_details: Optional[str] = None
     status: ProposalStatus
     threshold: int
     deadline: Optional[datetime]
@@ -1207,17 +1221,49 @@ class MealRead(ApiModel):
     price: int
     tax_type: TaxType
     is_active: bool
+    updated_at: datetime
     option_groups: List[MealOptionGroupRead] = Field(default_factory=list)
 
 
-class MealOptionImageUpdate(BaseModel):
-    id: str
-    image_url: Optional[str] = Field(default=None, max_length=500)
+class MealOptionEdit(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    id: Optional[str] = None
+    name: str = Field(min_length=1, max_length=120)
+    price_delta: int = Field(default=0, ge=0, le=100000)
+    is_active: bool = True
 
 
-class MealImagesUpdate(BaseModel):
-    image_url: Optional[str] = Field(default=None, max_length=500)
-    options: List[MealOptionImageUpdate] = Field(default_factory=list, max_length=1000)
+class MealOptionGroupEdit(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    id: Optional[str] = None
+    name: str = Field(min_length=1, max_length=120)
+    min_selections: int = Field(default=0, ge=0, le=20)
+    max_selections: int = Field(default=1, ge=1, le=20)
+    is_active: bool = True
+    options: List[MealOptionEdit] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_options(self) -> "MealOptionGroupEdit":
+        active_count = sum(option.is_active for option in self.options)
+        if self.min_selections > self.max_selections:
+            raise ValueError("必選數不可大於最多選擇數")
+        if self.is_active and active_count < self.max_selections:
+            raise ValueError("啟用選項數不可小於最多選擇數")
+        if len({option.name for option in self.options}) != len(self.options):
+            raise ValueError("同一群組不可有重複選項名稱")
+        return self
+
+
+class MealOptionsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_updated_at: datetime
+    option_groups: List[MealOptionGroupEdit] = Field(max_length=20)
+
+    @model_validator(mode="after")
+    def validate_groups(self) -> "MealOptionsUpdate":
+        if len({group.name for group in self.option_groups}) != len(self.option_groups):
+            raise ValueError("同一餐點不可有重複群組名稱")
+        return self
 
 
 class MealOfferingInput(BaseModel):

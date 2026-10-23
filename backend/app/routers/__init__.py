@@ -1,3 +1,4 @@
+from .photos import photos_router
 from .auth import auth_router
 from .line_auth import line_auth_router
 from .admin_users import admin_users_router
@@ -24,6 +25,7 @@ from .invoice_reports import invoice_reports_router
 from .financial_statements import router as financial_statements_router
 
 ALL_ROUTERS = [
+    photos_router,
     financial_statements_router,
     invoice_reports_router,
     promotions_router,

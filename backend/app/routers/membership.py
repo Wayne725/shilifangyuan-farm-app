@@ -1123,7 +1123,7 @@ async def update_my_directory_entry(
     if entry is None:
         entry = MemberDirectoryEntry(user_id=user.id, nickname=body.nickname)
         session.add(entry)
-    for field, value in body.model_dump().items():
+    for field, value in body.model_dump(exclude_unset=True).items():
         setattr(entry, field, value)
     await session.commit()
     return MemberDirectoryRead.model_validate(entry)
