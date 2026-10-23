@@ -82,8 +82,8 @@ async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(dat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("environment", ["production", "preview", "development"])
-async def test_only_production_public_listing_hides_demo_events_without_deleting_them(database_session, environment):
+@pytest.mark.parametrize("environment,scope", [("production", "meals_only"), ("production", "pickup"), ("preview", "all"), ("development", "all")])
+async def test_only_production_public_listing_hides_demo_events_without_deleting_them(database_session, environment, scope):
     session = database_session
     admin, buyer, live = await seed_meal_event(session)
     live_id = live.id
@@ -93,7 +93,7 @@ async def test_only_production_public_listing_hides_demo_events_without_deleting
             pickup_starts_at=live.pickup_starts_at, pickup_ends_at=live.pickup_ends_at,
             status=MealEventStatus.PUBLISHED, created_by_id=admin.id))
     await session.commit()
-    settings = meal_production_settings() if environment == "production" else make_test_settings(environment=environment)
+    settings = meal_production_settings(sales_scope=scope) if environment == "production" else make_test_settings(environment=environment)
     admin_token = create_token(admin, "access", timedelta(minutes=5), settings=settings)
     buyer_token = create_token(buyer, "access", timedelta(minutes=5), settings=settings)
     async with api_test_context(session, [meals_router], settings=settings) as client:
@@ -110,9 +110,12 @@ async def test_only_production_public_listing_hides_demo_events_without_deleting
             assert detail.status_code == 200
         if environment == "production":
             await session.refresh(live, ["offerings"])
-            blocked = await client.post("/v1/meal-events/meal-event-dinner-demo/orders", headers={"Authorization": f"Bearer {buyer_token}"}, json={
-                "items": [{"offering_id": live.offerings[0].id, "quantity": 1}], "contact_email": buyer.email,
-            })
-            assert blocked.status_code == 409
-            assert "展示" in blocked.json()["detail"]
+            for demo_id in DEMO_MEAL_EVENT_IDS:
+                for action, payment_method in (("quote", "online"), ("orders", "online"), ("orders", "cash_on_pickup")):
+                    blocked = await client.post(f"/v1/meal-events/{demo_id}/{action}", headers={"Authorization": f"Bearer {buyer_token}"}, json={
+                        "items": [{"offering_id": live.offerings[0].id, "quantity": 1}], "contact_email": buyer.email,
+                        "payment_method": payment_method,
+                    })
+                    assert blocked.status_code == 409, blocked.text
+                    assert "展示" in blocked.json()["detail"]
         assert await session.scalar(select(func.count(MealEvent.id))) == 4

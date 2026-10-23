@@ -481,7 +481,10 @@ async def join_campaign(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> OrderRead:
-    require_sales_scope_allows(settings)
+    require_sales_scope_allows(
+        settings, sales_channel=SalesChannel.GROUP,
+        fulfillment_method=body.fulfillment_method,
+    )
     await require_accepting_orders(session)
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:

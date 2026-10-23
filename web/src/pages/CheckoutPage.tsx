@@ -12,6 +12,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { storefrontCapabilities, storefrontOrderBlockReason, useStorefrontStatus } from "../components/StorefrontStatus";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import {
   defaultInvoicePreference,
@@ -44,6 +45,8 @@ const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
 
 export function CheckoutPage() {
   const { user, openLogin } = useAuth();
+  const platform = useStorefrontStatus();
+  const shippingEnabled = logisticsEnabled && storefrontCapabilities(platform.data).shipping;
   const notificationEmail = user?.notification_email || user?.email || "";
   const { cart, changeQuantity, clearCart } = useCommerce();
   const [checkoutMethod, setCheckoutMethod] =
@@ -65,6 +68,8 @@ export function CheckoutPage() {
       })),
     [cart],
   );
+  const orderBlockReason = storefrontOrderBlockReason(platform.data, "regular", items)
+    || (checkoutMethod === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
   const itemKey = items.map((item) => `${item.product_id}:${item.quantity}`).join("|");
   const eligibility = useMemo(() => shippingEligibility(cart), [cart]);
 
@@ -76,7 +81,7 @@ export function CheckoutPage() {
   const rates = useQuery({
     queryKey: ["shipping-rates"],
     queryFn: () => apiFetch<ShippingRate[]>("/v1/shipping-rates"),
-    enabled: logisticsEnabled,
+    enabled: shippingEnabled,
   });
   const quote = useQuery({
     queryKey: ["order-quote", itemKey, user?.id, invoicePreference.buyerType],
@@ -85,7 +90,7 @@ export function CheckoutPage() {
         method: "POST",
         body: JSON.stringify({ items, invoice_buyer_type: invoicePreference.buyerType }),
       }),
-    enabled: Boolean(user && items.length),
+    enabled: Boolean(user && items.length && !orderBlockReason),
   });
   const estimatedShippingFee =
     checkoutMethod === "shipping" &&
@@ -103,6 +108,7 @@ export function CheckoutPage() {
   const createOrder = useMutation({
     mutationFn: () => {
       if (!user) throw new Error("請先登入");
+      if (orderBlockReason) throw new Error(orderBlockReason);
       if (checkoutMethod === "shipping") {
         if (!shippingChannel || !eligibility.temperature) {
           throw new Error("這筆商品目前無法使用配送");
@@ -175,7 +181,7 @@ export function CheckoutPage() {
       estimatedShippingFee !== null,
   );
   const canSubmit = Boolean(
-    quote.data && !quote.isFetching && !quote.isError &&
+    !orderBlockReason && quote.data && !quote.isFetching && !quote.isError &&
       invoicePreferenceIsValid(invoicePreference) &&
       (checkoutMethod === "shipping" ? shippingReady : selectedPickupLocation && !locations.isError),
   );
@@ -190,6 +196,7 @@ export function CheckoutPage() {
         <p className="eyebrow">CHECKOUT / 結帳</p>
         <h1>把今天的選擇，<br />安排進生活裡。</h1>
       </div>
+      {orderBlockReason && <p className="form-error" role="status">{orderBlockReason}</p>}
 
       {cart.length === 0 ? (
         <DataState title="結帳清單還是空的" detail="回到生活消費，加入合作社正式上架的商品。" />
@@ -232,7 +239,7 @@ export function CheckoutPage() {
                   onChange={(event) => setCheckoutMethod(event.target.value as CheckoutMethod)}
                 >
                   <option value="cooperative_pickup">合作社取貨</option>
-                  {logisticsEnabled && <option value="shipping" disabled={Boolean(eligibility.blockers.length)}>宅配／超商取貨</option>}
+                  {(shippingEnabled || checkoutMethod === "shipping") && <option value="shipping" disabled={!shippingEnabled || Boolean(eligibility.blockers.length)}>宅配／超商取貨</option>}
                 </select>
               </label>
               {checkoutMethod === "cooperative_pickup" && (
@@ -250,7 +257,7 @@ export function CheckoutPage() {
                 </label>
               )}
             </div>
-            {logisticsEnabled && eligibility.blockers.length > 0 && (
+            {shippingEnabled && eligibility.blockers.length > 0 && (
               <div className="shipping-blockers">
                 <Package size={20} weight="light" />
                 <p>{eligibility.blockers.join("；")}。這筆仍可選擇合作社取貨。</p>
@@ -333,7 +340,7 @@ export function CheckoutPage() {
                 </div>
               ) : (
                 <>
-                  {quote.isPending && <LoadingLines count={2} />}
+                  {quote.isPending && !orderBlockReason && <LoadingLines count={2} />}
                   {quote.isError && <p className="form-error">{quote.error.message}</p>}
                   <dl className="summary-lines">
                     {quote.data?.items.map((item) => (
