@@ -19,6 +19,7 @@ from ..models import (
     OutboxEvent,
     Product,
     ProposalStatus,
+    ProposalTargetType,
     TargetType,
     User,
     UserRole,
@@ -85,6 +86,7 @@ def proposal_read(
         target_type=proposal.target_type,
         target_id=proposal.target_id,
         target_name=proposal.target_name_snapshot,
+        request_details=proposal.request_details,
         status=proposal.status,
         threshold=proposal.threshold,
         deadline=proposal.deadline,
@@ -233,10 +235,12 @@ async def create_proposal(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ProposalRead:
-    target_name, _ = await resolve_target(
-        session, body.target_type, body.target_id
-    )
-    duplicate = await session.scalar(
+    is_custom = body.target_type == ProposalTargetType.CUSTOM
+    if is_custom:
+        target_name = body.request_name
+    else:
+        target_name, _ = await resolve_target(session, body.target_type, body.target_id)
+    duplicate = None if is_custom else await session.scalar(
         select(VoteProposal)
         .where(
             VoteProposal.target_type == body.target_type,
@@ -258,6 +262,7 @@ async def create_proposal(
         target_type=body.target_type,
         target_id=body.target_id,
         target_name_snapshot=target_name,
+        request_details=body.request_details,
         status=ProposalStatus.PENDING_REVIEW,
     )
     session.add(proposal)
@@ -443,7 +448,9 @@ async def convert_proposal(
         if changed:
             await session.commit()
         raise HTTPException(status_code=409, detail="此提案尚未進入開團階段")
-    if (
+    if proposal.target_type == ProposalTargetType.CUSTOM:
+        await resolve_target(session, body.target_type, body.target_id)
+    elif (
         body.target_type != proposal.target_type
         or body.target_id != proposal.target_id
     ):

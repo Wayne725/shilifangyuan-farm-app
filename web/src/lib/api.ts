@@ -157,6 +157,7 @@ export async function downloadApiFile(path: string, filename: string): Promise<v
 
 export function resolveAsset(imageUrl?: string | null): string {
   if (!imageUrl) return "/products/generic-product.jpg";
+  if (imageUrl.startsWith("/v1/meal-photos/")) return apiUrl(imageUrl);
   return imageUrl.replace(/^\/assets/, "");
 }
 

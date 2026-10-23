@@ -410,9 +410,10 @@ export interface GroupBundle {
 export interface GroupVoteProposal {
   id: string;
   proposer_id: string;
-  target_type: "product" | "bundle";
-  target_id: string;
+  target_type: "product" | "bundle" | "custom";
+  target_id: string | null;
   target_name: string;
+  request_details?: string | null;
   status: string;
   threshold: number;
   deadline?: string | null;
@@ -489,6 +490,7 @@ export interface MealEvent {
 export interface Meal {
   id: string;
   slug: string;
+  updated_at: string;
   name: string;
   description: string;
   image_url?: string | null;

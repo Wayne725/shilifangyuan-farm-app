@@ -48,6 +48,8 @@ from ..integrations.payment_service import (
     reverse_order_purchase_points,
 )
 from ..meal_pricing import price_meal_line
+from ..meal_photos import router as meal_photos_router
+from ..meal_options_admin import router as meal_options_router
 from ..meal_booking import meal_booking_window, meal_pickup_slots, validate_meal_booking_day
 from ..meal_schedules import TAIPEI, generate_scheduled_meal_events
 from ..meal_operations import meal_operations_summary, search_meal_orders
@@ -106,7 +108,6 @@ from ..schemas import (
     MealPickupVerify,
     MealPaymentOptionsUpdate,
     MealRead,
-    MealImagesUpdate,
     MealScheduleInput,
     MealScheduleRead,
 )
@@ -117,6 +118,8 @@ from ..v2_domain import (
 
 
 meals_router = APIRouter(tags=["meals"])
+meals_router.include_router(meal_photos_router)
+meals_router.include_router(meal_options_router)
 
 
 def _require_live_meal_event(event_id: str, settings: Settings) -> None:
@@ -1267,40 +1270,6 @@ async def admin_create_meal(
         )
     )
     assert meal is not None
-    return MealRead.model_validate(meal)
-
-
-@meals_router.patch("/v1/admin/meals/{meal_id}/images", response_model=MealRead)
-async def admin_update_meal_images(
-    meal_id: str,
-    body: MealImagesUpdate,
-    admin: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
-) -> MealRead:
-    meal = await session.scalar(
-        select(Meal)
-        .where(Meal.id == meal_id)
-        .options(selectinload(Meal.option_groups).selectinload(MealOptionGroup.options))
-        .with_for_update()
-    )
-    if meal is None:
-        raise HTTPException(status_code=404, detail="找不到餐點")
-    options = {option.id: option for group in meal.option_groups for option in group.options}
-    requested_ids = [option.id for option in body.options]
-    if len(set(requested_ids)) != len(requested_ids) or any(option_id not in options for option_id in requested_ids):
-        raise HTTPException(status_code=422, detail="附餐選項不屬於此餐點或重複，請重新載入")
-    if "image_url" in body.model_fields_set:
-        meal.image_url = body.image_url
-    for requested in body.options:
-        options[requested.id].image_url = requested.image_url
-    session.add(AdminAudit(
-        actor_id=admin.id,
-        action="meal.images_update",
-        aggregate_type="meal",
-        aggregate_id=meal.id,
-        data={"meal_image_updated": "image_url" in body.model_fields_set, "option_ids": requested_ids},
-    ))
-    await session.commit()
     return MealRead.model_validate(meal)
 
 

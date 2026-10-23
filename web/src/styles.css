@@ -8229,6 +8229,86 @@ p {
   min-width: 0;
 }
 
+.meal-photo-upload {
+  margin-block: 1rem;
+}
+
+.meal-photo-upload input[type="file"] {
+  width: 100%;
+  min-width: 0;
+  padding: .65rem;
+  font-size: .85rem;
+}
+
+.meal-options-dialog {
+  position: fixed;
+  z-index: 110;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: min(850px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  padding: clamp(1rem, 3vw, 2rem);
+  background: var(--cream, #f4efe3);
+  border: 1px solid var(--line);
+}
+
+.meal-options-form,
+.meal-options-fields {
+  display: grid;
+  gap: 1.25rem;
+  min-width: 0;
+  margin-block: 1rem;
+}
+
+.meal-options-dialog-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--cream, #f4efe3);
+}
+
+.meal-options-dialog-heading h2 {
+  margin: 0;
+}
+
+.meal-options-fields {
+  border: 0;
+  padding: 0;
+}
+
+.meal-option-editor-group {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+}
+
+.meal-option-editor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(5rem, .4fr) auto;
+  align-items: end;
+  gap: .75rem;
+  margin-block: 1rem;
+}
+
+.group-request-details {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 620px) {
+  .meal-option-editor-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .meal-image-field:has(> .meal-photo) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (min-width: 621px) and (max-width: 1180px) {
   .meal-offer-page .meal-offering-summary:has(> .meal-offering-photo) {
     grid-template-columns: 8rem minmax(0, 1fr);
