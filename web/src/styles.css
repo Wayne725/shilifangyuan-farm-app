@@ -8640,5 +8640,5 @@ html[data-text-size="large"] { font-size: 20px; }
 .group-proposal-card .admin-master-form .field-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
 .group-proposal-card .admin-master-form :is(input, select) { min-width: 0; width: 100%; max-width: 100%; }
 
-.campaign-quantity-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 1rem; margin: 0 0 1rem; }
+.campaign-quantity-summary { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 1rem; margin: 0 0 1rem; }
 .campaign-quantity-summary dd { margin: .35rem 0 0; font-size: 1.15rem; }
