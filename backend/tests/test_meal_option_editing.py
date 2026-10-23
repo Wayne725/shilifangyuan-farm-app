@@ -33,6 +33,17 @@ def clean_payload(meal):
 
 
 @pytest.mark.asyncio
+async def test_meal_edit_version_keeps_utc_after_database_reload(v2_context):
+    client, admin = v2_context["client"], auth_headers(v2_context["admin"])
+    meal = await create_meal(v2_context)
+    v2_context["session"].expire_all()
+    meals = (await client.get("/v1/admin/meals", headers=admin)).json()
+    reloaded = next(item for item in meals if item["id"] == meal["id"])
+    assert reloaded["updated_at"] == meal["updated_at"]
+    assert reloaded["updated_at"].endswith("Z")
+
+
+@pytest.mark.asyncio
 async def test_edits_update_live_choices_and_prices_but_preserve_order_snapshots(v2_context):
     client, admin = v2_context["client"], auth_headers(v2_context["admin"])
     meal = await create_meal(v2_context)

@@ -1224,6 +1224,11 @@ class MealRead(ApiModel):
     updated_at: datetime
     option_groups: List[MealOptionGroupRead] = Field(default_factory=list)
 
+    @field_validator("updated_at")
+    @classmethod
+    def utc_edit_version(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
 
 class MealOptionEdit(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
