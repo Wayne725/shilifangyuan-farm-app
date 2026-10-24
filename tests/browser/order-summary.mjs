@@ -266,8 +266,8 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   await page.goto(`${base}/admin?section=summary`);
   await wait_for_summary(page);
   const summary = page.getByRole('region', { name: '訂單品項匯總', exact: true });
-  const categories = summary.getByRole('group', { name: '訂單分類', exact: true });
-  await categories.getByRole('button', { name: '一般訂單', exact: true }).click();
+  const categories = summary.getByRole('combobox', { name: '訂單分類', exact: true });
+  await categories.selectOption('general');
   await wait_for_summary(page);
   await verify_summary(page, { order_count: 10, quantity: 61, product_count: 28 });
   assert.equal(await summary.getByRole('combobox', { name: '銷售類型', exact: true }).locator('option[value="meal_preorder"]').count(), 0);
@@ -275,7 +275,7 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '25');
-  await categories.getByRole('button', { name: '便當訂單', exact: true }).click();
+  await categories.selectOption('meal');
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '0');
   assert.equal(state.summaries.at(-1).query.order_category, 'meal');
@@ -293,7 +293,7 @@ test('管理員訂單及問題回報保留查詢與分類，手機無溢出', { 
   const { page, state } = await fixture(t, { width: 390 });
   await page.goto(`${base}/admin`);
   await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
-  await page.getByRole('group', { name: '訂單分類', exact: true }).getByRole('button', { name: '便當訂單', exact: true }).click();
+  await page.getByRole('combobox', { name: '訂單分類', exact: true }).selectOption('meal');
   await page.getByLabel('搜尋訂單', { exact: true }).fill('隔離買家');
   await page.getByRole('combobox', { name: '付款狀態', exact: true }).selectOption('paid');
   await page.getByRole('button', { name: '搜尋', exact: true }).click();
@@ -304,7 +304,7 @@ test('管理員訂單及問題回報保留查詢與分類，手機無溢出', { 
   await verify_read_only(page, state);
   await page.goto(`${base}/admin?section=issues`);
   await page.getByRole('heading', { name: '待處理問題', exact: true }).waitFor();
-  await page.getByRole('group', { name: '訂單分類', exact: true }).getByRole('button', { name: '其他系統工作', exact: true }).click();
+  await page.getByRole('combobox', { name: '訂單分類', exact: true }).selectOption('system');
   await page.getByLabel('搜尋問題', { exact: true }).fill('逾時');
   await page.getByRole('button', { name: '查詢問題', exact: true }).click();
   await page.getByText('沒有符合條件的問題。', { exact: true }).waitFor();
@@ -331,8 +331,8 @@ for (const width of [1440, 390]) {
     await pagination.getByText('共 15 筆 · 第 1 頁', { exact: true }).waitFor();
     await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
     await pagination.getByText('共 15 筆 · 第 2 頁', { exact: true }).waitFor();
-    const categories = page.getByRole('group', { name: '訂單分類', exact: true });
-    await categories.getByRole('button', { name: '一般訂單', exact: true }).click();
+    const categories = page.getByRole('combobox', { name: '訂單分類', exact: true });
+    await categories.selectOption('general');
     await pagination.getByText('共 13 筆 · 第 1 頁', { exact: true }).waitFor();
     assert.equal(state.orderQueries.at(-1).offset, '0');
     await page.getByLabel('搜尋訂單', { exact: true }).fill('共同購買白米');
@@ -340,7 +340,7 @@ for (const width of [1440, 390]) {
     await pagination.getByText('共 1 筆 · 第 1 頁', { exact: true }).waitFor();
     await page.locator('.operation-title strong').getByText('CATEGORY-12', { exact: true }).waitFor();
     assert.equal(state.orderQueries.at(-1).order_category, 'general');
-    await categories.getByRole('button', { name: '便當訂單', exact: true }).click();
+    await categories.selectOption('meal');
     await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
     assert.equal(state.orderQueries.at(-1).q, '共同購買白米');
     await page.getByRole('button', { name: '清除查詢', exact: true }).click();

@@ -119,13 +119,24 @@ test('列印與備餐各自查詢並清除，不執行出單或更改訂單', as
   const latest = state.reads.filter(url => url.pathname.endsWith('/meal-kitchen')).at(-1);
   assert.equal(latest.searchParams.get('search'), '王小明');
   assert.equal(latest.searchParams.get('offset'), '0');
+  for (const value of ['lunch', 'dinner', 'unspecified']) {
+    const changed = page.waitForResponse(response => response.url().includes('/meal-kitchen?') && new URL(response.url()).searchParams.get('meal_period') === value);
+    await page.getByRole('combobox', {name: '備餐時段', exact: true}).selectOption(value);
+    await changed;
+    const read = state.reads.filter(url => url.pathname.endsWith('/meal-kitchen')).at(-1);
+    assert.equal(read.searchParams.get('search'), '王小明');
+    assert.equal(read.searchParams.get('fulfillment_status'), 'preparing');
+    assert.equal(read.searchParams.get('offset'), '0');
+  }
+  await page.getByRole('combobox', {name: '備餐時段', exact: true}).selectOption('all');
+  assert.equal(await page.getByRole('combobox', {name: '備餐時段', exact: true}).inputValue(), 'all');
   await kitchenForm.getByRole('button', {name: '清除', exact: true}).click();
   assert.equal(await kitchenForm.getByRole('searchbox').inputValue(), '');
   assert.deepEqual(state.writes, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });
 
 for (const width of [390, 899, 1542]) {
-  test(`${width}px 列印查詢控制等高且桌面底部對齊`, async t => {
+  test(`${width}px 列印與備餐下拉控制等高且桌面底部對齊`, async t => {
     const {page} = await fixture(t, width);
     await page.goto(`${base}/admin/kitchen`);
     await page.getByText('模擬模式', {exact: true}).waitFor();
@@ -135,6 +146,12 @@ for (const width of [390, 899, 1542]) {
       const button = await page.getByRole('button', {name: '查詢設備', exact: true}).boundingBox();
       assert.ok(Math.abs(select.height - button.height) < 1, `高度 ${select.height}/${button.height}`);
       if (width >= 1200) assert.ok(Math.abs(select.y + select.height - button.y - button.height) < 1, `下緣 ${select.y + select.height}/${button.y + button.height}`);
+      const period = await page.getByRole('combobox', {name: '備餐時段', exact: true}).boundingBox();
+      const date = await page.getByLabel('取餐日期', {exact: true}).boundingBox();
+      const refresh = await page.getByRole('button', {name: '更新清單', exact: true}).boundingBox();
+      assert.ok(Math.abs(period.height - date.height) < 1);
+      assert.ok(Math.abs(period.height - refresh.height) < 1);
+      if (width >= 1200) assert.ok(Math.abs(period.y + period.height - refresh.y - refresh.height) < 1);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     }
   });

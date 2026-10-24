@@ -1,11 +1,7 @@
 import {
   ArrowLeft,
-  Check,
-  MapPin,
   Minus,
   Plus,
-  Storefront,
-  Truck,
   UsersThree,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -69,6 +65,7 @@ export function GroupCampaignPage() {
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
   });
+  const selectedPickupLocation = locations.data?.find((location) => location.id === pickupLocationId);
   const quote = useQuery({
     queryKey: ["group-quote", campaignId, quantity, method, shippingChannel, user?.id, invoicePreference.buyerType],
     queryFn: () => apiFetch<GroupQuote>(`/v1/group-campaigns/${campaignId}/quote`, {
@@ -106,6 +103,7 @@ export function GroupCampaignPage() {
           },
         });
       }
+      if (!selectedPickupLocation || locations.isError) throw new Error("請選擇可用的取貨地點");
       return beginGroupCheckout({
         campaignId,
         quantity,
@@ -122,7 +120,9 @@ export function GroupCampaignPage() {
   });
 
   useEffect(() => {
-    if (!pickupLocationId && locations.data?.[0]) setPickupLocationId(locations.data[0].id);
+    if (locations.data && !locations.data.some((location) => location.id === pickupLocationId)) {
+      setPickupLocationId(locations.data[0]?.id || "");
+    }
   }, [locations.data, pickupLocationId]);
 
   useEffect(() => {
@@ -143,7 +143,7 @@ export function GroupCampaignPage() {
   const submitReady = Boolean(
     !orderBlockReason && quote.data && !quote.isFetching && !quote.isError &&
       invoicePreferenceIsValid(invoicePreference) &&
-      (method === "pickup" ? pickupLocationId : shippingReady),
+      (method === "pickup" ? selectedPickupLocation && !locations.isError : shippingReady),
   );
 
   return (
@@ -179,30 +179,31 @@ export function GroupCampaignPage() {
           </div>
 
           <div className="checkout-step-title pickup-title"><span>02</span><div><small>FULFILLMENT</small><h2>取貨方式</h2></div></div>
-          <div className="fulfillment-switch">
-            <button type="button" className={method === "pickup" ? "selected" : ""} onClick={() => setMethod("pickup")}><Storefront size={22} /><span><strong>合作社取貨</strong><small>依預計取貨窗口領取</small></span><i><Check size={14} /></i></button>
-            {(shippingEnabled || method === "shipping") && <button type="button" className={method === "shipping" ? "selected shipping" : "shipping"} onClick={() => setMethod("shipping")} disabled={!shippingEnabled || !item.can_ship}><Truck size={22} /><span><strong>宅配／超商取貨</strong><small>{!shippingEnabled ? "目前未開放配送" : item.can_ship ? `${temperatureLabels[item.shipping_temperature || "ambient"]}配送` : "此團購未開放配送"}</small></span><i><Check size={14} /></i></button>}
+          <div className="checkout-fulfillment">
+            <label className="field">
+              取貨方式
+              <select value={method} disabled={checkout.isPending} onChange={(event) => setMethod(event.target.value as "pickup" | "shipping")}>
+                <option value="pickup">合作社取貨</option>
+                {(shippingEnabled || method === "shipping") && <option value="shipping" disabled={!shippingEnabled || !item.can_ship}>宅配／超商取貨{!shippingEnabled ? "（目前未開放配送）" : !item.can_ship ? "（此團購未開放配送）" : `（${temperatureLabels[item.shipping_temperature || "ambient"]}）`}</option>}
+              </select>
+            </label>
+            {method === "pickup" && <label className="field">
+              取貨地點
+              <select value={pickupLocationId} required disabled={checkout.isPending || locations.isPending || locations.isError || !locations.data?.length} onChange={(event) => setPickupLocationId(event.target.value)}>
+                <option value="" disabled>{locations.isPending ? "載入取貨地點中…" : locations.isError ? "取貨點暫時無法使用" : !locations.data?.length ? "目前沒有可用的取貨地點" : "請選擇取貨地點"}</option>
+                {!locations.isError && locations.data?.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
+            </label>}
           </div>
-
-          {method === "pickup" ? (
-            <div className="pickup-options offer-pickup-options">
-              {locations.data?.map((location) => (
-                <label key={location.id} className={pickupLocationId === location.id ? "selected" : ""}>
-                  <input type="radio" checked={pickupLocationId === location.id} onChange={() => setPickupLocationId(location.id)} />
-                  <MapPin size={20} /><span><strong>{location.name}</strong><small>{location.address || location.instructions}</small></span><i><Check size={14} /></i>
-                </label>
-              ))}
-            </div>
-          ) : (
+          {method === "pickup" && locations.isError && <p className="form-error">取貨點暫時無法使用，請稍後再試。</p>}
+          {method === "shipping" && (
             <div className="shipping-form">
-              <div className="shipping-channels">
-                {item.allowed_shipping_channels.map((channel) => (
-                  <label key={channel} className={shippingChannel === channel ? "selected" : ""}>
-                    <input type="radio" checked={shippingChannel === channel} onChange={() => setShippingChannel(channel)} />
-                    <span>{shippingChannelLabels[channel]}</span>{shippingChannel === channel && <Check size={14} />}
-                  </label>
-                ))}
-              </div>
+              <label className="field">配送通路
+                <select value={shippingChannel || ""} required disabled={checkout.isPending || !item.allowed_shipping_channels.length} onChange={(event) => setShippingChannel(event.target.value as ShippingChannel)}>
+                  <option value="" disabled>請選擇配送通路</option>
+                  {item.allowed_shipping_channels.map((channel) => <option key={channel} value={channel}>{shippingChannelLabels[channel]}</option>)}
+                </select>
+              </label>
               <div className="recipient-grid">
                 <label>收件人姓名<input value={recipientName} onChange={(event) => setRecipientName(event.target.value)} /></label>
                 <label>聯絡電話<input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value)} inputMode="tel" /></label>
@@ -228,6 +229,8 @@ export function GroupCampaignPage() {
               {quote.isPending && !orderBlockReason && <LoadingLines count={2} />}
               {quote.isError && <p className="form-error">{quote.error.message}</p>}
               <dl>
+                {method === "pickup" && <div><dt>取貨地點</dt><dd>{locations.isError ? "暫時無法使用" : selectedPickupLocation?.name || "尚未選擇"}</dd></div>}
+                {method === "pickup" && !locations.isError && selectedPickupLocation?.address && <div><dt>取貨地址</dt><dd>{selectedPickupLocation.address}</dd></div>}
                 <div><dt>社員單價</dt><dd>{formatMoney(quote.data?.unit_price || item.member_price)}</dd></div>
                 <div><dt>商品小計</dt><dd>{formatMoney(quote.data?.product_subtotal || 0)}</dd></div>
                 {shippingEnabled && <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>}

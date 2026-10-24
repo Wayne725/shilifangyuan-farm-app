@@ -7,6 +7,7 @@ import type { MealCancellationQueue, MealCancellationQueueItem } from "../lib/ty
 import { DataState, LoadingLines } from "./Shared";
 import { MealCancellationSummary } from "./MealCancellationSummary";
 import { AdminReasonChoices } from "./AdminReasonChoices";
+import "./AdminMealFilters.css";
 
 const reviewLabels = { pending: "待審核", approved: "已核准", rejected: "未核准" };
 const paymentLabels: Record<string, string> = { pending: "待付款", paid: "已付款", refund_pending: "退款中", late_paid_refund_required: "付款晚到，退款處理中", refunded: "已退款", expired: "已逾期", failed: "付款失敗" };
@@ -42,9 +43,9 @@ export function AdminMealCancellations({ initialSearch = "" }: { initialSearch?:
     <h2 id="meal-cancellation-heading">退單審核</h2>
     <div className="field-grid two-columns"><label className="field"><span>申請開始日期</span><input type="date" value={startsOn} onChange={event => { setStartsOn(event.target.value); setOffset(0); }} /></label><label className="field"><span>申請結束日期</span><input type="date" min={startsOn} value={endsOn} onChange={event => { setEndsOn(event.target.value); setOffset(0); }} /></label></div>
     <MealCancellationSummary startsOn={startsOn} endsOn={endsOn} search={search} status={status} />
-    <div className="admin-quick-buttons" role="group" aria-label="退單審核狀態">{["pending", "approved", "rejected", "all"].map((key) => <button className="button button-quiet" key={key} type="button" aria-pressed={status === key} onClick={() => { setStatus(key); setOffset(0); }}>{key === "all" ? "全部紀錄" : reviewLabels[key as keyof typeof reviewLabels]}</button>)}</div>
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setSearch(searchInput.trim()); setOffset(0); }}>
       <label>訂單編號或 Email<input value={searchInput} maxLength={100} onChange={(event) => setSearchInput(event.target.value)} /></label>
+      <label>退單審核狀態<select value={status} onChange={(event) => { setStatus(event.target.value); setOffset(0); }}>{["pending", "approved", "rejected", "all"].map((key) => <option value={key} key={key}>{key === "all" ? "全部紀錄" : reviewLabels[key as keyof typeof reviewLabels]}</option>)}</select></label>
       <button className="button button-system" type="submit">搜尋</button>
     </form>
     {queue.isPending && <LoadingLines count={3} />}

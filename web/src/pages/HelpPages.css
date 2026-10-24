@@ -1,0 +1,15 @@
+.pickup-location-help-list {
+  display: grid;
+  gap: 20px;
+  padding-block: 16px;
+  overflow-wrap: anywhere;
+}
+
+.pickup-location-help-list h3 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.pickup-location-help-instructions {
+  white-space: pre-wrap;
+}

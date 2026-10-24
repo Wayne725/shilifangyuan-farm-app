@@ -11,6 +11,7 @@ import { OrderStatusBadge } from "./OrderStatusBadge";
 import { AdminCancelOrder } from "./AdminCancelOrder";
 import { AdminCashPayment } from "./AdminCashPayment";
 import { DataState, LoadingLines } from "./Shared";
+import "./AdminMealFilters.css";
 
 const pageSize = 20;
 const emptyFilters = { search: "", date_from: "", date_to: "", meal_period: "all", pickup_time: "", payment_status: "", fulfillment_status: "", invoice_status: "", review_status: "all", work_queue: "all" };
@@ -56,17 +57,18 @@ export function AdminMealOrderSearch({ initialSearch = "", onReviewOrder }: { in
       </button>)}
     </div>
     <div className="admin-quick-buttons" role="group" aria-label="快速取餐日期">{[{ label: "全部日期", date: "" }, { label: "今天", date: taipeiDate() }, { label: "明天", date: shiftMealDate(taipeiDate(), 1) }].map(({ label, date }) => <button className="button button-quiet" key={label} type="button" aria-pressed={filters.date_from === date && filters.date_to === date && filters.work_queue === "all"} onClick={() => apply({ ...filters, date_from: date, date_to: date, work_queue: "all" })}>{label}</button>)}</div>
-    <div className="admin-quick-buttons" role="group" aria-label="快速製作狀態">{[{ label: "全部狀態", status: "" }, { label: "待製作", status: "pending_confirmation" }, { label: "製作中", status: "preparing" }, { label: "待取餐", status: "ready_for_pickup" }].map(({ label, status }) => <button className="button button-quiet" key={label} type="button" aria-pressed={filters.fulfillment_status === status && filters.work_queue === "all"} onClick={() => apply({ ...filters, fulfillment_status: status, work_queue: "all" })}>{label}</button>)}</div>
     {summary.isError && <DataState kind="error" title="待辦數量暫時無法更新" detail={summary.error.message} onAction={() => summary.refetch()} />}
     <form className="meal-order-filters" onSubmit={(event) => { event.preventDefault(); if (!dateError) apply({ ...draft, search: draft.search.trim() }); }}>
-      <label className="field meal-order-search-field"><span>訂單編號、姓名或 Email</span><input value={draft.search} maxLength={100} onChange={(event) => update("search", event.target.value)} /></label>
+      <div className="meal-order-primary-filters">
+        <label className="field"><span>訂單編號、姓名或 Email</span><input value={draft.search} maxLength={100} onChange={(event) => update("search", event.target.value)} /></label>
+        <label className="field"><span>履約狀態</span><select value={draft.fulfillment_status} onChange={(event) => update("fulfillment_status", event.target.value)}><option value="">全部履約狀態</option><option value="pending_confirmation">待製作</option><option value="preparing">製作中</option><option value="ready_for_pickup">待取餐</option><option value="picked_up">已取餐</option><option value="no_show">逾時未取</option><option value="cancelled">已取消</option></select></label>
+      </div>
       <details className="meal-order-advanced-filters"><summary>更多篩選</summary><div className="meal-order-filter-fields">
       <label className="field"><span>取餐日期（起）</span><input type="date" value={draft.date_from} onChange={(event) => update("date_from", event.target.value)} /></label>
       <label className="field"><span>取餐日期（迄）</span><input type="date" min={draft.date_from || undefined} value={draft.date_to} aria-invalid={dateError} onChange={(event) => update("date_to", event.target.value)} /></label>
       <label className="field"><span>午餐／晚餐</span><select value={draft.meal_period} onChange={(event) => update("meal_period", event.target.value)}><option value="all">全部餐別</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="unspecified">未標餐別</option></select></label>
       <label className="field"><span>預計取餐時間</span><input type="time" step={60} value={draft.pickup_time} onChange={(event) => update("pickup_time", event.target.value)} /></label>
       <label className="field"><span>付款狀態</span><select value={draft.payment_status} onChange={(event) => update("payment_status", event.target.value)}><option value="">全部付款狀態</option>{["pending", "paid", "refund_pending", "late_paid_refund_required", "refunded", "expired", "failed"].map((status) => <option value={status} key={status}>{paymentStatusLabel(status)}</option>)}</select></label>
-      <label className="field"><span>履約狀態</span><select value={draft.fulfillment_status} onChange={(event) => update("fulfillment_status", event.target.value)}><option value="">全部履約狀態</option><option value="pending_confirmation">待確認</option><option value="preparing">製作中</option><option value="ready_for_pickup">待取餐</option><option value="picked_up">已取餐</option><option value="no_show">逾時未取</option><option value="cancelled">已取消</option></select></label>
       <label className="field"><span>發票狀態</span><select value={draft.invoice_status} onChange={(event) => update("invoice_status", event.target.value)}><option value="">全部發票狀態</option>{["not_eligible", "pending", "issued", "failed", "void_pending", "voided"].map((status) => <option value={status} key={status}>{invoiceStatusLabel(status)}</option>)}</select></label>
       <label className="field"><span>退單審核</span><select value={draft.review_status} onChange={(event) => update("review_status", event.target.value)}><option value="all">全部審核狀態</option><option value="none">沒有退單申請</option><option value="pending">待審核</option><option value="approved">已核准</option><option value="rejected">未核准</option></select></label>
       </div></details>

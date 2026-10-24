@@ -1,0 +1,21 @@
+.admin-reason-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-light);
+  color: var(--ink);
+  font: inherit;
+}
+
+.admin-reason-select:focus-visible {
+  outline: 2px solid var(--moss-dark);
+  outline-offset: 3px;
+}
+
+.admin-reason-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

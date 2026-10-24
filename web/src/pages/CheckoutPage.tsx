@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  Check,
   Minus,
   Package,
   Plus,
@@ -266,23 +265,15 @@ export function CheckoutPage() {
                   <span>本筆溫層</span>
                   <strong>{eligibility.temperature ? temperatureLabels[eligibility.temperature] : "無法判定"}</strong>
                 </div>
-                <fieldset>
-                  <legend>配送通路</legend>
-                  <div className="shipping-channels">
+                <label className="field">
+                  配送通路
+                  <select value={shippingChannel || ""} required disabled={createOrder.isPending || !eligibility.availableChannels.length} onChange={(event) => setShippingChannel(event.target.value as ShippingChannel)}>
+                    <option value="" disabled>請選擇配送通路</option>
                     {eligibility.availableChannels.map((channel) => (
-                      <label key={channel} className={shippingChannel === channel ? "selected" : ""}>
-                        <input
-                          type="radio"
-                          name="shipping-channel"
-                          checked={shippingChannel === channel}
-                          onChange={() => setShippingChannel(channel)}
-                        />
-                        <span>{shippingChannelLabels[channel]}</span>
-                        {shippingChannel === channel && <Check size={14} />}
-                      </label>
+                      <option key={channel} value={channel}>{shippingChannelLabels[channel]}</option>
                     ))}
-                  </div>
-                </fieldset>
+                  </select>
+                </label>
                 <div className="recipient-grid">
                   <label>
                     收件人姓名

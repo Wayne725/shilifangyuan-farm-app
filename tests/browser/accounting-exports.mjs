@@ -34,7 +34,7 @@ for (const width of [1440, 816, 390]) {
     await page.locator('.reading-menu > summary').click();
     await page.getByRole('button', {name: '放大', exact: true}).click();
     const form = page.locator('.accounting-export');
-    await form.getByRole('button', {name: '一般訂單', exact: true}).click();
+    await form.getByRole('combobox', {name: '訂單分類', exact: true}).selectOption('general');
     await form.getByLabel('發票日期起', {exact: true}).fill('2030-01-01');
     await form.getByLabel('發票日期迄', {exact: true}).fill('2030-01-31');
     for (const [source, extension] of [['invoice', '.xlsx'], ['newebpay', '.csv'], ['jkopay', '.xlsx'], ['linepay', '.xlsx'], ['esun', '.xls']]) {
