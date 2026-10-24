@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useContext,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -31,10 +32,12 @@ function readCart(): CartItem[] {
 
 export function CommerceProvider({ children }: { children: ReactNode }) {
   const [cart, setCart] = useState<CartItem[]>(readCart);
+  const currentCart = useRef(cart);
 
   const persist = (items: CartItem[]) => {
-    setCart(items);
     localStorage.setItem(storageKey, JSON.stringify(items));
+    currentCart.current = items;
+    setCart(items);
   };
 
   const value = useMemo<CommerceContextValue>(
@@ -42,19 +45,17 @@ export function CommerceProvider({ children }: { children: ReactNode }) {
       cart,
       itemCount: cart.reduce((sum, item) => sum + item.quantity, 0),
       addToCart(product) {
-        const existing = cart.find((item) => item.product.id === product.id);
-        const next = existing
-          ? cart.map((item) =>
+        const current = currentCart.current;
+        persist(current.some((item) => item.product.id === product.id)
+          ? current.map((item) =>
               item.product.id === product.id
                 ? { ...item, quantity: item.quantity + 1 }
                 : item,
             )
-          : [...cart, { product, quantity: 1 }];
-        persist(next);
+          : [...current, { product, quantity: 1 }]);
       },
       changeQuantity(productId, quantity) {
-        persist(
-          cart
+        persist(currentCart.current
             .map((item) =>
               item.product.id === productId ? { ...item, quantity } : item,
             )

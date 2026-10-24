@@ -1,0 +1,16 @@
+.product-bottom {
+  flex-wrap: wrap;
+}
+
+.cart-add-feedback {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--harbor-dark);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.cart-add-feedback:not(:empty) {
+  margin-top: 10px;
+}

@@ -1,8 +1,9 @@
-import { ArrowClockwise, ArrowRight, Basket, Plus } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowRight, Basket } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 
 import { formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import type { Product } from "../lib/types";
+import { ProductAddButton } from "./ProductAddButton";
 
 export function SectionHeading({
   eyebrow,
@@ -57,15 +58,7 @@ export function ProductCard({
             <span className="price">{formatMoney(product.member_price)}</span>
             <small>社員價／{product.unit}</small>
           </div>
-          <button
-            className="icon-button add-button"
-            type="button"
-            onClick={() => onAdd(product)}
-            disabled={product.stock_quantity <= 0}
-            aria-label={`加入 ${product.name}`}
-          >
-            <Plus size={20} weight="light" />
-          </button>
+          <ProductAddButton product={product} onAdd={onAdd} compact />
         </div>
       </div>
     </article>
