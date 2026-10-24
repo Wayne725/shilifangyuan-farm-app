@@ -11,6 +11,8 @@ import {
   type OrderSummaryFilters,
   type OrderSummaryReport,
 } from "../lib/order-summary";
+import { channelMatchesCategory, orderCategoryLabels } from "../lib/order-category";
+import { OrderCategoryFilter } from "./OrderCategoryFilter";
 import { DataState, LoadingLines } from "./Shared";
 import "./AdminOrderSummary.css";
 
@@ -22,7 +24,7 @@ export function AdminOrderSummary() {
   const { user } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const [draft, setDraft] = useState<OrderSummaryFilters>(() => ({
-    ...financePeriodPreset("month"), salesChannel: "all", status: "active", category: "", search: "",
+    ...financePeriodPreset("month"), salesChannel: "all", orderCategory: "all", status: "active", category: "", search: "",
   }));
   const [filters, setFilters] = useState(draft);
   const [preset, setPreset] = useState<keyof typeof periodLabels | "">("month");
@@ -32,6 +34,7 @@ export function AdminOrderSummary() {
     starts_on: filters.startsOn,
     ends_on: filters.endsOn,
     sales_channel: filters.salesChannel,
+    order_category: filters.orderCategory,
     status: filters.status,
     category: filters.category,
     search: filters.search,
@@ -59,6 +62,10 @@ export function AdminOrderSummary() {
   const dateError = formError ? "order-summary-date-error" : undefined;
 
   return <section className="admin-order-summary" aria-label="訂單品項匯總">
+    <OrderCategoryFilter value={filters.orderCategory} onChange={(orderCategory) => {
+      const next = { ...filters, orderCategory, salesChannel: "all" as const, category: "" };
+      setDraft(next); setFilters(next); setOffset(0); setFormError("");
+    }} />
     <div className="admin-order-summary-presets" role="group" aria-label="下單日期快速選擇">
       {(Object.keys(periodLabels) as Array<keyof typeof periodLabels>).map((mode) => <button key={mode} className="button button-quiet" type="button" aria-pressed={preset === mode} onClick={() => applyPreset(mode)}>{periodLabels[mode]}</button>)}
     </div>
@@ -73,7 +80,7 @@ export function AdminOrderSummary() {
     }}>
       <label className="field"><span>下單日期起（台灣）</span><input type="date" required value={draft.startsOn} aria-invalid={Boolean(formError)} aria-describedby={dateError} onChange={(event) => { setDraft({ ...draft, startsOn: event.target.value }); setPreset(""); }} /></label>
       <label className="field"><span>下單日期迄（台灣）</span><input type="date" required value={draft.endsOn} aria-invalid={Boolean(formError)} aria-describedby={dateError} onChange={(event) => { setDraft({ ...draft, endsOn: event.target.value }); setPreset(""); }} /></label>
-      <label className="field"><span id="order-summary-channel-label">銷售類型</span><select aria-labelledby="order-summary-channel-label" value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value as OrderSummaryFilters["salesChannel"] })}>{Object.entries(orderSummaryChannelLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label className="field"><span id="order-summary-channel-label">銷售類型</span><select aria-labelledby="order-summary-channel-label" value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value as OrderSummaryFilters["salesChannel"] })}>{Object.entries(orderSummaryChannelLabels).filter(([value]) => channelMatchesCategory(value, filters.orderCategory)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label className="field"><span id="order-summary-status-label">訂單狀態</span><select aria-labelledby="order-summary-status-label" value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as OrderSummaryFilters["status"] })}>{Object.entries(orderSummaryStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label className="field"><span id="order-summary-category-label">品類</span><select aria-labelledby="order-summary-category-label" value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })}><option value="">全部品類</option>{categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
       <label className="field admin-order-summary-search"><span>品項名稱</span><input type="search" maxLength={100} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
@@ -81,7 +88,7 @@ export function AdminOrderSummary() {
     </form>
     {formError && <p className="form-error" id="order-summary-date-error" role="alert">{formError}</p>}
     <div className="admin-order-summary-result-heading">
-      <div><p>{filters.startsOn} 至 {filters.endsOn}</p><p>{[orderSummaryChannelLabels[filters.salesChannel], orderSummaryStatusLabels[filters.status], filters.category || "全部品類", filters.search].filter(Boolean).join(" · ")}</p></div>
+      <div><p>{filters.startsOn} 至 {filters.endsOn}</p><p>{[orderCategoryLabels[filters.orderCategory], orderSummaryChannelLabels[filters.salesChannel], orderSummaryStatusLabels[filters.status], filters.category || "全部品類", filters.search].filter(Boolean).join(" · ")}</p></div>
       <button className="button button-quiet" type="button" disabled={report.isFetching} onClick={() => void report.refetch()}><ArrowClockwise size={18} />{report.isFetching && !report.isPending ? "更新中…" : "更新"}</button>
     </div>
     <div aria-busy={report.isFetching}>

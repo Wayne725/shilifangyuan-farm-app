@@ -4,6 +4,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
+import { channelMatchesCategory, orderCategoryLabels, type OrderCategory } from "../lib/order-category";
 import { AdminNav } from "../components/AdminNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
@@ -16,23 +18,23 @@ const pageSize = 20;
 const membershipNames: Record<string, string> = { nonmember: "一般使用者", trainee: "實習社員", member: "社員" };
 const cancellationNames: Record<string, string> = { pending: "退單待審", approved: "退單已核准", rejected: "退單遭拒" };
 const refundNames: Record<string, string> = { pending: "待退款", completed: "退款完成", failed: "退款失敗" };
-const channelNames = { all: "全部銷售", meal_preorder: "便當", regular: "日常選品", group: "團購" };
+const channelNames = { all: "全部銷售", meal_preorder: "便當", regular: "日常選品", group: "共同購買" };
 
 export function AdminFinancePage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
-  const [draft, setDraft] = useState(() => ({ ...financePeriodPreset("month"), search: "", salesChannel: "all" }));
+  const [draft, setDraft] = useState(() => ({ ...financePeriodPreset("month"), search: "", salesChannel: "all", orderCategory: "all" as OrderCategory }));
   const [filters, setFilters] = useState(draft);
   const [offset, setOffset] = useState(0);
   const [formError, setFormError] = useState("");
-  const parameters = new URLSearchParams({ starts_on: filters.startsOn, ends_on: filters.endsOn, search: filters.search, sales_channel: filters.salesChannel });
+  const parameters = new URLSearchParams({ starts_on: filters.startsOn, ends_on: filters.endsOn, search: filters.search, sales_channel: filters.salesChannel, order_category: filters.orderCategory });
   const report = useQuery({
     queryKey: ["meal-sales-report", filters, offset],
     queryFn: () => apiFetch<MealSalesReport>(`/v1/admin/finance/meal-sales?${parameters}&limit=${pageSize}&offset=${offset}`),
     enabled: isAdmin,
     refetchInterval: 30_000,
   });
-  const download = useMutation({ mutationFn: () => downloadApiFile(`/v1/admin/finance/meal-sales.csv?${parameters}`, `銷售明細-${filters.startsOn}-${filters.endsOn}.csv`) });
+  const download = useMutation({ mutationFn: () => downloadApiFile(`/v1/admin/finance/meal-sales.csv?${parameters}`, `${orderCategoryLabels[filters.orderCategory]}銷售明細-${filters.startsOn}-${filters.endsOn}.csv`) });
   useEffect(() => {
     if (report.data && offset > 0 && offset >= report.data.orders.total) setOffset(Math.max(0, Math.floor((report.data.orders.total - 1) / pageSize) * pageSize));
   }, [offset, report.data]);
@@ -40,13 +42,17 @@ export function AdminFinancePage() {
   if (!isAdmin) return <section className="admin-gate"><div className="admin-gate-mark"><Buildings size={38} weight="light" /></div><h1>財務報表只向管理員開放。</h1>{!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理員登入</button> : <Link className="button button-quiet" to="/">返回首頁</Link>}</section>;
 
   const applyPreset = (mode: "today" | "week" | "month") => {
-    const next = { ...financePeriodPreset(mode), search: "", salesChannel: draft.salesChannel };
+    const next = { ...financePeriodPreset(mode), search: "", salesChannel: draft.salesChannel, orderCategory: draft.orderCategory };
     setDraft(next); setFilters(next); setOffset(0); setFormError("");
   };
   return <section className="admin-module-page meal-finance-page">
     <header className="workspace-heading"><div><p className="eyebrow">SALES REPORT / 財務報表</p><h1>銷售明細與統整</h1></div></header>
     <AdminNav />
 
+    <OrderCategoryFilter value={filters.orderCategory} onChange={(orderCategory) => {
+      const next = { ...filters, orderCategory, salesChannel: "all" };
+      setDraft(next); setFilters(next); setOffset(0); setFormError("");
+    }} />
     <div className="meal-finance-presets" aria-label="常用查詢期間">{(["today", "week", "month"] as const).map((mode) => <button key={mode} type="button" className="button button-quiet" onClick={() => applyPreset(mode)}>{{ today: "今天", week: "本週", month: "本月" }[mode]}</button>)}</div>
     <form className="meal-finance-filters" onSubmit={(event) => {
       event.preventDefault();
@@ -55,12 +61,12 @@ export function AdminFinancePage() {
     }}>
       <label className="field"><span>收退款日期起</span><input type="date" required value={draft.startsOn} onChange={(event) => setDraft({ ...draft, startsOn: event.target.value })} /></label>
       <label className="field"><span>收退款日期迄</span><input type="date" required value={draft.endsOn} onChange={(event) => setDraft({ ...draft, endsOn: event.target.value })} /></label>
-      <label className="field"><span>銷售類型</span><select value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value })}>{Object.entries(channelNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
+      <label className="field"><span>銷售類型</span><select value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value })}>{Object.entries(channelNames).filter(([value]) => channelMatchesCategory(value, filters.orderCategory)).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
       <label className="field"><span>訂單或買家</span><input placeholder="訂單編號、姓名或電子信箱" value={draft.search} maxLength={100} onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
       <button className="button button-primary" type="submit">查詢</button>
     </form>
     {formError && <p className="form-error" role="alert">{formError}</p>}
-    <div className="meal-finance-result-heading"><p>{channelNames[filters.salesChannel as keyof typeof channelNames]} · {filters.startsOn} 至 {filters.endsOn}{filters.search && ` · ${filters.search}`}</p><div><button className="button button-quiet" type="button" disabled={report.isFetching} onClick={() => void report.refetch()}><ArrowClockwise size={18} />更新</button><button className="button button-system" type="button" disabled={!report.data || download.isPending} onClick={() => download.mutate()}><DownloadSimple size={18} />{download.isPending ? "下載中…" : "下載全部明細 CSV"}</button></div></div>
+    <div className="meal-finance-result-heading"><p>{orderCategoryLabels[filters.orderCategory]} · {channelNames[filters.salesChannel as keyof typeof channelNames]} · {filters.startsOn} 至 {filters.endsOn}{filters.search && ` · ${filters.search}`}</p><div><button className="button button-quiet" type="button" disabled={report.isFetching} onClick={() => void report.refetch()}><ArrowClockwise size={18} />更新</button><button className="button button-system" type="button" disabled={!report.data || download.isPending} onClick={() => download.mutate()}><DownloadSimple size={18} />{download.isPending ? "下載中…" : "下載全部明細 CSV"}</button></div></div>
     {download.isError && <p className="form-error" role="alert">{download.error.message}</p>}
     {report.isPending ? <LoadingLines count={5} /> : report.isError ? <DataState kind="error" title="銷售報表無法讀取" detail={report.error.message} onAction={() => void report.refetch()} /> : report.data && <>
       <div className="meal-finance-stats">

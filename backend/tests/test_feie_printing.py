@@ -140,6 +140,34 @@ async def read_job(c):
         return await session.get(PrintJob, c.job_id)
 
 
+async def test_print_job_search_filters_before_pagination_and_escapes_wildcards(print_context):
+    c = print_context
+    order = await c.session.get(Order, c.order_id)
+    order.order_number = "PRINT_100%"
+    c.buyer.display_name = "列印查詢買家"
+    original_job = await c.session.get(PrintJob, c.job_id)
+    second_job = PrintJob(order_id=order.id, event_key="search-second", reprint_of_id=original_job.id,
+        kind="order", mode="dry_run", status="failed", printer_fingerprint=original_job.printer_fingerprint,
+        snapshot=original_job.snapshot)
+    c.session.add(second_job)
+    await c.session.commit()
+    async with api_test_context(c.session, [printers_router], settings=c.settings) as client:
+        async def read(**params):
+            response = await client.get("/v1/admin/printers/jobs", params=params, headers=auth_headers(c.admin))
+            assert response.status_code == 200, response.text
+            return response.json()
+        first = await read(search="_100%", limit=1)
+        second = await read(search="_100%", limit=1, offset=1)
+        assert first["total"] == second["total"] == 2
+        assert first["items"][0]["id"] != second["items"][0]["id"]
+        assert (await read(search="  列印查詢買家  "))["total"] == 2
+        assert (await read(search=original_job.snapshot["items"][0]["name"]))["total"] == 2
+        assert (await read(search="PRINTX100"))["total"] == 0
+        assert (await read(search="%", status="failed"))["items"][0]["id"] == second_job.id
+        assert (await client.get("/v1/admin/printers/jobs", params={"search": "x" * 101}, headers=auth_headers(c.admin))).status_code == 422
+        assert (await client.get("/v1/admin/printers/jobs", params={"search": "PRINT"}, headers=auth_headers(c.buyer))).status_code == 403
+
+
 async def set_job(c, **values):
     async with c.factory() as session:
         job = await session.get(PrintJob, c.job_id)

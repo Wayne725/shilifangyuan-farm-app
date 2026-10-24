@@ -92,3 +92,8 @@
 .admin-order-search .check-field input { width: 20px; min-height: 20px; height: 20px; padding: 0; }
 .order-cancellation-review { margin-block: 24px; padding: 24px; border: 1px solid var(--line-strong); background: var(--paper-light); }
 .order-cancellation-review h3 { margin-top: 0; font-family: var(--serif); font-size: 1.5rem; }
+
+.admin-orders-panel .admin-order-search { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; }
+.admin-orders-panel .admin-order-search > label { min-width: 0; flex: 1 1 240px; }
+.admin-orders-panel .admin-order-search select { width: 100%; min-width: 0; min-height: 52px; font: inherit; color: var(--ink); background: var(--paper-light); border: 1px solid var(--line-strong); padding: 12px; }
+@media (max-width: 600px) { .admin-orders-panel .admin-order-search > label, .admin-orders-panel .admin-order-search > .button { flex-basis: 100%; } }

@@ -83,6 +83,8 @@ test('社員首頁保留社員編號，隱藏股金股數且分列提案會議',
   assert.doesNotMatch(content, /股數|股金|股票號碼|999999|MUST-NOT-DISPLAY/);
   await page.getByRole('heading', { name: '提案進度', exact: true }).waitFor();
   await page.getByRole('heading', { name: '社員會議', exact: true }).waitFor();
+  assert.equal(await page.getByRole('navigation', { name: '社務功能' }).getByRole('link', { name: '永續活動', exact: true }).count(), 0);
+  assert.equal(await page.locator('main a[href="/activities"]').count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   assert.deepEqual(unknownApi, []);
 });

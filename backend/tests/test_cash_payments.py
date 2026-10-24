@@ -14,7 +14,7 @@ from app.routers.meals import meals_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
 from app.jobs import _reconcile_expired_cash_orders, _reconcile_expired_payments
-from app.meal_finance import _receipts
+from app.meal_finance import MealSalesFilters, _receipts
 from tests.support import api_test_context, auth_headers, make_test_settings, tomorrow_meal_timeline
 
 
@@ -65,7 +65,8 @@ async def count(c, model):
 
 
 async def received_total(c):
-    receipts = _receipts(SimpleNamespace(sales_channel="all"))
+    day = datetime.now(timezone.utc).date()
+    receipts = _receipts(MealSalesFilters(starts_on=day, ends_on=day, sales_channel="all", order_category="all"))
     return await c.session.scalar(select(func.coalesce(func.sum(receipts.c.amount), 0)))
 
 

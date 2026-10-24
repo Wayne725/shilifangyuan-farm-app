@@ -19,8 +19,9 @@ from ..csv_export import csv_response
 from ..database import get_session
 from ..models import AdminAudit, FinancialStatementImport, Order, User
 from ..statement_formats import MAX_FILE_BYTES, SOURCES, parse_statement
-from ..statement_reconciliation import reconcile_statement, statement_summary
+from ..statement_reconciliation import reconcile_statement, statement_summary, filter_reconciliation
 from ..accounting_exports import export_accounting, accounting_response
+from ..order_categories import OrderCategory, order_category_condition
 
 router = APIRouter(prefix='/v1/admin/financial-statements', tags=['financial-statements'])
 Source = Literal['newebpay', 'jkopay', 'esun', 'linepay', 'invoice']
@@ -59,10 +60,11 @@ async def list_statements(limit: int = Query(default=20, ge=1, le=100), offset: 
 
 @router.get('/accounting-export')
 async def download_accounting(source: Source, starts_on: date, ends_on: date, batch_id: str | None = Query(default=None, max_length=36),
+                              order_category: OrderCategory = 'all',
                               admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    body, count = await export_accounting(session, source, starts_on, ends_on, batch_id)
+    body, count = await export_accounting(session, source, starts_on, ends_on, batch_id, order_category)
     session.add(AdminAudit(actor_id=admin.id, action='accounting.exported', aggregate_type='accounting_export', aggregate_id=str(uuid4()),
-        data={'source': source, 'starts_on': starts_on.isoformat(), 'ends_on': ends_on.isoformat(), 'batch_id': batch_id, 'count': count}))
+        data={'source': source, 'starts_on': starts_on.isoformat(), 'ends_on': ends_on.isoformat(), 'batch_id': batch_id, 'order_category': order_category, 'count': count}))
     await session.commit()
     return accounting_response(body, source, starts_on, ends_on)
 
@@ -96,17 +98,17 @@ async def import_statement(source: Source = Form(), file: UploadFile = File(), a
 
 
 @router.get('/order-options')
-async def order_options(q: str = Query(default='', max_length=120), _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    query = select(Order).where(Order.order_number.icontains(q.strip(), autoescape=True)).order_by(Order.created_at.desc()).limit(20)
-    return [{'id': row.id, 'order_number': row.order_number, 'amount': row.amount_total, 'created_at': row.created_at} for row in await session.scalars(query)]
+async def order_options(q: str = Query(default='', max_length=120), order_category: OrderCategory = 'all', _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    query = select(Order).where(Order.order_number.icontains(q.strip(), autoescape=True), order_category_condition(order_category)).order_by(Order.created_at.desc(), Order.id).limit(20)
+    return [{'id': row.id, 'order_number': row.order_number, 'sales_channel': row.sales_channel.value, 'amount': row.amount_total, 'created_at': row.created_at} for row in await session.scalars(query)]
 
 
 @router.get('/{batch_id}')
-async def statement_detail(batch_id: str, result: Literal['all', 'matched', 'difference', 'unmatched'] = 'all', limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0), _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+async def statement_detail(batch_id: str, result: Literal['all', 'matched', 'difference', 'unmatched'] = 'all', q: str = Query(default='', max_length=120), order_category: OrderCategory = 'all', limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0), _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     batch = await get_batch(session, batch_id, include_rows=True)
     rows = await reconcile_statement(session, batch)
-    filtered = rows if result == 'all' else [row for row in rows if row['result'] == result]
-    return {**metadata(batch), 'summary': statement_summary(rows), 'items': filtered[offset:offset + limit], 'total': len(filtered)}
+    filtered = filter_reconciliation(rows, q=q, order_category=order_category, result=result)
+    return {**metadata(batch), 'summary': statement_summary(filtered), 'items': filtered[offset:offset + limit], 'total': len(filtered)}
 
 
 class LinkOrder(BaseModel):
@@ -143,14 +145,14 @@ async def download_original(batch_id: str, admin: User = Depends(require_admin),
 
 
 @router.get('/{batch_id}/reconciliation.csv')
-async def export_reconciliation(batch_id: str, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+async def export_reconciliation(batch_id: str, result: Literal['all', 'matched', 'difference', 'unmatched'] = 'all', q: str = Query(default='', max_length=120), order_category: OrderCategory = 'all', admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     batch = await get_batch(session, batch_id, include_rows=True)
-    rows = await reconcile_statement(session, batch)
+    rows = filter_reconciliation(await reconcile_statement(session, batch), q=q, order_category=order_category, result=result)
     audit(session, admin, 'statement.reconciliation_exported', batch, count=len(rows), **statement_summary(rows))
     await session.commit()
     labels = {'matched': '吻合', 'difference': '有差異', 'unmatched': '待連結'}
-    return csv_response('statement-reconciliation.csv', ['來源', '原檔列號', '交易或發票編號', '來源訂單編號或備註', '交易日期', '交易類別', '來源金額', '來源手續費', '來源預計撥款', '網站訂單編號', '網站核對金額', '差額', '來源狀態', '網站狀態', '對帳結果', '差異原因'],
+    return csv_response('statement-reconciliation.csv', ['來源', '原檔列號', '交易或發票編號', '來源訂單編號或備註', '交易日期', '交易類別', '來源金額', '來源手續費', '來源預計撥款', '網站訂單編號', '網站核對金額', '差額', '來源狀態', '網站狀態', '對帳結果', '差異原因', '訂單分類'],
         [[SOURCES[batch.source][0], row['row_number'], row['external_id'], row['reference'], row['occurred_at'], row['kind'],
           *[Decimal(row[key]) if row[key] is not None else None for key in ['amount', 'fee', 'payout']], row['order_number'],
           *[Decimal(row[key]) if row[key] is not None else None for key in ['expected_amount', 'difference']],
-          row['state'], row['website_state'], labels[row['result']], '、'.join(row['reasons'])] for row in rows])
+          row['state'], row['website_state'], labels[row['result']], '、'.join(row['reasons']), '未連結訂單' if not row['sales_channel'] else '便當訂單' if row['sales_channel'] == 'meal_preorder' else '一般訂單'] for row in rows])

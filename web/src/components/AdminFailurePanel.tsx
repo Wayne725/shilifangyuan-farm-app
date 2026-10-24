@@ -1,9 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiFetch, formatDateTime } from "../lib/api";
 
+import { OrderCategoryFilter } from "./OrderCategoryFilter";
+import { orderCategoryLabels, type IssueOrderCategory } from "../lib/order-category";
+
 interface FailedJob {
+  order_category?: IssueOrderCategory;
   id: string; event_type: string; attempts: number; error: string;
   retryable: boolean; retry_blocker: string;
   title?: string; description?: string; next_action?: string;
@@ -16,17 +20,22 @@ export function AdminFailurePanel() {
   const [input, setInput] = useState("");
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("all");
+  const [orderCategory, setOrderCategory] = useState<IssueOrderCategory>("all");
   const [offset, setOffset] = useState(0);
   const [notice, setNotice] = useState("");
   const query = useQuery({
-    queryKey: ["admin-failed-jobs", search, kind, offset],
-    queryFn: () => apiFetch<{ items: FailedJob[]; total: number }>(`/v1/admin/failed-jobs?q=${encodeURIComponent(search)}&kind=${kind}&limit=10&offset=${offset}`),
+    queryKey: ["admin-failed-jobs", search, kind, offset, orderCategory],
+    queryFn: () => apiFetch<{ items: FailedJob[]; total: number }>(`/v1/admin/failed-jobs?q=${encodeURIComponent(search)}&kind=${kind}&order_category=${orderCategory}&limit=10&offset=${offset}`),
     refetchInterval: 30000,
   });
+  useEffect(() => {
+    if (query.data && offset > 0 && offset >= query.data.total) setOffset(Math.max(0, Math.floor((query.data.total - 1) / 10) * 10));
+  }, [offset, query.data]);
   return <section className="admin-failure-panel">
     <h2>待處理問題</h2>
+    <OrderCategoryFilter value={orderCategory} includeSystem onChange={(value) => { setOrderCategory(value); setOffset(0); setNotice(""); }} />
     <form className="failed-job-search" onSubmit={(event) => { event.preventDefault(); setSearch(input.trim()); setOffset(0); setNotice(""); }}>
-      <label>搜尋問題<input maxLength={120} placeholder="訂單編號、問題編號、類型或原因" value={input} onChange={(event) => setInput(event.target.value)} /></label>
+      <label>搜尋問題<input type="search" maxLength={120} placeholder="訂單編號、問題編號、類型或原因" value={input} onChange={(event) => setInput(event.target.value)} /></label>
       <label>問題類型<select aria-label="問題類型" value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); setNotice(""); }}>{Object.entries(jobKinds).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <button type="submit" className="button button-system" disabled={query.isFetching}>查詢問題</button>
       <button type="button" className="button button-quiet" onClick={() => { setInput(""); setSearch(""); setKind("all"); setOffset(0); setNotice(""); }}>清除篩選</button>
@@ -56,6 +65,7 @@ function FailedJobRow({ job, onRetry }: { job: FailedJob; onRetry: (message: str
     <header><h3>{title}</h3><span>已嘗試 {job.attempts} 次</span></header>
     {job.description && <p className="failed-job-description">{job.description}</p>}
     <dl>
+      {job.order_category && <div><dt>訂單分類</dt><dd>{job.order_category === "system" ? "其他系統工作" : orderCategoryLabels[job.order_category]}</dd></div>}
       <div><dt>訂單編號</dt><dd>{job.order_number || "未關聯訂單"}</dd></div>
       {job.created_at && <div><dt>發生時間</dt><dd>{formatDateTime(job.created_at)}</dd></div>}
       <div><dt>問題編號</dt><dd>{job.id}</dd></div>

@@ -17,7 +17,7 @@ async function fixture(t, width, { admin = false, ready = true, startFails = fal
     title: index === 11 ? '退款處理' : '電子發票開立', description: '此工作尚未完成確認。',
     kind: index === 11 ? 'refund' : 'invoice', attempts: 8, error: '外部服務回應逾時，尚未確認處理結果。',
     retryable: false, retry_blocker: '需要先核對訂單狀態。', next_action: '開啟訂單核對目前狀態。',
-    order_number: `SLF-TEST-${index}`, order_id: `order-${index}`, created_at: '2026-10-16T01:00:00Z',
+    order_category: index < 10 ? 'general' : 'meal', order_number: `SLF-TEST-${index}`, order_id: `order-${index}`, created_at: '2026-10-16T01:00:00Z',
   })) };
   await context.route('**/*', async (route) => {
     const req = route.request(), url = new URL(req.url()), path = url.pathname;
@@ -30,7 +30,8 @@ async function fixture(t, width, { admin = false, ready = true, startFails = fal
       if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready, linked: false, identity_verified: false, message: ready ? '' : 'LINE登入尚未啟用，可使用Email登入' } });
       if (path === '/v1/admin/failed-jobs') {
         const q = url.searchParams.get('q') || '', kind = url.searchParams.get('kind') || 'all', offset = Number(url.searchParams.get('offset') || 0);
-        const rows = state.jobs.filter((job) => (!q || job.order_number.includes(q)) && (kind === 'all' || job.kind === kind));
+        const category = url.searchParams.get('order_category') || 'all';
+        const rows = state.jobs.filter((job) => (!q || job.order_number?.includes(q) || job.title.includes(q)) && (kind === 'all' || job.kind === kind) && (category === 'all' || job.order_category === category));
         return route.fulfill({ json: { items: rows.slice(offset, offset + 10), total: rows.length, offset, limit: 10 } });
       }
       if (path === '/v1/admin/order-search') return route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 12 } });
@@ -70,7 +71,8 @@ for (const width of [1440, 390]) {
     await page.getByRole('heading', { name: '退款處理', exact: true }).waitFor();
     const orderLink = page.getByRole('link', { name: '查看訂單', exact: true });
     assert.equal(new URL(await orderLink.getAttribute('href'), base).searchParams.get('q'), 'SLF-TEST-11');
-    await page.getByRole('button', { name: '放大', exact: true }).click();
+    await page.locator('.reading-menu > summary').click();
+    await page.getByRole('group', { name: '文字大小', exact: true }).getByRole('button', { name: '放大', exact: true }).click();
     await verify(page, state);
     assert.deepEqual(state.writes, []);
     await orderLink.click();
@@ -123,3 +125,37 @@ test('LINE開始失敗保留專頁並顯示可理解的錯誤', async (t) => {
   assert.equal(new URL(page.url()).pathname, '/line-consent');
   await verify(page, state);
 });
+
+
+for (const width of [1440, 390]) {
+  test(`${width}px 問題查詢分類保留關鍵字、重設頁碼並保留未關聯系統工作`, async (t) => {
+    const { page, state } = await fixture(t, width, { admin: true });
+    state.jobs.push({ id: 'system-job', event_type: 'maintenance.task', title: '系統資料核對', kind: 'other',
+      attempts: 1, error: '連線逾時', retryable: false, retry_blocker: '人工核對', order_category: 'system', order_number: null });
+    await page.goto(`${base}/admin?section=issues`);
+    await page.getByRole('heading', { name: '待處理問題', exact: true }).waitFor();
+    const categories = page.getByRole('group', { name: '訂單分類', exact: true });
+    const pagination = page.getByRole('navigation', { name: '問題清單分頁', exact: true });
+    await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
+    await pagination.getByText('共 13 筆・第 2 頁', { exact: true }).waitFor();
+    await categories.getByRole('button', { name: '一般訂單', exact: true }).click();
+    await pagination.getByText('共 10 筆・第 1 頁', { exact: true }).waitFor();
+    assert.equal(state.reads.filter((row) => row.path === '/v1/admin/failed-jobs').at(-1).params.offset, '0');
+    assert.equal(await page.locator('.failed-job').count(), 10);
+    assert.equal(await page.getByText('SLF-TEST-11', { exact: true }).count(), 0);
+    await page.getByLabel('搜尋問題', { exact: true }).fill('SLF-TEST-0');
+    await page.getByRole('button', { name: '查詢問題', exact: true }).click();
+    await pagination.getByText('共 1 筆・第 1 頁', { exact: true }).waitFor();
+    await categories.getByRole('button', { name: '便當訂單', exact: true }).click();
+    await page.getByText('沒有符合條件的問題。', { exact: true }).waitFor();
+    const query = state.reads.filter((row) => row.path === '/v1/admin/failed-jobs').at(-1).params;
+    assert.equal(query.q, 'SLF-TEST-0'); assert.equal(query.order_category, 'meal');
+    await page.getByRole('button', { name: '清除篩選', exact: true }).click();
+    await pagination.getByText('共 2 筆・第 1 頁', { exact: true }).waitFor();
+    await categories.getByRole('button', { name: '其他系統工作', exact: true }).click();
+    await page.getByRole('heading', { name: '系統資料核對', exact: true }).waitFor();
+    assert.equal(await page.getByRole('link', { name: '查看訂單', exact: true }).count(), 0);
+    await page.getByText('未關聯訂單', { exact: true }).waitFor();
+    await verify(page, state); assert.deepEqual(state.writes, []);
+  });
+}

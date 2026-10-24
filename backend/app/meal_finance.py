@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from .domain import aware
 from .meal_schedules import TAIPEI
+from .order_categories import OrderCategory, order_category_condition
 from .models import Order, OrderItem, PaymentAttempt, PaymentStatus, Refund, RefundStatus, SalesChannel, User
 
 
@@ -17,6 +18,7 @@ class MealSalesFilters(BaseModel):
     ends_on: Annotated[date, Field(ge=date(2, 1, 1), le=date(9998, 12, 31))]
     search: str = Field(default="", max_length=100)
     sales_channel: Literal["all", "meal_preorder", "regular", "group"] = "meal_preorder"
+    order_category: OrderCategory = "all"
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -33,7 +35,8 @@ class MealSalesFilters(BaseModel):
 
 
 def _channel_scope(filters):
-    return True if filters.sales_channel == "all" else Order.sales_channel == SalesChannel(filters.sales_channel)
+    channel = True if filters.sales_channel == "all" else Order.sales_channel == SalesChannel(filters.sales_channel)
+    return and_(channel, order_category_condition(filters.order_category))
 
 
 def _receipts(filters):

@@ -14,6 +14,8 @@ const errorText = (code: string) => errors[code] || (code.startsWith("provider_r
 
 export function CloudPrintPanel() {
   const [filter, setFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [reason, setReason] = useState("");
@@ -21,7 +23,7 @@ export function CloudPrintPanel() {
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const queryClient = useQueryClient();
   const device = useQuery({queryKey: ["cloud-printer"], queryFn: () => apiFetch<Device>("/v1/admin/printers/status"), staleTime: 60_000});
-  const jobs = useQuery({queryKey: ["print-jobs", filter, offset], queryFn: () => apiFetch<{items: Job[]; total: number}>(`/v1/admin/printers/jobs?${new URLSearchParams({...(filter ? {status: filter} : {}), offset: String(offset), limit: "30"})}`), refetchInterval: 10_000});
+  const jobs = useQuery({queryKey: ["print-jobs", filter, search, offset], queryFn: () => apiFetch<{items: Job[]; total: number}>(`/v1/admin/printers/jobs?${new URLSearchParams({...(filter ? {status: filter} : {}), ...(search ? {search} : {}), offset: String(offset), limit: "30"})}`), refetchInterval: 10_000});
   const preview = useQuery({queryKey: ["print-job", selected], queryFn: () => apiFetch<Job & {preview: string}>(`/v1/admin/printers/jobs/${selected}`), enabled: Boolean(selected), refetchInterval: selected ? 10_000 : false});
   const refresh = () => Promise.all([queryClient.invalidateQueries({queryKey: ["print-jobs"]}), queryClient.invalidateQueries({queryKey: ["print-job"]})]);
   const reprint = useMutation({mutationFn: () => apiFetch<Job>(`/v1/admin/printers/jobs/${selected}/reprint`, {method: "POST", body: JSON.stringify({request_id: requestId, reason, acknowledge_duplicate: acknowledge})}), onSuccess: () => { setRequestId(crypto.randomUUID()); return refresh(); }});
@@ -31,7 +33,12 @@ export function CloudPrintPanel() {
   return <details className="cloud-print-panel" open>
     <summary><span>雲端出單 <small>CLOUD PRINT</small></span><span>{device.data ? deviceStates[device.data.status] : "讀取設備狀態"}</span></summary>
     <div className="cloud-print-body">
-      <div className="cloud-print-controls"><label className="field"><span>列印狀態</span><select aria-label="列印狀態" value={filter} onChange={event => {setFilter(event.target.value); setOffset(0);}}><option value="">全部狀態</option>{Object.entries(states).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button className="button button-quiet" disabled={device.isFetching} onClick={() => void device.refetch()}>查詢設備</button><Link to="/help">出單操作說明</Link></div>
+      <form className="cloud-print-filters" aria-label="列印紀錄查詢" onSubmit={event => {event.preventDefault(); setSearch(searchDraft.trim()); setOffset(0); setSelected(null);}}>
+        <label className="field"><span>查詢列印紀錄</span><input type="search" maxLength={100} placeholder="訂單編號、姓名、餐點名稱" value={searchDraft} onChange={event => setSearchDraft(event.target.value)} /></label>
+        <label className="field"><span>列印狀態</span><select aria-label="列印狀態" value={filter} onChange={event => {setFilter(event.target.value); setOffset(0); setSelected(null);}}><option value="">全部狀態</option>{Object.entries(states).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <div className="cloud-print-filter-actions"><button className="button button-primary" type="submit">查詢</button><button className="button button-quiet" type="button" onClick={() => {setSearchDraft(""); setSearch(""); setFilter(""); setOffset(0); setSelected(null);}}>清除</button><button className="button button-quiet" type="button" disabled={device.isFetching} onClick={() => void device.refetch()}>查詢設備</button></div>
+      </form>
+      <div className="cloud-print-result-heading"><p role="status">{jobs.data ? `共 ${jobs.data.total} 筆列印紀錄` : "讀取列印紀錄"}</p><Link to="/help">出單操作說明</Link></div>
       {device.isError && <p role="alert">{device.error.message}</p>}{device.data?.error && <p role="alert">{errorText(device.data.error)}</p>}
       {jobs.isError && <p role="alert">{jobs.error.message}</p>}
       {jobs.data?.items.length === 0 && <p role="status">沒有符合的列印工作</p>}

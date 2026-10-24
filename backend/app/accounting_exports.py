@@ -15,7 +15,9 @@ from starlette.concurrency import run_in_threadpool
 from .domain import aware
 from .csv_export import csv_response
 from .meal_booking import TAIPEI
-from .models import FinancialStatementImport, Invoice, InvoiceStatus
+from .models import FinancialStatementImport, Invoice, InvoiceStatus, Order
+from .order_categories import order_category_condition
+from .statement_reconciliation import reconcile_statement, filter_reconciliation
 from .statement_formats import SOURCES, _tables, parse_statement, text
 
 
@@ -40,8 +42,9 @@ def validate_period(start, end):
         raise HTTPException(422, '結束日期不可早於開始日期')
 
 
-async def website_invoices(session, start, end):
-    invoices = list(await session.scalars(select(Invoice).where(
+async def website_invoices(session, start, end, order_category='all'):
+    invoices = list(await session.scalars(select(Invoice).join(Order, Order.id == Invoice.order_id).where(
+        order_category_condition(order_category),
         Invoice.invoice_number.is_not(None),
         Invoice.invoice_date >= datetime.combine(start, time.min, TAIPEI).astimezone(timezone.utc),
         Invoice.invoice_date < datetime.combine(end + timedelta(days=1), time.min, TAIPEI).astimezone(timezone.utc),
@@ -185,19 +188,25 @@ def xls_export(selected, original, start, end):
     return output.getvalue()
 
 
-async def export_accounting(session, source, start, end, batch_id):
+async def export_accounting(session, source, start, end, batch_id, order_category='all'):
     validate_period(start, end)
     if batch_id:
-        batch = await session.scalar(select(FinancialStatementImport).where(FinancialStatementImport.id == batch_id).options(undefer(FinancialStatementImport.file_content)))
+        batch = await session.scalar(select(FinancialStatementImport).where(FinancialStatementImport.id == batch_id).options(undefer(FinancialStatementImport.file_content), undefer(FinancialStatementImport.rows)))
         if batch is None:
             raise HTTPException(404, '找不到匯入明細')
         if batch.source != source:
             raise HTTPException(422, '明細檔與匯出格式不符')
         content = batch.file_content
         selected = await run_in_threadpool(batch_rows, content, batch.filename, source, start, end)
+        if order_category != 'all':
+            matched_rows = filter_reconciliation(await reconcile_statement(session, batch), order_category=order_category)
+            row_numbers = {row['row_number'] for row in matched_rows}
+            selected = [row for row in selected if row[0] in row_numbers]
+            if not selected:
+                raise HTTPException(404, '所選期間與訂單分類沒有已連結的明細')
     elif source == 'invoice':
         content = None
-        selected = list(enumerate(await website_invoices(session, start, end), 2))
+        selected = list(enumerate(await website_invoices(session, start, end, order_category), 2))
     else:
         raise HTTPException(409, '請先選擇已匯入的金流或銀行明細檔')
     body = await run_in_threadpool(render_export, source, selected, content, start, end)

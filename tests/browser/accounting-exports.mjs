@@ -31,8 +31,10 @@ for (const width of [1440, 816, 390]) {
     const page = await context.newPage(); page.setDefaultTimeout(7000); page.on('pageerror', error => errors.push(error.message));
     await page.goto(`${base}/admin/accounting`);
     await page.getByRole('heading', {name: '會計格式匯出', exact: true}).waitFor();
+    await page.locator('.reading-menu > summary').click();
     await page.getByRole('button', {name: '放大', exact: true}).click();
     const form = page.locator('.accounting-export');
+    await form.getByRole('button', {name: '一般訂單', exact: true}).click();
     await form.getByLabel('發票日期起', {exact: true}).fill('2030-01-01');
     await form.getByLabel('發票日期迄', {exact: true}).fill('2030-01-31');
     for (const [source, extension] of [['invoice', '.xlsx'], ['newebpay', '.csv'], ['jkopay', '.xlsx'], ['linepay', '.xlsx'], ['esun', '.xls']]) {
@@ -44,6 +46,7 @@ for (const width of [1440, 816, 390]) {
       assert.ok(file.suggestedFilename().endsWith(extension));
       await form.getByRole('status').filter({hasText: '匯出完成'}).waitFor();
       assert.equal(requests.at(-1).source, source);
+      assert.equal(requests.at(-1).order_category, 'general');
       assert.equal(requests.at(-1).starts_on, '2030-01-01');
       assert.equal(requests.at(-1).ends_on, '2030-01-31');
       assert.equal(requests.at(-1).batch_id, source === 'invoice' ? undefined : 'sample');

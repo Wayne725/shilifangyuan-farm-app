@@ -129,6 +129,8 @@ for (const width of [1440, 390]) {
     assert.equal(await tab.getAttribute('data-state'), 'active', await page.locator('.meal-finance-page').innerText());
     await page.getByRole('combobox', { name: '統整方式', exact: true }).selectOption('weekly');
     await page.getByRole('rowheader', { name: '2029-12-31 起', exact: true }).waitFor();
+    await page.getByRole('group', { name: '訂單分類', exact: true }).getByRole('button', { name: '一般訂單', exact: true }).click();
+    await page.getByRole('button', { name: '更新', exact: true }).waitFor();
     await page.getByRole('combobox', { name: '銷售類型', exact: true }).selectOption('regular');
     await page.getByLabel('訂單或買家', { exact: true }).fill('SLF-REPORT-001');
     await page.getByRole('button', { name: '查詢', exact: true }).click();
@@ -137,7 +139,7 @@ for (const width of [1440, 390]) {
     await page.getByRole('button', { name: '下載全部明細 CSV', exact: true }).click();
     await downloading;
     const csv = state.reads.findLast((q) => q.csv);
-    assert.equal(csv.sales_channel, 'regular'); assert.equal(csv.search, 'SLF-REPORT-001');
+    assert.equal(csv.order_category, 'general'); assert.equal(csv.sales_channel, 'regular'); assert.equal(csv.search, 'SLF-REPORT-001');
     assert.equal(csv.starts_on, '2030-01-01'); assert.equal(csv.ends_on, '2030-01-02');
     await verify(page, state);
     if (process.env.BROWSER_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/finance-${width}.png`, fullPage: true });

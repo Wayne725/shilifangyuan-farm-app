@@ -22,6 +22,9 @@ export function AdminKitchenPage() {
   const isAdmin = user?.user_role === "admin";
   const [serviceDate, setServiceDate] = useState(taipeiDate());
   const [mealPeriod, setMealPeriod] = useState("all");
+  const [search, setSearch] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [fulfillmentStatus, setFulfillmentStatus] = useState("all");
   const [offset, setOffset] = useState(0);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [reprint, setReprint] = useState(false);
@@ -32,8 +35,8 @@ export function AdminKitchenPage() {
   const observed = useRef<{key: string; ids: Set<string>} | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const soundSettings = useQuery({queryKey: ["admin-platform"], queryFn: () => apiFetch<{kitchen_sound: boolean}>("/v1/admin/platform"), enabled: isAdmin});
-  const parameters = new URLSearchParams({ service_date: serviceDate, meal_period: mealPeriod, offset: String(offset), limit: String(pageSize) });
-  const list = useQuery({ queryKey: ["meal-kitchen", serviceDate, mealPeriod, offset], queryFn: () => apiFetch<KitchenList>(`/v1/admin/meal-kitchen?${parameters}`), enabled: isAdmin && Boolean(serviceDate), refetchInterval: 15_000 });
+  const parameters = new URLSearchParams({ service_date: serviceDate, meal_period: mealPeriod, search, fulfillment_status: fulfillmentStatus, offset: String(offset), limit: String(pageSize) });
+  const list = useQuery({ queryKey: ["meal-kitchen", serviceDate, mealPeriod, search, fulfillmentStatus, offset], queryFn: () => apiFetch<KitchenList>(`/v1/admin/meal-kitchen?${parameters}`), enabled: isAdmin && Boolean(serviceDate), refetchInterval: 15_000 });
   const update = useMutation({
     mutationFn: ({ orderId, status }: { orderId: string; status: string }) => apiFetch<KitchenOrder>(`/v1/admin/meal-kitchen/orders/${orderId}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
     onSuccess: () => Promise.all(["meal-kitchen", "meal-kitchen-ticket", "admin-meal-orders", "admin-meal-operations-summary", "admin-orders", "meal-orders"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))),
@@ -57,7 +60,7 @@ export function AdminKitchenPage() {
   }, [offset, list.data]);
   useEffect(() => {
     if (!list.data) return;
-    const key = `${serviceDate}:${mealPeriod}:${offset}`;
+    const key = `${serviceDate}:${mealPeriod}:${search}:${fulfillmentStatus}:${offset}`;
     const ids = new Set(list.data.items.map(order => order.id));
     if (soundEnabled && soundSettings.data?.kitchen_sound && audio.current?.state === "running" && observed.current?.key === key && [...ids].some(id => !observed.current?.ids.has(id))) {
       const tone = audio.current.createOscillator(), gain = audio.current.createGain();
@@ -65,7 +68,7 @@ export function AdminKitchenPage() {
       tone.start(); tone.stop(audio.current.currentTime + .3);
     }
     observed.current = {key, ids};
-  }, [list.data, serviceDate, mealPeriod, offset, soundEnabled, soundSettings.data]);
+  }, [list.data, serviceDate, mealPeriod, search, fulfillmentStatus, offset, soundEnabled, soundSettings.data]);
   useEffect(() => () => { void audio.current?.close(); }, []);
   async function enableSound() {
     audio.current ||= new AudioContext();
@@ -81,6 +84,11 @@ export function AdminKitchenPage() {
     <header className="workspace-heading"><div><p className="eyebrow">KITCHEN / 廚房</p><h1>備餐與出單</h1></div></header>
     <AdminNav />
     <CloudPrintPanel />
+    <form className="meal-kitchen-search" aria-label="備餐訂單查詢" onSubmit={event => {event.preventDefault(); setSearch(searchDraft.trim()); setOffset(0); closePreview();}}>
+      <label className="field"><span>查詢便當訂單</span><input type="search" maxLength={100} placeholder="訂單編號、姓名、餐點、取餐地點" value={searchDraft} onChange={event => setSearchDraft(event.target.value)} /></label>
+      <label className="field"><span>備餐狀態</span><select aria-label="備餐狀態" value={fulfillmentStatus} onChange={event => {setFulfillmentStatus(event.target.value); setOffset(0); closePreview();}}><option value="all">全部備餐狀態</option>{Object.entries(kitchenStates).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <div className="meal-kitchen-search-actions"><button className="button button-primary" type="submit">查詢</button><button className="button button-quiet" type="button" onClick={() => {setSearch(""); setSearchDraft(""); setFulfillmentStatus("all"); setOffset(0); closePreview();}}>清除</button></div>
+    </form>
     {soundSettings.data?.kitchen_sound && <button className="button button-quiet kitchen-sound-button" type="button" onClick={() => void enableSound()} disabled={soundEnabled}>{soundEnabled ? "新訂單提示音已啟用" : "開啟本頁新訂單提示音"}</button>}
     <div className="meal-kitchen-filters"><div className="admin-quick-buttons" role="group" aria-label="快速備餐日期">{[{ label: "今天", date: taipeiDate() }, { label: "明天", date: shiftMealDate(taipeiDate(), 1) }].map(({ label, date }) => <button className="button button-quiet" key={label} type="button" aria-pressed={serviceDate === date} onClick={() => { setServiceDate(date); setOffset(0); closePreview(); }}>{label}</button>)}</div><label className="field"><span>取餐日期</span><input type="date" required value={serviceDate} onChange={(event) => { setServiceDate(event.target.value); setOffset(0); closePreview(); }} /></label><button className="button button-quiet" type="button" disabled={list.isFetching || !serviceDate} onClick={() => void list.refetch()}><ArrowClockwise size={18} />更新清單</button></div>
     <div className="admin-quick-buttons" role="group" aria-label="備餐時段">{[{ value: "all", label: "全部時段" }, { value: "lunch", label: "11:00–13:00" }, { value: "dinner", label: "16:30–18:00" }, { value: "unspecified", label: "舊場次" }].map(({ value, label }) => <button className="button button-quiet" key={value} type="button" aria-pressed={mealPeriod === value} onClick={() => { setMealPeriod(value); setOffset(0); closePreview(); }}>{label}</button>)}</div>

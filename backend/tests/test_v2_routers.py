@@ -1865,11 +1865,12 @@ async def test_community_activity_waitlist_and_named_vote_update(
     member_b = v2_context["member_b"]
     now = datetime.now(timezone.utc)
 
-    forbidden = await client.get(
+    public_list = await client.get(
         "/v1/activities",
         headers=auth_headers(applicant),
     )
-    assert forbidden.status_code == 403
+    assert public_list.status_code == 200
+    assert public_list.json() == []
 
     created = await client.post(
         "/v1/activities",
