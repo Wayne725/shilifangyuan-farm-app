@@ -5,7 +5,10 @@ export function OrderCategoryFilter<T extends IssueOrderCategory>({ value, onCha
   value: T; onChange: (value: T) => void; includeSystem?: boolean;
 }) {
   const options = includeSystem ? { ...orderCategoryLabels, system: "其他系統工作" } : orderCategoryLabels;
-  return <div className="order-category-filter" role="group" aria-label="訂單分類">
-    {Object.entries(options).map(([category, label]) => <button className="button button-quiet" type="button" key={category} aria-pressed={value === category} onClick={() => onChange(category as T)}>{label}</button>)}
-  </div>;
+  return <label className="field order-category-filter">
+    <span>訂單分類</span>
+    <select value={value} onChange={(event) => onChange(event.target.value as T)}>
+      {Object.entries(options).map(([category, label]) => <option key={category} value={category}>{label}</option>)}
+    </select>
+  </label>;
 }

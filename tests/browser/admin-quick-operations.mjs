@@ -135,14 +135,17 @@ for (const width of [1440, 390]) {
     assert.deepEqual(state.writes.map((r) => r.body.reason), ['客服核對發票狀態', '客服核對退款狀態']);
     await verify(page, state);
   });
-  test(`${width}px 一鍵日期與狀態、清單製作操作不換頁，歷史／未付款不顯示製作鍵`, async (t) => {
+  test(`${width}px 快捷日期與履約下拉查詢、清單製作操作不換頁，歷史／未付款不顯示製作鍵`, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin/meals`);
     const row = page.locator('.meal-operation-order').filter({ hasText: 'QUICK-A' });
     await row.getByRole('button', { name: '開始製作', exact: true }).waitFor();
     assert.equal(await page.getByLabel('取餐日期（起）', { exact: true }).isVisible(), false);
     await responseAfter(page, (r) => r.url().includes('date_from=2030-01-03'), () => page.getByRole('group', { name: '快速取餐日期', exact: true }).getByRole('button', { name: '明天', exact: true }).click());
-    await responseAfter(page, (r) => r.url().includes('fulfillment_status=pending_confirmation'), () => page.getByRole('group', { name: '快速製作狀態', exact: true }).getByRole('button', { name: '待製作', exact: true }).click());
+    assert.equal(await page.getByRole('group', { name: '快速製作狀態', exact: true }).count(), 0);
+    await page.getByRole('combobox', {name: '履約狀態', exact: true}).selectOption('pending_confirmation');
+    assert.equal(state.reads.filter((r) => r.path === '/v1/admin/meal-orders').at(-1).fulfillment_status, undefined, '選擇後由查詢按鈕套用');
+    await responseAfter(page, (r) => r.url().includes('fulfillment_status=pending_confirmation'), () => page.getByRole('button', {name: '查詢訂單', exact: true}).click());
     const read = state.reads.filter((r) => r.path === '/v1/admin/meal-orders').at(-1);
     assert.equal(read.date_to, date); assert.equal(read.fulfillment_status, 'pending_confirmation');
     assert.equal(state.writes.length, 0);
@@ -156,6 +159,29 @@ for (const width of [1440, 390]) {
     await page.waitForFunction(() => getComputedStyle(document.documentElement).fontSize === '20px');
     await verify(page, state);
   });
+  test(`${width}px 退單審核下拉保留關鍵字並查詢全部與單一狀態，不變更訂單`, async (t) => {
+    const {page, state} = await fixture(t, width);
+    await page.goto(`${base}/admin/meals?tab=cancellations&q=QUICK-A`);
+    const status = page.getByRole('combobox', {name: '退單審核狀態', exact: true});
+    await status.waitFor();
+    assert.equal(await status.inputValue(), 'pending');
+    for (const value of ['approved', 'rejected', 'all']) {
+      await responseAfter(page, response => response.url().includes('/meal-cancellation-requests?') && new URL(response.url()).searchParams.get('review_status') === value, () => status.selectOption(value));
+      const read = state.reads.filter(row => row.path === '/v1/admin/meal-cancellation-requests').at(-1);
+      assert.equal(read.search, 'QUICK-A');
+      assert.equal(read.offset, '0');
+      if (value === 'approved' || value === 'rejected') await page.getByText('沒有符合條件的退單申請', {exact: true}).waitFor();
+      else await page.getByRole('heading', {name: 'QUICK-A', exact: true}).waitFor();
+    }
+    await status.selectOption('pending');
+    await page.getByRole('heading', {name: 'QUICK-A', exact: true}).waitFor();
+    assert.equal(await status.inputValue(), 'pending');
+    assert.deepEqual(state.writes, []);
+    await page.locator('.reading-menu > summary').click();
+    await page.getByRole('button', {name: '放大', exact: true}).click();
+    await page.waitForFunction(() => getComputedStyle(document.documentElement).fontSize === '20px');
+    await verify(page, state);
+  });
   test(`${width}px 廚房直達單筆退單，重整保留目標，核准兩次點擊零輸入`, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin/kitchen`);
@@ -165,13 +191,15 @@ for (const width of [1440, 390]) {
     await page.reload(); await page.getByRole('button', { name: '核准退單', exact: true }).click();
     assert.equal(state.writes.length, 0);
     assert.equal(await page.locator('.meal-cancellation-review textarea').count(), 0);
+    assert.equal(await page.getByRole('combobox', { name: '審核理由（買家會看到）', exact: true }).inputValue(), '依買家申請核准退單。');
+    await page.locator('.admin-selected-reason').filter({ hasText: '依買家申請核准退單。' }).waitFor();
     if (process.env.ADMIN_QUICK_SCREENSHOTS && width === 1440) await page.screenshot({ path: '/Users/liuweiwei/Documents/farm/outputs/admin-quick-review-verified.png', fullPage: true });
     state.holdReview = true;
     await page.getByRole('button', { name: '確認核准', exact: true }).click();
     const pending = page.getByRole('button', { name: '處理中…', exact: true });
     await pending.waitFor();
     assert.equal(await pending.isEnabled(), false);
-    assert.equal(await page.getByRole('button', { name: '餐點無法供應', exact: true }).isEnabled(), false);
+    assert.equal(await page.getByRole('combobox', { name: '審核理由（買家會看到）', exact: true }).isEnabled(), false);
     assert.equal(await page.getByRole('button', { name: '返回', exact: true }).isEnabled(), false);
     await pending.dblclick({ force: true });
     assert.equal(state.writes.length, 1);
@@ -186,9 +214,12 @@ for (const width of [1440, 390]) {
     await page.goto(`${base}/admin/meals?tab=cancellations&q=QUICK-B`);
     await page.getByRole('button', { name: '拒絕退單', exact: true }).click();
     assert.equal(await page.getByRole('button', { name: '確認拒絕', exact: true }).isEnabled(), false);
-    await page.getByRole('button', { name: '已完成取餐', exact: true }).click();
+    const reason = page.getByRole('combobox', { name: '審核理由（買家會看到）', exact: true });
+    assert.equal(await reason.inputValue(), '');
+    await reason.selectOption({ label: '已完成取餐' });
+    await page.locator('.admin-selected-reason').filter({ hasText: '訂單已完成取餐，無法取消。' }).waitFor();
     assert.equal(state.writes.length, 0);
-    await page.getByRole('button', { name: '其他原因', exact: true }).click();
+    await reason.selectOption({ label: '其他原因' });
     assert.equal(await page.getByRole('button', { name: '確認拒絕', exact: true }).isEnabled(), false);
     await page.getByLabel('自訂審核理由（買家會看到）', { exact: true }).fill('需要補充確認');
     state.conflict = true;
@@ -280,7 +311,7 @@ test('人工作廢只對已退款訂單顯示，原因選擇不送出，最後�
   await page.goto(`${base}/admin`);
   await page.getByText('發票作廢處理', { exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '人工作廢／核對汎宇結果', exact: true }).isEnabled(), false);
-  await page.getByRole('button', { name: '全額退款', exact: true }).click();
+  await page.getByRole('combobox', { name: '人工處理原因', exact: true }).selectOption({ label: '全額退款' });
   assert.equal(state.writes.length, 0);
   await responseAfter(page, (r) => r.url().endsWith('/invoice/void'), () => page.getByRole('button', { name: '人工作廢／核對汎宇結果', exact: true }).click());
   assert.deepEqual(state.writes.map((r) => r.body.reason), ['全額退款，核對作廢']);

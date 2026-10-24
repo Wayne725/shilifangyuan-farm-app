@@ -95,12 +95,12 @@ for (const width of [1440, 390]) {
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();
     assert.equal(state.quotes.at(-1).body.pickup_at, '2030-01-03T10:00:00.000Z');
     await page.getByText('修改取餐時間', {exact:true}).click();
-    await page.getByRole('button', { name: '17:30', exact: true }).click();
+    await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).selectOption('2030-01-03T17:30');
     await page.waitForURL(/pickup_at=.*17%3A30/);
     await page.reload();
     await page.getByText('修改取餐時間', {exact:true}).click();
-    await page.getByRole('button', { name: '17:30', exact: true }).waitFor();
-    assert.equal(await page.getByRole('button', { name: '17:30', exact: true }).getAttribute('aria-pressed'), 'true');
+    await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).waitFor();
+    assert.equal(await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).inputValue(), '2030-01-03T17:30');
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();
     assert.equal(await page.locator('html').getAttribute('data-text-size'), 'large');
     await verify(page, state);
@@ -108,7 +108,7 @@ for (const width of [1440, 390]) {
     await page.getByRole('button', { name: '清空選餐與取餐時間', exact: true }).click();
     await page.reload();
     await page.getByRole('heading', { name: '選餐點與份數', exact: true }).waitFor();
-    assert.equal(await page.locator('.meal-pickup-options button[aria-pressed="true"]').count(), 0);
+    assert.equal(await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).inputValue(), '');
     assert.equal(state.quotes.every((q) => q.body.items[0].offering_id === 'dish-dinner'), true);
   });
   test(`${width}px 財務明細可展開、統整與CSV共用篩選，大字保持原版頁籤`, { timeout: 30000 }, async (t) => {
@@ -129,7 +129,7 @@ for (const width of [1440, 390]) {
     assert.equal(await tab.getAttribute('data-state'), 'active', await page.locator('.meal-finance-page').innerText());
     await page.getByRole('combobox', { name: '統整方式', exact: true }).selectOption('weekly');
     await page.getByRole('rowheader', { name: '2029-12-31 起', exact: true }).waitFor();
-    await page.getByRole('group', { name: '訂單分類', exact: true }).getByRole('button', { name: '一般訂單', exact: true }).click();
+    await page.getByRole('combobox', { name: '訂單分類', exact: true }).selectOption('general');
     await page.getByRole('button', { name: '更新', exact: true }).waitFor();
     await page.getByRole('combobox', { name: '銷售類型', exact: true }).selectOption('regular');
     await page.getByLabel('訂單或買家', { exact: true }).fill('SLF-REPORT-001');

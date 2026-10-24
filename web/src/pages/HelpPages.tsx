@@ -1,5 +1,10 @@
 import { ArrowLeft, CreditCard, FileText, Storefront, UsersThree } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { apiFetch } from "../lib/api";
+import type { PickupLocation } from "../lib/types";
+import "./HelpPages.css";
 
 const helpItems = [
   { icon: FileText, title: "放大字體", body: "網站上方按「放大」，選擇會記在目前瀏覽器。需要恢復時按「標準」。" },
@@ -7,12 +12,13 @@ const helpItems = [
   { icon: UsersThree, title: "團購投票", body: "投票只用來估計需求；正式開團後仍須加入並完成付款。" },
   { icon: CreditCard, title: "線上付款", body: "付款結果以訂單中心狀態為準；中斷時可由原訂單安全續接。" },
   { icon: FileText, title: "便當退單", body: "請在便當訂單按「電話聯絡退單」，向合作社提供訂單編號及退單原因，由管理員確認並辦理。聯絡後不代表訂單已取消；以原訂單顯示的訂單、退款及發票狀態為準。尚未設定電話時，頁面會顯示無法撥號的狀態。" },
-  { icon: Storefront, title: "便當取餐時間", body: "只能提前一天預訂，今天可訂明天。午餐可選 11:00、11:30、12:00、12:30、13:00；晚餐可選 16:30、17:00、17:30、18:00。場次實際可選時間以畫面上的按鈕為準，兩種餐別都到指定地點現場取餐。" },
+  { icon: Storefront, title: "便當取餐時間", body: "只能提前一天預訂，今天可訂明天。午餐可選 11:00、11:30、12:00、12:30、13:00；晚餐可選 16:30、17:00、17:30、18:00。場次實際可選時間以畫面上的可選時段為準，兩種餐別都到指定地點現場取餐。" },
   { icon: UsersThree, title: "入社資料", body: "合作社已確認不需上傳身分證或其他證件；填妥基本資料即可送出入社申請。社員提案與社員會議分別從社務選單進入。" },
   { icon: FileText, title: "電子發票", body: "後端確認付款成功後排入開票；汎宇寄送發票通知，平台寄送付款成功通知，票號可在訂單紀錄查看。" },
 ];
 
 const mealQuestions = [
+  { question: "下拉選單如何使用？", answer: "點選欄位後選擇項目；便當主食的加價或減價會列在選項中，選填項目可選「不選擇」。選擇不會直接付款或完成審核，請核對明細後再按付款或確認按鈕。" },
   { question: "非社員可以參加永續活動嗎？", answer: "可以。永續活動開放所有人瀏覽，登入一般帳號即可報名或取消自己的報名，不需要社員資格。額滿時依活動設定開放候補，名額釋出後依候補順序遞補。發起活動仍限有效社員，須經管理員審核後才會公開。" },
   { question: "如何查詢餐點與一般訂單？", answer: "在訂單中心選擇「餐點訂單」或「一般訂單」，可用訂單編號、餐點／商品名稱、取貨地點查詢，並依付款狀態篩選。一般訂單包含商品與正式團購；餐點訂單可直接查看取餐碼及退單進度。" },
   { question: "商品照片與社員頭像如何更新？", answer: "在商品新增／編輯表單或社員名錄的「編輯我的資料」選擇 JPG、PNG 或 WebP 照片後儲存。每張最多 5 MB、1200 萬像素，系統會縮圖並移除定位等中繼資料。社員頭像僅供登入的有效社員查看，選擇不公開時只有本人能查看。" },
@@ -62,7 +68,21 @@ const mealQuestions = [
 ];
 
 export function HelpPage() {
-  return <section className="help-page meal-help-page"><Link className="text-link" to="/"><ArrowLeft size={17} />回到首頁</Link><header><h1>操作說明與常見問題</h1></header><div className="help-list">{helpItems.map(({ icon: Icon, title, body }, index) => <article key={title}><span>{String(index + 1).padStart(2, "0")}</span><Icon size={24} weight="light" /><div><h2>{title}</h2><p>{body}</p></div></article>)}</div><section className="meal-faq" aria-label="便當常見問題"><h2>常見問題</h2>{mealQuestions.map(({ question, answer }) => <details key={question}><summary>{question}</summary><p>{answer}</p></details>)}</section></section>;
+  return <section className="help-page meal-help-page"><Link className="text-link" to="/"><ArrowLeft size={17} />回到首頁</Link><header><h1>操作說明與常見問題</h1></header><div className="help-list">{helpItems.map(({ icon: Icon, title, body }, index) => <article key={title}><span>{String(index + 1).padStart(2, "0")}</span><Icon size={24} weight="light" /><div><h2>{title}</h2><p>{body}</p></div></article>)}</div><section className="meal-faq" aria-label="便當常見問題"><h2>常見問題</h2><PickupLocationHelp />{mealQuestions.map(({ question, answer }) => <details key={question}><summary>{question}</summary><p>{answer}</p></details>)}</section></section>;
+}
+
+function PickupLocationHelp() {
+  const [open, setOpen] = useState(false);
+  const locations = useQuery({
+    queryKey: ["pickup-locations"],
+    queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
+    enabled: open,
+    retry: false,
+  });
+  return <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary>各取貨點有哪些領取說明？</summary>
+    {open && (locations.isPending ? <p role="status">讀取取貨點中…</p> : locations.isError ? <div><p role="alert">取貨點說明暫時無法讀取。</p><button type="button" className="button button-quiet" disabled={locations.isFetching} onClick={() => void locations.refetch()}>重新讀取</button></div> : locations.data.length === 0 ? <p>目前沒有可用的取貨點。</p> : <div className="pickup-location-help-list">{locations.data.map((location) => <section key={location.id}><h3>{location.name}</h3>{location.address && <p>{location.address}</p>}{location.instructions && <p className="pickup-location-help-instructions">{location.instructions}</p>}</section>)}</div>)}
+  </details>;
 }
 
 export function NotFoundPage() {

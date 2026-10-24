@@ -31,7 +31,7 @@ for (const width of [1440, 390]) {
     const page = await context.newPage(); page.setDefaultTimeout(7000); page.on('pageerror', error => errors.push(error.message));
     await page.goto(`${base}/admin/invoices`);
     await page.getByText('全部訂單 · 共 3 筆', {exact: true}).waitFor();
-    await page.getByRole('button', {name: '一般訂單', exact: true}).click();
+    await page.getByRole('combobox', {name: '訂單分類', exact: true}).selectOption('general');
     await page.getByText('一般訂單 · 共 2 筆', {exact: true}).waitFor();
     await page.getByLabel('訂單編號、發票號碼或 Email').fill('group');
     await page.getByRole('button', {name: '查詢', exact: true}).click();
@@ -41,7 +41,7 @@ for (const width of [1440, 390]) {
     assert.equal(downloads.at(-1).order_category, 'general'); assert.equal(downloads.at(-1).q, 'group');
     await page.getByLabel('訂單編號、發票號碼或 Email').fill('');
     await page.getByRole('button', {name: '查詢', exact: true}).click();
-    await page.getByRole('button', {name: '便當訂單', exact: true}).click();
+    await page.getByRole('combobox', {name: '訂單分類', exact: true}).selectOption('meal');
     await page.getByText('便當訂單 · 共 1 筆', {exact: true}).waitFor();
     assert.equal(reads.at(-1).order_category, 'meal');
     await page.locator('.reading-menu > summary').click();

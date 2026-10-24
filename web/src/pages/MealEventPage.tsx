@@ -333,11 +333,33 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                       {offering.option_groups.filter((group) => group.is_active).map((group) => {
                         const selected = selections[offering.id]?.[group.id] || [];
                         const valid = selected.length >= group.min_selections && selected.length <= group.max_selections;
+                        const activeOptions = group.options.filter((option) => option.is_active);
+                        const compactChoice = group.max_selections === 1 && activeOptions.length >= 3 && activeOptions.every((option) => !option.image_url);
+                        const fieldId = `meal-option-${offering.id}-${group.id}`;
                         return (
                           <fieldset className="meal-option-group" key={group.id}>
-                            <legend><span>{group.name}</span><small>{selectionRule(group)}</small></legend>
-                            <div className="meal-option-list">
-                              {group.options.filter((option) => option.is_active).map((option) => (
+                            <legend id={`${fieldId}-label`}><span>{group.name}</span><small>{selectionRule(group)}</small></legend>
+                            {compactChoice ? (
+                              <div className="field">
+                                <select
+                                  aria-label={`${offering.meal_name} ${group.name}`}
+                                  aria-describedby={!valid ? `${fieldId}-error` : undefined}
+                                  aria-invalid={!valid}
+                                  value={selected[0] || ""}
+                                  required={group.min_selections > 0}
+                                  disabled={checkout.isPending}
+                                  onChange={(event) => {
+                                    const optionId = event.target.value;
+                                    setDraftAdjusted(false);
+                                    setDraft((current) => ({ ...current, selections: { ...current.selections, [offering.id]: { ...current.selections[offering.id], [group.id]: optionId ? [optionId] : [] } } }));
+                                  }}
+                                >
+                                  <option value="" disabled={group.min_selections > 0}>{group.min_selections > 0 ? "請選擇" : "不選擇"}</option>
+                                  {activeOptions.map((option) => <option key={option.id} value={option.id}>{option.name}{option.price_delta > 0 ? ` +${formatMoney(option.price_delta)}` : option.price_delta < 0 ? ` −${formatMoney(Math.abs(option.price_delta))}` : ""}</option>)}
+                                </select>
+                              </div>
+                            ) : <div className="meal-option-list">
+                              {activeOptions.map((option) => (
                                 <button
                                   aria-pressed={selected.includes(option.id)}
                                   aria-label={`${option.name}${option.price_delta > 0 ? ` +${formatMoney(option.price_delta)}` : ""}`}
@@ -350,8 +372,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                                   <span className="meal-option-label"><span>{option.name}</span>{option.price_delta > 0 && <small>+{formatMoney(option.price_delta)}</small>}</span>
                                 </button>
                               ))}
-                            </div>
-                            {!valid && <p className="meal-option-error">請完成此項選擇</p>}
+                            </div>}
+                            {!valid && <p id={`${fieldId}-error`} className="meal-option-error">請完成此項選擇</p>}
                           </fieldset>
                         );
                       })}
@@ -397,7 +419,12 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           <div className="meal-checkout-settings">
             <details className="meal-pickup-selection" open={!pickupReady ? true : undefined}><summary>修改取餐時間</summary>
 
-              <div className="meal-pickup-options" role="group" aria-label="預計取餐時間（台灣時間）">{pickupOptions.map((option) => <button key={option.value} type="button" aria-pressed={pickupAt === option.value} disabled={!orderingOpen} onClick={() => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: option.value })); void navigate({ search: { pickup_at: option.value }, replace: true }); }}>{option.label}</button>)}</div>
+              <label className="field">預計取餐時間（台灣時間）
+                <select value={pickupReady ? pickupAt : ""} required disabled={!orderingOpen || checkout.isPending || !pickupOptions.length} onChange={(event) => { const value = event.target.value; setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: value })); void navigate({ search: { pickup_at: value }, replace: true }); }}>
+                  <option value="" disabled>請選擇取餐時間</option>
+                  {pickupOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
               {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
               {pickupReady && <p className="meal-pickup-confirmation" role="status">已選取餐時間：{formatMealDateTime(taipeiInputToIso(pickupAt))}</p>}
             </details>

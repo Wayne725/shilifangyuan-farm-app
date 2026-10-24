@@ -13,6 +13,7 @@ import { ApiError, apiFetch, formatDateTime } from "../lib/api";
 import { proposalStatusLabel } from "../lib/labels";
 import { documentAvailable, documentExpired, documentRetentionLabel } from "../lib/membership-documents";
 import type { Activity, Meeting, MembershipApplication, Proposal, Wish } from "../lib/types";
+import "./AdminSocialPage.css";
 
 interface ShareholdingRecord {
   id: string;
@@ -98,7 +99,7 @@ export function AdminSocialPage() {
         </Tabs.List>
 
         <Tabs.Content className="tab-content" value="reviews">
-          <div className="admin-quick-buttons social-review-scope" role="group" aria-label="審核範圍">{[["pending", "待處理"], ["all", "全部"], ["done", "已處理"]].map(([value, label]) => <button type="button" className="button button-quiet" key={value} aria-pressed={reviewScope === value} onClick={() => setReviewScope(value)}>{label}</button>)}</div>
+          <label className="field social-review-scope"><span>審核範圍</span><select value={reviewScope} onChange={(event) => setReviewScope(event.target.value)}><option value="pending">待處理</option><option value="all">全部</option><option value="done">已處理</option></select></label>
           {(reviewScope !== "pending" || visibleActivities.length > 0 || activities.isPending || activities.isError) && <AdminReviewSection icon={CalendarBlank} title="活動管理" count={visibleActivities.length} pending={activities.isPending} error={activities.error?.message} empty="沒有符合條件的活動">
             {visibleActivities.map((activity) => <ActivityReviewCard key={activity.id} activity={activity} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-activities"] })} />)}
           </AdminReviewSection>}
