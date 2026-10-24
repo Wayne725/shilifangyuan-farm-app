@@ -1,6 +1,5 @@
 import {
   ArrowRight,
-  CalendarBlank,
   CalendarCheck,
   IdentificationCard,
   NotePencil,
@@ -14,7 +13,7 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate } from "../lib/api";
 import { proposalStatusLabel } from "../lib/labels";
-import type { Activity, Meeting, MembershipSummary, Proposal } from "../lib/types";
+import type { Meeting, MembershipSummary, Proposal } from "../lib/types";
 
 export function SocialPage() {
   const { user, openLogin } = useAuth();
@@ -24,13 +23,8 @@ export function SocialPage() {
     enabled: Boolean(user),
   });
   const isMember = membership.data?.membership_type === "member";
-  const [activities, proposals, meetings] = useQueries({
+  const [proposals, meetings] = useQueries({
     queries: [
-      {
-        queryKey: ["activities"],
-        queryFn: () => apiFetch<Activity[]>("/v1/activities"),
-        enabled: Boolean(isMember),
-      },
       {
         queryKey: ["member-proposals"],
         queryFn: () => apiFetch<Proposal[]>("/v1/member-proposals"),
@@ -52,7 +46,7 @@ export function SocialPage() {
           <h1>一起參與，<br /><em>一起決定。</em></h1>
         </div>
         <div className="intro-aside">
-          <span>活動、願望、社員名錄與合作社議事。</span>
+          <span>願望、社員名錄與合作社議事。</span>
         </div>
       </section>
       {isMember && <SocialNav />}
@@ -61,7 +55,7 @@ export function SocialPage() {
         <section className="social-access-card">
           <UsersThree size={38} weight="light" />
           <h2>登入後進入社務系統</h2>
-          <p>一般買家可查看入社進度；正式社員可參與活動、願望、名錄與議事。</p>
+          <p>一般買家可查看入社進度；正式社員可參與願望、名錄與議事。</p>
           <button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button>
         </section>
       ) : membership.isPending ? (
@@ -91,14 +85,7 @@ export function SocialPage() {
 
           <section className="social-dashboard content-section">
             <div className="social-feature-grid">
-              <Link className="social-feature primary" to="/activities">
-                <CalendarBlank size={28} weight="light" />
-                <span>永續活動</span>
-                <strong>{activities.data?.length ?? 0}</strong>
-                <small>場近期活動</small>
-                <ArrowRight size={20} />
-              </Link>
-              <Link className="social-feature" to="/governance">
+              <Link className="social-feature primary" to="/governance">
                 <NotePencil size={28} weight="light" />
                 <span>社員提案</span>
                 <strong>{proposals.data?.length ?? 0}</strong>
@@ -122,19 +109,6 @@ export function SocialPage() {
             </div>
 
             <div className="social-feed-grid">
-              <section className="social-feed">
-                <header><div><p className="eyebrow">UPCOMING / 近期活動</p><h2>近期活動</h2></div><Link className="text-link" to="/activities">查看全部</Link></header>
-                {activities.isPending && <LoadingLines count={2} />}
-                {activities.data?.slice(0, 3).map((activity) => (
-                  <article key={activity.id}>
-                    <time>{formatDate(activity.starts_at)}</time>
-                    <div><strong>{activity.title}</strong><small>{activity.location} · {activity.registration_count}/{activity.capacity} 人</small></div>
-                    <span>{activity.my_registration ? "已報名" : "可報名"}</span>
-                  </article>
-                ))}
-                {activities.data?.length === 0 && <DataState title="目前沒有近期活動" detail="社員可發起新的活動送交管理員審核。" />}
-              </section>
-
               <section className="social-feed governance-feed">
                 <header><div><p className="eyebrow">PROPOSALS / 社員提案</p><h2>提案進度</h2></div><Link className="text-link" to="/governance">查看提案</Link></header>
                 {proposals.data?.slice(0, 3).map((proposal) => (

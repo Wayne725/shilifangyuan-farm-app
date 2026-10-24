@@ -11,16 +11,15 @@ import { useSocialAccess } from "../lib/social-access";
 
 export function HomePage() {
   const { addToCart } = useCommerce();
-  const { user, openLogin } = useAuth();
+  const { user } = useAuth();
   const socialAccess = useSocialAccess(user);
   const products = useQuery({
     queryKey: ["products"],
     queryFn: () => apiFetch<Product[]>("/v1/products"),
   });
   const activities = useQuery({
-    queryKey: ["activities"],
+    queryKey: ["activities", user?.id],
     queryFn: () => apiFetch<Activity[]>("/v1/activities"),
-    enabled: socialAccess,
   });
   const heroProduct = products.data?.find((item) => item.image_url);
 
@@ -140,16 +139,16 @@ export function HomePage() {
         </Link>
         {socialAccess && <Link className="workspace-door society" to="/social">
           <span>社務系統</span>
-          <strong>社員・活動・提案與治理</strong>
+          <strong>社員・提案與治理</strong>
           <ArrowRight size={25} weight="light" />
         </Link>}
       </section>
 
-      {socialAccess && <section className="content-section community-preview">
+      <section className="content-section community-preview">
         <SectionHeading
           eyebrow="COMMON AGENDA / 共同參與"
           title="共同生活，正在發生。"
-          action={{ label: "進入社務系統", to: "/social" }}
+          action={{ label: "查看永續活動", to: "/activities" }}
         />
         <div className="agenda-strip">
           {activities.data?.slice(0, 3).map((activity, index) => (
@@ -162,20 +161,14 @@ export function HomePage() {
               </div>
             </article>
           ))}
-          {activities.isPending && user && <LoadingLines count={2} />}
-          {activities.isError && user && (
+          {activities.isPending && <LoadingLines count={2} />}
+          {activities.isError && (
             <DataState
               kind="error"
               title="活動資料暫時無法讀取"
               detail={activities.error.message}
               onAction={() => activities.refetch()}
             />
-          )}
-          {!user && (
-            <button className="quiet-placeholder quiet-placeholder-button" type="button" onClick={openLogin}>
-              <CirclesThreePlus size={26} weight="light" />
-              <p>登入正式社員帳號後顯示本月活動。</p>
-            </button>
           )}
           {activities.data?.length === 0 && (
             <div className="quiet-placeholder">
@@ -184,7 +177,7 @@ export function HomePage() {
             </div>
           )}
         </div>
-      </section>}
+      </section>
     </>
   );
 }

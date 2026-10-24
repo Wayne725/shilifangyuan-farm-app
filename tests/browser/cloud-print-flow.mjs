@@ -12,7 +12,7 @@ async function fixture(t, width, dryRun = true, admin = true) {
   const browser = await chromium.launch({headless: true, executablePath: process.env.BROWSER_EXECUTABLE});
   t.after(() => browser.close());
   const context = await browser.newContext({viewport: {width, height: 900}, timezoneId: 'Asia/Taipei', serviceWorkers: 'block'});
-  const state = {jobs: [structuredClone(original)], writes: [], unknown: [], external: [], errors: []};
+  const state = {jobs: [structuredClone(original)], reads: [], writes: [], unknown: [], external: [], errors: []};
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) {state.external.push(url.origin); return route.abort();}
@@ -20,10 +20,11 @@ async function fixture(t, width, dryRun = true, admin = true) {
     if (path === '/v1/auth/refresh') return route.fulfill({json: {access_token: 'fixture', user: {id: 'fixture-user', email: 'fixture@example.test', display_name: '測試管理員', user_role: admin ? 'admin' : 'customer'}}});
     if (path === '/v1/platform') return route.fulfill({json: {orders_open: true, closed_message: ''}});
     if (path === '/v1/admin/platform') return route.fulfill({json: {kitchen_sound: false}});
-    if (path === '/v1/admin/meal-kitchen') return route.fulfill({json: {items: [], total: 0, meal_quantity: 0, products: []}});
+    if (path === '/v1/admin/meal-kitchen') {state.reads.push(url); return route.fulfill({json: {items: [], total: 0, meal_quantity: 0, products: []}});}
     if (path === '/v1/admin/printers/status') return route.fulfill({json: {enabled: true, dry_run: dryRun, status: dryRun ? 'dry_run' : 'offline', error: null}});
     if (path === '/v1/admin/printers/jobs') {
-      const jobs = state.jobs.filter(job => !url.searchParams.get('status') || job.status === url.searchParams.get('status'));
+      state.reads.push(url);
+      const jobs = state.jobs.filter(job => (!url.searchParams.get('status') || job.status === url.searchParams.get('status')) && (!url.searchParams.get('search') || job.order_number.includes(url.searchParams.get('search'))));
       return route.fulfill({json: {items: jobs, total: jobs.length}});
     }
     if (path === '/v1/admin/printers/jobs/job-1') return route.fulfill({json: {...state.jobs[0], preview: '十里方圓 合作社\n訂餐單\n姓名：測試同學\n繁體中文餐點\n付款方式：現場付款\n付款狀態：未付款'}});
@@ -96,3 +97,45 @@ test('非管理員不顯示雲端出單且不讀取紀錄', async t => {
   assert.equal(await page.getByRole('button', {name: '查詢設備', exact: true}).count(), 0);
   assert.deepEqual(state.writes, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });
+
+test('列印與備餐各自查詢並清除，不執行出單或更改訂單', async t => {
+  const {page, state} = await fixture(t, 390);
+  await page.goto(`${base}/admin/kitchen`);
+  const printForm = page.getByRole('form', {name: '列印紀錄查詢'});
+  await printForm.getByRole('searchbox').fill('NO-MATCH');
+  await printForm.getByRole('button', {name: '查詢', exact: true}).click();
+  await page.getByText('沒有符合的列印工作', {exact: true}).waitFor();
+  assert.equal(state.reads.filter(url => url.pathname.endsWith('/printers/jobs')).at(-1).searchParams.get('search'), 'NO-MATCH');
+  await printForm.getByRole('button', {name: '清除', exact: true}).click();
+  await page.getByRole('button', {name: '查看／補印', exact: true}).waitFor();
+  const kitchenForm = page.getByRole('form', {name: '備餐訂單查詢'});
+  await kitchenForm.getByRole('searchbox').fill('  王小明  ');
+  const searched = page.waitForResponse(response => response.url().includes('/meal-kitchen?') && new URL(response.url()).searchParams.get('search') === '王小明');
+  await kitchenForm.getByRole('button', {name: '查詢', exact: true}).click();
+  await searched;
+  const filtered = page.waitForResponse(response => response.url().includes('/meal-kitchen?') && new URL(response.url()).searchParams.get('fulfillment_status') === 'preparing');
+  await kitchenForm.getByRole('combobox', {name: '備餐狀態'}).selectOption('preparing');
+  await filtered;
+  const latest = state.reads.filter(url => url.pathname.endsWith('/meal-kitchen')).at(-1);
+  assert.equal(latest.searchParams.get('search'), '王小明');
+  assert.equal(latest.searchParams.get('offset'), '0');
+  await kitchenForm.getByRole('button', {name: '清除', exact: true}).click();
+  assert.equal(await kitchenForm.getByRole('searchbox').inputValue(), '');
+  assert.deepEqual(state.writes, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+});
+
+for (const width of [390, 899, 1542]) {
+  test(`${width}px 列印查詢控制等高且桌面底部對齊`, async t => {
+    const {page} = await fixture(t, width);
+    await page.goto(`${base}/admin/kitchen`);
+    await page.getByText('模擬模式', {exact: true}).waitFor();
+    for (const large of [false, true]) {
+      await page.evaluate(value => { document.documentElement.dataset.textSize = value ? 'large' : 'standard'; }, large);
+      const select = await page.getByLabel('列印狀態', {exact: true}).boundingBox();
+      const button = await page.getByRole('button', {name: '查詢設備', exact: true}).boundingBox();
+      assert.ok(Math.abs(select.height - button.height) < 1, `高度 ${select.height}/${button.height}`);
+      if (width >= 1200) assert.ok(Math.abs(select.y + select.height - button.y - button.height) < 1, `下緣 ${select.y + select.height}/${button.y + button.height}`);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    }
+  });
+}

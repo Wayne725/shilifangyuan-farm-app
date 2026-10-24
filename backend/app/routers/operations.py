@@ -14,12 +14,14 @@ from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..identity_numbers import next_identity_number
+from ..order_categories import OrderCategory, order_category_condition
 from ..failed_jobs import JOB_KINDS, job_details, job_error_expression, job_error_summary, job_order_id_expression, job_title_expression
 from ..integrations.common import IntegrationError
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..models import (
     AdminAudit,
     Order,
+    OrderItem,
     MealCancellationRequest,
     OrderFulfillment,
     OutboxEvent,
@@ -82,12 +84,17 @@ async def job_retry_blocker(session: AsyncSession, event: OutboxEvent) -> str:
 async def list_failed_jobs(
     q: str = Query(default="", max_length=120),
     kind: Literal["all", "invoice", "refund", "email", "other"] = "all",
+    order_category: Literal["all", "general", "meal", "system"] = "all",
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     query = select(OutboxEvent, Order).outerjoin(Order, Order.id == job_order_id_expression()).where(OutboxEvent.status == OutboxStatus.FAILED)
+    if order_category == "system":
+        query = query.where(Order.id.is_(None))
+    else:
+        query = query.where(order_category_condition(order_category))
     known_types = set().union(*JOB_KINDS.values())
     if kind == "other":
         query = query.where(OutboxEvent.event_type.not_in(known_types))
@@ -110,6 +117,7 @@ async def list_failed_jobs(
         items.append({"id": event.id, "event_type": event.event_type, "aggregate_id": event.aggregate_id,
                       "status": event.status.value, "attempts": event.attempts,
                       "error": job_error_summary(event), "retryable": not blocker, "retry_blocker": blocker,
+                      "order_category": "meal" if order and order.sales_channel.value == "meal_preorder" else "general" if order else "system",
                       **job_details(event, order)})
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -151,6 +159,8 @@ class AdminOrderPage(BaseModel):
 async def search_admin_orders(
     q: str = Query(default="", max_length=120),
     cancellation_pending: bool = False,
+    order_category: OrderCategory = "all",
+    payment_status: Optional[PaymentStatus] = None,
     limit: int = Query(default=12, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin),
@@ -158,7 +168,9 @@ async def search_admin_orders(
 ) -> AdminOrderPage:
     from .orders import order_read
 
-    query = select(Order)
+    query = select(Order).where(order_category_condition(order_category))
+    if payment_status is not None:
+        query = query.where(Order.payment_status == payment_status)
     if cancellation_pending:
         query = query.where(Order.cancellation_requests.any(MealCancellationRequest.status == "pending"))
     if term := q.strip():
@@ -166,6 +178,8 @@ async def search_admin_orders(
             Order.order_number.icontains(term, autoescape=True),
             Order.contact_email.icontains(term, autoescape=True),
             Order.invoice_buyer_tax_id.icontains(term, autoescape=True),
+            Order.user.has(or_(User.display_name.icontains(term, autoescape=True), User.email.icontains(term, autoescape=True))),
+            Order.items.any(OrderItem.product_name.icontains(term, autoescape=True)),
         ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     orders = await session.scalars(query.options(

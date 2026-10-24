@@ -40,6 +40,9 @@ interface AdminOrderPage {
   offset: number;
 }
 
+import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
+import { orderCategoryLabels, type OrderCategory } from "../lib/order-category";
+
 type OperationSection = "orders" | "summary" | "issues" | "suppliers" | "locations";
 
 export function AdminPage() {
@@ -51,11 +54,14 @@ export function AdminPage() {
   const [orderSearchInput, setOrderSearchInput] = useState(routeSearch.q || "");
   const [orderSearch, setOrderSearch] = useState(routeSearch.q || "");
   const [orderOffset, setOrderOffset] = useState(0);
+  const [orderCategory, setOrderCategory] = useState<OrderCategory>("all");
+  const [orderPayment, setOrderPayment] = useState("");
   const [cancellationPending, setCancellationPending] = useState(false);
   useEffect(() => {
     setOrderSearchInput(routeSearch.q || "");
     setOrderSearch(routeSearch.q || "");
     setOrderOffset(0);
+    setOrderCategory("all"); setOrderPayment(""); setCancellationPending(false);
   }, [routeSearch.q]);
   const [supplierQuery, locationQuery, orderQuery] = useQueries({
     queries: [
@@ -70,12 +76,15 @@ export function AdminPage() {
         enabled: isAdmin && section === "locations",
       },
       {
-        queryKey: ["admin-orders", orderSearch, orderOffset, cancellationPending],
-        queryFn: () => apiFetch<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}`),
+        queryKey: ["admin-orders", orderSearch, orderOffset, cancellationPending, orderCategory, orderPayment],
+        queryFn: () => apiFetch<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}&order_category=${orderCategory}${orderPayment ? `&payment_status=${orderPayment}` : ""}`),
         enabled: isAdmin && section === "orders",
       },
     ],
   });
+  useEffect(() => {
+    if (orderQuery.data && orderOffset > 0 && orderOffset >= orderQuery.data.total) setOrderOffset(Math.max(0, Math.floor((orderQuery.data.total - 1) / 12) * 12));
+  }, [orderOffset, orderQuery.data]);
   const updateFulfillment = useMutation({
     mutationFn: ({ orderId, status }: { orderId: string; status: string }) =>
       apiFetch<Order>(`/v1/orders/${orderId}/admin/fulfillment`, {
@@ -110,18 +119,21 @@ export function AdminPage() {
   }
 
   const orderContent = <section className="admin-orders-panel">
+    <OrderCategoryFilter value={orderCategory} onChange={(value) => { setOrderCategory(value); setOrderOffset(0); }} />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>
-      <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} placeholder="訂單編號、Email 或統編" maxLength={120} /></label>
+      <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} type="search" placeholder="訂單編號、姓名、Email、商品或統編" maxLength={120} /></label>
+      <label className="field"><span>付款狀態</span><select value={orderPayment} onChange={(event) => { setOrderPayment(event.target.value); setOrderOffset(0); }}><option value="">全部狀態</option><option value="pending">待付款</option><option value="paid">已付款</option><option value="refund_pending">退款中</option><option value="refunded">已退款</option><option value="failed">付款失敗</option><option value="expired">已逾期</option><option value="late_paid_refund_required">付款晚到待退款</option></select></label>
       <label className="check-field"><input type="checkbox" checked={cancellationPending} onChange={(event) => { setCancellationPending(event.target.checked); setOrderOffset(0); }} />只看退單待審</label>
       <button className="button button-quiet" type="submit">搜尋</button>
+      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderPayment(""); setCancellationPending(false); setOrderOffset(0); }}>清除查詢</button>
     </form>
     <div className="operations-list">
       {orderQuery.data?.items.map((order) => (
         <article key={order.id}>
           <div className="operation-title">
-            <span>{formatDate(order.created_at)}</span>
+            <span>{orderCategoryLabels[order.sales_channel === "meal_preorder" ? "meal" : "general"]} · {formatDate(order.created_at)}</span>
             <strong>{order.order_number}</strong>
             <small>{formatMoney(order.amount_total)}</small>
           </div>

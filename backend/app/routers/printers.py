@@ -3,14 +3,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..integrations.feie import FeieClient, FeieError, configuration_read, validate_live_config
-from ..models import AdminAudit, Order, PrintJob, User
+from ..models import AdminAudit, Order, OrderItem, PrintJob, User
 from ..printer_worker import wake_printer
 from ..printing import format_receipt, job_read, payment_snapshot, printer_fingerprint
 
@@ -39,6 +39,7 @@ async def printer_status(_admin: User = Depends(require_admin), settings: Settin
 
 @printers_router.get("/jobs")
 async def print_jobs(status: str | None = Query(default=None, pattern="^(pending|sending|submitted|printed|failed|unknown|simulated)$"),
+    search: str = Query(default="", max_length=100),
     order_id: str | None = None, limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     query = select(PrintJob)
@@ -46,6 +47,12 @@ async def print_jobs(status: str | None = Query(default=None, pattern="^(pending
         query = query.where(PrintJob.status == status)
     if order_id:
         query = query.where(PrintJob.order_id == order_id)
+    if term := search.strip():
+        query = query.join(Order, Order.id == PrintJob.order_id).where(or_(
+            Order.order_number.icontains(term, autoescape=True),
+            Order.user.has(User.display_name.icontains(term, autoescape=True)),
+            Order.items.any(OrderItem.product_name.icontains(term, autoescape=True)),
+        ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     jobs = await session.scalars(query.order_by(PrintJob.created_at.desc(), PrintJob.id.desc()).offset(offset).limit(limit))
     return {"items": [job_read(job) for job in jobs], "total": total}

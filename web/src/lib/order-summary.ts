@@ -1,3 +1,5 @@
+import type { OrderCategory } from "./order-category";
+
 export type OrderSummarySalesChannel = "meal_preorder" | "regular" | "group";
 export type OrderSummaryStatus = "active" | "paid" | "pending" | "inactive" | "all";
 
@@ -20,6 +22,7 @@ export interface OrderSummaryFilters {
   startsOn: string;
   endsOn: string;
   salesChannel: OrderSummarySalesChannel | "all";
+  orderCategory: OrderCategory;
   status: OrderSummaryStatus;
   category: string;
   search: string;
@@ -39,6 +42,7 @@ export interface OrderSummaryReport {
   starts_on: string;
   ends_on: string;
   sales_channel: OrderSummarySalesChannel | "all";
+  order_category: OrderCategory;
   status: OrderSummaryStatus;
   search: string;
   category: string;

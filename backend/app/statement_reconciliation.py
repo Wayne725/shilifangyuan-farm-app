@@ -101,10 +101,19 @@ async def reconcile_statement(session, batch):
             reasons.append('交易金額不符')
         status = 'matched' if not reasons else 'unmatched' if not order else 'difference'
         results.append({**record, 'order_id': order.id if order else None, 'order_number': order.order_number if order else None,
+                        'sales_channel': order.sales_channel.value if order else None,
                         'expected_amount': str(expected) if expected is not None else None,
                         'difference': str(difference) if difference is not None else None, 'website_state': state,
                         'result': status, 'reasons': reasons})
     return results
+
+
+def filter_reconciliation(rows, *, q='', order_category='all', result='all'):
+    term = q.strip().casefold()
+    return [row for row in rows
+            if (order_category == 'all' or (row['sales_channel'] in {'regular', 'group'} if order_category == 'general' else row['sales_channel'] == 'meal_preorder'))
+            and (result == 'all' or row['result'] == result)
+            and (not term or term in ' '.join(str(row.get(key) or '') for key in ['external_id', 'reference', 'order_number', 'occurred_at', 'state', 'website_state']).casefold() or term in ' '.join(row['reasons']).casefold())]
 
 
 def statement_summary(rows):

@@ -8,7 +8,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..auth import get_current_user, require_active_member, require_admin
+from ..auth import (
+    get_current_user,
+    get_optional_user,
+    membership_type_for_user,
+    require_active_member,
+    require_admin,
+)
 from ..database import get_session
 from ..models import (
     Activity,
@@ -21,6 +27,7 @@ from ..models import (
     MemberProposalStatus,
     MemberProposalType,
     MemberProposalVote,
+    MembershipType,
     Notification,
     OutboxEvent,
     PointAccount,
@@ -28,6 +35,7 @@ from ..models import (
     PointTransaction,
     ProposalOption,
     User,
+    UserRole,
 )
 from ..schemas import (
     AdminActivityRegistrationRead,
@@ -88,7 +96,7 @@ def _aware(value: datetime) -> datetime:
 
 def _activity_read(
     activity: Activity,
-    user_id: str,
+    user: Optional[User],
 ) -> ActivityRead:
     registered = [
         registration
@@ -109,7 +117,7 @@ def _activity_read(
         (
             registration
             for registration in activity.registrations
-            if registration.user_id == user_id
+            if user is not None and registration.user_id == user.id
         ),
         None,
     )
@@ -127,7 +135,12 @@ def _activity_read(
         waitlist_enabled=activity.waitlist_enabled,
         status=activity.status,
         reviewed_at=activity.reviewed_at,
-        review_reason=activity.review_reason,
+        review_reason=(
+            activity.review_reason
+            if user is not None
+            and (user.id == activity.created_by_id or user.user_role == UserRole.ADMIN)
+            else None
+        ),
         registration_count=len(registered),
         waitlist_count=len(waitlisted),
         my_registration=(
@@ -221,7 +234,7 @@ async def _load_proposal(
 
 @community_router.get("/v1/activities", response_model=list[ActivityRead])
 async def list_activities(
-    user: User = Depends(require_active_member),
+    user: Optional[User] = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[ActivityRead]:
     activities = (
@@ -232,7 +245,7 @@ async def list_activities(
             .order_by(Activity.starts_at)
         )
     ).all()
-    return [_activity_read(activity, user.id) for activity in activities]
+    return [_activity_read(activity, user) for activity in activities]
 
 
 @community_router.get(
@@ -241,16 +254,16 @@ async def list_activities(
 )
 async def get_activity(
     activity_id: str,
-    user: User = Depends(require_active_member),
+    user: Optional[User] = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRead:
     activity = await _load_activity(session, activity_id)
     if activity is None or (
         activity.status != ActivityStatus.PUBLISHED
-        and activity.created_by_id != user.id
+        and (user is None or activity.created_by_id != user.id)
     ):
         raise HTTPException(status_code=404, detail="找不到活動")
-    return _activity_read(activity, user.id)
+    return _activity_read(activity, user)
 
 
 @community_router.post(
@@ -280,7 +293,7 @@ async def create_activity(
         )
     )
     await session.commit()
-    return _activity_read(activity, user.id)
+    return _activity_read(activity, user)
 
 
 @community_router.post(
@@ -289,11 +302,11 @@ async def create_activity(
 )
 async def register_activity(
     activity_id: str,
-    user: User = Depends(require_active_member),
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRegistrationRead:
     activity = await _load_activity(session, activity_id, for_update=True)
-    if activity is None:
+    if activity is None or activity.status != ActivityStatus.PUBLISHED:
         raise HTTPException(status_code=404, detail="找不到活動")
     existing = next(
         (
@@ -357,7 +370,7 @@ async def register_activity(
 )
 async def cancel_activity_registration(
     activity_id: str,
-    user: User = Depends(require_active_member),
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRegistrationRead:
     activity = await _load_activity(session, activity_id, for_update=True)
@@ -414,7 +427,7 @@ async def admin_list_activities(
             .order_by(Activity.created_at.desc())
         )
     ).all()
-    return [_activity_read(activity, admin.id) for activity in activities]
+    return [_activity_read(activity, admin) for activity in activities]
 
 
 @community_router.get(
@@ -473,7 +486,7 @@ async def _review_activity(
         )
     )
     await session.commit()
-    return _activity_read(activity, admin.id)
+    return _activity_read(activity, admin)
 
 
 @community_router.post(
@@ -560,7 +573,7 @@ async def cancel_activity(
         )
     )
     await session.commit()
-    return _activity_read(activity, admin.id)
+    return _activity_read(activity, admin)
 
 
 @community_router.post(
@@ -593,7 +606,7 @@ async def complete_activity(
         )
     )
     await session.commit()
-    return _activity_read(activity, admin.id)
+    return _activity_read(activity, admin)
 
 
 @community_router.post(
@@ -621,6 +634,7 @@ async def mark_activity_attendance(
             ActivityRegistration.status
             == ActivityRegistrationStatus.REGISTERED,
         )
+        .options(selectinload(ActivityRegistration.user).selectinload(User.membership))
         .with_for_update()
     )
     if registration is None:
@@ -628,7 +642,8 @@ async def mark_activity_attendance(
     registration.status = attendance_status
     if attendance_status == ActivityRegistrationStatus.ATTENDED:
         registration.checked_in_at = datetime.now(timezone.utc)
-        await _award_points_once(session, registration.user_id, 5, PointSourceType.ACTIVITY, activity_id, "參與社員活動")
+        if membership_type_for_user(registration.user) == MembershipType.MEMBER:
+            await _award_points_once(session, registration.user_id, 5, PointSourceType.ACTIVITY, activity_id, "參與永續活動")
     session.add(
         AdminAudit(
             actor_id=admin.id,

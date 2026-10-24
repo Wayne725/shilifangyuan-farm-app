@@ -13,7 +13,7 @@ export function SectionHeading({
   eyebrow: string;
   title: string;
   description?: string;
-  action?: { label: string; to: "/" | "/shop" | "/social" | "/checkout" | "/admin" };
+  action?: { label: string; to: "/" | "/shop" | "/social" | "/activities" | "/checkout" | "/admin" };
 }) {
   return (
     <div className="section-heading">

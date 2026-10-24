@@ -7,6 +7,7 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .meal_schedules import TAIPEI
+from .order_categories import OrderCategory, order_category_condition
 from .models import (
     FulfillmentState, FulfillmentStatus, MealEventOffering, Order, OrderFulfillment,
     OrderItem, PaymentStatus, Product,
@@ -19,6 +20,7 @@ class OrderSummaryFilters(BaseModel):
     starts_on: Annotated[date, Field(ge=date(2, 1, 1), le=date(9998, 12, 31))]
     ends_on: Annotated[date, Field(ge=date(2, 1, 1), le=date(9998, 12, 31))]
     sales_channel: Literal["all", "meal_preorder", "regular", "group"] = "all"
+    order_category: OrderCategory = "all"
     status: Literal["active", "paid", "pending", "inactive", "all"] = "active"
     search: str = Field(default="", max_length=100)
     category: str = Field(default="", max_length=100)
@@ -70,7 +72,7 @@ def _summary_lines(filters: OrderSummaryFilters):
         OrderFulfillment, OrderFulfillment.order_id == Order.id,
     ).outerjoin(Product, Product.id == OrderItem.source_product_id).outerjoin(
         MealEventOffering, MealEventOffering.id == OrderItem.source_meal_offering_id,
-    ).where(Order.created_at >= start, Order.created_at < end)
+    ).where(Order.created_at >= start, Order.created_at < end, order_category_condition(filters.order_category))
     if filters.sales_channel != "all":
         query = query.where(Order.sales_channel == filters.sales_channel)
     if filters.status == "active":

@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,7 +11,7 @@ from .domain import aware
 from .meal_schedules import TAIPEI
 from .models import (
     AdminAudit, FulfillmentState, FulfillmentStatus, MealEvent, MealEventStatus,
-    Order, OrderFulfillment, OrderItem, PaymentStatus, SalesChannel,
+    Order, OrderFulfillment, OrderItem, PaymentStatus, SalesChannel, User,
 )
 
 
@@ -22,6 +22,8 @@ ACTIVE_EVENT_STATES = {MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSE
 class MealKitchenFilters(BaseModel):
     service_date: Annotated[date, Field(ge=date(2, 1, 1), le=date(9998, 12, 31))]
     meal_period: Literal["all", "lunch", "dinner", "unspecified"] = "all"
+    search: str = Field(default="", max_length=100)
+    fulfillment_status: Literal["all", "pending_confirmation", "preparing", "ready_for_pickup"] = "all"
     limit: int = Field(default=50, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -75,6 +77,15 @@ async def meal_kitchen_list(session: AsyncSession, filters: MealKitchenFilters):
         query = query.where(MealEvent.meal_period.is_(None))
     elif filters.meal_period != "all":
         query = query.where(MealEvent.meal_period == filters.meal_period)
+    if filters.fulfillment_status != "all":
+        query = query.where(OrderFulfillment.status == FulfillmentState(filters.fulfillment_status))
+    if term := filters.search.strip():
+        query = query.where(or_(
+            Order.order_number.icontains(term, autoescape=True),
+            Order.user.has(User.display_name.icontains(term, autoescape=True)),
+            Order.items.any(OrderItem.product_name.icontains(term, autoescape=True)),
+            func.coalesce(OrderFulfillment.pickup_location, MealEvent.location).icontains(term, autoescape=True),
+        ))
     total = int(await session.scalar(select(func.count()).select_from(query.subquery())) or 0)
     order_ids = query.with_only_columns(Order.id).subquery()
     products = (await session.execute(select(OrderItem.product_name, OrderItem.unit_label, func.sum(OrderItem.quantity))

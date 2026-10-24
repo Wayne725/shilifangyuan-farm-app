@@ -51,6 +51,23 @@ async def test_list_uses_actual_pickup_time_and_warns_pending_cancellation(kitch
 
 
 @pytest.mark.asyncio
+async def test_kitchen_search_and_status_filter_counts_before_pagination(kitchen_context):
+    c = kitchen_context
+    result = await read(c, search="王小明", limit=1)
+    assert result["total"] == 2 and result["meal_quantity"] == 4
+    assert len(result["items"]) == 1
+    ready = await read(c, search="  搜尋便當  ", fulfillment_status="ready_for_pickup")
+    assert ready["total"] == 1 and ready["meal_quantity"] == 2
+    assert ready["items"][0]["id"] == c.orders["ready"].id
+    assert (await read(c, search="找不到的品項"))["products"] == []
+    c.orders["ready"].order_number = "SEARCH_100%"
+    await c.session.commit()
+    assert (await read(c, search="_100%"))["total"] == 1
+    assert (await read(c, search="%"))["total"] == 1
+    assert (await read(c, search="SEARCHX100"))["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_closed_ordering_remains_available_for_preparation_and_printing_before_pickup(kitchen_context):
     c = kitchen_context
     c.event.status = MealEventStatus.ORDERING_CLOSED
@@ -151,7 +168,7 @@ async def test_ticket_preview_is_read_only_and_admin_only(kitchen_context):
     assert unauthorized.status_code == 403
 
 
-@pytest.mark.parametrize("params", [{"service_date": "invalid"}, {"meal_period": "other"}, {"limit": 101}, {"offset": -1}])
+@pytest.mark.parametrize("params", [{"service_date": "invalid"}, {"meal_period": "other"}, {"limit": 101}, {"offset": -1}, {"search": "x" * 101}, {"fulfillment_status": "invalid"}])
 @pytest.mark.asyncio
 async def test_kitchen_rejects_invalid_filters(kitchen_context, params):
     c = kitchen_context

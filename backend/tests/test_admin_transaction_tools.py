@@ -123,3 +123,36 @@ async def test_retry_rejects_unprivileged_users_and_outdated_work(database_sessi
         assert blocked.status_code == 409
         listing = await client.get('/v1/admin/failed-jobs', headers=auth_headers(admin))
         assert listing.json()['items'][0]['retryable'] is False
+
+
+async def test_admin_search_category_payment_and_item_search_cover_all_pages(database_session):
+    from app.models import OrderItem, SalesChannel, TaxType
+
+    buyer, _product, regular = await make_regular_order(database_session)
+    buyer.display_name = "分類查詢買家"
+    buyer.email = regular.contact_email = "category-buyer@example.com"
+    admin = User(email="category-admin@example.test", display_name="管理員", password_hash="unused", user_role=UserRole.ADMIN)
+    group = Order(order_number="CATEGORY-GROUP", user_id=buyer.id, order_kind=regular.order_kind,
+                  sales_channel=SalesChannel.GROUP, membership_type_snapshot=regular.membership_type_snapshot,
+                  amount_total=100, contact_email=buyer.email, payment_status=PaymentStatus.PAID,
+                  items=[OrderItem(product_name="分類共同購買品項", unit_label="份", unit_price=100, subtotal=100, quantity=1, tax_type=TaxType.TAXABLE)])
+    meal = Order(order_number="CATEGORY-MEAL", user_id=buyer.id, order_kind=regular.order_kind,
+                 sales_channel=SalesChannel.MEAL_PREORDER, membership_type_snapshot=regular.membership_type_snapshot,
+                 amount_total=100, contact_email=buyer.email)
+    database_session.add_all([admin, group, meal])
+    await database_session.commit()
+    async with api_test_context(database_session, [operations_router], settings=make_test_settings()) as client:
+        headers = auth_headers(admin)
+        params = {"order_category": "general", "q": buyer.display_name, "limit": 1}
+        first = await client.get("/v1/admin/order-search", params=params, headers=headers)
+        second = await client.get("/v1/admin/order-search", params=params | {"offset": 1}, headers=headers)
+        assert first.status_code == second.status_code == 200
+        assert first.json()["total"] == second.json()["total"] == 2
+        assert {first.json()["items"][0]["id"], second.json()["items"][0]["id"]} == {regular.id, group.id}
+        found = await client.get("/v1/admin/order-search", params={"order_category": "general", "q": "分類共同", "payment_status": "paid"}, headers=headers)
+        assert [row["id"] for row in found.json()["items"]] == [group.id]
+        assert (await client.get("/v1/admin/order-search", params={"order_category": "meal", "q": "分類共同"}, headers=headers)).json()["total"] == 0
+        meal_page = await client.get("/v1/admin/order-search", params={"order_category": "meal"}, headers=headers)
+        assert [row["id"] for row in meal_page.json()["items"]] == [meal.id]
+        for params in [{"order_category": "bad"}, {"payment_status": "bad"}]:
+            assert (await client.get("/v1/admin/order-search", params=params, headers=headers)).status_code == 422

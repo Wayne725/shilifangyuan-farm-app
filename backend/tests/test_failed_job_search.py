@@ -71,3 +71,31 @@ async def exercise_failed_job_search(session):
 @pytest.mark.asyncio
 async def test_failed_job_search_has_safe_context_filters_and_real_pagination(database_session):
     await exercise_failed_job_search(database_session)
+
+
+@pytest.mark.asyncio
+async def test_failed_jobs_order_categories_preserve_unlinked_system_work(database_session):
+    from app.models import SalesChannel
+
+    admin, _product, general = await make_regular_order(database_session)
+    admin.user_role = UserRole.ADMIN
+    meal = Order(order_number="ISSUE-MEAL", user_id=admin.id, order_kind=general.order_kind,
+                 sales_channel=SalesChannel.MEAL_PREORDER, membership_type_snapshot=general.membership_type_snapshot,
+                 amount_total=100, contact_email=admin.email)
+    database_session.add(meal)
+    await database_session.flush()
+    events = [OutboxEvent(event_type="invoice.issue_requested", aggregate_type="order", aggregate_id=order.id,
+                          payload={"order_id": order.id}, status=OutboxStatus.FAILED) for order in [general, meal]]
+    unlinked = OutboxEvent(event_type="maintenance.task", aggregate_type="system", aggregate_id="system",
+                           payload={}, status=OutboxStatus.FAILED)
+    database_session.add_all([*events, unlinked])
+    await database_session.commit()
+    async with api_test_context(database_session, [operations_router], settings=make_test_settings()) as client:
+        headers = auth_headers(admin)
+        for category, expected in [("general", events[0]), ("meal", events[1]), ("system", unlinked)]:
+            response = await client.get("/v1/admin/failed-jobs", params={"order_category": category}, headers=headers)
+            assert response.status_code == 200, response.text
+            assert response.json()["total"] == 1
+            assert response.json()["items"][0]["id"] == expected.id
+            assert response.json()["items"][0]["order_category"] == category
+        assert (await client.get("/v1/admin/failed-jobs", headers=headers)).json()["total"] == 3

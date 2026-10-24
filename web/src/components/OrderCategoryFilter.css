@@ -1,0 +1,4 @@
+.order-category-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+.order-category-filter .button { min-width: 0; min-height: 48px; }
+.order-category-filter .button[aria-pressed="true"] { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
+@media (max-width: 600px) { .order-category-filter .button { flex: 1 1 110px; padding-inline: 12px; } }

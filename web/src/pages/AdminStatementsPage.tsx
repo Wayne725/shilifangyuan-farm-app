@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
+import { orderCategoryLabels, type OrderCategory } from "../lib/order-category";
 import { AdminNav } from "../components/AdminNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
@@ -24,9 +26,9 @@ const amount = (value: string | null) => {
   return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (fraction ? `.${fraction}` : "");
 };
 interface Batch {id: string; source: string; filename: string; row_count: number; skipped_rows: number; created_at: string;}
-interface Row {row_number: number; external_id: string; reference: string; kind: string; amount: string; fee: string | null; payout: string | null; occurred_at: string; order_id: string | null; order_number: string | null; expected_amount: string | null; difference: string | null; result: string; reasons: string[]; manual_order_id: string | null;}
+interface Row {sales_channel: string | null; row_number: number; external_id: string; reference: string; kind: string; amount: string; fee: string | null; payout: string | null; occurred_at: string; order_id: string | null; order_number: string | null; expected_amount: string | null; difference: string | null; result: string; reasons: string[]; manual_order_id: string | null;}
 interface Detail extends Batch {summary: {matched: number; difference: number; unmatched: number}; items: Row[]; total: number;}
-interface OrderOption {id: string; order_number: string; amount: number; created_at: string;}
+interface OrderOption {sales_channel: string; id: string; order_number: string; amount: number; created_at: string;}
 
 export function AdminStatementsPage() {
   const {user, openLogin} = useAuth();
@@ -36,6 +38,10 @@ export function AdminStatementsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [selected, setSelected] = useState("");
   const [listOffset, setListOffset] = useState(0);
+  const [category, setCategory] = useState<OrderCategory>("all");
+  const [detailDraft, setDetailDraft] = useState("");
+  const [detailSearch, setDetailSearch] = useState("");
+  const [optionCategory, setOptionCategory] = useState<OrderCategory>("all");
   const [result, setResult] = useState("all");
   const [offset, setOffset] = useState(0);
   const [message, setMessage] = useState("");
@@ -50,8 +56,9 @@ export function AdminStatementsPage() {
   }, [target]);
   const batches = useQuery({queryKey: ["statement-imports", listOffset], queryFn: () => apiFetch<{items: Batch[]; total: number}>(`/v1/admin/financial-statements?limit=20&offset=${listOffset}`), enabled: isAdmin});
   const batchId = selected || batches.data?.items[0]?.id || "";
-  const detail = useQuery({queryKey: ["statement-detail", batchId, result, offset], queryFn: () => apiFetch<Detail>(`/v1/admin/financial-statements/${batchId}?result=${result}&limit=30&offset=${offset}`), enabled: isAdmin && !!batchId});
-  const options = useQuery({queryKey: ["statement-orders", search], queryFn: () => apiFetch<OrderOption[]>(`/v1/admin/financial-statements/order-options?q=${encodeURIComponent(search)}`), enabled: isAdmin && !!target});
+  const detailParams = new URLSearchParams({result, order_category: category, q: detailSearch});
+  const detail = useQuery({queryKey: ["statement-detail", batchId, result, category, detailSearch, offset], queryFn: () => apiFetch<Detail>(`/v1/admin/financial-statements/${batchId}?${detailParams}&limit=30&offset=${offset}`), enabled: isAdmin && !!batchId});
+  const options = useQuery({queryKey: ["statement-orders", search, optionCategory], queryFn: () => apiFetch<OrderOption[]>(`/v1/admin/financial-statements/order-options?q=${encodeURIComponent(search)}&order_category=${optionCategory}`), enabled: isAdmin && !!target});
   const upload = useMutation({mutationFn: () => {
     const body = new FormData(); body.set("source", source); body.set("file", file!);
     return apiFetch<Batch & {already_imported: boolean}>("/v1/admin/financial-statements", {method: "POST", body});
@@ -61,7 +68,9 @@ export function AdminStatementsPage() {
     void client.invalidateQueries({queryKey: ["statement-imports"]});
     void client.invalidateQueries({queryKey: ["statement-detail", data.id]});
   }});
-  const download = useMutation({mutationFn: ({original}: {original: boolean}) => downloadApiFile(`/v1/admin/financial-statements/${batchId}/${original ? "original" : "reconciliation.csv"}`, original ? detail.data!.filename : `對帳結果-${sources[detail.data!.source].label}.csv`)});
+  const download = useMutation({mutationFn: ({original}: {original: boolean}) => original
+    ? downloadApiFile(`/v1/admin/financial-statements/${batchId}/original`, detail.data!.filename)
+    : downloadApiFile(`/v1/admin/financial-statements/${batchId}/reconciliation.csv?${detailParams}`, `對帳結果-${sources[detail.data!.source].label}.csv`)});
   const link = useMutation({mutationFn: (id: string | null) => apiFetch(`/v1/admin/financial-statements/${batchId}/rows/${target!.row_number}/match`, {method: "PUT", body: JSON.stringify({order_id: id})}), onSuccess: () => {setTarget(null); setMessage("訂單連結已更新，對帳結果已重新計算。"); void client.invalidateQueries({queryKey: ["statement-detail", batchId]});}});
   useEffect(() => {
     if (detail.data && offset > 0 && offset >= detail.data.total) setOffset(Math.max(0, Math.floor((detail.data.total - 1) / 30) * 30));
@@ -83,16 +92,17 @@ export function AdminStatementsPage() {
         <label className="field"><span>匯入紀錄</span><select aria-label="匯入紀錄" disabled={link.isPending || upload.isPending} value={batchId} onChange={event => selectBatch(event.target.value)}>{!batches.data.items.some(batch => batch.id === batchId) && detail.data && <option value={batchId}>{detail.data.filename}</option>}{batches.data.items.map(batch => <option key={batch.id} value={batch.id}>{sources[batch.source].label} · {batch.filename} · {financeDateTime(batch.created_at)}</option>)}</select></label>
         {batches.data.total > 20 && <nav className="admin-pagination" aria-label="匯入紀錄分頁"><button className="button button-quiet" disabled={!listOffset || link.isPending || upload.isPending} onClick={() => changeListPage(Math.max(0, listOffset - 20))}>上一頁紀錄</button><span>{Math.floor(listOffset / 20) + 1}／{Math.ceil(batches.data.total / 20)}</span><button className="button button-quiet" disabled={listOffset + 20 >= batches.data.total || link.isPending || upload.isPending} onClick={() => changeListPage(listOffset + 20)}>下一頁紀錄</button></nav>}
         {detail.isPending ? <LoadingLines count={5}/> : detail.isError ? <DataState title="對帳結果無法讀取" detail={detail.error.message}/> : detail.data && <>
+          <OrderCategoryFilter value={category} onChange={value => {setCategory(value); setOffset(0); setTarget(null);}}/><form className="statement-actions" onSubmit={event => {event.preventDefault(); setDetailSearch(detailDraft.trim()); setOffset(0); setTarget(null);}}><label className="field"><span>查詢對帳明細</span><input placeholder="訂單編號、交易／發票編號或備註" maxLength={120} value={detailDraft} onChange={event => setDetailDraft(event.target.value)}/></label><button className="button button-primary">查詢</button><button className="button button-quiet" type="button" onClick={() => {setDetailDraft(""); setDetailSearch(""); setCategory("all"); setResult("all"); setOffset(0); setTarget(null);}}>清除篩選</button></form>
           <dl className="admin-records-totals"><div><dt>吻合</dt><dd>{detail.data.summary.matched} 筆</dd></div><div><dt>有差異</dt><dd>{detail.data.summary.difference} 筆</dd></div><div><dt>待連結</dt><dd>{detail.data.summary.unmatched} 筆</dd></div></dl>
           <div className="statement-actions"><button className="button button-quiet" disabled={detail.isFetching} onClick={() => void detail.refetch()}>重新核對</button><button className="button button-quiet" disabled={download.isPending} onClick={() => download.mutate({original: true})}>下載上傳原檔</button><button className="button button-primary" disabled={download.isPending} onClick={() => download.mutate({original: false})}>匯出對帳結果 CSV</button></div>
           {download.isError && <p className="form-error" role="alert">{download.error.message}</p>}
           <div className="statement-filters" role="group" aria-label="對帳結果篩選">{Object.entries(results).map(([value, label]) => <button className="button button-quiet" key={value} aria-pressed={result === value} onClick={() => {setResult(value); setOffset(0);}}>{label}</button>)}</div>
-          <p>共 {detail.data.total} 筆</p>
-          <div className="admin-records-table" tabIndex={0} role="region" aria-label="對帳明細"><table><thead><tr>{["原檔列號／日期", "交易或發票編號", "來源金額", "網站訂單／核對金額", "差額", "對帳結果", "操作"].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{detail.data.items.map(row => <tr key={row.row_number}><td data-label="原檔列號／日期">第 {row.row_number} 列 · {kinds[row.kind]}<br/>{row.occurred_at}</td><td data-label="交易或發票編號">{row.external_id || "—"}<br/>{row.reference}</td><td data-label="來源金額">{amount(row.amount)}{row.fee !== null && <><br/>手續費 {amount(row.fee)}</>}{row.payout !== null && <><br/>預計撥款 {amount(row.payout)}</>}</td><td data-label="網站訂單／核對金額">{row.order_number ? <Link to="/admin" search={{section: "orders", q: row.order_number}}>{row.order_number}</Link> : "—"}<br/>{amount(row.expected_amount)}{row.manual_order_id && <><br/>人工連結</>}</td><td data-label="差額">{amount(row.difference)}</td><td data-label="對帳結果">{results[row.result]}{row.reasons.map(reason => <div key={reason}>{reason}</div>)}</td><td data-label="操作"><button className="button button-quiet" onClick={() => {setTarget(row); setOrderId(row.manual_order_id || ""); setSearch(""); setSearchDraft(""); link.reset();}}>連結訂單</button></td></tr>)}</tbody></table></div>
+          <p>{orderCategoryLabels[category]} · 共 {detail.data.total} 筆</p>
+          <div className="admin-records-table" tabIndex={0} role="region" aria-label="對帳明細"><table><thead><tr>{["原檔列號／日期", "交易或發票編號", "來源金額", "網站訂單／核對金額", "差額", "對帳結果", "操作"].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{detail.data.items.map(row => <tr key={row.row_number}><td data-label="原檔列號／日期">第 {row.row_number} 列 · {kinds[row.kind]}<br/>{row.occurred_at}</td><td data-label="交易或發票編號">{row.external_id || "—"}<br/>{row.reference}</td><td data-label="來源金額">{amount(row.amount)}{row.fee !== null && <><br/>手續費 {amount(row.fee)}</>}{row.payout !== null && <><br/>預計撥款 {amount(row.payout)}</>}</td><td data-label="網站訂單／核對金額">{row.order_number ? <Link to="/admin" search={{section: "orders", q: row.order_number}}>{row.order_number}</Link> : "—"}<br/>{row.sales_channel ? row.sales_channel === "meal_preorder" ? "便當訂單" : "一般訂單" : "未連結訂單"}<br/>{amount(row.expected_amount)}{row.manual_order_id && <><br/>人工連結</>}</td><td data-label="差額">{amount(row.difference)}</td><td data-label="對帳結果">{results[row.result]}{row.reasons.map(reason => <div key={reason}>{reason}</div>)}</td><td data-label="操作"><button className="button button-quiet" onClick={() => {setTarget(row); setOptionCategory(row.sales_channel ? row.sales_channel === "meal_preorder" ? "meal" : "general" : "all"); setOrderId(row.manual_order_id || ""); setSearch(""); setSearchDraft(""); link.reset();}}>連結訂單</button></td></tr>)}</tbody></table></div>
           {detail.data.total > 30 && <nav className="admin-pagination" aria-label="對帳分頁"><button className="button button-quiet" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一頁</button><span>{Math.floor(offset / 30) + 1}／{Math.ceil(detail.data.total / 30)}</span><button className="button button-quiet" disabled={offset + 30 >= detail.data.total} onClick={() => setOffset(offset + 30)}>下一頁</button></nav>}
         </>}
       </>}
-      {target && <section className="admin-records-form" aria-label="連結網站訂單"><h2 ref={matchHeading} tabIndex={-1}>第 {target.row_number} 列 · 連結網站訂單</h2><form className="statement-actions" onSubmit={event => {event.preventDefault(); setSearch(searchDraft.trim()); setOrderId("");}}><label className="field"><span>搜尋訂單編號</span><input value={searchDraft} maxLength={120} onChange={event => setSearchDraft(event.target.value)}/></label><button className="button button-quiet">搜尋</button></form><label className="field"><span>網站訂單</span><select aria-label="網站訂單" value={orderId} onChange={event => setOrderId(event.target.value)}><option value="">請選擇訂單</option>{options.data?.map(order => <option key={order.id} value={order.id}>{order.order_number} · {amount(String(order.amount))} · {financeDateTime(order.created_at)}</option>)}</select></label>{options.isError && <p className="form-error" role="alert">{options.error.message}</p>}{options.data?.length === 0 && <p role="status">沒有符合的網站訂單</p>}{link.isError && <p className="form-error" role="alert">{link.error.message}</p>}<div className="statement-actions"><button className="button button-primary" disabled={!orderId || link.isPending} onClick={() => link.mutate(orderId)}>儲存連結並核對</button>{target.manual_order_id && <button className="button button-quiet" disabled={link.isPending} onClick={() => link.mutate(null)}>還原自動核對</button>}<button className="button button-quiet" onClick={() => setTarget(null)}>取消</button></div></section>}
+      {target && <section className="admin-records-form" aria-label="連結網站訂單"><h2 ref={matchHeading} tabIndex={-1}>第 {target.row_number} 列 · 連結網站訂單</h2><OrderCategoryFilter value={optionCategory} onChange={value => {setOptionCategory(value); setOrderId("");}}/><form className="statement-actions" onSubmit={event => {event.preventDefault(); setSearch(searchDraft.trim()); setOrderId("");}}><label className="field"><span>搜尋訂單編號</span><input value={searchDraft} maxLength={120} onChange={event => setSearchDraft(event.target.value)}/></label><button className="button button-quiet">搜尋</button></form><label className="field"><span>網站訂單</span><select aria-label="網站訂單" value={orderId} onChange={event => setOrderId(event.target.value)}><option value="">請選擇訂單</option>{options.data?.map(order => <option key={order.id} value={order.id}>{order.order_number} · {order.sales_channel === "meal_preorder" ? "便當訂單" : "一般訂單"} · {amount(String(order.amount))} · {financeDateTime(order.created_at)}</option>)}</select></label>{options.isError && <p className="form-error" role="alert">{options.error.message}</p>}{options.data?.length === 0 && <p role="status">沒有符合的網站訂單</p>}{link.isError && <p className="form-error" role="alert">{link.error.message}</p>}<div className="statement-actions"><button className="button button-primary" disabled={!orderId || link.isPending} onClick={() => link.mutate(orderId)}>儲存連結並核對</button>{target.manual_order_id && <button className="button button-quiet" disabled={link.isPending} onClick={() => link.mutate(null)}>還原自動核對</button>}<button className="button button-quiet" onClick={() => setTarget(null)}>取消</button></div></section>}
     </div>
   </section>;
 }

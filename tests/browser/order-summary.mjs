@@ -28,10 +28,11 @@ const rows = [
 function summarize(query) {
   const filters = {
     starts_on: query.starts_on, ends_on: query.ends_on, sales_channel: query.sales_channel || 'all',
-    status: query.status || 'active', search: query.search || '', category: query.category || '',
+    order_category: query.order_category || 'all', status: query.status || 'active', search: query.search || '', category: query.category || '',
   };
   const matching = rows.filter((row) => row.created_on >= filters.starts_on && row.created_on <= filters.ends_on
     && (filters.sales_channel === 'all' || row.sales_channel === filters.sales_channel)
+    && (filters.order_category === 'all' || (filters.order_category === 'meal' ? row.sales_channel === 'meal_preorder' : row.sales_channel !== 'meal_preorder'))
     && (filters.status === 'all' || (filters.status === 'active' ? row.state !== 'inactive' : row.state === filters.status))
     && row.name.includes(filters.search));
   const selected = matching.filter((row) => !filters.category || row.category === filters.category);
@@ -54,11 +55,11 @@ function summarize(query) {
   };
 }
 
-async function fixture(t, { width = 882, role = 'admin', failing = false } = {}) {
+async function fixture(t, { width = 882, role = 'admin', failing = false, orderRows = [] } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  const state = { reads: [], summaries: [], writes: [], unknown: [], errors: [], failing };
+  const state = { reads: [], summaries: [], orderQueries: [], issueQueries: [], writes: [], unknown: [], errors: [], failing };
   await context.route('**/*', (route) => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname, method = request.method();
     if (url.origin !== base) return route.abort();
@@ -75,7 +76,15 @@ async function fixture(t, { width = 882, role = 'admin', failing = false } = {})
       state.summaries.push({ query, report, failed: state.failing });
       return route.fulfill(state.failing ? { status: 503, json: { detail: '隔離匯總服務暫時不可用' } } : { json: report });
     }
-    if (path === '/v1/admin/order-search') return route.fulfill({ json: { items: [], total: 0, limit: 12, offset: 0 } });
+    if (path === '/v1/admin/order-search') {
+      const query = Object.fromEntries(url.searchParams); state.orderQueries.push(query);
+      const matched = orderRows.filter((row) => (query.order_category === 'all' || (query.order_category === 'meal' ? row.sales_channel === 'meal_preorder' : row.sales_channel !== 'meal_preorder'))
+        && (!query.q || `${row.order_number} ${row.contact_email} ${row.items.map((item) => item.product_name).join(' ')}`.includes(query.q))
+        && (!query.payment_status || row.payment_status === query.payment_status));
+      const offset = Number(query.offset), limit = Number(query.limit);
+      return route.fulfill({ json: { items: matched.slice(offset, offset + limit), total: matched.length, limit, offset } });
+    }
+    if (path === '/v1/admin/failed-jobs') { state.issueQueries.push(Object.fromEntries(url.searchParams)); return route.fulfill({ json: { items: [], total: 0, limit: 10, offset: 0 } }); }
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'nonmember', membership: null } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/notifications') return route.fulfill({ json: [] });
@@ -146,7 +155,7 @@ for (const width of [882, 390]) {
     await summary.getByRole('button', { name: '查詢', exact: true }).click();
     await page.getByRole('status').getByText('共 27 種品項', { exact: true }).waitFor();
     await wait_for_summary(page);
-    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', sales_channel: 'regular', status: 'paid', category: category_name, search: '隔離白米', limit: '25', offset: '0' };
+    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', sales_channel: 'regular', order_category: 'all', status: 'paid', category: category_name, search: '隔離白米', limit: '25', offset: '0' };
     assert.deepEqual(state.summaries.at(-1).query, expected_query);
     const expected_summary = { order_count: 9, quantity: 54, product_count: 27 };
     await verify_summary(page, expected_summary);
@@ -247,6 +256,100 @@ for (const role of ['guest', 'customer']) {
     assert.equal(await page.getByRole('region', { name: '訂單品項匯總', exact: true }).count(), 0);
     assert.equal(state.reads.some((path) => path.startsWith('/v1/admin/')), false);
     assert.deepEqual(state.summaries, []);
+    await verify_read_only(page, state);
+  });
+}
+
+
+test('一般與便當分類重設分頁和互斥條件，查詢保持分類且統計不混合', { timeout: 30000 }, async (t) => {
+  const { page, state } = await fixture(t, { width: 390 });
+  await page.goto(`${base}/admin?section=summary`);
+  await wait_for_summary(page);
+  const summary = page.getByRole('region', { name: '訂單品項匯總', exact: true });
+  const categories = summary.getByRole('group', { name: '訂單分類', exact: true });
+  await categories.getByRole('button', { name: '一般訂單', exact: true }).click();
+  await wait_for_summary(page);
+  await verify_summary(page, { order_count: 10, quantity: 61, product_count: 28 });
+  assert.equal(await summary.getByRole('combobox', { name: '銷售類型', exact: true }).locator('option[value="meal_preorder"]').count(), 0);
+  const pagination = page.getByRole('navigation', { name: '商品明細分頁', exact: true });
+  await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
+  await wait_for_summary(page);
+  assert.equal(state.summaries.at(-1).query.offset, '25');
+  await categories.getByRole('button', { name: '便當訂單', exact: true }).click();
+  await wait_for_summary(page);
+  assert.equal(state.summaries.at(-1).query.offset, '0');
+  assert.equal(state.summaries.at(-1).query.order_category, 'meal');
+  await verify_summary(page, { order_count: 1, quantity: 4, product_count: 1 });
+  await summary.getByLabel('品項名稱', { exact: true }).fill('白米');
+  await summary.getByRole('button', { name: '查詢', exact: true }).click();
+  await wait_for_summary(page);
+  await verify_summary(page, { order_count: 0, quantity: 0, product_count: 0 });
+  assert.equal(state.summaries.at(-1).query.order_category, 'meal');
+  await verify_read_only(page, state);
+});
+
+
+test('管理員訂單及問題回報保留查詢與分類，手機無溢出', { timeout: 30000 }, async (t) => {
+  const { page, state } = await fixture(t, { width: 390 });
+  await page.goto(`${base}/admin`);
+  await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
+  await page.getByRole('group', { name: '訂單分類', exact: true }).getByRole('button', { name: '便當訂單', exact: true }).click();
+  await page.getByLabel('搜尋訂單', { exact: true }).fill('隔離買家');
+  await page.getByRole('combobox', { name: '付款狀態', exact: true }).selectOption('paid');
+  await page.getByRole('button', { name: '搜尋', exact: true }).click();
+  await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
+  assert.equal(state.orderQueries.at(-1).order_category, 'meal');
+  assert.equal(state.orderQueries.at(-1).payment_status, 'paid');
+  assert.equal(state.orderQueries.at(-1).q, '隔離買家');
+  await verify_read_only(page, state);
+  await page.goto(`${base}/admin?section=issues`);
+  await page.getByRole('heading', { name: '待處理問題', exact: true }).waitFor();
+  await page.getByRole('group', { name: '訂單分類', exact: true }).getByRole('button', { name: '其他系統工作', exact: true }).click();
+  await page.getByLabel('搜尋問題', { exact: true }).fill('逾時');
+  await page.getByRole('button', { name: '查詢問題', exact: true }).click();
+  await page.getByText('沒有符合條件的問題。', { exact: true }).waitFor();
+  assert.equal(state.issueQueries.at(-1).order_category, 'system');
+  assert.equal(state.issueQueries.at(-1).q, '逾時');
+  await verify_read_only(page, state);
+});
+
+
+for (const width of [1440, 390]) {
+  test(`${width}px 管理員訂單分類與商品關鍵字跨頁查詢，類別和付款狀態不混用`, { timeout: 30000 }, async (t) => {
+    const orderRows = Array.from({ length: 15 }, (_, index) => ({
+      id: `isolated-order-${index}`, order_number: `CATEGORY-${String(index).padStart(2, '0')}`,
+      sales_channel: index >= 13 ? 'meal_preorder' : index === 12 ? 'group' : 'regular',
+      contact_email: 'buyer@example.com', payment_status: index === 14 ? 'paid' : 'pending',
+      payment_method: 'online', fulfillment_method: 'cooperative_pickup', fulfillment_status: 'pending_confirmation',
+      invoice_status: 'not_eligible', amount_total: 100, tax_amount: 0, member_tax_exempt_snapshot: false,
+      available_actions: [], created_at: '2030-01-02T02:00:00Z',
+      items: [{ product_name: index === 12 ? '共同購買白米' : index >= 13 ? '蔬食便當' : '日常白米', quantity: 1, unit_label: '份', subtotal: 100, unit_price: 100, tax_type: 'tax_exempt' }],
+    }));
+    const { page, state } = await fixture(t, { width, orderRows });
+    await page.goto(`${base}/admin`);
+    const pagination = page.getByRole('navigation', { name: '訂單分頁', exact: true });
+    await pagination.getByText('共 15 筆 · 第 1 頁', { exact: true }).waitFor();
+    await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
+    await pagination.getByText('共 15 筆 · 第 2 頁', { exact: true }).waitFor();
+    const categories = page.getByRole('group', { name: '訂單分類', exact: true });
+    await categories.getByRole('button', { name: '一般訂單', exact: true }).click();
+    await pagination.getByText('共 13 筆 · 第 1 頁', { exact: true }).waitFor();
+    assert.equal(state.orderQueries.at(-1).offset, '0');
+    await page.getByLabel('搜尋訂單', { exact: true }).fill('共同購買白米');
+    await page.getByRole('button', { name: '搜尋', exact: true }).click();
+    await pagination.getByText('共 1 筆 · 第 1 頁', { exact: true }).waitFor();
+    await page.locator('.operation-title strong').getByText('CATEGORY-12', { exact: true }).waitFor();
+    assert.equal(state.orderQueries.at(-1).order_category, 'general');
+    await categories.getByRole('button', { name: '便當訂單', exact: true }).click();
+    await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
+    assert.equal(state.orderQueries.at(-1).q, '共同購買白米');
+    await page.getByRole('button', { name: '清除查詢', exact: true }).click();
+    await pagination.getByText('共 2 筆 · 第 1 頁', { exact: true }).waitFor();
+    await page.getByRole('combobox', { name: '付款狀態', exact: true }).selectOption('paid');
+    await pagination.getByText('共 1 筆 · 第 1 頁', { exact: true }).waitFor();
+    await page.locator('.operation-title strong').getByText('CATEGORY-14', { exact: true }).waitFor();
+    assert.equal(state.orderQueries.at(-1).order_category, 'meal');
+    assert.equal(state.orderQueries.at(-1).payment_status, 'paid');
     await verify_read_only(page, state);
   });
 }

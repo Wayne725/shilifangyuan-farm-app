@@ -65,7 +65,7 @@ for (const width of [1440, 1024, 390]) for (const sample of cases) {
       return signedIn ? account?.tagName === 'A' : account?.tagName === 'BUTTON' && !account.disabled;
     }, Boolean(sample.user));
     assert.equal(await page.locator('a[href="/social"]').count() > 0, sample.social);
-    assert.equal(state.reads.includes('/v1/activities'), sample.social);
+    assert.equal(state.reads.includes('/v1/activities'), true);
     await page.locator('.reading-menu > summary').click();
     const reading = page.getByRole('group', { name: '文字大小', exact: true });
     assert.doesNotMatch(await reading.innerText(), /字體大小/);
@@ -106,7 +106,7 @@ for (const width of [1440, 1024, 390]) for (const sample of cases) {
       await page.getByRole('heading', { name: gateTitle, exact: true }).waitFor();
       assert.equal(await menu.count(), 0);
       assert.equal(await page.getByRole('navigation', { name: '社務功能', exact: true }).count(), 0);
-      assert.equal(state.reads.some((path) => ['/v1/activities', '/v1/member-proposals', '/v1/meetings'].includes(path)), false);
+      assert.equal(state.reads.some((path) => ['/v1/member-proposals', '/v1/meetings'].includes(path)), false);
     }
     assert.deepEqual(state.errors, []);
     assert.deepEqual(state.unknown, []);

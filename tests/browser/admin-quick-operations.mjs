@@ -23,16 +23,18 @@ async function fixture(t, width) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  const state = { writes: [], reads: [], errors: [], unknown: [], events: [], conflict: false, holdReview: false, holdQuery: false, queryStatus: 200, refunded: false,
+  const state = { writes: [], reads: [], errors: [], unknown: [], events: [], conflict: false, holdReview: false, holdCancel: false, holdQuery: false, queryStatus: 200, refunded: false,
     requests: [request('A'), request('B', false)], orders: [order('A'), order('C', 'pending', 'pending'), { ...order('D'), cancelled_at: '2030-01-02T02:00:00Z' }] };
   state.orders[0].cancellation_request = state.requests[0].request;
-  const retail = { id: 'retail', order_number: 'RETAIL-001', amount_total: 240, payment_status: 'paid', fulfillment_status: 'pending_confirmation', fulfillment_method: 'cooperative_pickup', sales_channel: 'regular', created_at: '2030-01-02T01:00:00Z', invoice_status: 'issued', items: [{ tax_type: 'tax_exempt', quantity: 2, subtotal: 240 }], available_actions: ['refund'], invoice: { provider: 'fanyu', status: 'issued' } };
+  const retail = { id: 'retail', order_number: 'RETAIL-001', amount_total: 240, payment_status: 'paid', fulfillment_status: 'pending_confirmation', fulfillment_method: 'cooperative_pickup', sales_channel: 'regular', created_at: '2030-01-02T01:00:00Z', invoice_status: 'issued', items: [{ tax_type: 'tax_exempt', quantity: 2, subtotal: 240 }], available_actions: ['cancel'], payment_method: 'online', invoice: { provider: 'fanyu', status: 'issued' } };
   await context.route('**/*', async (route) => {
     const req = route.request(), url = new URL(req.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return req.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'admin', user_role: 'admin', display_name: '測試管理員', email: 'admin@example.com' } } });
     if (req.method() === 'GET') {
+      if (path === '/v1/admin/printers/status') return route.fulfill({json: {enabled: false, dry_run: true, status: 'disabled', error: null}});
+      if (path === '/v1/admin/printers/jobs') return route.fulfill({json: {items: [], total: 0}});
       if (path === '/v1/admin/platform') return route.fulfill({json:{orders_open:true,closed_message:'',printer_brand:'',printer_model:'',printer_connection:'unknown',kitchen_sound:false,invoice_provider:'fanyu'}});
       if (path === '/v1/admin/meal-cancellation-summary') return route.fulfill({json:{requests:2,orders:2,pending:2,approved:0,rejected:0,pending_amount:240,approved_amount:0,refund_pending:0,refunded:0,refund_failed:0}});
       state.reads.push({ path, ...Object.fromEntries(url.searchParams) });
@@ -64,6 +66,12 @@ async function fixture(t, width) {
       state.orders[0].fulfillment_status = body.status === 'ready_for_pickup' ? 'ready' : body.status;
       return route.fulfill({ json: {} });
     }
+    if (req.method() === 'POST' && path === '/v1/orders/retail/admin/cancel') {
+      state.writes.push({path, body: req.postDataJSON()});
+      if (state.holdCancel) await new Promise(resolve => {state.releaseCancel = resolve;});
+      Object.assign(retail, {payment_status: 'refund_pending', fulfillment_status: 'cancelled', cancelled_at: '2030-01-02T02:00:00Z', available_actions: []});
+      return route.fulfill({json: retail});
+    }
     if (req.method() === 'POST' && /^\/v1\/(admin\/orders\/retail\/(invoice\/query|invoice\/void|payment\/query)|orders\/retail\/admin\/refund)$/.test(path)) {
       state.writes.push({ path, body: req.postDataJSON() });
       if (path.endsWith('/refund')) { retail.payment_status = 'refund_pending'; return route.fulfill({ json: retail }); }
@@ -74,7 +82,7 @@ async function fixture(t, width) {
     state.unknown.push(`${req.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated route' } });
   });
-  const page = await context.newPage();
+  const page = await context.newPage(); page.setDefaultTimeout(10000);
   page.on('pageerror', (e) => state.errors.push(e.message));
   await page.clock.install({ time: new Date('2030-01-02T09:00:00+08:00') });
   return { page, state };
@@ -143,6 +151,7 @@ for (const width of [1440, 390]) {
     await responseAfter(page, (r) => r.url().includes('/meal-orders?'), () => row.getByRole('button', { name: '標記待取餐', exact: true }).click());
     assert.deepEqual(state.writes.map((r) => r.body.status), ['preparing', 'ready_for_pickup']);
     for (const id of ['C', 'D']) assert.equal(await page.locator('.meal-operation-order').filter({ hasText: `QUICK-${id}` }).getByRole('button', { name: '開始製作', exact: true }).count(), 0);
+    await page.locator('.reading-menu > summary').click();
     await page.getByRole('button', { name: '放大', exact: true }).click();
     await page.waitForFunction(() => getComputedStyle(document.documentElement).fontSize === '20px');
     await verify(page, state);
@@ -189,18 +198,36 @@ for (const width of [1440, 390]) {
     assert.equal(await page.getByLabel('自訂審核理由（買家會看到）', { exact: true }).inputValue(), '需要補充確認');
     await verify(page, state);
   });
-  test(`${width}px 付款發票查詢免輸入，選退款原因不送出，最後確認才退款`, async (t) => {
+  test(`${width}px 付款發票查詢免輸入，退單須填原因並確認才申請退款`, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin`);
     await page.getByText('查詢發票', { exact: true }).click();
     await responseAfter(page, (r) => r.url().endsWith('/invoice/query'), () => page.getByRole('button', { name: '查詢開立狀態', exact: true }).click());
     await page.getByText('查詢付款', { exact: true }).click();
     await responseAfter(page, (r) => r.url().endsWith('/payment/query'), () => page.getByRole('button', { name: '查詢付款狀態', exact: true }).click());
-    await page.getByRole('button', { name: '審核退款', exact: true }).click();
-    await page.getByRole('button', { name: '商品無法供應', exact: true }).click();
-    assert.equal(state.writes.filter((r) => r.path.endsWith('/refund')).length, 0);
-    await responseAfter(page, (r) => r.url().endsWith('/admin/refund'), () => page.getByRole('button', { name: /核准退款.*240/ }).click());
-    assert.deepEqual(state.writes.map((r) => r.body.reason), ['客服核對發票狀態', '客服核對付款狀態', '商品無法供應，申請退款']);
+    await page.getByRole('button', { name: '辦理退單', exact: true }).click();
+    const dialog = page.getByRole('dialog', {name: '確認辦理退單', exact: true});
+    await dialog.waitFor();
+    assert.match(await dialog.innerText(), /取消整筆訂單並申請退款.*240/);
+    assert.equal(await dialog.getByRole('button', {name: '確認退單', exact: true}).isEnabled(), false);
+    assert.equal(state.writes.length, 2);
+    await dialog.getByLabel('退單原因', {exact: true}).fill('商品無法供應，申請退款');
+    assert.equal(state.writes.filter(r => r.path.endsWith('/admin/cancel')).length, 0);
+    state.holdCancel = true;
+    await dialog.getByRole('button', {name: '確認退單', exact: true}).click();
+    const pending = dialog.getByRole('button', {name: '退單處理中…', exact: true});
+    await pending.waitFor();
+    assert.equal(await pending.isEnabled(), false);
+    assert.equal(await dialog.getByRole('button', {name: '返回', exact: true}).isEnabled(), false);
+    assert.equal(await dialog.getByLabel('退單原因', {exact: true}).isEnabled(), false);
+    await pending.dblclick({force: true});
+    assert.equal(state.writes.filter(r => r.path.endsWith('/admin/cancel')).length, 1);
+    await responseAfter(page, r => r.url().endsWith('/admin/cancel'), () => state.releaseCancel());
+    await page.getByRole('status').filter({hasText: '訂單已取消。付款狀態：'}).waitFor();
+    assert.equal(await dialog.count(), 0);
+    assert.deepEqual(state.writes.map(r => r.body.reason), ['客服核對發票狀態', '客服核對付款狀態', '商品無法供應，申請退款']);
+    assert.equal(state.writes.filter(r => r.path.endsWith('/admin/refund')).length, 0);
+    await page.locator('.reading-menu > summary').click();
     await page.getByRole('button', { name: '放大', exact: true }).click();
     await page.waitForFunction(() => getComputedStyle(document.documentElement).fontSize === '20px');
     await verify(page, state);
@@ -224,6 +251,7 @@ test('查詢中停用按鈕避免重送，失敗顯示在原區塊且不保留�
   await invoice.getByRole('alert').filter({ hasText: '供應商暫時無回應' }).waitFor();
   assert.equal(await invoice.getByRole('status').filter({ hasText: '查詢完成' }).count(), 0);
   assert.equal(state.writes.length, 2);
+  await page.locator('.reading-menu > summary').click();
   await page.getByRole('button', { name: '放大', exact: true }).click();
   await verify(page, state);
   if (process.env.ADMIN_CLARITY_SCREENSHOTS) await page.screenshot({ path: '/Users/liuweiwei/Documents/farm/outputs/admin-status-query-verified.png', fullPage: true });
