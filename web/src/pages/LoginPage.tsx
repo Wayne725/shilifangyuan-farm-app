@@ -35,10 +35,10 @@ export function LoginPage() {
       {error && <p className="form-error" role="alert">{error}</p>}
       <button className="button button-primary" disabled={busy}>{busy ? "登入中…" : "登入系統"}</button>
     </form>
-    <div className="login-links"><a href="/forgot-password">忘記密碼</a><a href="/register">註冊帳號</a></div>
+    <div className="login-links"><a href="/forgot-password">忘記密碼</a><Link to="/register" search={{ return_to: returnTo }}>註冊帳號</Link></div>
     <div className="login-secondary">
       <Link className="button button-quiet line-login-link" to="/line-consent" search={{ return_to: returnTo, remember_me: rememberMe }}>使用LINE登入</Link>
     </div>
-    <p className="dialog-footnote"><a href="/verify-email">輸入或重寄驗證碼</a></p>
+    <p className="dialog-footnote"><Link to="/verify-email" search={{ return_to: returnTo }}>輸入或重寄驗證碼</Link></p>
   </section>;
 }

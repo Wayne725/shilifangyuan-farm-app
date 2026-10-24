@@ -10,6 +10,7 @@ import { type FormEvent, type ReactNode, useState } from "react";
 
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
+import { verificationReturnTo } from "../lib/login-navigation";
 import type { AuthActionResponse } from "../lib/types";
 
 function errorMessage(reason: unknown, fallback: string): string {
@@ -79,7 +80,8 @@ function AuthResult({
 
 export function VerifyEmailPage() {
   const search = useSearch({ from: "/verify-email" });
-  const { user, openLogin } = useAuth();
+  const { user } = useAuth();
+  const returnTo = verificationReturnTo(search.return_to);
   const [email, setEmail] = useState(search.email || "");
   const [token, setToken] = useState(search.token || "");
   const [busy, setBusy] = useState(false);
@@ -147,8 +149,10 @@ export function VerifyEmailPage() {
             ? "社員帳號已啟用，登入後即可使用正式社員功能。"
             : "你的非社員帳號已可登入使用。"}
         >
-          <button className="button button-primary" type="button" onClick={() => user ? window.location.replace("/account") : openLogin()}>
-            登入開始使用 <ArrowRight size={17} />
+          <button className="button button-primary" type="button" onClick={() => user
+            ? window.location.replace(returnTo)
+            : window.location.assign(`/login?return_to=${encodeURIComponent(returnTo)}`)}>
+            {user ? "繼續使用" : "登入開始使用"} <ArrowRight size={17} />
           </button>
         </AuthResult>
       ) : (
