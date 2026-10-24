@@ -15,10 +15,10 @@ import { PaymentMethodFields } from "../components/PaymentMethodFields";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { MealPhoto } from "../components/MealPhoto";
 import {
-  defaultInvoicePreference,
   InvoicePreferenceFields,
   InvoicePreferenceSummary,
   invoicePreferenceIsValid,
+  useInvoicePreference,
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
@@ -31,6 +31,7 @@ import type {
   MealEvent,
   MealOptionGroup,
   MealOptionSelection,
+  PickupLocation,
 } from "../lib/types";
 
 interface MealQuote {
@@ -42,6 +43,7 @@ interface MealQuote {
   member_tax_exempt?: boolean;
   tax_amount?: number;
   pickup_at?: string | null;
+  needs_utensils: boolean;
   items: Array<{
     offering_id: string;
     meal_name: string;
@@ -53,7 +55,7 @@ interface MealQuote {
     tax_type?: string;
     selections: MealOptionSelection[];
   }>;
-  pickup: { location: string; starts_at: string; ends_at: string };
+  pickup: { location: string; location_id: string | null; address: string; instructions: string; starts_at: string; ends_at: string };
 }
 
 export function MealEventPage() {
@@ -65,7 +67,7 @@ export function MealEventPage() {
 function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initialPickupAt?: string }) {
   const platform = useStorefrontStatus();
   const navigate = useNavigate({ from: "/meals/$eventId" });
-  const { user, openLogin } = useAuth();
+  const { user, openLogin, saveMobileBarcode } = useAuth();
   const notificationEmail = user?.notification_email || user?.email || "";
   const [kitchenNote, setKitchenNote] = useState("");
   const submission = useRef<{storageKey: string; id: string} | null>(null);
@@ -75,9 +77,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const [couponCode, setCouponCode] = useState("");
   const [draftAdjusted, setDraftAdjusted] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const [invoicePreference, setInvoicePreference] = useState(
-    () => defaultInvoicePreference(notificationEmail),
-  );
+  const [invoicePreference, setInvoicePreference] = useInvoicePreference(notificationEmail);
   const invoiceReady = paymentMethod === "cash_on_pickup" ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invoicePreference.buyerEmail.trim()) : invoicePreferenceIsValid(invoicePreference);
   const [editingInvoice, setEditingInvoice] = useState(false);
   const event = useQuery({
@@ -85,11 +85,19 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
     refetchInterval: 30000,
   });
+  const locations = useQuery({
+    queryKey: ["pickup-locations"],
+    queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
+    refetchInterval: 30000,
+  });
+  const activeLocations = useMemo(() => locations.data?.filter((location) => location.is_active), [locations.data]);
   const currentDraft = useMemo(
-    () => event.data ? reconcileMealDraft(draft, event.data, now) : draft,
-    [draft, event.data, now],
+    () => event.data ? reconcileMealDraft(draft, event.data, now, activeLocations) : draft,
+    [draft, event.data, now, activeLocations],
   );
-  const { quantities, selections, pickupAt } = currentDraft;
+  const { quantities, selections, pickupAt, pickupLocationId, needsUtensils } = currentDraft;
+  const selectedPickupLocation = activeLocations?.find((location) => location.id === pickupLocationId);
+  const pickupLocationReady = !locations.isError && Boolean(activeLocations && (!activeLocations.length || selectedPickupLocation));
   const pickupReady = Boolean(event.data && validPickupTime(pickupAt, event.data, now));
   const orderingOpen = Boolean(event.data && mealOrderingOpen(event.data, now));
   const activeOfferings = event.data?.offerings.filter((item) => item.is_active) || [];
@@ -116,13 +124,15 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     .map((item) => `${item.offering_id}:${item.quantity}:${[...item.option_ids].sort().join(",")}`)
     .join("|");
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey, pickupAt, invoicePreference, user?.id, couponCode, paymentMethod],
+    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, paymentMethod],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
       body: JSON.stringify({
         items,
         coupon_code: couponCode,
         pickup_at: taipeiInputToIso(pickupAt),
+        pickup_location_id: pickupLocationId || null,
+        needs_utensils: needsUtensils,
         contact_email: invoicePreference.buyerEmail.trim(),
         payment_method: paymentMethod,
         ...(paymentMethod === "online" ? invoicePreferencePayload(invoicePreference) : {}),
@@ -132,6 +142,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       items.length > 0 &&
       orderingOpen &&
       pickupReady &&
+      pickupLocationReady &&
       selectionsReady &&
       invoiceReady,
   });
@@ -141,11 +152,17 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       if (!user) throw new Error("請先登入");
       if (!event.data || !mealOrderingOpen(event.data)) throw new Error("只能提前一天預訂，且須在本場次的開放時間內送出");
       if (!event.data || !validPickupTime(pickupAt, event.data)) throw new Error("請重新選擇可預訂的半小時取餐時段");
+      if (!pickupLocationReady) throw new Error("請選擇可用的取餐點");
+      if (paymentMethod === "online" && invoicePreference.carrierType === "mobile_barcode") {
+        await saveMobileBarcode(invoicePreference.carrierValue ?? null);
+      }
       const input = {
         eventId,
         couponCode,
         expectedTotal: quote.data?.amount_total,
         pickupAt: taipeiInputToIso(pickupAt),
+        pickupLocationId,
+        needsUtensils,
         items,
         contactEmail: invoicePreference.buyerEmail.trim(),
         invoicePreference,
@@ -193,13 +210,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     writeMealDraft(eventId, currentDraft);
   }, [currentDraft, draft, event.data, eventId]);
 
-  useEffect(() => {
-    if (!notificationEmail) return;
-    setInvoicePreference((current) =>
-      current.buyerEmail ? current : { ...current, buyerEmail: notificationEmail },
-    );
-  }, [notificationEmail]);
-
   if (platform.data?.orders_open === false) return <StorefrontClosed message={platform.data.closed_message} />;
   if (event.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (event.isError || !event.data) {
@@ -212,6 +222,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const canOrder =
     orderingOpen &&
     pickupReady &&
+    pickupLocationReady &&
     items.length > 0 &&
     selectionsReady &&
     invoiceReady;
@@ -233,7 +244,9 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       };
     });
   const estimatedTotal = selectedMeals.reduce((sum, item) => sum + item.subtotal, 0);
-  const confirmedQuote = quote.isError ? undefined : quote.data;
+  const confirmedQuote = quote.isError || !canOrder ? undefined : quote.data;
+  const pickupLocationName = locations.isError ? "取餐點暫時無法使用" : selectedPickupLocation?.name || (locations.isPending ? "載入取餐點中…" : mealEvent.location);
+  const pickupAddress = confirmedQuote?.pickup.address || selectedPickupLocation?.address;
   const selectedMealQuantity = selectedMeals.reduce((sum, item) => sum + item.quantity, 0);
   const totalLabel = confirmedQuote ? "合計" : "預估合計";
   const totalDisplay = confirmedQuote
@@ -284,9 +297,23 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         <div>
           <section className="meal-selected-date" aria-label="已選取餐日期">
             <span className="meal-pickup-label">取餐安排</span>
-            <p><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}{pickupReady && ` · ${pickupAt.slice(11)}`} · {mealEvent.location}</strong><Link className="text-link" to="/shop">更換取餐時間</Link></p>
+            <p><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}{pickupReady && ` · ${pickupAt.slice(11)}`} · {pickupLocationName}</strong><Link className="text-link" to="/shop">更換取餐時間</Link></p>
           </section>
-          {draftAdjusted && <p className="meal-selection-notice" role="status">選餐已依最新庫存或可選時段調整，請再次確認餐點、份數與取餐時間。</p>}
+          <div className="field-grid two-columns meal-order-preferences">
+            <label className="field"><span id="meal-pickup-location-label">取餐點</span>
+              <select aria-labelledby="meal-pickup-location-label" value={pickupLocationId} required={Boolean(activeLocations?.length)} disabled={checkout.isPending || locations.isPending || locations.isError || !activeLocations?.length} onChange={(event) => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupLocationId: event.target.value })); }}>
+                <option value="" disabled={Boolean(activeLocations?.length)}>{locations.isPending ? "載入取餐點中…" : locations.isError ? "取餐點暫時無法使用" : activeLocations?.length ? "請選擇取餐點" : mealEvent.location}</option>
+                {!locations.isError && activeLocations?.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
+            </label>
+            <label className="field"><span id="meal-utensils-label">是否需要餐具</span>
+              <select aria-labelledby="meal-utensils-label" value={needsUtensils ? "yes" : "no"} disabled={checkout.isPending} onChange={(event) => setDraft((current) => ({ ...current, needsUtensils: event.target.value === "yes" }))}>
+                <option value="no">不需要餐具</option><option value="yes">需要餐具</option>
+              </select>
+            </label>
+          </div>
+          {locations.isError && <DataState kind="error" title="取餐點暫時無法使用" detail={locations.error.message} onAction={() => locations.refetch()} />}
+          {draftAdjusted && <p className="meal-selection-notice" role="status">選餐已依最新庫存、取餐點或可選時段調整，請再次確認餐點、份數與取餐安排。</p>}
           <div className="meal-offering-list">
             {activeOfferings.map((offering) => {
               const quantity = quantities[offering.id] || 0;
@@ -341,13 +368,14 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         <aside className="offer-summary meal-summary" id="meal-order-summary" tabIndex={-1} aria-labelledby="meal-summary-heading">
           <BowlFood size={29} weight="light" />
           <h2 id="meal-summary-heading">確認訂單明細</h2>
-          <div className="pickup-window"><MapPin size={19} /><div><strong>{mealEvent.location}</strong><small>{mealServiceDate(mealEvent).replaceAll("-", "/")}{pickupReady && ` · ${pickupAt.slice(11)}`}</small></div></div>
+          <div className="pickup-window"><MapPin size={19} /><div><strong>{confirmedQuote?.pickup.location || pickupLocationName}</strong>{pickupAddress && <small>{pickupAddress}</small>}<small>{mealServiceDate(mealEvent).replaceAll("-", "/")}{pickupReady && ` · ${pickupAt.slice(11)}`}</small></div></div>
           {quote.isFetching && <LoadingLines count={2} />}
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}
           {!pickupAt && <p className="meal-selection-notice">請選擇預計取餐時間。</p>}
           {!orderingOpen && <p className="meal-selection-notice">今天僅可預訂明天的餐點；本場次也須在開放時間內才能送出。</p>}
           <dl>
+            <div><dt>餐具</dt><dd>{needsUtensils ? "需要餐具" : "不需要餐具"}</dd></div>
             {confirmedQuote ? confirmedQuote.items.map((item) => (
               <div className="meal-quote-line" key={item.offering_id}>
                 <dt><strong>{item.meal_name} × {item.quantity}</strong><small>{taxTypeLabel(item.tax_type)}</small>{item.selections.length > 0 && <small>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</small>}</dt>

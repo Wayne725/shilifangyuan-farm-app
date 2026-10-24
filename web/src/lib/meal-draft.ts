@@ -1,17 +1,19 @@
 import { pickupTimeOptions } from "./meal-time";
-import type { MealEvent } from "./types";
+import type { MealEvent, PickupLocation } from "./types";
 
 export interface MealDraft {
   quantities: Record<string, number>;
   selections: Record<string, Record<string, string[]>>;
   pickupAt: string;
+  pickupLocationId: string;
+  needsUtensils: boolean;
 }
 
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 const storageKey = (eventId: string) => `slf_meal_draft_v1:${eventId}`;
 
 export function emptyMealDraft(): MealDraft {
-  return { quantities: {}, selections: {}, pickupAt: "" };
+  return { quantities: {}, selections: {}, pickupAt: "", pickupLocationId: "", needsUtensils: false };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,7 +38,13 @@ export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraf
             .map(([groupId, options]) => [groupId, [...new Set((options as unknown[]).filter((option): option is string => typeof option === "string"))]]),
         )]),
     );
-    return { quantities, selections, pickupAt: typeof value.pickupAt === "string" ? value.pickupAt : "" };
+    return {
+      quantities,
+      selections,
+      pickupAt: typeof value.pickupAt === "string" ? value.pickupAt : "",
+      pickupLocationId: typeof value.pickupLocationId === "string" ? value.pickupLocationId : "",
+      needsUtensils: value.needsUtensils === true,
+    };
   } catch {
     return emptyMealDraft();
   }
@@ -45,12 +53,13 @@ export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraf
 export function writeMealDraft(eventId: string, draft: MealDraft, storage?: DraftStorage): void {
   try {
     const target = storage ?? window.sessionStorage;
-    if (!draft.pickupAt && !Object.values(draft.quantities).some((quantity) => quantity > 0)) {
+    if (!draft.pickupAt && !draft.pickupLocationId && !draft.needsUtensils && !Object.values(draft.quantities).some((quantity) => quantity > 0)) {
       target.removeItem(storageKey(eventId));
       return;
     }
     target.setItem(storageKey(eventId), JSON.stringify({
       quantities: draft.quantities, selections: draft.selections, pickupAt: draft.pickupAt,
+      pickupLocationId: draft.pickupLocationId, needsUtensils: draft.needsUtensils,
     }));
   } catch {
     // Browser storage may be disabled; selecting meals must still work.
@@ -65,8 +74,12 @@ export function clearMealDraft(eventId: string, storage?: DraftStorage): void {
   }
 }
 
-export function reconcileMealDraft(draft: MealDraft, event: MealEvent, now = Date.now()): MealDraft {
+export function reconcileMealDraft(draft: MealDraft, event: MealEvent, now = Date.now(), locations?: PickupLocation[]): MealDraft {
   const next = emptyMealDraft();
+  next.needsUtensils = draft.needsUtensils;
+  next.pickupLocationId = locations === undefined || locations.some((location) => location.is_active && location.id === draft.pickupLocationId)
+    ? draft.pickupLocationId
+    : locations.find((location) => location.is_active)?.id || "";
   for (const offering of event.offerings) {
     if (!offering.is_active) continue;
     const quantity = Math.min(draft.quantities[offering.id] || 0, offering.available_quantity, 99);
@@ -91,6 +104,7 @@ export function reconcileMealDraft(draft: MealDraft, event: MealEvent, now = Dat
 
 export function mealDraftWasAdjusted(original: MealDraft, current: MealDraft): boolean {
   return Boolean(original.pickupAt && original.pickupAt !== current.pickupAt)
+    || Boolean(original.pickupLocationId && original.pickupLocationId !== current.pickupLocationId)
     || Object.entries(original.quantities).some(([id, quantity]) => quantity > 0 && quantity !== current.quantities[id])
     || Object.entries(original.selections).some(([id, groups]) => current.quantities[id] > 0
       && Object.entries(groups).some(([groupId, options]) => options.some((option) => !current.selections[id]?.[groupId]?.includes(option))));

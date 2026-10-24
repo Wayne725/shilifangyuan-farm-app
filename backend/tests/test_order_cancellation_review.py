@@ -5,7 +5,7 @@ from app.models import AdminAudit, MealCancellationRequest, OutboxEvent, Payment
 from app.routers.orders import orders_router
 from app.routers.operations import operations_router
 from tests.support import api_test_context, auth_headers, make_test_settings
-from tests.test_meal_cancellation_review import seed_cancellation_order, mark_paid
+from tests.test_meal_cancellation_review import seed_cancellation_order, mark_paid, submit
 
 
 @pytest.fixture
@@ -21,22 +21,22 @@ async def cancellation_context(database_session):
 
 @pytest.mark.parametrize("paid", [False, True])
 @pytest.mark.asyncio
-async def test_customer_only_requests_admin_review_before_cancellation_or_refund(cancellation_context, paid):
+async def test_customers_cannot_cancel_and_admin_can_review_existing_pending_requests(cancellation_context, paid):
     c = cancellation_context
     if paid:
         await mark_paid(c)
     path = f"/v1/orders/{c.order.id}/cancel"
-    assert (await c.client.post(path, headers=auth_headers(c.other), json={"reason": "非本人"})).status_code == 404
+    assert (await c.client.post(path, headers=auth_headers(c.other), json={"reason": "非本人"})).status_code == 403
     response = await c.client.post(path, headers=auth_headers(c.buyer), json={"reason": "行程變更"})
-    assert response.status_code == 200, response.text
+    assert response.status_code == 403, response.text
     assert c.order.cancelled_at is None
     assert c.order.payment_status == (PaymentStatus.PAID if paid else PaymentStatus.PENDING)
     assert await c.session.scalar(select(func.count(Refund.id))) == 0
-    request = response.json()["cancellation_request"]
+    assert await c.session.scalar(select(func.count(MealCancellationRequest.id))) == 0
+    request = await submit(c)
     assert request["status"] == "pending"
-    assert "cancel" not in response.json()["available_actions"]
-    duplicate = await c.client.post(path, headers=auth_headers(c.buyer), json={"reason": "重複點擊"})
-    assert duplicate.json()["cancellation_request"]["id"] == request["id"]
+    detail = await c.client.get(f"/v1/orders/{c.order.id}", headers=auth_headers(c.buyer))
+    assert "cancel" not in detail.json()["available_actions"]
     assert await c.session.scalar(select(func.count(MealCancellationRequest.id))) == 1
     review_path = f"/v1/orders/{c.order.id}/admin/cancellation-requests/{request['id']}/review"
     body = {"decision": "approve", "reason": "已核對，准予退單"}
@@ -57,9 +57,8 @@ async def test_customer_only_requests_admin_review_before_cancellation_or_refund
 async def test_rejection_and_stale_approval_preserve_money_and_order(cancellation_context):
     c = cancellation_context
     await mark_paid(c)
-    response = await c.client.post(f"/v1/orders/{c.order.id}/cancel", headers=auth_headers(c.buyer), json={"reason": "申請退款"})
+    request = await submit(c, "既有退單申請")
     assert c.order.cancelled_at is None
-    request = response.json()["cancellation_request"]
     path = f"/v1/orders/{c.order.id}/admin/cancellation-requests/{request['id']}/review"
     c.order.fulfillment_status = FulfillmentStatus.PICKED_UP
     c.order.fulfillment.status = FulfillmentState.PICKED_UP
@@ -74,16 +73,15 @@ async def test_rejection_and_stale_approval_preserve_money_and_order(cancellatio
 
 
 @pytest.mark.asyncio
-async def test_rejection_allows_new_request_and_pending_filter_returns_matching_order(cancellation_context):
+async def test_historical_pending_filter_returns_matching_order(cancellation_context):
     c = cancellation_context
     path = f"/v1/orders/{c.order.id}/cancel"
-    request = (await c.client.post(path, headers=auth_headers(c.buyer), json={"reason": "第一次申請"})).json()["cancellation_request"]
+    request = await submit(c, "既有第一次申請")
     review = f"/v1/orders/{c.order.id}/admin/cancellation-requests/{request['id']}/review"
     assert (await c.client.post(review, headers=auth_headers(c.admin), json={"decision": "reject", "reason": "資料不足"})).status_code == 200
     assert (await c.client.get("/v1/admin/order-search", params={"cancellation_pending": "true"}, headers=auth_headers(c.admin))).json()["total"] == 0
-    result = await c.client.post(path, headers=auth_headers(c.buyer), json={"reason": "補充資料重新申請"})
-    assert result.status_code == 200, result.text
-    assert result.json()["cancellation_request"]["id"] != request["id"]
+    next_request = await submit(c, "既有補充資料申請")
+    assert next_request["id"] != request["id"]
     found = await c.client.get("/v1/admin/order-search", params={"cancellation_pending": "true", "q": c.order.order_number}, headers=auth_headers(c.admin))
     assert found.status_code == 200, found.text
     assert found.json()["total"] == 1

@@ -8,7 +8,6 @@ import {
   MapPin,
   Package,
   Truck,
-  X,
 } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
@@ -20,6 +19,7 @@ import { OrderSearch } from "../components/OrderSearch";
 import { filterOrders } from "../lib/order-search";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
+import { OrderCancellationContact } from "../components/OrderCancellationContact";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { ApiError, apiFetch, formatDate, formatMoney } from "../lib/api";
@@ -59,8 +59,6 @@ export function OrdersPage() {
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState("");
   const [selectedId, setSelectedId] = useState(search.order_id || "");
-  const [cancelId, setCancelId] = useState("");
-  const [cancelReason, setCancelReason] = useState("行程變更");
   const orders = useQuery({
     queryKey: ["orders", user?.id],
     queryFn: () => apiFetch<Order[]>("/v1/orders"),
@@ -92,18 +90,6 @@ export function OrdersPage() {
     mutationFn: reissueLogisticsSelection,
     onSuccess: (url, orderId) => openOrderHandoff(url, orderId),
   });
-  const cancelOrder = useMutation({
-    mutationFn: (orderId: string) =>
-      apiFetch<Order>(`/v1/orders/${orderId}/cancel`, {
-        method: "POST",
-        body: JSON.stringify({ reason: cancelReason }),
-      }),
-    onSuccess: () => {
-      setCancelId("");
-      queryClient.invalidateQueries({ queryKey: ["orders"] });
-    },
-  });
-
   useEffect(() => {
     confirmationStartedAt.current = Date.now();
   }, [search.attempt_id]);
@@ -160,7 +146,7 @@ export function OrdersPage() {
       && returnResult === "confirming",
   );
   const actionError =
-    openPayment.error || reopenLogistics.error || cancelOrder.error;
+    openPayment.error || reopenLogistics.error;
 
   useEffect(() => {
     if (returnedMeal.isSuccess && !returnedMeal.isFetching && returnedMeal.data && returnedMeal.data.id === search.order_id && !selectedPaymentIsConfirming) {
@@ -261,10 +247,15 @@ export function OrdersPage() {
                 <StatusBlock icon={FileText} label="發票" value={invoiceStatusLabel(selected.invoice_status)} />
                 <StatusBlock
                   icon={selected.fulfillment_method === "ecpay_logistics" ? Truck : MapPin}
-                  label="取貨方式"
+                  label={selected.sales_channel === "meal_preorder" ? "取餐點" : "取貨方式"}
                   value={selected.fulfillment_method === "ecpay_logistics" ? "綠界物流" : selected.fulfillment?.pickup_location || "合作社取貨"}
                 />
               </div>
+
+              {selected.sales_channel === "meal_preorder" && selected.fulfillment && <div className="meal-pickup-info">
+                {selected.fulfillment.pickup_address && <p><strong>取餐地址：</strong>{selected.fulfillment.pickup_address}</p>}
+                <p><strong>餐具：</strong>{selected.fulfillment.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
+              </div>}
 
               <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} shippingFee={selected.shipment?.shipping_fee} taxAmount={selected.tax_amount} />
 
@@ -324,7 +315,7 @@ export function OrdersPage() {
               <div className="order-actions">
                 {selectedPaymentIsConfirming && (
                   <small className="no-action">
-                    正在向金流確認，請勿重複付款或取消訂單。
+                    正在向金流確認，請勿重複付款。
                   </small>
                 )}
                 {selected.shipment?.status === "selection_pending" && (
@@ -349,28 +340,9 @@ export function OrdersPage() {
                     {openPayment.isPending ? "準備付款頁…" : "前往線上付款"}
                   </button>
                 )}
-                {!selectedPaymentIsConfirming && selected.available_actions.includes("cancel") && cancelId !== selected.id && (
-                  <button className="button button-quiet" type="button" onClick={() => setCancelId(selected.id)}>
-                    申請退單
-                  </button>
-                )}
               </div>
 
-              {cancelId === selected.id && (
-                <div className="inline-confirm">
-                  <button className="icon-button" type="button" aria-label="關閉取消訂單" onClick={() => setCancelId("")}><X size={16} /></button>
-                  <strong>申請退單，交由管理員審核</strong>
-                  <label>退單原因<input value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} /></label>
-                  <button
-                    className="button button-danger"
-                    type="button"
-                    disabled={!cancelReason.trim() || cancelOrder.isPending}
-                    onClick={() => cancelOrder.mutate(selected.id)}
-                  >
-                    {cancelOrder.isPending ? "送出中…" : "送出退單申請"}
-                  </button>
-                </div>
-              )}
+              <OrderCancellationContact />
             </article>
           )}
         </div>
@@ -439,7 +411,7 @@ function returnMessage(result: string): string {
     resume: "付款或物流服務暫時未開啟，訂單不會重複建立。",
     paid: "付款已由金流查詢確認，發票將接續處理。",
     succeeded: "付款已由金流查詢確認，發票將接續處理。",
-    confirming: "系統正在向金流查詢，請勿重複付款或取消訂單；離開頁面後仍會在背景補查。",
+    confirming: "系統正在向金流查詢，請勿重複付款；離開頁面後仍會在背景補查。",
     expired: "尚未確認付款；若已扣款，系統仍會繼續補查。",
     selected: "現在可以建立付款頁，完成這筆交易。",
     failed: "請查看下方狀態並重新操作。",

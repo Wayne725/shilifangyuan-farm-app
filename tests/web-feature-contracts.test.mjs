@@ -37,7 +37,7 @@ test("便當端到端包含取餐 QR 與管理端核銷", () => {
 
 test("管理工作台保留六個營運模組", () => {
   for (const path of ["/admin", "/admin/catalog", "/admin/groups", "/admin/meals", "/admin/finance", "/admin/social"]) assert.match(router, new RegExp(`path: "${path.replaceAll("/", "\\/")}"`));
-  for (const endpoint of ["admin/refund", "finance/meal-sales", "finance/meal-sales.csv", "suppliers", "pickup-locations"]) assert.match(source, new RegExp(endpoint.replaceAll("/", "\\/")));
+  for (const endpoint of ["admin/cancel", "finance/meal-sales", "finance/meal-sales.csv", "suppliers", "pickup-locations"]) assert.match(source, new RegExp(endpoint.replaceAll("/", "\\/")));
   assert.doesNotMatch(source, /surplus\/dry-run|surplus\/confirm|現行運費|新增運費/);
 });
 

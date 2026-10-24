@@ -8,6 +8,7 @@ import { formatMealDateTime, shiftMealDate, taipeiDate } from "../lib/meal-time"
 import type { MealAdminOrderItem, MealAdminOrderPage, MealOperationsSummary } from "../lib/types";
 import { InvoiceTaxSummary } from "./InvoiceTaxSummary";
 import { OrderStatusBadge } from "./OrderStatusBadge";
+import { AdminCancelOrder } from "./AdminCancelOrder";
 import { AdminCashPayment } from "./AdminCashPayment";
 import { DataState, LoadingLines } from "./Shared";
 
@@ -97,11 +98,13 @@ function MealOperationOrder({ item, onReviewOrder }: { item: MealAdminOrderItem;
     <header><div><h3 className="order-number">{order.order_number}</h3><p>{item.customer_name} · {item.customer_email}</p></div><strong>{formatMoney(order.amount_total)}</strong></header>
     <p><strong>預計取餐：{formatMealDateTime(order.pickup_at || order.pickup_start)}</strong>{!order.pickup_at && "（舊訂單未指定，顯示場次開始時間）"}</p>
     <p>{order.meal_event_title} · {item.meal_period === "lunch" ? "午餐" : item.meal_period === "dinner" ? "晚餐" : "未標餐別"} · {order.venue_name}</p>
+    {order.pickup_address && <p>取餐地址：{order.pickup_address}</p>}
+    <p>餐具：{order.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
     <p>{order.items.map((meal) => `${meal.meal_name} × ${meal.quantity}`).join("、")}</p>
     <div className="operation-state"><OrderStatusBadge kind="payment" status={order.payment_status} /><OrderStatusBadge kind="fulfillment" status={order.cancelled_at ? "cancelled" : order.fulfillment_status} label={order.cancelled_at ? "已取消" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"} /><OrderStatusBadge kind="invoice" status={order.invoice_status} /></div>
     {order.cancellation_request && <p className="meal-order-review-status">{reviewLabels[order.cancellation_request.status]}{order.cancellation_request.status === "pending" && "，訂單尚未取消"}</p>}
     <p>付款方式：{order.payment_method === "cash_on_pickup" ? "合作社現場付款" : "線上付款"}</p>
-    <AdminCashPayment order={order} />
+    <AdminCancelOrder order={order} /><AdminCashPayment order={order} />
     <details><summary>查看餐點、發票與退單明細</summary>
       <ul>{order.items.map((meal, index) => <li key={`${meal.offering_id}-${index}`}>{meal.meal_name} × {meal.quantity} · {formatMoney(meal.subtotal)}{meal.selections.length > 0 && <span>（{meal.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join("、")}）</span>}</li>)}</ul>
       <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} taxAmount={order.tax_amount} />

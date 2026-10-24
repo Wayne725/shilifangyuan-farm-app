@@ -1,6 +1,7 @@
 import {
   Basket,
   Buildings,
+  CalendarBlank,
   List,
   Receipt,
   SignIn,
@@ -20,6 +21,7 @@ import "../styles/site-navigation.css";
 const navItems = [
   { to: "/" as const, label: "首頁" },
   { to: "/shop" as const, label: "生活消費", icon: Storefront },
+  { to: "/activities" as const, label: "永續活動", icon: CalendarBlank },
   { to: "/social" as const, label: "社務系統", icon: Buildings },
 ];
 
@@ -108,7 +110,7 @@ export function AppShell() {
             {itemCount > 0 && <b>{itemCount}</b>}
           </Link>
           {user ? (
-            <Link className="account-button" to="/account">
+            <Link className="account-button" to="/account" aria-label={`會員中心：${user.display_name}`}>
               <UserCircle size={21} weight="light" />
               <span>{user.display_name}</span>
             </Link>
@@ -116,6 +118,7 @@ export function AppShell() {
             <button
               className="account-button"
               type="button"
+              aria-label={isAuthReady ? "帳號登入" : "確認登入中…"}
               onClick={() => { setMobileOpen(false); openLogin(); }}
               disabled={!isAuthReady}
             >

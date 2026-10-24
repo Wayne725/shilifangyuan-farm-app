@@ -150,9 +150,7 @@ async def test_two_admins_confirming_cash_cannot_double_collect_or_release_capac
     offering = updated.json()["offerings"][0]
     assert (offering["reserved_quantity"], offering["paid_quantity"], offering["available_quantity"]) == (0, 1, 0)
 
-    requested = await request("POST", f"/v1/meal-orders/{order_id}/cancellation-requests", buyer, {"reason": "取消"})
-    assert requested.status_code == 201, requested.text
-    reviewed = await request("POST", f"/v1/admin/meal-cancellation-requests/{requested.json()['id']}/review", admin, {"decision": "approve", "reason": "核准"})
+    reviewed = await request("POST", f"/v1/admin/meal-orders/{order_id}/cancel", admin, {"reason": "電話確認退單"})
     assert reviewed.status_code == 200, reviewed.text
     refund_path = f"/v1/orders/{order_id}/admin/cash-refund"
     refund_confirmation = {"amount": 100, "reason": "已核對並實際退還現金"}

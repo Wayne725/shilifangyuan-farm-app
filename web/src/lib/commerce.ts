@@ -307,6 +307,8 @@ export async function beginMealCheckout(input: {
   expectedTotal?: number;
   eventId: string;
   pickupAt: string;
+  pickupLocationId?: string;
+  needsUtensils?: boolean;
   items: Array<{
     offering_id: string;
     quantity: number;
@@ -328,6 +330,8 @@ export async function beginMealCheckout(input: {
         ...(input.couponCode ? {coupon_code: input.couponCode} : {}),
         ...(input.expectedTotal !== undefined ? {expected_total: input.expectedTotal} : {}),
         pickup_at: input.pickupAt,
+        pickup_location_id: input.pickupLocationId || null,
+        needs_utensils: input.needsUtensils ?? false,
         contact_email: input.contactEmail,
         payment_method: paymentMethod,
         ...(paymentMethod === "online" ? invoicePreferencePayload(input.invoicePreference) : {}),

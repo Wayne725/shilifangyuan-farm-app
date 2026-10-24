@@ -7,6 +7,8 @@ export interface KitchenOrder {
   event_title: string;
   meal_period?: string | null;
   location: string;
+  pickup_address?: string;
+  needs_utensils?: boolean;
   pickup_at: string;
   pickup_time_confirmed: boolean;
   fulfillment_status: "pending_confirmation" | "preparing" | "ready_for_pickup";

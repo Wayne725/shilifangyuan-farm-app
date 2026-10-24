@@ -293,10 +293,23 @@ def meal_cancellation_request_allowed(order: Order, now: Optional[datetime] = No
         and order.cancelled_at is None
         and order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
         and fulfillment is not None
-        and fulfillment.status not in {FulfillmentState.PICKED_UP, FulfillmentState.NO_SHOW, FulfillmentState.CANCELLED}
+        and fulfillment.status in {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
         and event is not None
         and event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}
         and current < aware(event.pickup_ends_at)
+    )
+
+
+def admin_order_cancellation_allowed(order: Order, now: Optional[datetime] = None) -> bool:
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        return meal_cancellation_request_allowed(order, now) and not order_fulfillment_is_irreversible(order)
+    fulfillment = order.__dict__.get("fulfillment")
+    return (
+        order.payment_status in {PaymentStatus.PENDING, PaymentStatus.PAID}
+        and order.cancelled_at is None
+        and order.fulfillment_status != FulfillmentStatus.CANCELLED
+        and (fulfillment is None or fulfillment.status not in {FulfillmentState.CANCELLED, FulfillmentState.NO_SHOW})
+        and not order_fulfillment_is_irreversible(order)
     )
 
 
@@ -338,32 +351,9 @@ def order_available_actions(
             or (not meal_fulfillment_closed and meal_payment_window_open(order, current))
         ):
             actions.append("pay")
-        if not is_meal and not meal_fulfillment_closed:
-            actions.append("cancel")
-    elif order.payment_status == PaymentStatus.PAID:
-        if not is_meal and order.order_kind == OrderKind.REGULAR:
-            if order.fulfillment_status == FulfillmentStatus.PENDING_CONFIRMATION:
-                actions.append("cancel")
-        elif not is_meal and order.group_campaign is not None:
-            campaign = order.group_campaign
-            if campaign.decision_status != GroupDecisionStatus.CONFIRMED:
-                actions.append("cancel")
-            elif (
-                campaign.confirmed_at is not None
-                and order.paid_at is not None
-                and aware(order.paid_at) >= aware(campaign.confirmed_at)
-                and current
-                <= aware(order.paid_at)
-                + timedelta(
-                    minutes=get_settings().post_confirmation_cancel_minutes
-                )
-            ):
-                actions.append("cancel")
-    if is_meal and meal_cancellation_request_allowed(order, current) and not any(
-        request.status == "pending" for request in order.__dict__.get("cancellation_requests", [])
-    ):
-        actions.append("request_cancellation")
     if viewer_is_admin:
+        if admin_order_cancellation_allowed(order, current):
+            actions.append("cancel")
         event = order.__dict__.get("meal_event")
         if (order.payment_method == PaymentMethod.CASH_ON_PICKUP
             and order.payment_status == PaymentStatus.PENDING and not meal_fulfillment_closed
@@ -475,8 +465,8 @@ def order_fulfillment_is_irreversible(order: Order) -> bool:
     )
 
 
-def ensure_self_cancel_allowed(
+def ensure_admin_cancel_allowed(
     order: Order, now: Optional[datetime] = None
 ) -> None:
-    if "cancel" not in order_available_actions(order, False, now):
-        raise DomainError("此訂單目前無法由買家取消")
+    if not admin_order_cancellation_allowed(order, now):
+        raise DomainError("訂單已取消、交付或結束履約，目前不可退單")

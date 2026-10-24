@@ -69,7 +69,7 @@ async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(dat
             await session.commit()
         session.expunge_all()
         cancelled = await client.post(f"/v1/meal-orders/{order_id}/cancel", headers=buyer_headers, json={"reason": "已領餐仍嘗試取消"})
-        assert cancelled.status_code == 409, cancelled.text
+        assert cancelled.status_code == 403, cancelled.text
         detail = await client.get(f"/v1/meal-orders/{order_id}", headers=buyer_headers)
         assert detail.json()["payment_status"] == "paid"
         assert detail.json()["fulfillment_status"] == ("preparing" if legacy_status_only else "picked_up")

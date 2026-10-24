@@ -45,7 +45,7 @@ function event(overrides = {}) {
 function selection(overrides = {}) {
   return {
     quantities: { chicken: 2 }, selections: { chicken: { main: ["rice"] } },
-    pickupAt: "2026-10-09T11:30", ...overrides,
+    pickupAt: "2026-10-09T11:30", pickupLocationId: "", needsUtensils: false, ...overrides,
   };
 }
 
@@ -108,13 +108,13 @@ test("只保存選餐欄位，不保存發票或報價；損壞資料及禁用�
   const browserStorage = storage();
   writeMealDraft("lunch", { ...selection(), invoicePreference: { buyerEmail: "private@example.test" }, quote: { amount_total: 1 } }, browserStorage);
   const saved = JSON.parse([...browserStorage.entries.values()][0]);
-  assert.deepEqual(Object.keys(saved).sort(), ["pickupAt", "quantities", "selections"]);
+  assert.deepEqual(Object.keys(saved).sort(), ["needsUtensils", "pickupAt", "pickupLocationId", "quantities", "selections"]);
   const key = [...browserStorage.entries.keys()][0];
   browserStorage.setItem(key, "bad JSON");
   assert.deepEqual(readMealDraft("lunch", browserStorage), emptyMealDraft());
   browserStorage.setItem(key, JSON.stringify({ quantities: { chicken: 1.5, beef: "2", tofu: -1, rice: 999 }, selections: { rice: { main: ["plain", 9, "plain"], bad: 1 }, bad: [] }, pickupAt: 10 }));
   assert.deepEqual(readMealDraft("lunch", browserStorage), {
-    quantities: { rice: 99 }, selections: { rice: { main: ["plain"] } }, pickupAt: "",
+    quantities: { rice: 99 }, selections: { rice: { main: ["plain"] } }, pickupAt: "", pickupLocationId: "", needsUtensils: false,
   });
   const blocked = {
     getItem() { throw new Error("storage disabled"); },
@@ -124,6 +124,39 @@ test("只保存選餐欄位，不保存發票或報價；損壞資料及禁用�
   assert.deepEqual(readMealDraft("lunch", blocked), emptyMealDraft());
   assert.doesNotThrow(() => writeMealDraft("lunch", selection(), blocked));
   assert.doesNotThrow(() => clearMealDraft("lunch", blocked));
+});
+
+test("取餐點與餐具需求返回後保留，清單載入前不丟失原選擇", () => {
+  const browserStorage = storage();
+  const original = selection({ pickupLocationId: "west", needsUtensils: true });
+  writeMealDraft("lunch", original, browserStorage);
+  const restored = readMealDraft("lunch", browserStorage);
+  assert.deepEqual(reconcileMealDraft(restored, event(), NOW), original);
+  assert.deepEqual(reconcileMealDraft(restored, event(), NOW, [{ id: "west", is_active: true }]), original);
+  assert.equal(mealDraftWasAdjusted(original, original), false);
+});
+
+test("停用或移除的取餐點切換至啟用點並提示，無啟用點回到場次地點", () => {
+  const original = selection({ pickupLocationId: "west", needsUtensils: true });
+  const locations = [{ id: "west", is_active: false }, { id: "east", is_active: true }];
+  const adjusted = reconcileMealDraft(original, event(), NOW, locations);
+  assert.equal(adjusted.pickupLocationId, "east");
+  assert.equal(adjusted.needsUtensils, true);
+  assert.equal(mealDraftWasAdjusted(original, adjusted), true);
+  const fallback = reconcileMealDraft(original, event(), NOW, []);
+  assert.equal(fallback.pickupLocationId, "");
+  assert.equal(fallback.needsUtensils, true);
+  assert.equal(reconcileMealDraft(selection(), event(), NOW, locations).pickupLocationId, "east");
+});
+
+test("舊草稿與格式錯誤的新增欄位使用不提供餐具預設值", () => {
+  const browserStorage = storage();
+  browserStorage.setItem("slf_meal_draft_v1:lunch", JSON.stringify({ quantities: {}, selections: {}, pickupAt: "" }));
+  assert.deepEqual(readMealDraft("lunch", browserStorage), emptyMealDraft());
+  browserStorage.setItem("slf_meal_draft_v1:lunch", JSON.stringify({ pickupLocationId: 17, needsUtensils: "false" }));
+  assert.deepEqual(readMealDraft("lunch", browserStorage), emptyMealDraft());
+  writeMealDraft("lunch", { ...emptyMealDraft(), needsUtensils: true }, browserStorage);
+  assert.equal(readMealDraft("lunch", browserStorage).needsUtensils, true);
 });
 
 test("菜單或時段變更會提示調整，正常移除餐點及取消選項不誤報", () => {

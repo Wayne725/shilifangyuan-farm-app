@@ -279,13 +279,8 @@ async def test_any_existing_order_prevents_event_update(preorder_context):
     assert created.status_code == 201
     for cancel_first in (False, True):
         if cancel_first:
-            cancel = await client.post(f"/v1/meal-orders/{created.json()['id']}/cancel", json={"reason": "測試取消"}, headers=auth_headers(buyer))
-            assert cancel.status_code == 201
-            approved = await client.post(
-                f"/v1/admin/meal-cancellation-requests/{cancel.json()['id']}/review",
-                json={"decision": "approve", "reason": "同意測試退單"}, headers=auth_headers(admin),
-            )
-            assert approved.status_code == 200
+            cancel = await client.post(f"/v1/admin/meal-orders/{created.json()['id']}/cancel", json={"reason": "測試電話退單"}, headers=auth_headers(admin))
+            assert cancel.status_code == 200
         response = await client.put(f"/v1/admin/meal-events/{event.id}", json=update, headers=auth_headers(admin))
         assert response.status_code == 409
     detail = await client.get(f"/v1/meal-events/{event.id}")

@@ -6195,6 +6195,16 @@ p {
   font-weight: 500;
 }
 
+.meal-pickup-info strong small {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-soft);
+}
+
+.meal-order-preferences {
+  margin-bottom: 24px;
+}
+
 /* Finance */
 .finance-period {
   display: flex;

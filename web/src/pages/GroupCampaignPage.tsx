@@ -16,7 +16,7 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { storefrontCapabilities, storefrontOrderBlockReason, useStorefrontStatus } from "../components/StorefrontStatus";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import {
-  defaultInvoicePreference,
+  useInvoicePreference,
   InvoicePreferenceFields,
   InvoicePreferenceSummary,
   invoicePreferenceIsValid,
@@ -47,7 +47,7 @@ const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
 
 export function GroupCampaignPage() {
   const { campaignId } = useParams({ from: "/groups/$campaignId" });
-  const { user, openLogin } = useAuth();
+  const { user, openLogin, saveMobileBarcode } = useAuth();
   const platform = useStorefrontStatus();
   const shippingEnabled = logisticsEnabled && storefrontCapabilities(platform.data).shipping;
   const notificationEmail = user?.notification_email || user?.email || "";
@@ -58,9 +58,7 @@ export function GroupCampaignPage() {
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
-  const [invoicePreference, setInvoicePreference] = useState(
-    () => defaultInvoicePreference(notificationEmail),
-  );
+  const [invoicePreference, setInvoicePreference] = useInvoicePreference(notificationEmail);
   const orderBlockReason = storefrontOrderBlockReason(platform.data, "group")
     || (method === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
   const campaign = useQuery({
@@ -85,9 +83,12 @@ export function GroupCampaignPage() {
     enabled: Boolean(user && campaign.data && !orderBlockReason && (method === "pickup" || shippingChannel)),
   });
   const checkout = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!user || !campaign.data) throw new Error("請先登入");
       if (orderBlockReason) throw new Error(orderBlockReason);
+      if (invoicePreference.carrierType === "mobile_barcode") {
+        await saveMobileBarcode(invoicePreference.carrierValue || "");
+      }
       if (method === "shipping") {
         if (!shippingChannel || !campaign.data.shipping_temperature) throw new Error("請選擇配送通路");
         return beginGroupCheckout({
@@ -132,13 +133,6 @@ export function GroupCampaignPage() {
     setQuantity((value) => Math.max(1, Math.min(value, campaign.data.per_user_cap, campaign.data.available_quantity)));
   }, [campaign.data, shippingChannel]);
 
-  useEffect(() => {
-    if (!notificationEmail) return;
-    setInvoicePreference((current) =>
-      current.buyerEmail ? current : { ...current, buyerEmail: notificationEmail },
-    );
-  }, [notificationEmail]);
-
   if (campaign.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (campaign.isError || !campaign.data) {
     return <section className="offer-page"><DataState kind="error" title="團購資料無法讀取" detail={campaign.error?.message || "找不到這筆團購"} /></section>;
@@ -154,14 +148,14 @@ export function GroupCampaignPage() {
 
   return (
     <section className="offer-page">
-      <Link className="text-link" to="/shop"><ArrowLeft size={17} />回到共同團購</Link>
+      <Link className="text-link" to="/shop"><ArrowLeft size={17} />回到共同購買</Link>
       <div className="offer-hero">
         <div className="offer-image">
           <img src={resolveAsset(item.image_url)} alt={item.title} onError={replaceBrokenAsset} />
           <span>{item.intake_status}</span>
         </div>
         <div className="offer-copy">
-          <p className="eyebrow">BUYING TOGETHER / 共同團購</p>
+          <p className="eyebrow">BUYING TOGETHER / 共同購買</p>
           <h1>{item.title}</h1>
           <p>{item.description}</p>
           <dl>

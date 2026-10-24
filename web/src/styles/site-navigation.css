@@ -17,9 +17,13 @@
 .site-menu a:hover, .site-menu button:hover { color: var(--moss-dark); }
 .workspace-passage.single-workspace { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
 .workspace-passage.single-workspace .passage-copy { grid-column: auto; }
-@media (min-width: 901px) and (max-width: 1180px) {
+@media (min-width: 901px) and (max-width: 1320px) {
   .site-header .brand span { display: none; }
-  .site-header :is(.account-button, .cart-link, .orders-link) span { display: inline; }
+  .site-header :is(.account-button, .cart-link, .orders-link) span { display: none; }
+  .site-header .desktop-nav a { padding-inline: 8px; gap: 5px; }
+}
+@media (min-width: 1321px) and (max-width: 1439px) {
+  html[data-text-size="large"] .site-header .brand span { display: none; }
 }
 @media (max-width: 900px) {
   .site-frame > .site-header { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }

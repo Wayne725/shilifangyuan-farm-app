@@ -1,6 +1,6 @@
 import { StorefrontClosed, useStorefrontStatus } from "../components/StorefrontStatus";
 import * as Tabs from "@radix-ui/react-tabs";
-import { ArrowRight, BowlFood, Package, UsersThree } from "@phosphor-icons/react";
+import { ArrowRight, BowlFood, CalendarBlank, Package, UsersThree } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -37,7 +37,7 @@ export function ShopPage() {
     !["draft", "cancelled", "completed"].includes(meal.status)
       && new Date(meal.pickup_ends_at).getTime() > now,
   ) || [];
-  const pageTitle = activeTab === "meals" ? "我要訂餐" : activeTab === "groups" ? "共同團購" : "日常選品";
+  const pageTitle = activeTab === "meals" ? "我要訂餐" : activeTab === "groups" ? "共同購買" : "日常選品";
 
   if (platform.data?.orders_open === false) return <StorefrontClosed message={platform.data.closed_message} />;
   return (
@@ -50,20 +50,26 @@ export function ShopPage() {
       </section>
 
       <Tabs.Root className="market-tabs" value={activeTab} onValueChange={setActiveTab}>
-        <Tabs.List className="tab-list" aria-label="消費類型">
-          <Tabs.Trigger value="meals">
-            <BowlFood size={18} weight="light" />
-            便當預購
-          </Tabs.Trigger>
-          <Tabs.Trigger value="groups">
-            <UsersThree size={18} weight="light" />
-            共同團購
-          </Tabs.Trigger>
-          <Tabs.Trigger value="products">
-            <Package size={18} weight="light" />
-            日常選品
-          </Tabs.Trigger>
-        </Tabs.List>
+        <div className="tab-list market-navigation">
+          <Tabs.List className="market-type-tabs" aria-label="消費類型">
+            <Tabs.Trigger value="meals">
+              <BowlFood size={18} weight="light" />
+              便當預購
+            </Tabs.Trigger>
+            <Tabs.Trigger value="groups">
+              <UsersThree size={18} weight="light" />
+              共同購買
+            </Tabs.Trigger>
+            <Tabs.Trigger value="products">
+              <Package size={18} weight="light" />
+              日常選品
+            </Tabs.Trigger>
+          </Tabs.List>
+          <Link to="/activities">
+            <CalendarBlank size={18} weight="light" />
+            永續活動
+          </Link>
+        </div>
 
         <Tabs.Content value="products" className="tab-content">
           <SectionHeading
@@ -91,7 +97,7 @@ export function ShopPage() {
 
         <Tabs.Content value="groups" className="tab-content">
           <SectionHeading
-            eyebrow="BUYING TOGETHER / 共同團購"
+            eyebrow="BUYING TOGETHER / 共同購買"
             title="把需求聚在一起"
           />
           <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的團購需求 <ArrowRight size={17} /></Link></div>

@@ -2111,7 +2111,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     assert created_order.json()["paid_at"] is None
     assert created_order.json()["pickup_code"] is None
     assert created_order.json()["pickup_qr_payload"] is None
-    assert created_order.json()["available_actions"] == ["pay", "request_cancellation"]
+    assert created_order.json()["available_actions"] == ["pay"]
 
     pending_order = await client.get(
         f"/v1/meal-orders/{created_order.json()['id']}",
@@ -2162,16 +2162,15 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         json={"reason": "行程異動"},
         headers=auth_headers(applicant),
     )
-    assert cancelled.status_code == 201
-    assert cancelled.json()["status"] == "pending"
+    assert cancelled.status_code == 403
     assert offering.reserved_quantity == 1
     approved = await client.post(
-        f"/v1/admin/meal-cancellation-requests/{cancelled.json()['id']}/review",
-        json={"decision": "approve", "reason": "未製作，可取消"},
+        f"/v1/admin/meal-orders/{created_order.json()['id']}/cancel",
+        json={"reason": "未製作，電話取消"},
         headers=auth_headers(admin),
     )
     assert approved.status_code == 200
-    assert approved.json()["status"] == "approved"
+    assert approved.json()["cancellation_request"]["status"] == "approved"
     await session.refresh(stored_order)
     assert stored_order.payment_status == PaymentStatus.EXPIRED
     assert stored_order.fulfillment_status == FulfillmentStatus.CANCELLED
@@ -2426,12 +2425,11 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
         json={"reason": "臨時有事"},
         headers=auth_headers(applicant),
     )
-    assert buyer_cancel.status_code == 201
-    assert buyer_cancel.json()["status"] == "pending"
+    assert buyer_cancel.status_code == 403
     assert buyer_order.payment_status == PaymentStatus.PAID
     approved = await client.post(
-        f"/v1/admin/meal-cancellation-requests/{buyer_cancel.json()['id']}/review",
-        json={"decision": "approve", "reason": "核對後同意退單"},
+        f"/v1/admin/meal-orders/{buyer_order.id}/cancel",
+        json={"reason": "電話核對後同意退單"},
         headers=auth_headers(admin),
     )
     assert approved.status_code == 200

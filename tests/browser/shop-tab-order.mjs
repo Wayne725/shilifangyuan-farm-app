@@ -12,13 +12,13 @@ if (!['127.0.0.1', 'localhost'].includes(testUrl.hostname)
 const base = testUrl.origin;
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const tabs = [
-  { name: '便當預購', heading: '預約一份剛好的午餐與晚餐' },
-  { name: '共同團購', heading: '把需求聚在一起' },
+  { name: '便當預購', heading: '選取餐時間' },
+  { name: '共同購買', heading: '把需求聚在一起' },
   { name: '日常選品', heading: '合作社選品' },
 ];
 
 for (const width of [1440, 390]) {
-  test(`${width}px 生活消費依便當、團購、選品排序，預設便當並驗證分頁切換及重新載入`, { timeout: 30000 }, async (t) => {
+  test(`${width}px 生活消費依便當、共同購買、選品排序，預設便當並驗證分頁切換及重新載入`, { timeout: 30000 }, async (t) => {
     const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
     t.after(() => browser.close());
     const context = await browser.newContext({
@@ -35,6 +35,7 @@ for (const width of [1440, 390]) {
         if (method === 'POST' && url.pathname === '/v1/auth/refresh') {
           return route.fulfill({ status: 401, json: { detail: '隔離測試未登入' } });
         }
+        if (method === 'GET' && url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (method === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/meal-events'].includes(url.pathname)) {
           return route.fulfill({ json: [] });
         }
@@ -56,7 +57,7 @@ for (const width of [1440, 390]) {
     const selected = tabList.getByRole('tab', { selected: true });
     assert.equal(await selected.innerText(), '便當預購');
     await page.getByRole('tabpanel', { name: '便當預購', exact: true })
-      .getByRole('heading', { name: '預約一份剛好的午餐與晚餐', exact: true }).waitFor();
+      .getByRole('heading', { name: '選取餐時間', exact: true }).waitFor();
     assert.deepEqual(await tabList.getByRole('tab').allTextContents(), tabs.map(({ name }) => name));
     const positions = await tabList.getByRole('tab').evaluateAll((elements) => elements.map((element) => {
       const { x, y, width, height } = element.getBoundingClientRect();
@@ -72,12 +73,13 @@ for (const width of [1440, 390]) {
       const panel = page.getByRole('tabpanel', { name, exact: true });
       await panel.getByRole('heading', { name: heading, exact: true }).waitFor();
       assert.equal(await page.getByRole('tabpanel').count(), 1);
+      if (name === '共同購買') await page.getByRole('heading', { name: '共同購買', exact: true }).waitFor();
     }
     await page.reload();
     await tabList.waitFor();
     assert.equal(await selected.innerText(), '便當預購');
     await page.getByRole('tabpanel', { name: '便當預購', exact: true })
-      .getByRole('heading', { name: '預約一份剛好的午餐與晚餐', exact: true }).waitFor();
+      .getByRole('heading', { name: '選取餐時間', exact: true }).waitFor();
     assert.equal(await page.getByRole('tabpanel').count(), 1);
     assert.deepEqual(unknownApi, []);
     assert.deepEqual(mutations, []);

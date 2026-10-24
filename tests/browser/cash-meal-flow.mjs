@@ -25,13 +25,14 @@ async function fixture(t, width, admin = false, allowCash = true) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
-  const state = { order: structuredClone(order), writes: [], unknown: [], errors: [] };
+  const state = { order: structuredClone(order), locations: [], quotes: [], writes: [], unknown: [], errors: [] };
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return route.continue();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.test', display_name: '隔離使用者', user_role: admin ? 'admin' : 'customer' } } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
+    if (path === '/v1/pickup-locations') return route.fulfill({ json: state.locations });
     if (path === '/v1/meal-events/onsite-event') return route.fulfill({ json: { ...event, allow_cash_payment: allowCash } });
     if (path === '/v1/meal-events') return route.fulfill({ json: [event] });
     if (path === '/v1/meal-orders') return route.fulfill({ json: [state.order] });
@@ -39,9 +40,17 @@ async function fixture(t, width, admin = false, allowCash = true) {
     if (path === '/v1/admin/meal-events') return route.fulfill({ json: [event] });
     if (path === '/v1/admin/meal-orders') return route.fulfill({ json: { items: [{ order: state.order, customer_name: '買家', customer_email: 'buyer@example.test', meal_period: 'lunch' }], total: 1, offset: 0, limit: 20 } });
     if (path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { pending_cancellation: 0, refund_attention: 0, invoice_attention: 0, today_pickup: 0 } });
-    if (path === '/v1/meal-events/onsite-event/quote') return route.fulfill({ json: { amount_total: 120, items: order.items, pickup: { location: event.location, starts_at: event.pickup_starts_at, ends_at: event.pickup_ends_at } } });
+    if (path === '/v1/meal-events/onsite-event/quote') {
+      const body = request.postDataJSON();
+      state.quotes.push(body);
+      const location = state.locations.find(location => location.id === body.pickup_location_id);
+      return route.fulfill({ json: { amount_total: 120, items: order.items, needs_utensils: body.needs_utensils, pickup: { location_id: location?.id || null, location: location?.name || event.location, address: location?.address || '', instructions: '', starts_at: event.pickup_starts_at, ends_at: event.pickup_ends_at } } });
+    }
     if (path === '/v1/meal-events/onsite-event/orders') {
-      state.writes.push({ path, body: request.postDataJSON() });
+      const body = request.postDataJSON();
+      const location = state.locations.find(location => location.id === body.pickup_location_id);
+      state.writes.push({ path, body });
+      state.order = { ...state.order, pickup_location_id: location?.id || null, venue_name: location?.name || event.location, pickup_address: location?.address || '', needs_utensils: body.needs_utensils };
       return route.fulfill({ status: 201, json: { ...state.order, available_actions: ['request_cancellation'] } });
     }
     if (['/v1/orders/onsite-order/admin/cash-payment', '/v1/orders/onsite-order/admin/cash-unpaid'].includes(path)) {
@@ -73,6 +82,8 @@ for (const width of [390, 1280]) {
     await page.getByRole('heading', { name: '預訂成功・待現場付款', exact: true }).waitFor();
     assert.equal(state.writes.length, 1);
     assert.equal(state.writes[0].body.payment_method, 'cash_on_pickup');
+    assert.equal(state.writes[0].body.pickup_location_id, null);
+    assert.equal(state.writes[0].body.needs_utensils, false);
     assert.equal('invoice_carrier_type' in state.writes[0].body, false);
     assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
   });
@@ -128,6 +139,64 @@ test('送單回應中斷後重試與重新整理沿用同一識別碼及備註',
   assert.equal(attempts.length, 3);
   assert.equal(new Set(attempts.map(body => body.client_request_id)).size, 1);
   assert.equal(attempts[2].kitchen_note, '飯少，不要辣');
+  assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+});
+
+for (const width of [390, 1280]) {
+  test(`${width}px 便當沿用日常選品取餐點，餐具與取餐點草稿、試算、訂單保持一致`, async t => {
+    const { page, state } = await fixture(t, width);
+    state.locations = [
+      { id: 'east', code: 'EAST', name: '合作社東站', address: '花蓮縣壽豐鄉東路 1 號', is_active: true },
+      { id: 'west', code: 'WEST', name: '合作社西站', address: '花蓮縣壽豐鄉西路 2 號', is_active: true },
+    ];
+    await page.goto(`${base}/meals/onsite-event?pickup_at=2030-01-03T11%3A30`);
+    const firstQuote = page.waitForResponse(response => response.url().endsWith('/quote'));
+    await page.getByRole('button', { name: '增加蔬食便當', exact: true }).click();
+    await firstQuote;
+    assert.equal(state.quotes.at(-1).pickup_location_id, 'east');
+    assert.equal(state.quotes.at(-1).needs_utensils, false);
+    await page.getByLabel('取餐點', { exact: true }).selectOption('west');
+    const updatedQuote = page.waitForResponse(response => response.url().endsWith('/quote') && response.request().postDataJSON().needs_utensils === true);
+    await page.getByLabel('是否需要餐具', { exact: true }).selectOption('yes');
+    await updatedQuote;
+    assert.equal(state.quotes.at(-1).pickup_location_id, 'west');
+    await page.reload();
+    await page.getByRole('option', { name: '合作社西站', exact: true }).waitFor({ state: 'attached' });
+    assert.equal(await page.getByLabel('取餐點', { exact: true }).inputValue(), 'west');
+    assert.equal(await page.getByLabel('是否需要餐具', { exact: true }).inputValue(), 'yes');
+    await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
+    if (process.env.BROWSER_ARTIFACT_DIR) {
+      await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); });
+      await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/meal-pickup-${width === 390 ? 'mobile' : 'desktop'}.png`, fullPage: true });
+    }
+    await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).click();
+    await page.waitForURL('**/meal-orders?order_id=onsite-order');
+    await page.getByRole('heading', { name: '預訂成功・待現場付款', exact: true }).waitFor();
+    assert.equal(state.writes[0].body.pickup_location_id, 'west');
+    assert.equal(state.writes[0].body.needs_utensils, true);
+    assert.equal(state.quotes.at(-1).pickup_location_id, 'west');
+    assert.equal(state.quotes.at(-1).needs_utensils, true);
+    assert.match(await page.locator('.meal-pickup-info').innerText(), /合作社西站.*花蓮縣壽豐鄉西路 2 號/s);
+    await page.getByText('需要餐具', { exact: false }).waitFor();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+  });
+}
+
+test('取餐點載入失敗阻止便當送單，可重試恢復', async t => {
+  const { page, state } = await fixture(t, 390);
+  await page.route('**/v1/pickup-locations', route => route.fulfill({ status: 503, json: { detail: '取餐點維護中' } }));
+  await page.goto(`${base}/meals/onsite-event?pickup_at=2030-01-03T11%3A30`);
+  await page.getByRole('button', { name: '增加蔬食便當', exact: true }).click();
+  await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
+  assert.equal(await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).isDisabled(), true);
+  await page.getByRole('heading', { name: '取餐點暫時無法使用', exact: true }).waitFor({ timeout: 15000 });
+  await page.unroute('**/v1/pickup-locations');
+  await page.getByRole('button', { name: '重新連線', exact: true }).click();
+  await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).click();
+  await page.waitForURL('**/meal-orders?order_id=onsite-order');
+  assert.equal(state.writes.length, 1);
+  assert.equal(state.writes[0].body.pickup_location_id, null);
   assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });
 

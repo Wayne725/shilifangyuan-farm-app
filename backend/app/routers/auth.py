@@ -22,6 +22,7 @@ from ..config import Settings, get_settings
 from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationError
+from ..integrations.invoice_service import invoice_adapter_from_settings
 from ..integrations.pii_crypto import (
     encrypt_auth_outbox_credential,
     pii_cipher_from_settings,
@@ -58,6 +59,7 @@ from ..schemas import (
     ResendVerificationRequest,
     ResetPasswordRequest,
     TokenResponse,
+    UserPreferencesUpdate,
     UserRead,
     VerifyEmailRequest,
 )
@@ -73,6 +75,7 @@ def user_read(user: User) -> UserRead:
         customer_number=user.customer_number,
         email=user.email,
         notification_email=user.notification_email,
+        saved_mobile_barcode=user.saved_mobile_barcode,
         display_name=user.display_name,
         user_role=user.user_role,
         membership_type=membership_type_for_user(user),
@@ -695,6 +698,31 @@ async def logout(
 
 @auth_router.get("/me", response_model=UserRead)
 async def me(user: User = Depends(get_current_user)) -> UserRead:
+    return user_read(user)
+
+
+@auth_router.patch("/preferences", response_model=UserRead)
+async def update_preferences(
+    body: UserPreferencesUpdate,
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> UserRead:
+    expected_user_id = request.headers.get("X-Expected-User-ID")
+    if expected_user_id is not None and expected_user_id != user.id:
+        raise HTTPException(409, "登入帳號已變更，請重新整理後再試")
+    barcode = body.saved_mobile_barcode
+    if barcode is not None:
+        try:
+            result = await invoice_adapter_from_settings(settings).validate_mobile_barcode(barcode)
+        except (IntegrationError, ValueError) as exc:
+            raise HTTPException(503, "手機條碼驗證服務目前無法使用") from exc
+        if not result.valid:
+            raise HTTPException(422, result.message or "手機條碼驗證失敗")
+        barcode = result.barcode
+    user.saved_mobile_barcode = barcode
+    await session.commit()
     return user_read(user)
 
 

@@ -12,10 +12,11 @@ import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminCashPayment } from "../components/AdminCashPayment";
 import { AdminNav } from "../components/AdminNav";
 import { AdminOperationsNav } from "../components/AdminOperationsNav";
+import { AdminOrderSummary } from "../components/AdminOrderSummary";
 import { AdminOrderCancellationReview } from "../components/AdminOrderCancellationReview";
 import { AdminFailurePanel } from "../components/AdminFailurePanel";
 import { AdminInvoiceAdjustment } from "../components/AdminInvoiceAdjustment";
-import { AdminReasonChoices } from "../components/AdminReasonChoices";
+import { AdminCancelOrder } from "../components/AdminCancelOrder";
 import { AdminStatusQuery } from "../components/AdminStatusQuery";
 import { OrderStatusBadge } from "../components/OrderStatusBadge";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
@@ -39,7 +40,7 @@ interface AdminOrderPage {
   offset: number;
 }
 
-type OperationSection = "orders" | "issues" | "suppliers" | "locations";
+type OperationSection = "orders" | "summary" | "issues" | "suppliers" | "locations";
 
 export function AdminPage() {
   const { user, openLogin } = useAuth();
@@ -96,11 +97,6 @@ export function AdminPage() {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
-  const refreshFinancialOrders = () => Promise.all(["admin-orders", "admin-meal-orders", "admin-meal-operations-summary", "meal-sales-report"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
-  const refundOrder = useMutation({
-    mutationFn: ({ orderId, reason }: { orderId: string; reason: string }) => apiFetch<Order>(`/v1/orders/${orderId}/admin/refund`, { method: "POST", body: JSON.stringify({ reason }) }),
-    onSuccess: refreshFinancialOrders,
-  });
 
   if (!isAdmin) {
     return (
@@ -138,18 +134,16 @@ export function AdminPage() {
           <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} />
           <AdminOrderAction
             order={order}
-            busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending || refundOrder.isPending}
+            busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending}
             onFulfillment={(status) => updateFulfillment.mutate({ orderId: order.id, status })}
             onCreateLogistics={() => createLogistics.mutate(order.id)}
             onShipment={(status) => advanceShipment.mutate({ orderId: order.id, status })}
-            onRefund={(reason) => refundOrder.mutate({ orderId: order.id, reason })}
           />
+          <AdminCancelOrder order={order} />
           <AdminOrderCancellationReview order={order} />
           <AdminInvoiceAdjustment order={order} />
           <AdminCashPayment order={order} />
-          {(!order.payment_method || order.payment_method === "online") && <AdminStatusQuery orderId={order.id} kind="payment" disabled={refundOrder.isPending} />}
-          {refundOrder.variables?.orderId === order.id && refundOrder.isSuccess && <p className="form-success" role="status">退款狀態：{adminPaymentStatusLabel(refundOrder.data.payment_status)}</p>}
-          {refundOrder.variables?.orderId === order.id && refundOrder.isError && <p className="form-error" role="alert">{refundOrder.error.message}</p>}
+          {(!order.payment_method || order.payment_method === "online") && <AdminStatusQuery orderId={order.id} kind="payment" />}
         </article>
       ))}
     </div>
@@ -195,12 +189,13 @@ export function AdminPage() {
   </section>;
 
   const content = section === "orders" ? orderContent
+    : section === "summary" ? <AdminOrderSummary />
     : section === "issues" ? <section className="admin-issues-panel"><SectionHeading eyebrow="SYSTEM STATUS / 系統狀態" title="問題回報" /><AdminFailurePanel /></section>
       : section === "suppliers" ? supplierContent : locationContent;
 
   return <>
     <section className="admin-intro admin-operations-intro">
-      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
+      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "summary" ? "訂單匯總" : section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
       <div className="admin-intro-meta"><span>管理者</span><strong>{user.display_name}</strong></div>
     </section>
     <AdminNav />
@@ -215,21 +210,16 @@ function AdminOrderAction({
   onFulfillment,
   onCreateLogistics,
   onShipment,
-  onRefund,
 }: {
   order: Order;
   busy: boolean;
   onFulfillment: (status: string) => void;
   onCreateLogistics: () => void;
   onShipment: (status: string) => void;
-  onRefund: (reason: string) => void;
 }) {
-  const [refundOpen, setRefundOpen] = useState(false);
-  const [refundReason, setRefundReason] = useState("依買家申請退款");
-  const refundControl = order.available_actions.includes("refund") && (refundOpen ? <div className="operation-refund"><AdminReasonChoices label="退款原因" value={refundReason} onChange={setRefundReason} disabled={busy} choices={[{ label: "買家申請", value: "依買家申請退款" }, { label: "商品無法供應", value: "商品無法供應，申請退款" }, { label: "重複付款", value: "重複付款，申請退款" }]} /><button type="button" disabled={busy || !refundReason.trim()} onClick={() => onRefund(refundReason)}>核准退款 {formatMoney(order.amount_total)}</button><button type="button" onClick={() => setRefundOpen(false)}>取消</button></div> : <button type="button" disabled={busy} onClick={() => setRefundOpen(true)}>審核退款</button>);
   const invoiceControl = <AdminStatusQuery orderId={order.id} kind="invoice" disabled={busy} />;
   if (order.sales_channel === "meal_preorder") {
-    return <div className="operation-actions"><Link className="button button-quiet" to="/admin/meals" search={{ tab: "orders", q: order.order_number }}>便當取餐與退單審核</Link>{invoiceControl}</div>;
+    return <div className="operation-actions"><Link className="button button-quiet" to="/admin/meals" search={{ tab: "orders", q: order.order_number }}>便當取餐與退單</Link>{invoiceControl}</div>;
   }
   if (order.payment_status !== "paid") {
     return (
@@ -258,7 +248,6 @@ function AdminOrderAction({
   return (
     <div className="operation-actions">
       {fulfillmentControl}
-      {refundControl}
       {invoiceControl}
     </div>
   );

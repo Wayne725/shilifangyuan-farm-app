@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 import app.meal_kitchen as kitchen
 import app.routers.meals as meals
-from app.models import AdminAudit, FulfillmentState, MealEventOffering, Order, OrderFulfillment, Refund
+from app.models import AdminAudit, FulfillmentState, MealCancellationRequest, MealEventOffering, Order, OrderFulfillment, Refund
 from app.routers.meal_kitchen import meal_kitchen_router
 from app.routers.meals import meals_router
 from pgtests.test_transaction_concurrency import postgres_sessions
@@ -29,10 +29,10 @@ async def _change(factory, c):
 
 async def _request(factory, c):
     async with factory() as session:
-        async with api_test_context(session, [meals_router], settings=make_test_settings()) as client:
-            response = await client.post(f"/v1/meal-orders/{c.order.id}/cancellation-requests", json={"reason": "測試退單"}, headers=auth_headers(c.buyer))
-            assert response.status_code == 201
-            return response.json()
+        request = MealCancellationRequest(order_id=c.order.id, requested_by_id=c.buyer.id, reason="歷史退單申請")
+        session.add(request)
+        await session.commit()
+        return {"id": request.id}
 
 
 async def _approve(factory, c, request_id):

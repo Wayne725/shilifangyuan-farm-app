@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import type { InvoicePreference } from "../lib/commerce";
 
 
@@ -12,8 +14,29 @@ function invoiceEmailIsValid(value: InvoicePreference): boolean {
   return emailPattern.test(email) && email.length <= invoiceEmailLimit(value);
 }
 
-export function defaultInvoicePreference(email = ""): InvoicePreference {
-  return { buyerType: "personal", buyerEmail: email, carrierType: "cloud" };
+export function defaultInvoicePreference(email = "", barcode?: string | null): InvoicePreference {
+  return {
+    buyerType: "personal",
+    buyerEmail: email,
+    carrierType: barcode ? "mobile_barcode" : "cloud",
+    ...(barcode ? { carrierValue: barcode } : {}),
+  };
+}
+
+export function useInvoicePreference(email: string) {
+  const { user } = useAuth();
+  const [ownerId, setOwnerId] = useState(user?.id);
+  const [preference, setPreference] = useState(
+    () => defaultInvoicePreference(email, user?.saved_mobile_barcode),
+  );
+  if (ownerId !== user?.id) {
+    setOwnerId(user?.id);
+    setPreference(defaultInvoicePreference(email, user?.saved_mobile_barcode));
+  }
+  useEffect(() => {
+    if (email) setPreference((current) => current.buyerEmail ? current : { ...current, buyerEmail: email });
+  }, [email]);
+  return [preference, setPreference] as const;
 }
 
 export function isTaiwanTaxId(value: string): boolean {
@@ -54,6 +77,20 @@ function InvoiceCarrierFields({
   onChange: (value: InvoicePreference) => void;
   sectionNumber: string;
 }) {
+  const { user, saveMobileBarcode } = useAuth();
+  const [saveState, setSaveState] = useState({ barcode: "", status: "", error: "" });
+  const saveSequence = useRef(0);
+  const barcode = (value.carrierValue || "").trim().toUpperCase();
+  const saveBarcode = (next: string | null) => {
+    if (!user || (next !== null && !/^\/[0-9A-Z+\-.]{7}$/.test(next))) return;
+    const sequence = ++saveSequence.current;
+    setSaveState({ barcode: next || "", status: "saving", error: "" });
+    void saveMobileBarcode(next).then(() => {
+      if (sequence === saveSequence.current) setSaveState({ barcode: next || "", status: "saved", error: "" });
+    }).catch((reason: unknown) => {
+      if (sequence === saveSequence.current) setSaveState({ barcode: next || "", status: "error", error: reason instanceof Error ? reason.message : "載具儲存失敗，請重試" });
+    });
+  };
   const cloudTitle = value.buyerType === "personal"
     ? "Email 會員載具"
     : "Email 雲端交付";
@@ -64,7 +101,7 @@ function InvoiceCarrierFields({
         <input
           checked={value.carrierType === "cloud"}
           name={`invoice-carrier-${sectionNumber}`}
-          onChange={() => onChange({ ...value, carrierType: "cloud", carrierValue: undefined })}
+          onChange={() => onChange({ ...value, carrierType: "cloud" })}
           type="radio"
         />
         <span><strong>{cloudTitle}</strong></span>
@@ -73,23 +110,33 @@ function InvoiceCarrierFields({
         <input
           checked={value.carrierType === "mobile_barcode"}
           name={`invoice-carrier-${sectionNumber}`}
-          onChange={() => onChange({ ...value, carrierType: "mobile_barcode", carrierValue: "" })}
+          onChange={() => onChange({ ...value, carrierType: "mobile_barcode", carrierValue: value.carrierValue || user?.saved_mobile_barcode || "" })}
           type="radio"
         />
         <span><strong>手機條碼載具</strong></span>
       </label>
-      {value.carrierType === "mobile_barcode" && (
+      {value.carrierType === "mobile_barcode" && <>
         <label className="invoice-barcode-field">
           手機條碼
           <input
             autoCapitalize="characters"
             maxLength={8}
-            onChange={(event) => onChange({ ...value, carrierValue: event.target.value.toUpperCase() })}
+            aria-invalid={saveState.barcode === barcode && saveState.status === "error"}
+            aria-describedby={saveState.barcode === barcode && saveState.status === "error" ? `invoice-barcode-error-${sectionNumber}` : undefined}
+            onChange={(event) => {
+              const next = event.target.value.trim().toUpperCase();
+              onChange({ ...value, carrierValue: next });
+              saveBarcode(next);
+            }}
             placeholder="/AB12+-."
             value={value.carrierValue || ""}
           />
         </label>
-      )}
+        {saveState.barcode === barcode && saveState.status === "saving" && <p role="status">正在儲存載具…</p>}
+        {saveState.barcode === barcode && saveState.status === "saved" && <p role="status">{barcode ? "載具已儲存" : "已移除儲存載具"}</p>}
+        {saveState.barcode === barcode && saveState.status === "error" && <div role="alert"><p id={`invoice-barcode-error-${sectionNumber}`} className="invoice-field-error">{saveState.error}</p><button className="text-link" type="button" onClick={() => saveBarcode(barcode || null)}>重試儲存載具</button></div>}
+        {user?.saved_mobile_barcode && <button className="text-link" type="button" disabled={saveState.status === "saving"} onClick={() => { onChange({ ...value, carrierValue: "" }); saveBarcode(null); }}>移除已儲存載具</button>}
+      </>}
     </div>
   );
 }
@@ -144,6 +191,7 @@ export function InvoicePreferenceFields({
   sectionNumber?: string;
   showHeading?: boolean;
 }) {
+  const { user } = useAuth();
   const emailLimit = invoiceEmailLimit(value);
   const emailIsValid = invoiceEmailIsValid(value);
   const emailErrorId = `invoice-email-error-${sectionNumber}`;
@@ -168,7 +216,8 @@ export function InvoicePreferenceFields({
           onClick={() => onChange({
             buyerType: "personal",
             buyerEmail: value.buyerEmail,
-            carrierType: "cloud",
+            carrierType: value.carrierType,
+            carrierValue: value.carrierValue,
           })}
           role="radio"
           type="button"
@@ -183,7 +232,8 @@ export function InvoicePreferenceFields({
             buyerTaxId: "",
             buyerName: "",
             buyerEmail: value.buyerEmail,
-            carrierType: "cloud",
+            carrierType: value.carrierType,
+            carrierValue: value.carrierValue,
           })}
           role="radio"
           type="button"
@@ -236,6 +286,7 @@ export function InvoicePreferenceFields({
         </div>
 
         <InvoiceCarrierFields
+          key={user?.id || "guest"}
           onChange={onChange}
           sectionNumber={sectionNumber}
           value={value}

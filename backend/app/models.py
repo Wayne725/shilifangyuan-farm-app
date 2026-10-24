@@ -358,6 +358,7 @@ class User(Base):
     )
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, unique=True, index=True)
     notification_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    saved_mobile_barcode: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
     token_version: Mapped[int] = mapped_column(Integer, default=0)
@@ -2063,6 +2064,9 @@ class OrderFulfillment(Base):
     pickup_location: Mapped[Optional[str]] = mapped_column(
         String(240), nullable=True
     )
+    pickup_address: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    pickup_instructions: Mapped[str] = mapped_column(Text, default="", server_default="")
+    needs_utensils: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     pickup_starts_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -36,6 +36,7 @@ from .integrations.notifications import (
 from .integrations.payment_service import (
     PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
+    lock_order_payment_subject,
     payment_adapter_from_settings,
     remaining_subject_payment_status,
     refund_adapter_from_settings,
@@ -1162,6 +1163,40 @@ async def _dispatch_outbox_event(
         await _process_domain_event(session, event)
 
 
+async def _load_locked_refund(session: AsyncSession, refund_filter) -> Refund:
+    identity = (await session.execute(
+        select(Refund.id, Refund.order_id, Refund.membership_charge_id, Refund.payment_attempt_id)
+        .where(refund_filter).order_by(Refund.created_at.desc()).limit(1)
+    )).first()
+    if identity is None:
+        raise ValueError("找不到退款資料")
+    # Order refunds follow callbacks: parent → order → attempt → refund.
+    # Membership refunds retain their existing membership-specific lock flow.
+    if identity.order_id is not None:
+        await lock_order_payment_subject(session, identity.order_id)
+        if identity.payment_attempt_id is not None:
+            await session.execute(select(PaymentAttempt.id).where(
+                PaymentAttempt.id == identity.payment_attempt_id
+            ).with_for_update())
+    elif identity.membership_charge_id is None:
+        raise ValueError("退款缺少訂單或入社款項")
+    refund = await session.scalar(
+        select(Refund).where(Refund.id == identity.id)
+        .options(
+            selectinload(Refund.order).selectinload(Order.reservations),
+            selectinload(Refund.order).selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),
+            selectinload(Refund.order).selectinload(Order.user),
+            selectinload(Refund.order).selectinload(Order.invoice),
+            selectinload(Refund.payment_attempt),
+            selectinload(Refund.membership_charge),
+        )
+        .execution_options(populate_existing=True).with_for_update()
+    )
+    if refund is None:
+        raise ValueError("找不到退款資料")
+    return refund
+
+
 async def _process_refund_event(
     session: AsyncSession,
     event: OutboxEvent,
@@ -1178,21 +1213,7 @@ async def _process_refund_event(
         )
     else:
         refund_filter = Refund.id == event.aggregate_id
-    refund = await session.scalar(
-        select(Refund)
-        .where(refund_filter)
-        .order_by(Refund.created_at.desc())
-        .options(
-            selectinload(Refund.order).selectinload(Order.reservations),
-            selectinload(Refund.order).selectinload(Order.user),
-            selectinload(Refund.order).selectinload(Order.invoice),
-            selectinload(Refund.payment_attempt),
-            selectinload(Refund.membership_charge),
-        )
-        .with_for_update()
-    )
-    if refund is None:
-        raise ValueError("找不到退款資料")
+    refund = await _load_locked_refund(session, refund_filter)
     if refund.status == RefundStatus.COMPLETED:
         return
     if refund.status != RefundStatus.PENDING:
@@ -1201,16 +1222,10 @@ async def _process_refund_event(
     charge = refund.membership_charge
     if order is None and charge is None:
         raise ValueError("退款缺少訂單或入社款項")
-    if order is not None:
-        await session.execute(
-            select(Order.id).where(Order.id == order.id).with_for_update()
-        )
-    else:
-        await session.execute(
-            select(MembershipCharge.id)
-            .where(MembershipCharge.id == charge.id)
-            .with_for_update()
-        )
+    if order is None:
+        await session.execute(select(MembershipCharge.id).where(
+            MembershipCharge.id == charge.id
+        ).with_for_update())
     subject_amount = order.amount_total if order is not None else charge.amount
     if refund.amount != subject_amount:
         raise ValueError("雷門規格只允許全額退款")
@@ -1343,21 +1358,7 @@ async def _process_refund_event(
                 "platform_refund_state": "submission_started",
             }
             await session.commit()
-            refund = await session.scalar(
-                select(Refund)
-                .where(Refund.id == refund.id)
-                .options(
-                    selectinload(Refund.order).selectinload(Order.reservations),
-                    selectinload(Refund.order).selectinload(Order.user),
-                    selectinload(Refund.order).selectinload(Order.invoice),
-                    selectinload(Refund.payment_attempt),
-                    selectinload(Refund.membership_charge),
-                )
-                .execution_options(populate_existing=True)
-                .with_for_update()
-            )
-            if refund is None:
-                raise ValueError("找不到退款資料")
+            refund = await _load_locked_refund(session, Refund.id == refund.id)
             if refund.status == RefundStatus.COMPLETED:
                 return
             if refund.status != RefundStatus.PENDING:
@@ -1365,36 +1366,16 @@ async def _process_refund_event(
             order = refund.order
             charge = refund.membership_charge
             attempt = refund.payment_attempt
-            if order is not None:
-                order = await session.scalar(
-                    select(Order)
-                    .where(Order.id == order.id)
-                    .options(
-                        selectinload(Order.reservations),
-                        selectinload(Order.user),
-                        selectinload(Order.invoice),
-                    )
-                    .execution_options(populate_existing=True)
-                    .with_for_update()
-                )
-                if order is None:
-                    raise ValueError("找不到退款訂單")
-            elif charge is not None:
-                charge = await session.scalar(
-                    select(MembershipCharge)
-                    .where(MembershipCharge.id == charge.id)
-                    .execution_options(populate_existing=True)
-                    .with_for_update()
-                )
+            if order is None and charge is not None:
+                charge = await session.scalar(select(MembershipCharge).where(
+                    MembershipCharge.id == charge.id
+                ).execution_options(populate_existing=True).with_for_update())
                 if charge is None:
                     raise ValueError("找不到退款入社款項")
-            if attempt is not None:
-                attempt = await session.scalar(
-                    select(PaymentAttempt)
-                    .where(PaymentAttempt.id == attempt.id)
-                    .execution_options(populate_existing=True)
-                    .with_for_update()
-                )
+                if attempt is not None:
+                    attempt = await session.scalar(select(PaymentAttempt).where(
+                        PaymentAttempt.id == attempt.id
+                    ).execution_options(populate_existing=True).with_for_update())
             if attempt is None or not attempt.provider_trade_no:
                 raise ValueError("找不到已付款的雷門交易")
             result = await adapter.refund(

@@ -26,6 +26,10 @@
 
 .meal-shop-intro { padding-block: 24px; }
 .market-tabs > .tab-list { padding-top: 0; }
+.market-navigation { overflow-x: auto; }
+.market-type-tabs { display: flex; flex: 0 0 auto; }
+.market-navigation :is([role="tab"], a) { flex: 0 0 auto; white-space: nowrap; }
+.market-navigation :is([role="tab"], a):focus-visible { outline-offset: -3px; }
 .meal-booking-content { padding-top: 24px; }
 .meal-booking-content > .section-heading { margin-bottom: 16px; }
 .meal-booking-content > .section-heading h2 { font-size: clamp(1.5rem, 3vw, 2rem); }
