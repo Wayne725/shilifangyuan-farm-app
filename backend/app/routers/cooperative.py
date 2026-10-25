@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 from collections.abc import Sequence
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,10 +11,13 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
+from ..domain import aware
 from ..models import (
     AdminAudit,
     BadgeDefinition,
@@ -22,6 +25,7 @@ from ..models import (
     GroupCampaign,
     GroupDecisionStatus,
     Meeting,
+    MeetingCategory,
     MeetingAttendance,
     MeetingResolution,
     MeetingType,
@@ -51,6 +55,11 @@ from ..models import (
     utcnow,
 )
 from ..schemas import (
+    MeetingCategoryCreate,
+    MeetingCategoryRead,
+    MeetingCategoryUpdate,
+    MeetingCreate,
+    MeetingRead,
     MemberBadgeRead,
     PointSourceOrderRead,
     PointSummaryRead,
@@ -645,27 +654,107 @@ async def update_wish_status(
     return _wish_read(wish, count)
 
 
-class MeetingCreate(BaseModel):
-    meeting_type: MeetingType
-    title: str = Field(min_length=1, max_length=160)
-    agenda: list[dict[str, Any]] = Field(default_factory=list)
-    starts_at: datetime
-    location: str = Field(default="", max_length=240)
-
-
-@cooperative_router.get("/v1/meetings")
-async def list_meetings(
+@cooperative_router.get("/v1/meeting-categories", response_model=list[MeetingCategoryRead])
+async def list_meeting_categories(
     _user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
-) -> list[dict[str, Any]]:
-    meetings = (await session.scalars(select(Meeting).order_by(Meeting.starts_at.desc()))).all()
+) -> list[MeetingCategory]:
+    return list(await session.scalars(select(MeetingCategory).where(MeetingCategory.is_active.is_(True))
+        .order_by(MeetingCategory.sort_order, MeetingCategory.name, MeetingCategory.id)))
+
+
+@cooperative_router.get("/v1/admin/meeting-categories", response_model=list[MeetingCategoryRead])
+async def list_admin_meeting_categories(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[MeetingCategory]:
+    return list(await session.scalars(select(MeetingCategory)
+        .order_by(MeetingCategory.sort_order, MeetingCategory.name, MeetingCategory.id)))
+
+
+@cooperative_router.post("/v1/admin/meeting-categories", response_model=MeetingCategoryRead, status_code=status.HTTP_201_CREATED)
+async def create_meeting_category(
+    body: MeetingCategoryCreate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MeetingCategory:
+    category = MeetingCategory(**body.model_dump())
+    session.add(category)
+    try:
+        await session.flush()
+        session.add(AdminAudit(actor_id=admin.id, action="meeting_category.create", aggregate_type="meeting_category",
+            aggregate_id=category.id, data=body.model_dump()))
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="已有同名會議類別") from exc
+    return category
+
+
+@cooperative_router.patch("/v1/admin/meeting-categories/{category_id}", response_model=MeetingCategoryRead)
+async def update_meeting_category(
+    category_id: str,
+    body: MeetingCategoryUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MeetingCategory:
+    category = await session.scalar(select(MeetingCategory).where(MeetingCategory.id == category_id)
+        .execution_options(populate_existing=True).with_for_update())
+    if category is None:
+        raise HTTPException(status_code=404, detail="找不到會議類別")
+    if aware(category.updated_at) != body.expected_updated_at:
+        raise HTTPException(status_code=409, detail="類別資料已更新，請重新載入後核對")
+    changes = {key: value for key, value in body.model_dump(exclude_unset=True, exclude={"expected_updated_at"}).items()
+               if getattr(category, key) != value}
+    if not changes:
+        return category
+    previous = {key: getattr(category, key) for key in changes}
+    for key, value in changes.items():
+        setattr(category, key, value)
+    category.updated_at = max(utcnow(), aware(category.updated_at) + timedelta(microseconds=1))
+    session.add(AdminAudit(actor_id=admin.id, action="meeting_category.update", aggregate_type="meeting_category",
+        aggregate_id=category.id, data={"before": previous, "after": changes}))
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="已有同名會議類別") from exc
+    return category
+
+
+def _meeting_fields(meeting: Meeting) -> dict[str, Any]:
+    return {"id": meeting.id, "category_id": meeting.category_id, "category_name": meeting.category.name,
+        "meeting_type": meeting.meeting_type, "title": meeting.title, "agenda": meeting.agenda,
+        "starts_at": aware(meeting.starts_at), "location": meeting.location}
+
+
+async def _meeting_list(session: AsyncSession) -> list[dict[str, Any]]:
+    meetings = (await session.scalars(select(Meeting).options(selectinload(Meeting.category))
+        .order_by(Meeting.starts_at.desc()))).all()
     active_members = int(await session.scalar(select(func.count(Membership.id)).where(Membership.status == MembershipStatus.ACTIVE)) or 0)
     result = []
     for meeting in meetings:
         attended = int(await session.scalar(select(func.count(MeetingAttendance.id)).where(MeetingAttendance.meeting_id == meeting.id, MeetingAttendance.attended.is_(True))) or 0)
         resolutions = (await session.scalars(select(MeetingResolution).where(MeetingResolution.meeting_id == meeting.id).order_by(MeetingResolution.created_at))).all()
-        result.append({"id": meeting.id, "meeting_type": meeting.meeting_type, "title": meeting.title, "agenda": meeting.agenda, "starts_at": meeting.starts_at, "location": meeting.location, "attended_count": attended, "eligible_member_count": active_members, "attendance_rate": attended / active_members if active_members else 0, "resolutions": [{"id": resolution.id, "title": resolution.title, "resolution_text": resolution.resolution_text, "member_proposal_id": resolution.member_proposal_id, "created_at": resolution.created_at} for resolution in resolutions]})
+        result.append({**_meeting_fields(meeting), "attended_count": attended, "eligible_member_count": active_members,
+            "attendance_rate": attended / active_members if active_members else 0, "resolutions": resolutions})
     return result
+
+
+@cooperative_router.get("/v1/meetings", response_model=list[MeetingRead])
+async def list_meetings(
+    _user: User = Depends(require_active_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    return await _meeting_list(session)
+
+
+@cooperative_router.get("/v1/admin/meetings", response_model=list[MeetingRead])
+async def list_admin_meetings(
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    return await _meeting_list(session)
 
 
 @cooperative_router.post("/v1/admin/meetings", status_code=status.HTTP_201_CREATED)
@@ -674,20 +763,25 @@ async def create_meeting(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    meeting = Meeting(created_by_id=admin.id, **body.model_dump())
+    category_filter = (MeetingCategory.id == body.category_id if body.category_id is not None
+                       else MeetingCategory.legacy_type == body.meeting_type.value)
+    category = await session.scalar(select(MeetingCategory).where(category_filter)
+        .execution_options(populate_existing=True).with_for_update(read=True))
+    if category is None:
+        raise HTTPException(status_code=404, detail="找不到會議類別")
+    if not category.is_active:
+        raise HTTPException(status_code=409, detail="此會議類別已停用，請重新選擇")
+    legacy_type = MeetingType(category.legacy_type or MeetingType.AFFAIRS.value)
+    if body.meeting_type is not None and body.meeting_type != legacy_type:
+        raise HTTPException(status_code=422, detail="會議類別與舊版會議類型不一致")
+    meeting = Meeting(created_by_id=admin.id, category=category, meeting_type=legacy_type,
+        **body.model_dump(exclude={"category_id", "meeting_type"}))
     session.add(meeting)
     await session.flush()
-    session.add(
-        AdminAudit(
-            actor_id=admin.id,
-            action="meeting.create",
-            aggregate_type="meeting",
-            aggregate_id=meeting.id,
-            data={"title": meeting.title},
-        )
-    )
+    session.add(AdminAudit(actor_id=admin.id, action="meeting.create", aggregate_type="meeting",
+        aggregate_id=meeting.id, data={"title": meeting.title, "category_id": category.id, "category_name": category.name}))
     await session.commit()
-    return {"id": meeting.id, **body.model_dump()}
+    return _meeting_fields(meeting)
 
 
 class AttendanceUpsert(BaseModel):

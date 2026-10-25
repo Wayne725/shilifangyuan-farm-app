@@ -14,7 +14,7 @@ async function fixture(t, width, invalid = false) {
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block' });
   const state = { writes: [], reads: [], unknown: [], errors: [], conflict: false };
-  const emptyLists = ['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/wishes', '/v1/meetings', '/v1/admin/members', '/v1/admin/member-roster', '/v1/notifications'];
+  const emptyLists = ['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/admin/members', '/v1/admin/member-roster', '/v1/notifications'];
   await context.route('**/*', (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -72,7 +72,7 @@ for (const width of [1440, 390]) {
     const nav = page.getByRole('navigation', { name: '訂單營運子頁面' });
     const active = nav.getByRole('link', { name: '訂單、付款與發票', exact: true });
     await active.waitFor();
-    assert.match(await page.getByRole('navigation', { name: '管理工作台分類' }).getByRole('link', { name: '訂單營運', exact: true }).getAttribute('class'), /active/);
+    assert.match(await page.getByRole('navigation', { name: '管理工作台分類' }).getByRole('link', { name: '訂餐營運', exact: true }).getAttribute('class'), /active/);
     const style = await active.evaluate((element) => {
       const style = getComputedStyle(element);
       return { background: style.backgroundColor, border: style.borderBottomColor, font: style.fontSize };

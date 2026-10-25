@@ -1,5 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { CalendarBlank, CheckCircle, HandHeart, IdentificationCard, NotePencil, Plus, UsersThree } from "@phosphor-icons/react";
+import { CalendarBlank, CheckCircle, HandHeart, IdentificationCard, NotePencil, UsersThree } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link } from "@tanstack/react-router";
@@ -7,6 +7,8 @@ import { Link } from "@tanstack/react-router";
 import { DataState, LoadingLines } from "../components/Shared";
 import { SocialActionButton } from "../components/SocialActionButton";
 import { AdminNav } from "../components/AdminNav";
+import { MeetingFilters, MeetingSetup } from "../components/MeetingTools";
+import { filterMeetings, meetingAccessDenied, meetingCategoryName, meetingCategoryOptions, retryMeetingRead } from "../lib/meetings";
 import { RosterCsvImport } from "../components/RosterCsvImport";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, formatDateTime } from "../lib/api";
@@ -54,13 +56,16 @@ export function AdminSocialPage() {
   const [reviewScope, setReviewScope] = useState("pending");
   const [memberSearch, setMemberSearch] = useState("");
   const [memberStatus, setMemberStatus] = useState("");
+  const [meetingCategory, setMeetingCategory] = useState("");
+  const [meetingKeyword, setMeetingKeyword] = useState("");
+  const [meetingAccessRevoked, setMeetingAccessRevoked] = useState(false);
   const queryClient = useQueryClient();
   const [activities, proposals, applications, wishes, meetings, memberships, roster] = useQueries({ queries: [
     { queryKey: ["admin-activities"], queryFn: () => apiFetch<Activity[]>("/v1/admin/activities"), enabled: isAdmin },
     { queryKey: ["admin-member-proposals"], queryFn: () => apiFetch<Proposal[]>("/v1/admin/member-proposals"), enabled: isAdmin },
     { queryKey: ["admin-membership-applications"], queryFn: () => apiFetch<MembershipApplication[]>("/v1/admin/membership-applications"), enabled: isAdmin },
     { queryKey: ["wishes"], queryFn: () => apiFetch<Wish[]>("/v1/wishes"), enabled: isAdmin },
-    { queryKey: ["meetings"], queryFn: () => apiFetch<Meeting[]>("/v1/meetings"), enabled: isAdmin },
+    { queryKey: ["admin-meetings"], queryFn: () => apiFetch<Meeting[]>("/v1/admin/meetings"), enabled: isAdmin, retry: retryMeetingRead },
     { queryKey: ["admin-members"], queryFn: () => apiFetch<AdminMembership[]>("/v1/admin/members"), enabled: isAdmin },
     { queryKey: ["admin-member-roster"], queryFn: () => apiFetch<MemberRosterEntry[]>("/v1/admin/member-roster"), enabled: isAdmin },
   ] });
@@ -80,6 +85,9 @@ export function AdminSocialPage() {
   const visibleApplications = filterReviews(applications.data, item => ["submitted", "needs_supplement"].includes(item.status));
   const visibleTrainees = reviewScope === "done" ? [] : traineeMemberships;
   const visibleMembers = (memberships.data || []).map(item => ({...item, display_name: roster.data?.find(entry => entry.member_number === item.member_number)?.legal_name ?? item.display_name})).filter(item => (!memberStatus || item.status === memberStatus) && `${item.display_name || ""} ${item.member_number || ""} ${item.trainee_number || ""} ${item.user_id}`.toLowerCase().includes(memberSearch.trim().toLowerCase()));
+
+  const visibleMeetings = filterMeetings(meetings.data || [], meetingCategory, meetingKeyword);
+  const refreshMeetings = () => { void queryClient.invalidateQueries({ queryKey: ["admin-meetings"] }); void queryClient.invalidateQueries({ queryKey: ["meetings"] }); };
 
   return (
     <section className="admin-social-page">
@@ -128,10 +136,13 @@ export function AdminSocialPage() {
         </Tabs.Content>
 
         <Tabs.Content className="tab-content" value="meetings">
-          <MeetingCreateForm onDone={() => queryClient.invalidateQueries({ queryKey: ["meetings"] })} />
-          <AdminReviewSection icon={CalendarBlank} title="會議紀錄" count={meetings.data?.length || 0} pending={meetings.isPending} error={meetings.error?.message} empty="目前沒有會議">
-            {meetings.data?.map((meeting) => <MeetingAdminCard key={meeting.id} meeting={meeting} memberships={memberships.data || []} proposals={proposals.data || []} onDone={() => queryClient.invalidateQueries({ queryKey: ["meetings"] })} />)}
+          {meetingAccessRevoked || meetingAccessDenied(meetings.error) ? <DataState kind="error" title="會議管理權限已失效" detail="請重新登入管理員帳號" /> : <>
+          <MeetingSetup key={user?.id} onDone={refreshMeetings} onAccessDenied={() => setMeetingAccessRevoked(true)} />
+          <MeetingFilters categories={meetingCategoryOptions(meetings.data || [])} categoryId={meetingCategory} keyword={meetingKeyword} onCategory={setMeetingCategory} onKeyword={setMeetingKeyword} />
+          <AdminReviewSection icon={CalendarBlank} title="會議紀錄" count={visibleMeetings.length} pending={meetings.isPending} error={meetings.error?.message} empty={meetingCategory || meetingKeyword ? "沒有符合條件的會議" : "目前沒有會議"}>
+            {!meetings.isError && visibleMeetings.map((meeting) => <MeetingAdminCard key={meeting.id} meeting={meeting} memberships={memberships.data || []} proposals={proposals.data || []} onDone={refreshMeetings} />)}
           </AdminReviewSection>
+          </>}
         </Tabs.Content>
 
         <Tabs.Content className="tab-content" value="roster">
@@ -379,7 +390,7 @@ function MeetingAdminCard({ meeting, memberships, proposals, onDone }: { meeting
   const activeMemberships = memberships.filter((membership) => membership.status === "active");
   return (
     <article className="admin-review-card admin-review-card-expandable meeting-admin-card">
-      <div className="review-card-copy"><span className="status-chip">{meeting.meeting_type === "general_assembly" ? "社員大會" : "社務會議"}</span><h3>{meeting.title}</h3><p>{formatDateTime(meeting.starts_at)} · {meeting.location}</p><small>{meeting.resolutions.length} 項決議</small></div>
+      <div className="review-card-copy"><span className="status-chip">{meetingCategoryName(meeting)}</span><h3>{meeting.title}</h3><p>{formatDateTime(meeting.starts_at)} · {meeting.location}</p><small>{meeting.resolutions.length} 項決議</small></div>
       <div className="meeting-admin-summary"><strong>{Math.round(meeting.attendance_rate * 100)}%</strong><small>{meeting.attended_count}/{meeting.eligible_member_count} 人</small><button type="button" onClick={() => setManage((value) => !value)}>{manage ? "收起管理" : "出席與決議"}</button></div>
       {manage && (
         <div className="meeting-admin-tools">
@@ -401,14 +412,6 @@ function MeetingAdminCard({ meeting, memberships, proposals, onDone }: { meeting
       )}
     </article>
   );
-}
-
-function MeetingCreateForm({ onDone }: { onDone: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ meeting_type: "affairs", title: "", agenda: "", starts_at: "", location: "" });
-  const create = useMutation({ mutationFn: () => apiFetch("/v1/admin/meetings", { method: "POST", body: JSON.stringify({ ...form, starts_at: new Date(form.starts_at).toISOString(), agenda: form.agenda.split("\n").map((title) => title.trim()).filter(Boolean).map((title) => ({ title })) }) }), onSuccess: () => { setOpen(false); setForm({ meeting_type: "affairs", title: "", agenda: "", starts_at: "", location: "" }); onDone(); } });
-  function submit(event: FormEvent) { event.preventDefault(); create.mutate(); }
-  return <section className="meeting-create-section"><button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />建立會議</button>{open && <form className="social-form" onSubmit={submit}><div className="form-heading"><div><p className="eyebrow">NEW MEETING / 新增會議</p><h2>建立社員會議</h2></div></div><div className="field-grid two-columns"><label className="field"><span>會議類型</span><select value={form.meeting_type} onChange={(event) => setForm({ ...form, meeting_type: event.target.value })}><option value="affairs">社務會議</option><option value="general_assembly">社員大會</option></select></label><label className="field"><span>會議名稱</span><input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label className="field"><span>開始時間</span><input required type="datetime-local" value={form.starts_at} onChange={(event) => setForm({ ...form, starts_at: event.target.value })} /></label><label className="field"><span>地點</span><input required value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label><label className="field wide"><span>議程（每行一項）</span><textarea rows={5} value={form.agenda} onChange={(event) => setForm({ ...form, agenda: event.target.value })} /></label></div>{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={create.isPending}>建立會議</button></div></form>}</section>;
 }
 
 function activityAdminStatus(status: string) {

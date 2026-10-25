@@ -38,7 +38,7 @@ export function HomePage() {
             <em>成為共同生活。</em>
           </h1>
           <p className="hero-lead">
-            從一袋米、一次預購，到一場社員會議。十里方圓把可靠的消費與真正的共同治理，放進同一個入口。
+            從一袋米、一次預購，到一場會議。十里方圓把可靠的消費與真正的共同治理，放進同一個入口。
           </p>
           <p className="hero-translation">
             From the food we choose to the decisions we share — one place for
