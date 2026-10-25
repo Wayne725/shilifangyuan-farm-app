@@ -774,16 +774,19 @@ export interface MembershipCharge {
   refunded_at?: string | null;
 }
 
+export interface PointTransaction {
+  id: string;
+  amount: number;
+  source_type: string;
+  reference_id?: string | null;
+  note?: string | null;
+  created_at: string;
+  source_order?: { id: string; order_number: string; sales_channel: string } | null;
+}
+
 export interface PointSummary {
   balance: number;
-  transactions: Array<{
-    id: string;
-    amount: number;
-    source_type: string;
-    reference_id?: string | null;
-    note?: string | null;
-    created_at: string;
-  }>;
+  transactions: PointTransaction[];
 }
 
 export interface MemberBadge {

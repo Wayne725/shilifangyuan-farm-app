@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Sequence
 from datetime import date, datetime, time, timezone
 from typing import Any, Literal, Optional
 
@@ -37,6 +38,7 @@ from ..models import (
     PointSourceType,
     PointTransaction,
     Product,
+    Refund,
     SalesChannel,
     SurplusDistribution,
     SurplusLedger,
@@ -47,6 +49,12 @@ from ..models import (
     WishSupport,
     VoteProposal,
     utcnow,
+)
+from ..schemas import (
+    MemberBadgeRead,
+    PointSourceOrderRead,
+    PointSummaryRead,
+    PointTransactionRead,
 )
 
 
@@ -414,25 +422,76 @@ async def _point_account(session: AsyncSession, user_id: str) -> PointAccount:
     return account
 
 
-@cooperative_router.get("/v1/me/points")
+async def _point_source_orders(
+    session: AsyncSession, user_id: str, transactions: Sequence[PointTransaction]
+) -> dict[tuple[PointSourceType, str], PointSourceOrderRead]:
+    purchase_ids = {
+        item.reference_id
+        for item in transactions
+        if item.source_type == PointSourceType.PURCHASE and item.reference_id
+    }
+    refund_ids = {
+        item.reference_id
+        for item in transactions
+        if item.source_type == PointSourceType.REFUND and item.reference_id
+    }
+    sources: dict[tuple[PointSourceType, str], PointSourceOrderRead] = {}
+    if purchase_ids:
+        orders = await session.execute(
+            select(Order.id, Order.order_number, Order.sales_channel).where(
+                Order.id.in_(purchase_ids), Order.user_id == user_id
+            )
+        )
+        for order_id, order_number, sales_channel in orders:
+            sources[(PointSourceType.PURCHASE, order_id)] = PointSourceOrderRead(
+                id=order_id, order_number=order_number, sales_channel=sales_channel
+            )
+    if refund_ids:
+        refunds = await session.execute(
+            select(Refund.id, Order.id, Order.order_number, Order.sales_channel)
+            .join(Order, Order.id == Refund.order_id)
+            .where(Refund.id.in_(refund_ids), Order.user_id == user_id)
+        )
+        for refund_id, order_id, order_number, sales_channel in refunds:
+            sources[(PointSourceType.REFUND, refund_id)] = PointSourceOrderRead(
+                id=order_id, order_number=order_number, sales_channel=sales_channel
+            )
+    return sources
+
+
+@cooperative_router.get("/v1/me/points", response_model=PointSummaryRead)
 async def my_points(
     user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
-) -> dict[str, Any]:
+) -> PointSummaryRead:
     account = await _point_account(session, user.id)
     transactions = (
         await session.scalars(
-            select(PointTransaction).where(PointTransaction.account_id == account.id).order_by(PointTransaction.created_at.desc())
+            select(PointTransaction)
+            .where(PointTransaction.account_id == account.id)
+            .order_by(PointTransaction.created_at.desc())
         )
     ).all()
+    sources = await _point_source_orders(session, user.id, transactions)
     await session.commit()
-    return {
-        "balance": sum(item.amount for item in transactions),
-        "transactions": [{"id": item.id, "amount": item.amount, "source_type": item.source_type, "reference_id": item.reference_id, "note": item.note, "created_at": item.created_at} for item in transactions],
-    }
+    return PointSummaryRead(
+        balance=sum(item.amount for item in transactions),
+        transactions=[
+            PointTransactionRead(
+                id=item.id,
+                amount=item.amount,
+                source_type=item.source_type,
+                reference_id=item.reference_id,
+                note=item.note,
+                created_at=item.created_at,
+                source_order=sources.get((item.source_type, item.reference_id)),
+            )
+            for item in transactions
+        ],
+    )
 
 
-@cooperative_router.get("/v1/me/badges")
+@cooperative_router.get("/v1/me/badges", response_model=list[MemberBadgeRead])
 async def my_badges(
     user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),

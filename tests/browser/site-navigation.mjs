@@ -31,7 +31,7 @@ async function fixture(t, width, sample) {
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: sample.confirmedMembership || (sample.social ? 'member' : user?.membership_type || 'nonmember'), membership: { status: 'active' } } });
     if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/meal-orders', '/v1/activities', '/v1/membership/charges', '/v1/notifications', '/v1/me/badges', '/v1/me/surplus-distributions'].includes(path)) return route.fulfill({ json: [] });
-    if (path === '/v1/me/points') return route.fulfill({ json: { balance: 0 } });
+    if (path === '/v1/me/points') return route.fulfill({ json: { balance: 0, transactions: [] } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: false, identity_verified: false, message: '' } });
     state.unknown.push(`${req.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated navigation route' } });

@@ -41,6 +41,7 @@ from .models import (
     OrderKind,
     PaymentStatus,
     PaymentMethod,
+    PointSourceType,
     ProductCategory,
     ProposalStatus,
     ProposalTargetType,
@@ -1016,6 +1017,44 @@ class MembershipFeeScheduleInput(BaseModel):
         if self.effective_to and self.effective_to < self.effective_from:
             raise ValueError("費率結束日不可早於生效日")
         return self
+
+
+class PointSourceOrderRead(ApiModel):
+    id: str
+    order_number: str
+    sales_channel: SalesChannel
+
+
+class PointTransactionRead(ApiModel):
+    id: str
+    amount: int
+    source_type: PointSourceType
+    reference_id: Optional[str]
+    note: str
+    created_at: datetime
+    source_order: Optional[PointSourceOrderRead] = None
+
+    @field_validator("created_at")
+    @classmethod
+    def timestamp_as_utc(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class PointSummaryRead(ApiModel):
+    balance: int
+    transactions: List[PointTransactionRead]
+
+
+class MemberBadgeRead(ApiModel):
+    key: str
+    name: str
+    description: str
+    granted_at: datetime
+
+    @field_validator("granted_at")
+    @classmethod
+    def timestamp_as_utc(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class MemberDirectoryUpdate(BaseModel):
