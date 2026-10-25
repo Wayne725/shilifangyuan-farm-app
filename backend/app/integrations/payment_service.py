@@ -775,7 +775,7 @@ async def create_payment_attempt(
             )
     elif order.order_kind == OrderKind.GROUP:
         if order.group_campaign_id is None:
-            raise PaymentApplicationError("團購訂單缺少團購資料")
+            raise PaymentApplicationError("共同購買訂單缺少共同購買資料")
         campaign = await session.scalar(
             select(GroupCampaign)
             .where(GroupCampaign.id == order.group_campaign_id)
@@ -783,7 +783,7 @@ async def create_payment_attempt(
             .with_for_update()
         )
         if campaign is None:
-            raise PaymentApplicationError("找不到團購")
+            raise PaymentApplicationError("找不到共同購買")
         if campaign.intake_status != GroupIntakeStatus.OPEN:
             raise PaymentApplicationError("此團目前未開放付款")
         if campaign.decision_status not in {
@@ -792,12 +792,12 @@ async def create_payment_attempt(
         }:
             raise PaymentApplicationError("此團目前無法付款")
         if current >= _aware(campaign.deadline):
-            raise PaymentApplicationError("團購已截止")
+            raise PaymentApplicationError("共同購買已截止")
         quantity = _group_quantity(order)
         if campaign.paid_quantity + campaign.reserved_quantity + quantity > (
             campaign.supply_cap
         ):
-            raise PaymentApplicationError("團購剩餘名額不足")
+            raise PaymentApplicationError("共同購買剩餘名額不足")
         campaign.reserved_quantity += quantity
         reservation = InventoryReservation(
             order=order,
@@ -1488,7 +1488,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 await self._mark_late_refund(
                     order,
                     attempt,
-                    "此筆付款未能保留團購名額",
+                    "此筆付款未能保留共同購買名額",
                     paid_at=payment_time,
                 )
                 await self._publish_payment_notification(
@@ -1522,7 +1522,7 @@ class SQLAlchemyPaymentCallbackRepository:
                         NotificationCommand(
                             user_id=admin.id,
                             event_type="group_threshold_reached",
-                            title="團購已達付款門檻",
+                            title="共同購買已達付款門檻",
                             body="「{}」已達成團門檻，請在期限內確認。".format(
                                 campaign.title
                             ),
@@ -1912,7 +1912,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 .with_for_update()
             )
             if campaign is None:
-                raise PaymentApplicationError("找不到團購資料")
+                raise PaymentApplicationError("找不到共同購買資料")
             remove_paid_quantity(campaign, group_release_quantity, current)
 
     async def _apply_provider_refund_failure(

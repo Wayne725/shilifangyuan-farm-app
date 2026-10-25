@@ -18,7 +18,7 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone }: { cam
     mutationFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaign.id}`, { method: "PATCH", body: JSON.stringify(changes) }),
     onSuccess: () => { setOpen(false); setSaved(true); onDone(); },
   });
-  return <section className="admin-create-block campaign-quantity-settings" aria-label="團購數量設定">
+  return <section className="admin-create-block campaign-quantity-settings" aria-label="共同購買數量設定">
     <dl className="campaign-quantity-summary">
       <div><dt>每人限購</dt><dd>{campaign.per_user_cap} {unit}</dd></div>
       <div><dt>成團所需總數量</dt><dd>{campaign.min_paid_quantity} {unit}</dd></div>
@@ -27,9 +27,9 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone }: { cam
     <button className="button button-system" type="button" disabled={locked || closed || update.isPending} onClick={() => { setDraft(quantities(campaign)); setOriginal(quantities(campaign)); setOpen((value) => !value); setSaved(false); update.reset(); }}>編輯數量設定</button>
     {locked && <p className="form-error">已有付款，限購與成團數量已鎖定。</p>}
     {!locked && closed && <p className="form-error">此團已結束，無法修改數量設定。</p>}
-    {saved && <p className="form-success" role="status">團購數量設定已儲存</p>}
-    {open && !locked && !closed && <form className="social-form admin-master-form" aria-label="編輯團購數量" onSubmit={(event) => { event.preventDefault(); if (!error && Object.keys(changes).length) update.mutate(); }}>
-      <div className="form-heading"><div><p className="eyebrow">CAMPAIGN QUANTITIES / 數量設定</p><h3>編輯團購數量</h3></div></div>
+    {saved && <p className="form-success" role="status">共同購買數量設定已儲存</p>}
+    {open && !locked && !closed && <form className="social-form admin-master-form" aria-label="編輯共同購買數量" onSubmit={(event) => { event.preventDefault(); if (!error && Object.keys(changes).length) update.mutate(); }}>
+      <div className="form-heading"><div><p className="eyebrow">CAMPAIGN QUANTITIES / 數量設定</p><h3>編輯共同購買數量</h3></div></div>
       <div className="field-grid three-columns">
         {([
           ["per_user_cap", "每人限購數量"],

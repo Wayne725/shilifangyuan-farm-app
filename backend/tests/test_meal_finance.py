@@ -213,6 +213,9 @@ async def test_all_channels_include_regular_and_group_sales_refunds_and_csv(fina
     csv_result = await c.client.get("/v1/admin/finance/meal-sales.csv", params={"starts_on": "2030-01-02", "ends_on": "2030-01-02", "sales_channel": "all", "order_category": "general", "offset": 1, "limit": 1}, headers=auth_headers(c.admin))
     csv_rows = list(csv.DictReader(io.StringIO(csv_result.text.lstrip("\ufeff"))))
     assert {row["訂單編號"] for row in csv_rows} == {ordinary.order_number, group.order_number}
+    group_csv = next(row for row in csv_rows if row["訂單編號"] == group.order_number)
+    assert group_csv["銷售類型"] == "共同購買"
+    assert "團購選品" in group_csv["品項與加選"]
     assert sum(int(row["期間收款"]) for row in csv_rows) == general["summary"]["received"]
     response = await c.client.get('/v1/admin/finance/meal-sales.csv', params={'starts_on': '2030-01-02', 'ends_on': '2030-01-02', 'sales_channel': 'regular'}, headers=auth_headers(c.admin))
     rows = list(csv.DictReader(io.StringIO(response.text.lstrip('\ufeff'))))

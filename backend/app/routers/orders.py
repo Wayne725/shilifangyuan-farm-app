@@ -561,7 +561,7 @@ async def request_order_refund(
             .with_for_update()
         )
         if campaign is None:
-            raise HTTPException(status_code=409, detail="找不到團購資料")
+            raise HTTPException(status_code=409, detail="找不到共同購買資料")
         remove_paid_quantity(
             campaign, group_release_quantity, now
         )
@@ -784,7 +784,7 @@ async def update_fulfillment(
         and order.group_campaign is not None
         and order.group_campaign.decision_status != GroupDecisionStatus.CONFIRMED
     ):
-        raise HTTPException(status_code=409, detail="團購尚未確認成團")
+        raise HTTPException(status_code=409, detail="共同購買尚未確認成團")
     allowed = {
         FulfillmentStatus.PENDING_CONFIRMATION: FulfillmentStatus.PREPARING,
         FulfillmentStatus.PREPARING: FulfillmentStatus.READY_FOR_PICKUP,

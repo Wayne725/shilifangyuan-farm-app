@@ -10,10 +10,10 @@ const product = { id: 'scope-product', slug: 'scope-product', name: '範圍測�
 const pickup = { orders_open: true, closed_message: '暫停接單', sales_scope: 'pickup', regular_orders_enabled: true, group_orders_enabled: true, shipping_enabled: false };
 const mealsOnly = { ...pickup, sales_scope: 'meals_only', regular_orders_enabled: false, group_orders_enabled: false };
 
-async function fixture(t, { platform = pickup, path = '/checkout', admin = false, delayed = false } = {}) {
+async function fixture(t, { platform = pickup, path = '/checkout', admin = false, delayed = false, width = 390 } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 390, height: 900 }, serviceWorkers: 'block' });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
   await context.addInitScript((product) => localStorage.setItem('slf_cart', JSON.stringify([{ product, quantity: 1 }])), product);
   const writes = [], errors = [], unknown = [];
   let release;
@@ -44,7 +44,7 @@ async function fixture(t, { platform = pickup, path = '/checkout', admin = false
 
 for (const [path, button, blockedMessage] of [
   ['/checkout', '前往線上付款', '目前未開放一般商品訂購'],
-  ['/groups/scope-group', '參加並前往付款', '目前未開放團購訂購'],
+  ['/groups/scope-group', '參加並前往付款', '目前未開放共同購買訂購'],
 ]) {
   test(`${path} 自取能力已開放時可付款，不呈現配送選項`, async t => {
     const { page, writes, errors, unknown } = await fixture(t, { path });
@@ -52,6 +52,12 @@ for (const [path, button, blockedMessage] of [
     await submit.waitFor();
     await page.waitForFunction(text => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === text && !button.disabled), button);
     assert.equal(await page.getByText('宅配／超商取貨', { exact: true }).count(), 0);
+    if (path.startsWith('/groups/')) {
+      await page.getByRole('heading', { name: '隔離農產團購', exact: true }).waitFor();
+      await page.getByRole('heading', { name: '共同購買摘要', exact: true }).waitFor();
+      assert.equal(await page.getByRole('heading', { name: '隔離農產共同購買', exact: true }).count(), 0);
+      if (process.env.BROWSER_ARTIFACT_DIR) { await page.evaluate(() => window.scrollTo({top: 0, behavior: 'instant'})); await page.screenshot({path: `${process.env.BROWSER_ARTIFACT_DIR}/shared-purchase-390.png`, fullPage: true}); }
+    }
     assert.deepEqual(writes, []); assert.deepEqual(errors, []); assert.deepEqual(unknown, []);
   });
   test(`${path} 受限制時顯示原因並阻止建單`, async t => {
@@ -82,8 +88,18 @@ test('既有便當限定驗收商品仍能以單件自取結帳', async t => {
 
 test('後台同步顯示真正銷售範圍與配送能力', async t => {
   const { page, writes, errors, unknown } = await fixture(t, { path: '/admin/settings', admin: true });
-  await page.getByText('一般商品、團購、便當自取', { exact: true }).waitFor();
+  await page.getByText('一般商品、共同購買、便當自取', { exact: true }).waitFor();
   assert.equal(await page.getByText('配送政策', { exact: true }).locator('..').getByText('未開放', { exact: true }).count(), 1);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(writes, []); assert.deepEqual(errors, []); assert.deepEqual(unknown, []);
+});
+
+test('桌面共同購買用語不改寫既有活動名稱與頁面路徑', async t => {
+  const { page, writes, errors, unknown } = await fixture(t, { path: '/groups/scope-group', width: 1280 });
+  await page.getByRole('heading', { name: '隔離農產團購', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '共同購買摘要', exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, '/groups/scope-group');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  if (process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({path: `${process.env.BROWSER_ARTIFACT_DIR}/shared-purchase-1280.png`, fullPage: true});
   assert.deepEqual(writes, []); assert.deepEqual(errors, []); assert.deepEqual(unknown, []);
 });

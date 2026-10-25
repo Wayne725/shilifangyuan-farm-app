@@ -443,7 +443,7 @@ class CampaignCreate(BaseModel):
             self.shipping_temperature is None
             or not self.allowed_shipping_channels
         ):
-            raise ValueError("可配送團購必須設定溫層與至少一個物流通路")
+            raise ValueError("可配送共同購買必須設定溫層與至少一個物流通路")
         if (
             self.shipping_temperature != ShippingTemperature.AMBIENT
             and any(
@@ -451,7 +451,7 @@ class CampaignCreate(BaseModel):
                 for channel in self.allowed_shipping_channels
             )
         ):
-            raise ValueError("冷藏或冷凍團購只支援宅配")
+            raise ValueError("冷藏或冷凍共同購買只支援宅配")
         return self
 
 
@@ -658,7 +658,7 @@ class GroupJoinRequest(InvoicePreferenceInput):
             FulfillmentMethod.COOPERATIVE_PICKUP,
             FulfillmentMethod.ECPAY_LOGISTICS,
         }:
-            raise ValueError("團購只支援合作社取貨或綠界物流")
+            raise ValueError("共同購買只支援合作社取貨或綠界物流")
         if (
             self.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
             and self.shipping_channel is None
@@ -679,7 +679,7 @@ class GroupJoinQuoteRequest(BaseModel):
             FulfillmentMethod.COOPERATIVE_PICKUP,
             FulfillmentMethod.ECPAY_LOGISTICS,
         }:
-            raise ValueError("團購只支援合作社取貨或綠界物流")
+            raise ValueError("共同購買只支援合作社取貨或綠界物流")
         if (
             self.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS
             and self.shipping_channel is None

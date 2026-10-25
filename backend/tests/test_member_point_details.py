@@ -358,3 +358,50 @@ async def test_database_naive_utc_dates_have_explicit_offset_in_api(point_contex
     expected = naive_utc.replace(tzinfo=timezone.utc)
     assert datetime.fromisoformat(points.json()["transactions"][0]["created_at"]) == expected
     assert datetime.fromisoformat(badges.json()[0]["granted_at"]) == expected
+
+
+@pytest.mark.parametrize("key,stored_description,display_description", [
+    ("groups_3", "成功發起 3 次團購", "成功發起 3 次共同購買"),
+    ("groups_3", "協助社區團購滿 3 次", "協助社區團購滿 3 次"),
+    ("groups_3", "成功發起3次團購", "成功發起3次團購"),
+    ("custom_groups", "成功發起 3 次團購", "成功發起 3 次團購"),
+])
+async def test_shared_purchase_badge_display_preserves_custom_text_and_original_grant(
+    point_context, key, stored_description, display_description,
+):
+    context = point_context
+    session = context["session"]
+    granted_at = datetime(2026, 9, 10, 3, 45, tzinfo=timezone.utc)
+    definition = BadgeDefinition(key=key, name="既有徽章名稱", description=stored_description)
+    session.add(definition)
+    await session.flush()
+    grant = MemberBadge(user_id=context["users"]["member"].id, badge_id=definition.id, granted_at=granted_at)
+    session.add(grant)
+    await session.commit()
+    grant_id = grant.id
+    headers = auth_headers(context["users"]["member"])
+
+    first = await context["client"].get("/v1/me/badges", headers=headers)
+    second = await context["client"].get("/v1/me/badges", headers=headers)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert len(first.json()) == 1
+    displayed = first.json()[0]
+    assert displayed["key"] == key and displayed["name"] == "既有徽章名稱"
+    assert displayed["description"] == display_description
+    assert datetime.fromisoformat(displayed["granted_at"]) == granted_at
+    await session.refresh(definition)
+    await session.refresh(grant)
+    assert definition.description == stored_description
+    assert grant.id == grant_id and grant.granted_at.replace(tzinfo=timezone.utc) == granted_at
+    assert await session.scalar(select(func.count(MemberBadge.id))) == 1
+
+
+async def test_new_shared_purchase_badge_definition_uses_current_wording(point_context):
+    context = point_context
+    response = await context["client"].get("/v1/me/badges", headers=auth_headers(context["users"]["member"]))
+    assert response.status_code == 200 and response.json() == []
+    definition = await context["session"].scalar(select(BadgeDefinition).where(BadgeDefinition.key == "groups_3"))
+    assert definition.description == "成功發起 3 次共同購買"
+    assert definition.rule == {"successful_groups": 3}

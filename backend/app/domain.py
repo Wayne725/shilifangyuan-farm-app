@@ -153,9 +153,9 @@ def validate_campaign_schedule(campaign: GroupCampaign, now: datetime) -> None:
     if campaign.min_paid_quantity > campaign.supply_cap:
         raise DomainError("成團門檻不可高於供應上限")
     if aware(campaign.deadline) <= now:
-        raise DomainError("團購截止時間必須在未來")
+        raise DomainError("共同購買截止時間必須在未來")
     if aware(campaign.estimated_pickup_start) < aware(campaign.deadline):
-        raise DomainError("預估取貨起始時間不可早於團購截止")
+        raise DomainError("預估取貨起始時間不可早於共同購買截止")
     if aware(campaign.estimated_pickup_end) < aware(
         campaign.estimated_pickup_start
     ):
@@ -186,7 +186,7 @@ def validate_group_join(
     }:
         raise DomainError("此團目前無法加入")
     if current >= aware(campaign.deadline):
-        raise DomainError("團購已截止")
+        raise DomainError("共同購買已截止")
     if quantity < 1:
         raise DomainError("數量至少為 1")
     if user_committed_quantity + quantity > campaign.per_user_cap:
@@ -251,7 +251,7 @@ def confirm_campaign(
 ) -> None:
     current = now or utcnow()
     if campaign.decision_status != GroupDecisionStatus.PENDING_CONFIRMATION:
-        raise DomainError("只有待確認成團的團購可以確認")
+        raise DomainError("只有待確認成團的共同購買可以確認")
     if campaign.paid_quantity < campaign.min_paid_quantity:
         raise DomainError("已付款數量尚未達成團門檻")
     if (

@@ -290,7 +290,7 @@ export async function beginGroupCheckout(
     return {
       kind: "resume",
       order,
-      message: reason instanceof Error ? reason.message : "團購訂單已建立，請從訂單中心繼續",
+      message: reason instanceof Error ? reason.message : "共同購買訂單已建立，請從訂單中心繼續",
     };
   }
 }

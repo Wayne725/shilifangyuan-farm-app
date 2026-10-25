@@ -134,7 +134,7 @@ export function HomePage() {
         </div>
         <Link className="workspace-door consumer" to="/shop">
           <span>生活消費</span>
-          <strong>選品・團購・便當預購</strong>
+          <strong>選品・共同購買・便當預購</strong>
           <ArrowRight size={25} weight="light" />
         </Link>
         {socialAccess && <Link className="workspace-door society" to="/social">

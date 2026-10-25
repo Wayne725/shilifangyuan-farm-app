@@ -66,7 +66,7 @@ async def resolve_target(
         )
     )
     if bundle is None:
-        raise HTTPException(status_code=422, detail="選擇的團購套組不存在")
+        raise HTTPException(status_code=422, detail="選擇的共同購買套組不存在")
     return bundle.name, bundle.image_url
 
 
@@ -129,18 +129,18 @@ async def apply_clock_with_events(
     event_names = {
         ProposalStatus.ENDED_UNMET: (
             "proposal.ended_unmet",
-            "團購投票已截止",
+            "共同購買投票已截止",
             f"{proposal.target_name_snapshot} 未達投票門檻",
         ),
         ProposalStatus.CONVERSION_PENDING: (
             "proposal.conversion_pending",
-            "團購投票已達標",
-            f"{proposal.target_name_snapshot} 可由管理員建立正式團購",
+            "共同購買投票已達標",
+            f"{proposal.target_name_snapshot} 可由管理員建立正式共同購買",
         ),
         ProposalStatus.EXPIRED_UNHANDLED: (
             "proposal.expired_unhandled",
-            "團購投票已關閉",
-            f"{proposal.target_name_snapshot} 未在期限內建立正式團購",
+            "共同購買投票已關閉",
+            f"{proposal.target_name_snapshot} 未在期限內建立正式共同購買",
         ),
     }
     event = event_names.get(proposal.status)
