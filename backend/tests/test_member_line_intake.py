@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlsplit
 import pytest
 from sqlalchemy import select
 from app.models import LineOAuthState, MemberRosterEntry, Membership, User
@@ -8,12 +9,13 @@ from app.routers.membership import membership_router
 from app.routers.line_auth import line_auth_router
 from app.routers.auth import auth_router
 from tests.support import api_test_context, auth_headers
-from tests.test_line_login import start_flow, callback, profile, settings
+from tests.test_line_login import start_flow, callback, profile, settings, reset_line_rate_limits
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("contact_only", [True, False])
-async def test_line_member_requires_matching_roster_and_otp_before_qualification(database_session, settings, profile, contact_only):
+@pytest.mark.parametrize("return_to", ["/shop", "/meals/event-1?pickup_at=2030-01-02T12%3A00#selection", "/checkout?source=line", "/checkout?note=" + "a" * 480])
+async def test_line_member_requires_matching_roster_and_otp_before_qualification(database_session, settings, profile, contact_only, return_to):
     configured = settings.model_copy(update={'environment': 'development', 'pii_encryption_keys_json': json.dumps({'v1': base64.b64encode(b'p'*32).decode()})})
     from app.models import UserRole
     admin = User(email='intake-admin@example.com', display_name='管理員', password_hash='test', user_role=UserRole.ADMIN)
@@ -28,20 +30,23 @@ async def test_line_member_requires_matching_roster_and_otp_before_qualification
         invalid_claim = {**claim, 'phone': '0987654321'} if contact_only else {**claim, 'legal_name': '錯誤'}
         invalid = await client.post('/v1/auth/line/start', json={'intent': 'member', 'data_consent_version': 'line-data-v1', 'member_claim': invalid_claim})
         assert invalid.status_code == 409
-        state, _ = await start_flow(client, intent='member', member_claim=claim)
+        state, _ = await start_flow(client, intent='member', member_claim=claim, return_to=return_to)
         record = await database_session.scalar(select(LineOAuthState))
         assert 'member@example.com' not in record.member_claim_encrypted
         result = await callback(client, state)
         assert result.status_code == 200, result.text
         data = result.json()
         assert data['session']['user']['membership_type'] == 'nonmember'
-        assert '/verify-email?' in data['return_to'] and 'intent=existing_member' in data['return_to']
+        target = urlsplit(data['return_to'])
+        assert target.path == '/verify-email'
+        assert parse_qs(target.query) == {'email': [claim['email']], 'intent': ['existing_member'], 'return_to': [return_to]}
         owner = await database_session.scalar(select(User).where(User.email == claim['email']))
         assert owner.display_name == profile[0]['display_name']
         assert owner.pending_member_claim
         assert await database_session.scalar(select(Membership).where(Membership.user_id == owner.id)) is None
         await database_session.refresh(record)
         assert record.member_claim_encrypted is None
+        assert record.return_to == return_to
         resent = await client.post('/v1/auth/resend-verification', json={'email': claim['email']})
         assert resent.status_code == 202 and resent.json()['development_token']
         verified = await client.post('/v1/auth/verify-email', json={'email': claim['email'], 'token': resent.json()['development_token']})

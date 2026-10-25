@@ -7,3 +7,19 @@ export function loginReturnTo(value: unknown): string {
   if (["/register", "/verify-email", "/forgot-password", "/reset-password"].includes(target.pathname)) return "/";
   return `${target.pathname}${target.search}${target.hash}`;
 }
+
+export function verificationReturnTo(value: unknown): string {
+  if (typeof value !== "string" || !value.startsWith("/")) return "/shop";
+  try {
+    const decoded = decodeURIComponent(value);
+    if (!decoded.startsWith("/") || decoded.startsWith("//") || decoded.includes("\\")
+      || /[\u0000-\u001f\u007f]/.test(decoded)) return "/shop";
+    const target = new URL(value, "https://return.invalid");
+    const path = decodeURIComponent(target.pathname).replace(/\/+$/, "").toLowerCase();
+    if (target.origin !== "https://return.invalid"
+      || ["/login", "/line-consent", "/auth/line/callback", "/register", "/verify-email", "/forgot-password", "/reset-password"].includes(path)) return "/shop";
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return "/shop";
+  }
+}

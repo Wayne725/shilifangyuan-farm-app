@@ -115,7 +115,11 @@ async def test_start_requires_current_data_consent(database_session, settings, p
         assert await database_session.scalar(select(func.count()).select_from(LineOAuthState)) == 0
 
 
-@pytest.mark.parametrize("return_to", ["https://evil.example/shop", "//evil.example/shop", "/unknown-screen", "/shop\\evil", "/shop\n", "/meals/../admin", "/groups/../admin"])
+@pytest.mark.parametrize("return_to", [
+    "https://evil.example/shop", "//evil.example/shop", "/unknown-screen", "/shop\\evil", "/shop\n",
+    "/meals/../admin", "/groups/../admin", "/%2fevil.example/shop", "/shop?next=%5cevil",
+    "/shop?next=%0a", "/shop?next=\x7f", "/shop?next=%7f",
+])
 @pytest.mark.asyncio
 async def test_start_rejects_open_redirects_and_unsupported_return_paths(database_session, settings, return_to):
     async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
@@ -127,7 +131,7 @@ async def test_start_rejects_open_redirects_and_unsupported_return_paths(databas
 @pytest.mark.parametrize("return_to", [
     "/social", "/admin?section=orders&q=SLF-1", "/admin/meals?tab=cancellations&q=SLF-1",
     "/groups/campaign-1", "/products/product-1", "/proposals/proposal-1",
-    "/group-votes/proposal-1", "/membership", "/register",
+    "/group-votes/proposal-1", "/membership", "/register", "/verify-email?return_to=%2Fverify-email",
 ])
 @pytest.mark.asyncio
 async def test_login_keeps_supported_work_page_without_granting_admin_role(database_session, settings, profile, return_to):
@@ -136,7 +140,7 @@ async def test_login_keeps_supported_work_page_without_granting_admin_role(datab
         response = await callback(client, state)
         assert response.status_code == 200, response.text
         result = response.json()
-        assert result["return_to"] == ("/account" if return_to == "/register" else return_to)
+        assert result["return_to"] == ("/account" if urlsplit(return_to).path in {"/register", "/verify-email"} else return_to)
         assert result["session"]["user"]["user_role"] == "customer"
         assert result["session"]["user"]["membership_type"] == "nonmember"
 

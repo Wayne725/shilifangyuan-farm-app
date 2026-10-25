@@ -5,7 +5,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal
-from urllib.parse import urlsplit, urlencode
+from urllib.parse import unquote, urlsplit, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, TypeAdapter, field_validator
@@ -81,6 +81,9 @@ def _hash(value: str) -> str:
 
 
 def _return_path(value: str) -> str:
+    decoded = unquote(value)
+    if not decoded.startswith("/") or decoded.startswith("//") or "\\" in decoded or any(ord(char) < 32 or ord(char) == 127 for char in decoded):
+        raise HTTPException(status_code=422, detail="登入返回頁面不合法")
     parsed = urlsplit(value)
     path = parsed.path
     valid_path = path in {
@@ -180,7 +183,7 @@ async def line_start(body: LineStart, request: Request, response: Response,
 
 
 async def _sign_in(user: User, record: LineOAuthState, session: AsyncSession,
-    response: Response, settings: Settings) -> dict:
+    response: Response, settings: Settings, *, return_to: str | None = None) -> dict:
     user = await session.scalar(select(User).where(User.id == user.id)
         .options(selectinload(User.membership)).execution_options(populate_existing=True))
     if user is None or not user.is_active:
@@ -191,11 +194,11 @@ async def _sign_in(user: User, record: LineOAuthState, session: AsyncSession,
     await session.commit()
     result = token_response(user, response, settings, pair, remember_me=record.remember_me)
     _clear_flow(response, settings)
-    return {"status": "authenticated", "return_to": record.return_to, "intent": record.registration_intent,
+    return {"status": "authenticated", "return_to": return_to or record.return_to, "intent": record.registration_intent,
         "session": result.model_dump(mode="json")}
 
 
-async def _prepare_member_registration(account: User, record: LineOAuthState, session: AsyncSession, settings: Settings) -> None:
+async def _prepare_member_registration(account: User, record: LineOAuthState, session: AsyncSession, settings: Settings) -> str | None:
     if not record.member_claim_encrypted:
         return
     try:
@@ -214,8 +217,8 @@ async def _prepare_member_registration(account: User, record: LineOAuthState, se
         account.email = email
         account.pending_member_claim = True
         await reserve_roster_claim(session, entry, account, datetime.now(timezone.utc) + timedelta(minutes=10))
-        record.return_to = "/verify-email?" + urlencode({"email": email, "intent": "existing_member"})
         await _issue_email_verification(session, account, settings)
+        return "/verify-email?" + urlencode({"email": email, "intent": "existing_member", "return_to": _return_path(record.return_to)})
     except MemberClaimError as exc:
         raise HTTPException(status_code=409, detail="社員資料已異動或正在認領，請重新核對資料") from exc
     except IntegrationError as exc:
@@ -314,15 +317,14 @@ async def line_callback(body: LineCallback, request: Request, response: Response
             account.display_name = profile.display_name
             identity.data_consent_version = record.data_consent_version
             identity.data_consented_at = record.data_consented_at
-            if record.member_claim_encrypted:
-                await _prepare_member_registration(account, record, session, settings)
-            return await _sign_in(account, record, session, response, settings)
+            return_to = await _prepare_member_registration(account, record, session, settings)
+            return await _sign_in(account, record, session, response, settings, return_to=return_to)
         email = profile.email
         if email and await session.scalar(select(User.id).where(User.email == email)) is not None:
             email = None
         account = await _create_account(profile, None if record.member_claim_encrypted else email, record, session)
-        await _prepare_member_registration(account, record, session, settings)
-        return await _sign_in(account, record, session, response, settings)
+        return_to = await _prepare_member_registration(account, record, session, settings)
+        return await _sign_in(account, record, session, response, settings, return_to=return_to)
     except IntegrityError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="帳號或LINE已建立連結，請重新登入或使用原帳號連結") from exc

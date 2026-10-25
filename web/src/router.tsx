@@ -40,6 +40,7 @@ interface VerifyEmailSearch {
   email?: string;
   token?: string;
   intent?: RegisterIntent;
+  return_to?: string;
 }
 
 interface ResetPasswordSearch {
@@ -86,6 +87,7 @@ const verifyEmailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/verify-email",
   validateSearch: (search: Record<string, unknown>): VerifyEmailSearch => ({
+    return_to: typeof search.return_to === "string" ? search.return_to : undefined,
     email: typeof search.email === "string" ? search.email : undefined,
     token: typeof search.token === "string" ? search.token : undefined,
     intent:
