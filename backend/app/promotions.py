@@ -34,4 +34,4 @@ async def price_promotion(session, total, code, user_id, now):
             raise HTTPException(status_code=409, detail="優惠碼不適用、已到期或已達使用上限")
         return None, 0
     discount, rule = max(candidates, key=lambda pair: (pair[0], pair[1].id))
-    return {'id': rule.id, 'name': rule.name, 'code': rule.code, 'discount': discount, 'original_amount': total}, discount
+    return {'id': rule.id, 'name': rule.name, 'code': rule.code, 'discount': discount, 'original_amount': total, 'pricing': {'discount_kind': rule.discount_kind, 'discount_value': rule.discount_value, 'minimum_amount': rule.minimum_amount}}, discount

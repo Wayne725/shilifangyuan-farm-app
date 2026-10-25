@@ -54,7 +54,7 @@ async def confirm_cash_payment(
         raise PaymentApplicationError("此訂單不是現場付款")
     if amount != order.amount_total or amount <= 0:
         raise PaymentApplicationError("實收金額必須等於訂單總額")
-    attempts = list(await session.scalars(select(PaymentAttempt).where(PaymentAttempt.order_id == order.id).with_for_update()))
+    attempts = list(await session.scalars(select(PaymentAttempt).where(PaymentAttempt.order_id == order.id).order_by(PaymentAttempt.id).with_for_update()))
     if order.payment_status == PaymentStatus.PAID and any(attempt.provider == "onsite" and attempt.status == PaymentStatus.PAID for attempt in attempts):
         return
     if any(not attempt.provider_response.get("payment_correction") for attempt in attempts):
@@ -79,7 +79,7 @@ async def confirm_cash_payment(
     if not active or reserved != expected:
         raise PaymentApplicationError("訂單保留數量不完整，不可收款")
     attempt = PaymentAttempt(
-        order=order, provider="onsite", merchant_trade_no=f"SITE{new_id().replace('-', '')}",
+        order=order, order_revision=order.revision, provider="onsite", merchant_trade_no=f"SITE{new_id().replace('-', '')}",
         provider_trade_no=new_id(), amount=amount, status=PaymentStatus.PAID,
         expires_at=now, paid_at=now,
         provider_response={"confirmed_by_id": actor_id, "reason": reason, "confirmed_at": now.isoformat(), "collection_method": collection_method, "reference": reference},

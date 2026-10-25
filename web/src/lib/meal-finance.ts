@@ -10,6 +10,8 @@ export interface MealSalesPeriod {
 }
 
 export interface MealSalesOrder {
+  revision?: number;
+  receipts?: Array<{ merchant_trade_no: string; order_revision: number; amount: number; status: string; received_at: string | null; obsolete_revision: boolean }>;
   id: string;
   order_number: string;
   sales_channel: "meal_preorder" | "regular" | "group";
@@ -42,7 +44,7 @@ export interface MealSalesOrder {
     tax_type: string;
     options: Array<{ group_name: string; name: string; price_delta: number }>;
   }>;
-  refunds: Array<{ amount: number; status: string; reason: string; requested_at: string; completed_at?: string | null }>;
+  refunds: Array<{ amount: number; status: string; reason: string; requested_at: string; completed_at?: string | null; purpose?: string; payment_attempt_id?: string | null }>;
 }
 
 export interface MealSalesReport {

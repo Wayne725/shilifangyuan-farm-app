@@ -2112,7 +2112,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     assert created_order.json()["paid_at"] is None
     assert created_order.json()["pickup_code"] is None
     assert created_order.json()["pickup_qr_payload"] is None
-    assert created_order.json()["available_actions"] == ["pay"]
+    assert created_order.json()["available_actions"] == ["amend_quantities", "pay"]
 
     pending_order = await client.get(
         f"/v1/meal-orders/{created_order.json()['id']}",

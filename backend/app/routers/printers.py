@@ -112,7 +112,7 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
     order_id = await session.scalar(select(PrintJob.order_id).where(PrintJob.id == job_id))
     if order_id is None:
         raise HTTPException(404, "找不到列印工作")
-    order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
+    order = await session.scalar(select(Order).where(Order.id == order_id).execution_options(populate_existing=True).with_for_update())
     source = await session.scalar(select(PrintJob).where(PrintJob.id == job_id).with_for_update())
     event_key = f"reprint:{body.request_id}"
     existing = await session.scalar(select(PrintJob).where(PrintJob.event_key == event_key))
@@ -124,8 +124,10 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
         raise HTTPException(409, "工作仍待發送或正在發送，請先確認結果")
     if source.status in {"submitted", "unknown"} and not body.acknowledge_duplicate:
         raise HTTPException(409, "原單可能已列印；請先查詢並確認可重複列印")
-    if order.cancelled_at and source.kind == "order":
+    if order.cancelled_at and source.kind in {"order", "amendment"}:
         raise HTTPException(409, "訂單已取消，僅能補印取消通知")
+    if source.kind in {"order", "amendment"} and source.snapshot.get("revision", 1) != order.revision:
+        raise HTTPException(409, "訂單已更新，請選擇最新版出單工作補印")
     mode = "dry_run" if settings.printer_dry_run else "live"
     snapshot = {**source.snapshot, **payment_snapshot(order)}
     job = PrintJob(order_id=order_id, event_key=event_key, reprint_of_id=source.id, kind=source.kind,

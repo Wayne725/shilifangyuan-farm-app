@@ -12,7 +12,7 @@ async function fixture(t, width, dryRun = true, admin = true) {
   const browser = await chromium.launch({headless: true, executablePath: process.env.BROWSER_EXECUTABLE});
   t.after(() => browser.close());
   const context = await browser.newContext({viewport: {width, height: 900}, timezoneId: 'Asia/Taipei', serviceWorkers: 'block'});
-  const state = {jobs: [structuredClone(original)], reads: [], writes: [], unknown: [], external: [], errors: []};
+  const state = {jobs: [structuredClone(original)], reads: [], writes: [], unknown: [], external: [], errors: [], reprintConflict: false};
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) {state.external.push(url.origin); return route.abort();}
@@ -27,9 +27,10 @@ async function fixture(t, width, dryRun = true, admin = true) {
       const jobs = state.jobs.filter(job => (!url.searchParams.get('status') || job.status === url.searchParams.get('status')) && (!url.searchParams.get('search') || job.order_number.includes(url.searchParams.get('search'))));
       return route.fulfill({json: {items: jobs, total: jobs.length}});
     }
-    if (path === '/v1/admin/printers/jobs/job-1') return route.fulfill({json: {...state.jobs[0], preview: '十里方圓 合作社\n訂餐單\n姓名：測試同學\n繁體中文餐點\n付款方式：現場付款\n付款狀態：未付款'}});
+    if (path === '/v1/admin/printers/jobs/job-1') return route.fulfill({json: {...state.jobs[0], preview: `十里方圓 合作社\n${state.jobs[0].kind === 'amendment' ? '數量修訂單' : '訂餐單'}\n姓名：測試同學\n繁體中文餐點\n付款方式：現場付款\n付款狀態：未付款`}});
     if (path === '/v1/admin/printers/jobs/job-1/reprint') {
       const body = request.postDataJSON(); state.writes.push({path, body});
+      if (state.reprintConflict) return route.fulfill({status: 409, json: {detail: '訂單數量已更新，請選擇最新版本補印'}});
       const job = {...original, id: 'job-2', status: 'pending', mode: dryRun ? 'dry_run' : 'live', reprint_of_id: 'job-1', last_error: null};
       state.jobs.push(job);
       return route.fulfill({status: 201, json: job});
@@ -156,3 +157,33 @@ for (const width of [390, 899, 1542]) {
     }
   });
 }
+
+for (const reprint of [false, true]) {
+  test(`修訂出單${reprint ? '補印' : '原票'}顯示正確種類與版本`, async t => {
+    const {page, state} = await fixture(t, 390);
+    Object.assign(state.jobs[0], {kind: 'amendment', revision: 2, reprint_of_id: reprint ? 'earlier-job' : null});
+    await page.goto(`${base}/admin/kitchen`);
+    const jobs = page.locator('.cloud-print-jobs'); await jobs.getByRole('button', {name: '查看／補印', exact: true}).waitFor();
+    assert.match(await jobs.innerText(), reprint ? /數量修訂單補印 · 第 2 版/ : /數量修訂單 · 第 2 版/);
+    assert.doesNotMatch(await jobs.innerText(), /訂餐單/);
+    await jobs.getByRole('button', {name: '查看／補印', exact: true}).click();
+    assert.match(await page.locator('.cloud-print-preview h3').innerText(), /數量修訂單.*第 2 版/);
+    assert.deepEqual(state.writes, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  });
+}
+
+test('舊版本停止發送顯示可讀原因，補印409保留原因且不宣稱成功', async t => {
+  const {page, state} = await fixture(t, 390);
+  Object.assign(state.jobs[0], {status: 'failed', revision: 1, last_error: 'order_revision_superseded'}); state.reprintConflict = true;
+  await page.goto(`${base}/admin/kitchen`);
+  await page.getByText('數量已更新，舊單已停止發送', {exact: true}).waitFor();
+  await page.getByRole('button', {name: '查看／補印', exact: true}).click();
+  await page.getByLabel('補印原因', {exact: true}).fill('核對最新數量');
+  await page.getByRole('button', {name: '建立模擬補印', exact: true}).click();
+  await page.getByText('訂單數量已更新，請選擇最新版本補印', {exact: true}).waitFor();
+  assert.equal(await page.getByLabel('補印原因', {exact: true}).inputValue(), '核對最新數量');
+  assert.equal(state.jobs.length, 1); assert.equal(state.writes.length, 1);
+  assert.equal(await page.getByText('已建立模擬補印工作：等待發送', {exact: true}).count(), 0);
+  assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+});

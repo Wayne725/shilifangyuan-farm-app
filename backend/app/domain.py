@@ -12,6 +12,7 @@ from .models import (
     GroupDecisionStatus,
     GroupIntakeStatus,
     InvoiceBuyerType,
+    InvoiceStatus,
     MealEventStatus,
     MembershipType,
     Order,
@@ -313,6 +314,41 @@ def admin_order_cancellation_allowed(order: Order, now: Optional[datetime] = Non
     )
 
 
+def order_amendment_blocked_reason(order: Order, now: Optional[datetime] = None) -> Optional[str]:
+    current = now or utcnow()
+    if order.payment_status != PaymentStatus.PENDING or order.paid_at is not None:
+        return "僅可修改未付款訂單；已付款請由管理員整單退款後重新下單"
+    fulfillment = order.__dict__.get("fulfillment")
+    if (order.cancelled_at is not None or order.fulfillment_status != FulfillmentStatus.PENDING_CONFIRMATION
+        or (fulfillment is not None and fulfillment.status != FulfillmentState.PENDING_CONFIRMATION)):
+        return "訂單已進入備貨或已結束，無法修改數量"
+    if order.invoice_status not in {InvoiceStatus.NOT_ELIGIBLE, InvoiceStatus.EXTERNAL} or order.__dict__.get("invoice") is not None:
+        return "訂單已有發票紀錄，請由管理員查核"
+    if any(attempt.provider_response.get("payment_correction") for attempt in order.__dict__.get("payment_attempts", [])):
+        return "訂單有收款更正紀錄，請由管理員處理"
+    if any(request.status == "pending" for request in order.__dict__.get("cancellation_requests", [])):
+        return "退單申請審核中，無法修改數量"
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        if not meal_payment_window_open(order, current):
+            return "已超過餐點訂購期限，無法修改數量"
+        from .meal_booking import validate_meal_booking_day
+        try:
+            validate_meal_booking_day(order.meal_event, current)
+        except ValueError as exc:
+            return str(exc)
+    elif order.group_campaign_id is not None:
+        campaign = order.__dict__.get("group_campaign")
+        if (campaign is None or campaign.intake_status != GroupIntakeStatus.OPEN
+            or campaign.decision_status not in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}
+            or current >= aware(campaign.deadline)):
+            return "共同購買已截止或停止接單，無法修改數量"
+    if fulfillment is not None:
+        shipment = fulfillment.__dict__.get("shipment")
+        if shipment is not None and shipment.status not in {ShipmentStatus.DRAFT, ShipmentStatus.SELECTION_PENDING, ShipmentStatus.READY_TO_CREATE}:
+            return "物流單已成立，請由管理員處理"
+    return None
+
+
 def order_available_actions(
     order: Order,
     viewer_is_admin: bool = False,
@@ -320,6 +356,8 @@ def order_available_actions(
 ) -> List[str]:
     current = now or utcnow()
     actions: List[str] = []
+    if order_amendment_blocked_reason(order, current) is None:
+        actions.append("amend_quantities")
     fulfillment = order.__dict__.get("fulfillment")
     is_meal = order.sales_channel == SalesChannel.MEAL_PREORDER
     meal_fulfillment_closed = is_meal and (

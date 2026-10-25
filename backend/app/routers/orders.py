@@ -26,6 +26,7 @@ from ..domain import (
     included_tax_amount,
     member_sale_is_tax_exempt,
     order_available_actions,
+    order_amendment_blocked_reason,
     order_fulfillment_is_irreversible,
     price_for_membership,
     remove_paid_quantity,
@@ -77,6 +78,9 @@ from ..schemas import (
     OrderQuoteRead,
     OrderQuoteRequest,
     OrderRead,
+    OrderQuantityAmendmentRequest,
+    OrderQuantityAmendmentConfirm,
+    OrderQuantityAmendmentQuote,
     RefundRequest,
 )
 
@@ -103,6 +107,9 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         actions = [action for action in actions if action != "refund"]
     return OrderRead(
         id=order.id,
+        revision=order.revision,
+        amendment_blocked_reason=order_amendment_blocked_reason(order),
+        amendments=order.__dict__.get("amendments", []),
         order_number=order.order_number,
         order_kind=order.order_kind,
         sales_channel=order.sales_channel,
@@ -213,10 +220,12 @@ async def load_order(
         select(Order)
         .where(Order.id == order_id)
         .options(
-            selectinload(Order.items),
+            selectinload(Order.items).selectinload(OrderItem.selected_options),
             selectinload(Order.group_campaign),
             selectinload(Order.reservations),
             selectinload(Order.cancellation_requests),
+            selectinload(Order.amendments),
+            selectinload(Order.payment_attempts),
             selectinload(Order.invoice),
             selectinload(Order.meal_event),
             selectinload(Order.fulfillment).selectinload(
@@ -372,7 +381,9 @@ async def list_orders(
 ) -> List[OrderRead]:
     query = select(Order).options(
         selectinload(Order.cancellation_requests),
-        selectinload(Order.items),
+        selectinload(Order.amendments),
+        selectinload(Order.payment_attempts),
+        selectinload(Order.items).selectinload(OrderItem.selected_options),
         selectinload(Order.group_campaign),
         selectinload(Order.meal_event),
         selectinload(Order.invoice),
@@ -400,6 +411,31 @@ async def get_order(
     if order.user_id != user.id and user.user_role != UserRole.ADMIN:
         raise HTTPException(status_code=404, detail="找不到訂單")
     return order_read(order, user.user_role == UserRole.ADMIN)
+
+
+@orders_router.post("/{order_id}/quantity-amendments/quote", response_model=OrderQuantityAmendmentQuote)
+async def quote_order_quantity_amendment(
+    order_id: str, body: OrderQuantityAmendmentRequest,
+    user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> OrderQuantityAmendmentQuote:
+    from ..order_amendments import prepare_quantity_amendment
+    _, quote = await prepare_quantity_amendment(session, order_id, body, user, settings)
+    return quote
+
+
+@orders_router.post("/{order_id}/quantity-amendments", response_model=OrderRead)
+async def confirm_order_quantity_amendment(
+    order_id: str, body: OrderQuantityAmendmentConfirm,
+    user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> OrderRead:
+    from ..order_amendments import prepare_quantity_amendment
+    await prepare_quantity_amendment(session, order_id, body, user, settings, confirm=True)
+    await session.commit()
+    from ..printer_worker import wake_printer
+    wake_printer()
+    return order_read(await load_order(session, order_id, refresh=True), user.user_role == UserRole.ADMIN)
 
 
 async def release_active_reservations(

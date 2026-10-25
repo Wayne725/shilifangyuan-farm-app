@@ -1,3 +1,4 @@
+import { OrderQuantityAmendment } from "./OrderQuantityAmendment";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -106,6 +107,7 @@ function MealOperationOrder({ item, onReviewOrder }: { item: MealAdminOrderItem;
     <div className="operation-state"><OrderStatusBadge kind="payment" status={order.payment_status} /><OrderStatusBadge kind="fulfillment" status={order.cancelled_at ? "cancelled" : order.fulfillment_status} label={order.cancelled_at ? "已取消" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"} /><OrderStatusBadge kind="invoice" status={order.invoice_status} /></div>
     {order.cancellation_request && <p className="meal-order-review-status">{reviewLabels[order.cancellation_request.status]}{order.cancellation_request.status === "pending" && "，訂單尚未取消"}</p>}
     <p>付款方式：{order.payment_method === "cash_on_pickup" ? "合作社現場付款" : "線上付款"}</p>
+    <OrderQuantityAmendment order={order} disabled={update.isPending} />
     <AdminCancelOrder order={order} /><AdminCashPayment order={order} />
     <details><summary>查看餐點、發票與退單明細</summary>
       <ul>{order.items.map((meal, index) => <li key={`${meal.offering_id}-${index}`}>{meal.meal_name} × {meal.quantity} · {formatMoney(meal.subtotal)}{meal.selections.length > 0 && <span>（{meal.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join("、")}）</span>}</li>)}</ul>

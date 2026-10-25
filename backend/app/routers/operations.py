@@ -184,6 +184,7 @@ async def search_admin_orders(
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     orders = await session.scalars(query.options(
         selectinload(Order.cancellation_requests),
+        selectinload(Order.amendments), selectinload(Order.payment_attempts),
         selectinload(Order.items), selectinload(Order.group_campaign),
         selectinload(Order.meal_event), selectinload(Order.invoice),
         selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),

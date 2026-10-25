@@ -1,3 +1,4 @@
+import { OrderQuantityAmendment } from "./OrderQuantityAmendment";
 import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, Money, QrCode, Receipt } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -73,6 +74,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       {selected.kitchen_note && <p className="meal-kitchen-note"><strong>餐點備註：</strong>{selected.kitchen_note}</p>}
       {selected.promotion && <p className="meal-order-discount">{selected.promotion.name} · 已折抵 {formatMoney(selected.promotion.discount)}</p>}
       <p className="meal-order-payment-status" aria-live="polite">付款狀態：<strong>{paymentStatus(selected.payment_status)}</strong></p>
+      <OrderQuantityAmendment key={selected.id} order={selected} disabled={pay.isPending} />
       <MealCancellationStatus order={selected} />
       {credential.data ? <div className="pickup-ticket"><span className="status-chip passed">{["ready", "ready_for_pickup"].includes(selected.fulfillment_status) ? "可取餐" : "取餐碼已生效"}</span><div className="pickup-qr" aria-label={`訂單 ${selected.order_number} 取餐 QR Code`}><QRCodeSVG value={credential.data.qr_token} size={168} level="H" marginSize={2} /></div><small>六位取餐碼</small><strong>{credential.data.pickup_code}</strong><p>到現場出示 QR 或告知六位取餐碼；取餐完成後，這組取餐碼會失效。</p></div> : credentialAvailable ? <div className="credential-pending"><QrCode size={34} weight="light" /><h3>{credential.isError ? "取餐碼暫時無法讀取" : "正在查詢取餐碼"}</h3><p>{credential.error?.message || "系統正在確認這組取餐碼是否仍可使用。"}</p><button className="button button-quiet" type="button" onClick={() => credential.refetch()}>重新查詢</button></div> : <MealOrderState order={selected} onPay={() => pay.mutate(selected.id)} paying={pay.isPending} />}
       <MealInvoiceStatus order={selected} />

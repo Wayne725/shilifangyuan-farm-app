@@ -351,6 +351,17 @@ async def award_order_purchase_points(session: AsyncSession, order: Order) -> No
             source_type=PointSourceType.PURCHASE, reference_id=order.id, note="消費累積"))
 
 
+def is_obsolete_order_attempt(attempt: PaymentAttempt, order: Order) -> bool:
+    return (attempt.superseded_at is not None or attempt.order_revision != order.revision
+            or attempt.amount != order.amount_total)
+
+
+def is_obsolete_order_refund(refund: Refund, attempt: Optional[PaymentAttempt], order: Order) -> bool:
+    return refund.purpose == "obsolete_order_revision" or (
+        attempt is not None and is_obsolete_order_attempt(attempt, order)
+    )
+
+
 async def remaining_subject_payment_status(
     session: AsyncSession,
     attempt: PaymentAttempt,
@@ -360,10 +371,19 @@ async def remaining_subject_payment_status(
         if attempt.order_id is not None
         else PaymentAttempt.membership_charge_id == attempt.membership_charge_id
     )
+    revision_filters = []
+    if attempt.order_id is not None:
+        current_order = (await session.execute(select(Order.revision, Order.amount_total).where(Order.id == attempt.order_id))).one()
+        revision_filters = [
+            PaymentAttempt.order_revision == current_order.revision,
+            PaymentAttempt.amount == current_order.amount_total,
+            PaymentAttempt.superseded_at.is_(None),
+        ]
     statuses = set(
         await session.scalars(
             select(PaymentAttempt.status).where(
                 subject_filter,
+                *revision_filters,
                 PaymentAttempt.id != attempt.id,
                 PaymentAttempt.status.in_(
                     {
@@ -406,6 +426,7 @@ async def create_provider_aware_refund(
     membership_charge: Optional[MembershipCharge] = None,
     payment_attempt: Optional[PaymentAttempt] = None,
     defer_completion: bool = False,
+    purpose: str = "order_cancellation",
     allow_unbound_local_completion: bool = False,
     now: Optional[datetime] = None,
 ) -> tuple[Refund, bool]:
@@ -421,6 +442,11 @@ async def create_provider_aware_refund(
             select(PaymentAttempt)
             .where(
                 subject_filter,
+                *([
+                    PaymentAttempt.order_revision == order.revision,
+                    PaymentAttempt.amount == order.amount_total,
+                    PaymentAttempt.superseded_at.is_(None),
+                ] if order is not None else []),
                 PaymentAttempt.status.in_(
                     {
                         PaymentStatus.PAID,
@@ -485,6 +511,7 @@ async def create_provider_aware_refund(
             else RefundStatus.COMPLETED
         ),
         reason=reason,
+        purpose=purpose,
         requested_by_id=requested_by_id,
         completed_at=None if requires_provider_refund else current,
     )
@@ -516,6 +543,10 @@ def _aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _reservation_resource_key(reservation: InventoryReservation):
+    return (reservation.group_campaign_id or reservation.source_product_id or reservation.source_meal_offering_id or "", reservation.id)
 
 
 def _group_quantity(order: Order) -> int:
@@ -656,14 +687,27 @@ async def create_payment_attempt(
         if not meal_payment_window_open(order, current):
             raise PaymentApplicationError("便當目前未開放預購或已截止")
 
-    for existing in sorted(
-        order.payment_attempts, key=lambda item: item.created_at, reverse=True
-    ):
+    attempts = list(await session.scalars(select(PaymentAttempt)
+        .where(PaymentAttempt.order_id == order.id).order_by(PaymentAttempt.id)
+        .options(selectinload(PaymentAttempt.reservations))
+        .execution_options(populate_existing=True).with_for_update()))
+    set_committed_value(order, "payment_attempts", attempts)
+    for existing in attempts:
+        if is_obsolete_order_attempt(existing, order):
+            await release_attempt_reservations(session, existing)
+            existing.superseded_at = existing.superseded_at or current
+            if existing.status == PaymentStatus.PENDING:
+                existing.status = PaymentStatus.EXPIRED
+    for existing in sorted(attempts, key=lambda item: item.created_at, reverse=True):
+        if is_obsolete_order_attempt(existing, order):
+            continue
         if (
             existing.status == PaymentStatus.PENDING
             and _aware(existing.expires_at) > current
             and existing.checkout_payload
         ):
+            await session.commit()
+            await session.refresh(existing)
             return existing
         if existing.status == PaymentStatus.PENDING:
             raise PaymentApplicationError(
@@ -685,6 +729,7 @@ async def create_payment_attempt(
         expires_at = min(expires_at, _aware(order.fulfillment.meal_ordering_ends_at))
     attempt = PaymentAttempt(
         order=order,
+        order_revision=order.revision,
         provider=settings.payment_provider,
         merchant_trade_no=merchant_trade_no,
         amount=order.amount_total,
@@ -695,7 +740,7 @@ async def create_payment_attempt(
     await session.flush()
 
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
-        for item in order.items:
+        for item in sorted(order.items, key=lambda item: item.source_meal_offering_id or item.source_product_id or item.id):
             if item.source_meal_offering_id is None:
                 raise PaymentApplicationError("便當訂單品項資料不完整")
             offering = await session.scalar(
@@ -764,7 +809,7 @@ async def create_payment_attempt(
         )
         session.add(reservation)
     else:
-        for item in order.items:
+        for item in sorted(order.items, key=lambda item: item.source_meal_offering_id or item.source_product_id or item.id):
             if item.source_product_id is None:
                 raise PaymentApplicationError("一般訂單品項缺少商品資料")
             product = await session.scalar(
@@ -1292,6 +1337,19 @@ class SQLAlchemyPaymentCallbackRepository:
         )
         if order is None:
             raise PaymentApplicationError("找不到付款訂單")
+        if is_obsolete_order_attempt(attempt, order):
+            await self._reload_locked_attempt_reservations(attempt)
+            await release_attempt_reservations(self.session, attempt)
+            await self._mark_late_refund(
+                order, attempt, "訂單數量已修改，退回舊版付款", paid_at=payment_time,
+                obsolete_revision=True,
+            )
+            await self._publish_payment_notification(
+                order, attempt, "obsolete_order_payment_refund_requested",
+                "舊版訂單付款將退回",
+                f"訂單 {order.order_number} 已修改數量；舊版實收 NT${attempt.amount} 將全額退回，請使用目前訂單的付款入口。",
+            )
+            return
         await self._reload_locked_attempt_reservations(attempt)
         remaining_payment_status = (
             await remaining_subject_payment_status(self.session, attempt)
@@ -1597,7 +1655,7 @@ class SQLAlchemyPaymentCallbackRepository:
             .order_by(Refund.created_at.desc())
             .with_for_update()
         )
-        if refund is None:
+        if refund is None and not (order is not None and is_obsolete_order_attempt(attempt, order)):
             refund = await self.session.scalar(
                 select(Refund)
                 .where(
@@ -1636,6 +1694,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 amount=attempt.amount,
                 status=RefundStatus.COMPLETED,
                 reason="雷門查單確認交易已退款",
+                purpose=("obsolete_order_revision" if order is not None and is_obsolete_order_attempt(attempt, order) else "order_cancellation"),
                 requested_by_id=requested_by_id,
                 completed_at=current,
             )
@@ -1649,13 +1708,18 @@ class SQLAlchemyPaymentCallbackRepository:
             refund.status = RefundStatus.COMPLETED
             refund.completed_at = current
 
+        obsolete_refund = order is not None and is_obsolete_order_refund(refund, attempt, order)
+        if obsolete_refund:
+            refund.purpose = "obsolete_order_revision"
+            attempt.superseded_at = attempt.superseded_at or current
+            await release_attempt_reservations(self.session, attempt)
         remaining_payment_status = (
             await remaining_subject_payment_status(self.session, attempt)
         )
         fulfillment_irreversible = (
             order is not None and order_fulfillment_is_irreversible(order)
         )
-        if order is not None:
+        if order is not None and not obsolete_refund:
             await self._release_refunded_attempt_resources(
                 attempt,
                 current,
@@ -1663,7 +1727,7 @@ class SQLAlchemyPaymentCallbackRepository:
             )
         attempt.status = PaymentStatus.REFUNDED
         attempt.provider_response = dict(payload)
-        if order is not None:
+        if order is not None and not obsolete_refund:
             order.payment_status = (
                 remaining_payment_status or PaymentStatus.REFUNDED
             )
@@ -1725,10 +1789,16 @@ class SQLAlchemyPaymentCallbackRepository:
                     user_id=owner.id,
                     event_type="refund_completed",
                     title="退款完成",
-                    body=f"NT${refund.amount} 已由金流確認退款完成。",
+                    body=(
+                        f"訂單 {order.order_number} 第 {attempt.order_revision} 版付款 NT${refund.amount} 已退回，請依訂單中心最新狀態辦理。"
+                        if obsolete_refund else f"NT${refund.amount} 已由金流確認退款完成。"
+                    ),
                     data={
                         "order_id": attempt.order_id,
                         "membership_charge_id": attempt.membership_charge_id,
+                        "refund_amount": refund.amount,
+                        "refund_purpose": refund.purpose,
+                        "order_revision": attempt.order_revision if order else None,
                     },
                     email=owner.email,
                     dedupe_key=f"refund:{refund.id}",
@@ -1743,6 +1813,7 @@ class SQLAlchemyPaymentCallbackRepository:
             await self.session.scalars(
                 select(InventoryReservation)
                 .where(InventoryReservation.payment_attempt_id == attempt.id)
+                .order_by(InventoryReservation.id)
                 .execution_options(populate_existing=True)
                 .with_for_update()
             )
@@ -1801,7 +1872,7 @@ class SQLAlchemyPaymentCallbackRepository:
         ):
             return
         group_release_quantity = 0
-        for reservation in attempt.reservations:
+        for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
             if reservation.status != ReservationStatus.CONSUMED:
                 continue
             if (
@@ -1861,7 +1932,7 @@ class SQLAlchemyPaymentCallbackRepository:
             .order_by(Refund.created_at.desc())
             .with_for_update()
         )
-        if refund is None:
+        if refund is None and not (attempt.order is not None and is_obsolete_order_attempt(attempt, attempt.order)):
             refund = await self.session.scalar(
                 select(Refund)
                 .where(
@@ -1951,7 +2022,7 @@ class SQLAlchemyPaymentCallbackRepository:
         originally_in_window = payment_time <= _aware(attempt.expires_at)
         if payment_time > _aware(attempt.expires_at):
             await release_attempt_reservations(self.session, attempt)
-        for reservation in attempt.reservations:
+        for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
             if reservation.source_meal_offering_id is None:
                 continue
             offering = await self.session.scalar(
@@ -1980,7 +2051,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 offering.reserved_quantity += reservation.quantity
                 reservation.status = ReservationStatus.ACTIVE
                 reservation.released_at = None
-        for reservation in attempt.reservations:
+        for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
             if (
                 reservation.status == ReservationStatus.ACTIVE
                 and reservation.source_meal_offering_id is not None
@@ -2009,19 +2080,24 @@ class SQLAlchemyPaymentCallbackRepository:
         attempt: PaymentAttempt,
         reason: str,
         paid_at: Optional[datetime] = None,
+        obsolete_revision: bool = False,
     ) -> None:
         current = datetime.now(timezone.utc)
         payment_time = paid_at or current
         attempt.status = PaymentStatus.LATE_PAID_REFUND_REQUIRED
         attempt.paid_at = payment_time
-        order.payment_status = PaymentStatus.LATE_PAID_REFUND_REQUIRED
-        order.paid_at = payment_time
+        if obsolete_revision:
+            attempt.superseded_at = attempt.superseded_at or current
+        else:
+            order.payment_status = PaymentStatus.LATE_PAID_REFUND_REQUIRED
+            order.paid_at = payment_time
         refund = Refund(
             order=order,
             payment_attempt=attempt,
             provider=attempt.provider,
-            amount=order.amount_total,
+            amount=attempt.amount,
             status=RefundStatus.PENDING,
+            purpose="obsolete_order_revision" if obsolete_revision else "order_cancellation",
             reason=reason,
             requested_by_id=order.user_id,
         )
@@ -2069,7 +2145,7 @@ class SQLAlchemyPaymentCallbackRepository:
         if payment_time > _aware(attempt.expires_at):
             await release_attempt_reservations(self.session, attempt)
         products_to_reacquire = []
-        for reservation in attempt.reservations:
+        for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
             if reservation.source_product_id is None:
                 continue
             if reservation.status == ReservationStatus.ACTIVE:
@@ -2086,7 +2162,7 @@ class SQLAlchemyPaymentCallbackRepository:
             product.stock_quantity -= reservation.quantity
             reservation.status = ReservationStatus.ACTIVE
             reservation.released_at = None
-        for reservation in attempt.reservations:
+        for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
             if reservation.status == ReservationStatus.ACTIVE:
                 reservation.status = ReservationStatus.CONSUMED
         return True
@@ -2101,7 +2177,7 @@ async def release_attempt_reservations(
     session: AsyncSession, attempt: PaymentAttempt
 ) -> None:
     current = datetime.now(timezone.utc)
-    for reservation in attempt.reservations:
+    for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
         if reservation.status != ReservationStatus.ACTIVE:
             continue
         if reservation.group_campaign_id is not None:

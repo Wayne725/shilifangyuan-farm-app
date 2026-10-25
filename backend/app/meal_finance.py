@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, exists, func, or_, select, union_all
+from sqlalchemy import and_, case, exists, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -45,7 +45,7 @@ def _receipts(filters):
     }))
     attempts = select(
         Order.id.label("order_id"), PaymentAttempt.amount.label("amount"),
-        func.coalesce(PaymentAttempt.paid_at, Order.paid_at).label("occurred_at"),
+        func.coalesce(PaymentAttempt.paid_at, case((and_(PaymentAttempt.order_revision == Order.revision, PaymentAttempt.amount == Order.amount_total, PaymentAttempt.superseded_at.is_(None)), Order.paid_at))).label("occurred_at"),
     ).join(PaymentAttempt, PaymentAttempt.order_id == Order.id).where(
         _channel_scope(filters), received,
     )
@@ -112,6 +112,14 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
         details.append({
             "id": order.id, "order_number": order.order_number, "sales_channel": order.sales_channel.value, "customer_name": order.user.display_name,
             "customer_email": order.contact_email, "membership_type": order.membership_type_snapshot.value,
+            "revision": order.revision,
+            "receipts": [{"merchant_trade_no": attempt.merchant_trade_no, "order_revision": attempt.order_revision,
+                          "amount": attempt.amount, "status": attempt.status.value,
+                          "received_at": aware(attempt.paid_at) if attempt.paid_at else None,
+                          "obsolete_revision": attempt.superseded_at is not None or attempt.order_revision != order.revision or attempt.amount != order.amount_total}
+                         for attempt in sorted(order.payment_attempts, key=lambda row: (aware(row.created_at), row.id))
+                         if attempt.paid_at or attempt.status in {PaymentStatus.PAID, PaymentStatus.REFUND_PENDING,
+                             PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}],
             "created_at": aware(order.created_at), "paid_at": aware(order.paid_at) if order.paid_at else None, "order_amount": order.amount_total,
             "tax_amount": order.tax_amount, "period_received": period_receipts[order.id], "period_refunded": period_refunds,
             "period_net": period_receipts[order.id] - period_refunds, "payment_status": order.payment_status.value,
@@ -126,7 +134,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
                        "unit_price": item.unit_price, "subtotal": item.subtotal, "tax_type": item.tax_type.value,
                        "options": [{"group_name": option.group_name, "name": option.option_name, "price_delta": option.price_delta} for option in item.selected_options]}
                       for item in order.items],
-            "refunds": [{"amount": row.amount, "status": row.status.value, "reason": row.reason,
+            "refunds": [{"purpose": row.purpose, "payment_attempt_id": row.payment_attempt_id, "amount": row.amount, "status": row.status.value, "reason": row.reason,
                          "requested_at": aware(row.created_at), "completed_at": aware(row.completed_at) if row.completed_at else None} for row in refunds],
         })
     return {"items": details, "total": total, "limit": filters.limit, "offset": filters.offset}
