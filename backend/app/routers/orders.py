@@ -145,6 +145,8 @@ def consolidate_lines(lines: List[object]) -> Dict[str, int]:
         quantities[line.product_id] = (
             quantities.get(line.product_id, 0) + line.quantity
         )
+        if quantities[line.product_id] > 999:
+            raise HTTPException(status_code=422, detail="同一商品合計數量不可超過 999")
     return quantities
 
 

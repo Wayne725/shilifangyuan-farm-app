@@ -38,7 +38,7 @@ export function ProductCard({
   onAdd,
 }: {
   product: Product;
-  onAdd: (product: Product) => void;
+  onAdd: (product: Product, quantity?: number) => void;
 }) {
   return (
     <article className="product-card">

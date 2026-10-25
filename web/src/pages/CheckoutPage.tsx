@@ -21,6 +21,7 @@ import {
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
+import { maxOrderItemQuantity } from "../lib/cart-quantity";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import { taxTypeLabel } from "../lib/invoice-tax";
@@ -47,7 +48,8 @@ export function CheckoutPage() {
   const platform = useStorefrontStatus();
   const shippingEnabled = logisticsEnabled && storefrontCapabilities(platform.data).shipping;
   const notificationEmail = user?.notification_email || user?.email || "";
-  const { cart, changeQuantity, clearCart } = useCommerce();
+  const { cart, adjustQuantity, clearCart } = useCommerce();
+  const [quantityError, setQuantityError] = useState("");
   const [checkoutMethod, setCheckoutMethod] =
     useState<CheckoutMethod>("cooperative_pickup");
   const [pickupLocationId, setPickupLocationId] = useState("");
@@ -81,7 +83,7 @@ export function CheckoutPage() {
     enabled: shippingEnabled,
   });
   const quote = useQuery({
-    queryKey: ["order-quote", itemKey, user?.id, invoicePreference.buyerType],
+    queryKey: ["order-quote", itemKey, user?.id, user?.membership_type, invoicePreference.buyerType],
     queryFn: () =>
       apiFetch<OrderQuote>("/v1/orders/quote", {
         method: "POST",
@@ -178,6 +180,14 @@ export function CheckoutPage() {
       invoicePreferenceIsValid(invoicePreference) &&
       (checkoutMethod === "shipping" ? shippingReady : selectedPickupLocation && !locations.isError),
   );
+  const changeQuantity = (productId: string, delta: number) => {
+    try {
+      adjustQuantity(productId, delta);
+      setQuantityError("");
+    } catch (reason) {
+      setQuantityError(reason instanceof RangeError ? reason.message : "無法儲存結帳清單，請再試一次。");
+    }
+  };
 
   return (
     <section className="checkout-page">
@@ -206,19 +216,21 @@ export function CheckoutPage() {
                 <div>
                   <small>{product.supplier_name || product.category}</small>
                   <h3>{product.name}</h3>
-                  <p>{formatMoney(product.member_price)}／{product.unit}</p>
+                  <p>{formatMoney(quote.data?.items.find((item) => item.product_id === product.id)?.unit_price
+                    ?? (user?.membership_type === "member" || user?.membership_type === "trainee" ? product.member_price : product.nonmember_price))}／{product.unit}</p>
                 </div>
                 <div className="quantity-control">
-                  <button type="button" onClick={() => changeQuantity(product.id, quantity - 1)} aria-label="減少數量">
+                  <button type="button" disabled={createOrder.isPending} onClick={() => changeQuantity(product.id, -1)} aria-label="減少數量">
                     <Minus size={15} />
                   </button>
                   <span>{quantity}</span>
-                  <button type="button" onClick={() => changeQuantity(product.id, quantity + 1)} aria-label="增加數量">
+                  <button type="button" disabled={createOrder.isPending || quantity >= maxOrderItemQuantity} onClick={() => changeQuantity(product.id, 1)} aria-label="增加數量">
                     <Plus size={15} />
                   </button>
                 </div>
               </article>
             ))}
+            {quantityError && <p className="form-error" role="alert">{quantityError}</p>}
 
             <div className="checkout-step-title pickup-title">
               <span>02</span>
