@@ -416,7 +416,13 @@ async def test_post_deadline_threshold_drop_refunds_remaining_group_orders(
         status=ReservationStatus.CONSUMED,
         expires_at=now,
     )
-    database_session.add_all([refunded_reservation, remaining_reservation])
+    remaining_attempt = PaymentAttempt(
+        order=remaining_order, provider="ecpay", merchant_trade_no="GROUP-THRESHOLD-PAID",
+        provider_trade_no="GROUP-THRESHOLD-PROVIDER", amount=remaining_order.amount_total,
+        status=PaymentStatus.PAID, paid_at=now, expires_at=now,
+    )
+    remaining_reservation.payment_attempt = remaining_attempt
+    database_session.add_all([refunded_reservation, remaining_reservation, remaining_attempt])
     await database_session.flush()
     remove_paid_quantity(campaign, 1, now)
     await database_session.commit()

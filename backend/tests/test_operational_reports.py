@@ -46,3 +46,33 @@ async def test_invoice_register_search_is_read_only_and_export_audited(review_co
     exported = await c.client.get('/v1/admin/invoice-register.csv?q=AB12345678', headers=headers)
     assert exported.status_code == 200 and 'AB12345678' in exported.text
     assert await c.session.scalar(select(func.count(AdminAudit.id)).where(AdminAudit.action == 'invoice.register_exported')) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("obsolete_status", list(RefundStatus))
+async def test_cancellation_report_excludes_refunds_for_obsolete_order_payments(review_context, obsolete_status):
+    import csv
+    import io
+
+    c = review_context
+    c.client._transport.app.include_router(meal_cancellation_reports_router)
+    await mark_paid(c)
+    request = await submit(c)
+    assert (await review(c, request)).status_code == 200
+    c.session.add(Refund(
+        order=c.order, amount=900, status=obsolete_status,
+        purpose="obsolete_order_revision", reason="舊版本付款退款",
+        requested_by_id=c.admin.id,
+    ))
+    await c.session.commit()
+    result = await c.client.get('/v1/admin/meal-cancellation-summary', headers=auth_headers(c.admin))
+    assert result.status_code == 200, result.text
+    summary = result.json()
+    assert summary['approved_amount'] == 200
+    assert summary['refund_pending'] == 200
+    assert summary['refunded'] == 0
+    assert summary['refund_failed'] == 0
+    exported = await c.client.get('/v1/admin/meal-cancellations.csv?review_status=approved', headers=auth_headers(c.admin))
+    row = next(csv.DictReader(io.StringIO(exported.text.lstrip('\ufeff'))))
+    assert row['退款處理中金額'] == '200'
+    assert row['已完成退款金額'] == '0'

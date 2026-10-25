@@ -40,20 +40,21 @@ async def cancellation_report(session, starts_on, ends_on, search):
     approved_orders, rows = set(), []
     for request in requests:
         order = request.order
+        cancellation_refunds = [refund for refund in order.refunds if refund.purpose == "order_cancellation"]
         summary[request.status] += 1
         if request.status == "pending":
             summary["pending_amount"] += order.amount_total
         if request.status == "approved" and order.id not in approved_orders:
             approved_orders.add(order.id)
             summary["approved_amount"] += order.amount_total
-            for refund in order.refunds:
+            for refund in cancellation_refunds:
                 summary[{RefundStatus.PENDING: "refund_pending", RefundStatus.COMPLETED: "refunded", RefundStatus.FAILED: "refund_failed"}[refund.status]] += refund.amount
         rows.append({"id": request.id, "order_number": order.order_number, "name": request.requested_by.display_name,
             "email": order.contact_email, "amount": order.amount_total, "status": request.status, "reason": request.reason,
             "requested_at": request.requested_at, "review_reason": request.review_reason, "reviewed_at": request.reviewed_at,
             "payment_status": order.payment_status.value,
-            "refund_pending": sum(row.amount for row in order.refunds if row.status == RefundStatus.PENDING),
-            "refunded": sum(row.amount for row in order.refunds if row.status == RefundStatus.COMPLETED)})
+            "refund_pending": sum(row.amount for row in cancellation_refunds if row.status == RefundStatus.PENDING),
+            "refunded": sum(row.amount for row in cancellation_refunds if row.status == RefundStatus.COMPLETED)})
     return {"summary": summary, "items": rows}
 
 
