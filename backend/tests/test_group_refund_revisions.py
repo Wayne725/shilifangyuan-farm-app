@@ -60,7 +60,13 @@ async def test_group_closure_refunds_current_revision_despite_obsolete_refund(da
                "admin_reject": GroupDecisionStatus.PENDING_CONFIRMATION, "admin_cancel": GroupDecisionStatus.CONFIRMED}[path]
     admin, campaign, order, old, latest, old_refund = await make_revised_group(session, old_refund_status, initial)
     if path in {"failed", "expired"}:
-        assert await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 100) == 1
+        await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 100)
+        assert campaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION
+        assert order.payment_status == PaymentStatus.PAID
+        assert await session.scalar(select(func.count(Refund.id)).where(Refund.purpose == "order_cancellation")) == 0
+        async with api_test_context(session, [groups_router]) as client:
+            response = await client.post(f"/v1/group-campaigns/{campaign.id}/admin/cancel", headers=auth_headers(admin), json={"reason": "管理員核對後取消"})
+            assert response.status_code == 200, response.text
         assert await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 100) == 0
     else:
         async with api_test_context(session, [groups_router]) as client:

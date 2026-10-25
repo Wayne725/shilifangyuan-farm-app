@@ -64,6 +64,7 @@ from ..schemas import (
     CampaignCreate,
     CampaignDecision,
     CampaignRead,
+    CampaignReviewDeadlineUpdate,
     CampaignReject,
     CampaignUpdate,
     GroupJoinRequest,
@@ -71,6 +72,7 @@ from ..schemas import (
     GroupJoinQuoteRequest,
     OrderRead,
 )
+from ..group_review import campaign_has_unsettled_payments, reconcile_campaign_state, review_blocked_reason, TERMINAL_DECISIONS
 from .orders import (
     order_read,
     release_active_reservations,
@@ -87,6 +89,8 @@ def make_order_number() -> str:
 
 
 def campaign_read(campaign: GroupCampaign) -> CampaignRead:
+    now = datetime.now(timezone.utc)
+    blocked_reason = review_blocked_reason(campaign, now)
     return CampaignRead(
         id=campaign.id,
         source_proposal_id=campaign.source_proposal_id,
@@ -103,19 +107,29 @@ def campaign_read(campaign: GroupCampaign) -> CampaignRead:
         paid_quantity=campaign.paid_quantity,
         reserved_quantity=campaign.reserved_quantity,
         available_quantity=campaign_available_quantity(campaign),
-        deadline=campaign.deadline,
-        estimated_pickup_start=campaign.estimated_pickup_start,
-        estimated_pickup_end=campaign.estimated_pickup_end,
-        final_pickup_at=campaign.final_pickup_at,
+        deadline=aware(campaign.deadline),
+        estimated_pickup_start=aware(campaign.estimated_pickup_start),
+        estimated_pickup_end=aware(campaign.estimated_pickup_end),
+        final_pickup_at=aware(campaign.final_pickup_at) if campaign.final_pickup_at else None,
         decision_status=campaign.decision_status,
         intake_status=campaign.intake_status,
-        confirmation_deadline=campaign.confirmation_deadline,
-        confirmed_at=campaign.confirmed_at,
-        core_locked_at=campaign.core_locked_at,
+        confirmation_deadline=aware(campaign.confirmation_deadline) if campaign.confirmation_deadline else None,
+        threshold_version=campaign.threshold_version or 0,
+        updated_at=aware(campaign.updated_at),
+        review_overdue=bool(campaign.decision_status not in TERMINAL_DECISIONS and campaign.confirmation_deadline and now >= aware(campaign.confirmation_deadline)),
+        can_confirm=blocked_reason is None,
+        can_edit_review_deadline=campaign.decision_status not in TERMINAL_DECISIONS,
+        confirmation_blocked_reason=blocked_reason,
+        confirmed_paid_quantity=campaign.confirmed_paid_quantity,
+        confirmed_min_paid_quantity=campaign.confirmed_min_paid_quantity,
+        confirmed_threshold_version=campaign.confirmed_threshold_version,
+        confirmation_exception_reason=None,
+        confirmed_at=aware(campaign.confirmed_at) if campaign.confirmed_at else None,
+        core_locked_at=aware(campaign.core_locked_at) if campaign.core_locked_at else None,
         can_ship=campaign.can_ship,
         shipping_temperature=campaign.shipping_temperature,
         allowed_shipping_channels=campaign.allowed_shipping_channels or [],
-        created_at=campaign.created_at,
+        created_at=aware(campaign.created_at),
     )
 
 
@@ -199,7 +213,7 @@ async def load_campaign(
 ) -> Optional[GroupCampaign]:
     query = select(GroupCampaign).where(GroupCampaign.id == campaign_id)
     if lock:
-        query = query.with_for_update()
+        query = query.execution_options(populate_existing=True).with_for_update()
     return await session.scalar(query)
 
 
@@ -307,6 +321,7 @@ async def update_campaign(
         "supply_cap": campaign.supply_cap,
         "per_user_cap": campaign.per_user_cap,
         "deadline": aware(campaign.deadline),
+        "confirmation_deadline": aware(campaign.confirmation_deadline) if campaign.confirmation_deadline else None,
         "estimated_pickup_start": aware(campaign.estimated_pickup_start),
         "estimated_pickup_end": aware(campaign.estimated_pickup_end),
         "can_ship": campaign.can_ship,
@@ -344,11 +359,10 @@ async def update_campaign(
             .where(
                 InventoryReservation.group_campaign_id == campaign.id,
                 InventoryReservation.status == ReservationStatus.ACTIVE,
-                InventoryReservation.expires_at > now,
             )
             .limit(1)
         )
-        if active_reservation_id is not None:
+        if active_reservation_id is not None or await campaign_has_unsettled_payments(session, campaign):
             raise HTTPException(
                 status_code=409,
                 detail="尚有有效付款保留，暫時無法修改共同購買核心條件",
@@ -612,6 +626,34 @@ async def join_campaign(
     return order_read(order, False)
 
 
+@groups_router.patch("/{campaign_id}/admin/review-deadline", response_model=CampaignRead)
+async def update_review_deadline(
+    campaign_id: str, body: CampaignReviewDeadlineUpdate,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+) -> CampaignRead:
+    campaign = await load_campaign(session, campaign_id, lock=True)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="找不到共同購買")
+    if campaign.decision_status in TERMINAL_DECISIONS:
+        raise HTTPException(status_code=409, detail="已完成決定的共同購買不可修改審核期限")
+    previous_deadline = aware(campaign.confirmation_deadline) if campaign.confirmation_deadline else None
+    if aware(campaign.updated_at) != body.expected_updated_at or previous_deadline != body.expected_confirmation_deadline:
+        raise HTTPException(status_code=409, detail="審核時程已更新，請重新核對")
+    start = body.estimated_pickup_start or aware(campaign.estimated_pickup_start)
+    end = body.estimated_pickup_end or aware(campaign.estimated_pickup_end)
+    if body.confirmation_deadline <= max(datetime.now(timezone.utc), aware(campaign.deadline)) or body.confirmation_deadline > start or end < start:
+        raise HTTPException(status_code=422, detail="審核期限須晚於現在與付款截止，且不晚於預估取貨開始；取貨結束不可早於開始")
+    before = {"confirmation_deadline": previous_deadline.isoformat() if previous_deadline else None,
+              "estimated_pickup_start": aware(campaign.estimated_pickup_start).isoformat(),
+              "estimated_pickup_end": aware(campaign.estimated_pickup_end).isoformat()}
+    campaign.confirmation_deadline = body.confirmation_deadline
+    campaign.estimated_pickup_start, campaign.estimated_pickup_end = start, end
+    session.add(AdminAudit(actor_id=admin.id, action="campaign.review_deadline", aggregate_type="group_campaign", aggregate_id=campaign.id,
+        reason=body.reason, data={"before": before, "after": {"confirmation_deadline": body.confirmation_deadline.isoformat(), "estimated_pickup_start": start.isoformat(), "estimated_pickup_end": end.isoformat()}}))
+    await session.commit()
+    return campaign_read(campaign)
+
+
 @groups_router.post(
     "/{campaign_id}/admin/confirm", response_model=CampaignRead
 )
@@ -624,9 +666,13 @@ async def confirm_group(
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
+    now = datetime.now(timezone.utc)
+    await reconcile_campaign_state(session, campaign, now)
     try:
         confirm_campaign(
-            campaign, body.final_pickup_at, datetime.now(timezone.utc)
+            campaign, body.final_pickup_at, now,
+            expected_threshold_version=body.expected_threshold_version,
+            allow_below_threshold=body.allow_below_threshold, reason=body.reason,
         )
     except DomainError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -650,7 +696,8 @@ async def confirm_group(
                 action="campaign.confirm",
                 aggregate_type="group_campaign",
                 aggregate_id=campaign.id,
-                data={"threshold_version": campaign.threshold_version},
+                data={"threshold_version": campaign.threshold_version, "paid_quantity": campaign.paid_quantity, "min_paid_quantity": campaign.min_paid_quantity, "allow_below_threshold": body.allow_below_threshold},
+                reason=campaign.confirmation_exception_reason,
             ),
             OutboxEvent(
                 event_type="group.confirmed",
@@ -678,6 +725,7 @@ async def close_campaign_with_refunds(
         await session.scalars(
             select(Order)
             .where(Order.group_campaign_id == campaign.id)
+            .order_by(Order.id)
             .options(
                 selectinload(Order.items),
                 selectinload(Order.reservations),

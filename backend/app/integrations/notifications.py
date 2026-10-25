@@ -9,6 +9,9 @@ from ..models import Notification, OutboxEvent
 
 
 EMAIL_EVENT_TYPES = {
+    "group.settlement_pending",
+    "group.review_ready",
+    "group.review_overdue",
     "proposal_approved",
     "proposal_rejected",
     "group_opened",

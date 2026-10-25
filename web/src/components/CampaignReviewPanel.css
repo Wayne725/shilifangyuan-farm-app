@@ -1,0 +1,12 @@
+.campaign-review-panel { grid-column: 1 / -1; min-width: 0; width: 100%; border-top: 1px solid var(--line); padding-top: 1.5rem; }
+.campaign-review-panel > :is(p, button, div, form, dl) { margin-bottom: 1rem; }
+.campaign-review-panel .social-form { margin-top: 1rem; padding: 1.25rem; border: 1px solid var(--line); }
+.campaign-review-panel .field-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+.campaign-review-panel :is(input, textarea) { min-width: 0; max-width: 100%; }
+.campaign-review-panel .meal-choice { display: flex; align-items: flex-start; gap: .65rem; margin: 1rem 0; }
+.campaign-review-panel .meal-choice input { flex: 0 0 auto; width: 1rem; height: 1rem; margin-top: .2rem; }
+.campaign-review-panel .form-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
+.campaign-review-panel .form-actions .button { flex: 0 1 auto; }
+.campaign-rejection { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: end; }
+.campaign-review-conflict { border-left: 3px solid var(--brass); padding-left: 1rem; margin: 1rem 0; }
+@media (max-width: 600px) { .campaign-rejection { grid-template-columns: 1fr; } .campaign-review-panel .social-form { padding: 1rem; } }

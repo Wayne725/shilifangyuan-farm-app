@@ -9,6 +9,7 @@ import { DataState, LoadingLines, ProductCard, SectionHeading } from "../compone
 import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
 import { apiFetch, formatDate } from "../lib/api";
+import { campaignOrderBlockReason, campaignStatusLabel } from "../lib/group-campaigns";
 import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
@@ -115,13 +116,13 @@ export function ShopPage() {
               <article key={campaign.id} className="editorial-card">
                 <div className="editorial-number">{String(index + 1).padStart(2, "0")}</div>
                 <div>
-                  <span>{campaign.intake_status || "進行中"}</span>
+                  <span>{campaignStatusLabel(campaign, now)}</span>
                   <h3>{campaign.title || "共同採購"}</h3>
                   <p>{campaign.description || "供應與達標資訊以系統紀錄為準。"}</p>
                 </div>
                 <Link className="editorial-end" to="/groups/$campaignId" params={{ campaignId: campaign.id }}>
                   <small>截止 {formatDate(campaign.deadline)}</small>
-                  <span>查看並參加 <ArrowRight size={22} weight="light" /></span>
+                  <span>{campaignOrderBlockReason(campaign, now) ? "查看共同購買" : "查看並參加"} <ArrowRight size={22} weight="light" /></span>
                 </Link>
               </article>
             ))}

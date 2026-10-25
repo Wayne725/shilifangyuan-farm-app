@@ -164,6 +164,7 @@ export interface Order {
   sales_channel: "regular" | "group" | "meal_preorder";
   fulfillment_method: FulfillmentMethod;
   group_campaign_id?: string | null;
+  group_campaign_deadline?: string | null;
   meal_event_id?: string | null;
   membership_type_snapshot: string;
   member_tax_exempt_snapshot?: boolean;
@@ -425,6 +426,16 @@ export interface GroupCampaign {
   allowed_shipping_channels: ShippingChannel[];
   final_pickup_at?: string | null;
   confirmation_deadline?: string | null;
+  updated_at?: string;
+  threshold_version?: number;
+  review_overdue?: boolean;
+  can_confirm?: boolean;
+  can_edit_review_deadline?: boolean;
+  confirmation_blocked_reason?: string | null;
+  confirmed_paid_quantity?: number | null;
+  confirmed_min_paid_quantity?: number | null;
+  confirmed_threshold_version?: number | null;
+  confirmation_exception_reason?: string | null;
   confirmed_at?: string | null;
   core_locked_at?: string | null;
   created_at?: string;

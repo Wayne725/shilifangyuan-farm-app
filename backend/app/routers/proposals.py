@@ -496,12 +496,8 @@ async def open_proposal_campaign(proposal_id: str, body: CampaignCreate, admin: 
     )
     await session.commit()
     await session.refresh(campaign)
-    return CampaignRead.model_validate(
-        {
-            **campaign.__dict__,
-            "available_quantity": campaign.supply_cap,
-        }
-    )
+    from .groups import campaign_read
+    return campaign_read(campaign)
 
 
 router = proposals_router

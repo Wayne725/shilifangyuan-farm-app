@@ -1,3 +1,5 @@
+import { campaignTimestamp } from "../lib/group-campaigns";
+import { useDeadlineClock } from "../lib/use-deadline-clock";
 import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
 import {
   ArrowClockwise,
@@ -115,6 +117,8 @@ export function OrdersPage() {
   const generalOrders = (orders.data || []).filter((order) => order.sales_channel !== "meal_preorder");
   const visibleOrders = filterOrders(generalOrders, query, payment);
   const selected = visibleOrders.find((order) => order.id === selectedId) || visibleOrders[0];
+  const now = useDeadlineClock(selected?.group_campaign_deadline);
+  const groupPaymentClosed = Boolean(selected?.group_campaign_deadline && campaignTimestamp(selected.group_campaign_deadline) <= now);
   const returnedOrder = orders.data?.find((order) => order.id === search.order_id);
   const returnedMeal = useQuery({
     queryKey: ["returned-meal-order", user?.id, search.order_id],
@@ -331,7 +335,7 @@ export function OrdersPage() {
                     {reopenLogistics.isPending ? "準備物流頁…" : "繼續選擇物流"}
                   </button>
                 )}
-                {!selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
+                {!groupPaymentClosed && !selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
                   <button
                     className="button button-primary"
                     type="button"

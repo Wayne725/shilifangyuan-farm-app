@@ -1291,6 +1291,12 @@ class GroupCampaign(Base):
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    review_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_paid_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    confirmed_min_paid_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    confirmed_threshold_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    confirmation_exception_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    legacy_confirmed_intake: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     can_ship: Mapped[bool] = mapped_column(Boolean, default=False)
     shipping_temperature: Mapped[Optional[ShippingTemperature]] = mapped_column(
@@ -2315,6 +2321,8 @@ class PaymentAttempt(Base):
     )
     order_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    unpaid_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    settlement_unknown_since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     provider: Mapped[str] = mapped_column(
         String(20), default="ecpay", index=True
     )
