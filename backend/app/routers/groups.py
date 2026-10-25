@@ -151,7 +151,7 @@ async def target_order_snapshot(
         )
     )
     if bundle is None:
-        raise HTTPException(status_code=422, detail="選擇的團購套組不存在")
+        raise HTTPException(status_code=422, detail="選擇的共同購買套組不存在")
     tax_type = (
         TaxType.TAXABLE
         if any(
@@ -220,7 +220,7 @@ async def get_campaign(
 ) -> CampaignRead:
     campaign = await load_campaign(session, campaign_id)
     if campaign is None:
-        raise HTTPException(status_code=404, detail="找不到團購")
+        raise HTTPException(status_code=404, detail="找不到共同購買")
     return campaign_read(campaign)
 
 
@@ -288,7 +288,7 @@ async def update_campaign(
 ) -> CampaignRead:
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
-        raise HTTPException(status_code=404, detail="找不到團購")
+        raise HTTPException(status_code=404, detail="找不到共同購買")
 
     updates = body.model_dump(exclude_unset=True)
     if not updates:
@@ -335,7 +335,7 @@ async def update_campaign(
     if changed_core_fields and campaign.core_locked_at is not None:
         raise HTTPException(
             status_code=409,
-            detail="首筆付款成功後，團購核心條件不可修改",
+            detail="首筆付款成功後，共同購買核心條件不可修改",
         )
     if changed_core_fields:
         now = datetime.now(timezone.utc)
@@ -351,7 +351,7 @@ async def update_campaign(
         if active_reservation_id is not None:
             raise HTTPException(
                 status_code=409,
-                detail="尚有有效付款保留，暫時無法修改團購核心條件",
+                detail="尚有有效付款保留，暫時無法修改共同購買核心條件",
             )
 
     if (
@@ -390,7 +390,7 @@ async def quote_group_join(
 ) -> GroupJoinQuoteRead:
     campaign = await load_campaign(session, campaign_id)
     if campaign is None:
-        raise HTTPException(status_code=404, detail="找不到團購")
+        raise HTTPException(status_code=404, detail="找不到共同購買")
     committed_quantity = await _committed_group_quantity(
         session,
         campaign.id,
@@ -420,7 +420,7 @@ async def quote_group_join(
             or campaign.shipping_temperature is None
             or channel not in (campaign.allowed_shipping_channels or [])
         ):
-            raise HTTPException(status_code=409, detail="此團購不支援選擇的物流通路")
+            raise HTTPException(status_code=409, detail="此共同購買不支援選擇的物流通路")
         today = datetime.now(timezone.utc).date()
         rate = await session.scalar(
             select(ShippingRate)
@@ -488,7 +488,7 @@ async def join_campaign(
     await require_accepting_orders(session)
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
-        raise HTTPException(status_code=404, detail="找不到團購")
+        raise HTTPException(status_code=404, detail="找不到共同購買")
     committed_quantity = await _committed_group_quantity(
         session,
         campaign.id,
@@ -518,7 +518,7 @@ async def join_campaign(
         or campaign.shipping_temperature is None
         or body.shipping_channel not in (campaign.allowed_shipping_channels or [])
     ):
-        raise HTTPException(status_code=409, detail="此團購不支援選擇的物流通路")
+        raise HTTPException(status_code=409, detail="此共同購買不支援選擇的物流通路")
     pickup_location = None
     if body.pickup_location_id is not None:
         if body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP:
@@ -623,7 +623,7 @@ async def confirm_group(
 ) -> CampaignRead:
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
-        raise HTTPException(status_code=404, detail="找不到團購")
+        raise HTTPException(status_code=404, detail="找不到共同購買")
     try:
         confirm_campaign(
             campaign, body.final_pickup_at, datetime.now(timezone.utc)
@@ -751,7 +751,7 @@ async def reject_group(
 ) -> CampaignRead:
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
-        raise HTTPException(status_code=404, detail="找不到團購")
+        raise HTTPException(status_code=404, detail="找不到共同購買")
     if campaign.decision_status != GroupDecisionStatus.PENDING_CONFIRMATION:
         raise HTTPException(status_code=409, detail="此團目前無法拒絕成團")
     await close_campaign_with_refunds(
@@ -776,7 +776,7 @@ async def cancel_group(
 ) -> CampaignRead:
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
-        raise HTTPException(status_code=404, detail="找不到團購")
+        raise HTTPException(status_code=404, detail="找不到共同購買")
     if campaign.decision_status in {
         GroupDecisionStatus.REJECTED,
         GroupDecisionStatus.CANCELLED,

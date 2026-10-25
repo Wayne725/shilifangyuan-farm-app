@@ -257,7 +257,7 @@ async def get_bundle(
         )
     )
     if bundle is None:
-        raise HTTPException(status_code=404, detail="找不到團購套組")
+        raise HTTPException(status_code=404, detail="找不到共同購買套組")
     return bundle_read(bundle)
 
 
@@ -366,6 +366,6 @@ async def reset_demo(
     return Message(
         message=(
             f"展示資料已重設：{counts['products']} 項商品、"
-            f"{counts['campaigns']} 個正式團購"
+            f"{counts['campaigns']} 個正式共同購買"
         )
     )

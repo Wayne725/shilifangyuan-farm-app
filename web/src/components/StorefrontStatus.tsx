@@ -31,7 +31,7 @@ export function storefrontOrderBlockReason(
     && items[0].quantity === 1 && status?.limited_product_ids?.includes(items[0].product_id);
   if (limitedProductAllowed) return "";
   if (!storefrontCapabilities(status)[channel]) {
-    return channel === "regular" ? "目前未開放一般商品訂購" : "目前未開放團購訂購";
+    return channel === "regular" ? "目前未開放一般商品訂購" : "目前未開放共同購買訂購";
   }
   return "";
 }

@@ -100,12 +100,12 @@ export function ShopPage() {
             eyebrow="BUYING TOGETHER / 共同購買"
             title="把需求聚在一起"
           />
-          <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的團購需求 <ArrowRight size={17} /></Link></div>
+          <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的共同購買需求 <ArrowRight size={17} /></Link></div>
           {campaigns.isPending && <LoadingLines count={3} />}
           {campaigns.isError && (
             <DataState
               kind="error"
-              title="團購資料暫時不可用"
+              title="共同購買資料暫時不可用"
               detail={campaigns.error.message}
               onAction={() => campaigns.refetch()}
             />

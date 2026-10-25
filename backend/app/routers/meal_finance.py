@@ -58,7 +58,7 @@ async def export_meal_sales(
                 sum(item["quantity"] for item in order["items"]), order["order_amount"], order["tax_amount"], order["period_received"],
                 order["period_refunded"], order["period_net"], order["payment_status"], order["fulfillment_status"], order["cancellation_status"],
                 order["invoice_status"], order["invoice_number"], refunds,
-                {"meal_preorder": "便當", "regular": "日常選品", "group": "團購"}[order["sales_channel"]], order["revision"], receipts]])
+                {"meal_preorder": "便當", "regular": "日常選品", "group": "共同購買"}[order["sales_channel"]], order["revision"], receipts]])
         if page_filters.offset + len(page["items"]) >= page["total"]:
             break
         page_filters = page_filters.model_copy(update={"offset": page_filters.offset + 100})

@@ -452,6 +452,7 @@ async def test_post_deadline_threshold_drop_refunds_remaining_group_orders(
     assert campaign.intake_status == GroupIntakeStatus.CLOSED
     assert remaining_order.payment_status == PaymentStatus.REFUND_PENDING
     assert remaining_reservation.status == ReservationStatus.RELEASED
+    assert refund.reason == "共同購買未成立，自動退款"
     assert refund_event is not None
 
 
@@ -1240,3 +1241,32 @@ async def test_member_proposal_and_activity_reconcile(
         proposer.id: ActivityRegistrationStatus.NO_SHOW,
         voter.id: ActivityRegistrationStatus.ATTENDED,
     }
+
+
+async def test_new_shared_purchase_notification_preserves_user_title_and_old_history(database_session):
+    session = database_session
+    admin = User(email="wording-admin@example.test", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
+    session.add(admin)
+    await session.flush()
+    created_at = datetime(2026, 9, 1, 2, 0, tzinfo=timezone.utc)
+    old = Notification(user_id=admin.id, event_type="proposal.review_requested", title="有新的團購提案待審核",
+        body="歷史團購提案", created_at=created_at)
+    event = OutboxEvent(event_type="proposal.review_requested", aggregate_type="vote_proposal",
+        aggregate_id="wording-proposal", payload={"target_name": "客人命名的團購茶葉"})
+    session.add_all([old, event])
+    await session.commit()
+    old_id = old.id
+
+    await jobs_module._process_domain_event(session, event)
+    await session.commit()
+
+    notifications = (await session.scalars(select(Notification).order_by(Notification.created_at))).all()
+    assert len(notifications) == 2
+    historical = next(item for item in notifications if item.id == old_id)
+    current = next(item for item in notifications if item.id != old_id)
+    assert historical.title == "有新的團購提案待審核" and historical.body == "歷史團購提案"
+    assert historical.created_at.replace(tzinfo=timezone.utc) == created_at
+    assert current.title == "有新的共同購買提案待審核"
+    assert current.body == "客人命名的團購茶葉 已送出共同購買投票提案。"
+    assert current.event_type == event.event_type
+    assert current.data["proposal_id"] == event.aggregate_id

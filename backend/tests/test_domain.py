@@ -193,13 +193,13 @@ def test_campaign_shipping_contract_is_normalized_and_validated() -> None:
 
     with pytest.raises(
         ValidationError,
-        match="可配送團購必須設定溫層與至少一個物流通路",
+        match="可配送共同購買必須設定溫層與至少一個物流通路",
     ):
         CampaignCreate(**base_payload, can_ship=True)
 
     with pytest.raises(
         ValidationError,
-        match="冷藏或冷凍團購只支援宅配",
+        match="冷藏或冷凍共同購買只支援宅配",
     ):
         CampaignCreate(
             **base_payload,

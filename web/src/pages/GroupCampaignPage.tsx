@@ -135,7 +135,7 @@ export function GroupCampaignPage() {
 
   if (campaign.isPending) return <section className="offer-page"><LoadingLines count={4} /></section>;
   if (campaign.isError || !campaign.data) {
-    return <section className="offer-page"><DataState kind="error" title="團購資料無法讀取" detail={campaign.error?.message || "找不到這筆團購"} /></section>;
+    return <section className="offer-page"><DataState kind="error" title="共同購買資料無法讀取" detail={campaign.error?.message || "找不到這筆共同購買"} /></section>;
   }
 
   const item = campaign.data;
@@ -184,7 +184,7 @@ export function GroupCampaignPage() {
               取貨方式
               <select value={method} disabled={checkout.isPending} onChange={(event) => setMethod(event.target.value as "pickup" | "shipping")}>
                 <option value="pickup">合作社取貨</option>
-                {(shippingEnabled || method === "shipping") && <option value="shipping" disabled={!shippingEnabled || !item.can_ship}>宅配／超商取貨{!shippingEnabled ? "（目前未開放配送）" : !item.can_ship ? "（此團購未開放配送）" : `（${temperatureLabels[item.shipping_temperature || "ambient"]}）`}</option>}
+                {(shippingEnabled || method === "shipping") && <option value="shipping" disabled={!shippingEnabled || !item.can_ship}>宅配／超商取貨{!shippingEnabled ? "（目前未開放配送）" : !item.can_ship ? "（此共同購買未開放配送）" : `（${temperatureLabels[item.shipping_temperature || "ambient"]}）`}</option>}
               </select>
             </label>
             {method === "pickup" && <label className="field">
@@ -220,8 +220,8 @@ export function GroupCampaignPage() {
 
         <aside className="offer-summary">
           <UsersThree size={28} weight="light" />
-          <p className="eyebrow">GROUP ORDER / 團購訂單</p>
-          <h2>團購摘要</h2>
+          <p className="eyebrow">GROUP ORDER / 共同購買訂單</p>
+          <h2>共同購買摘要</h2>
           {!user ? (
             <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後取得正式價格</button>
           ) : (
@@ -240,7 +240,7 @@ export function GroupCampaignPage() {
               </dl>
               {checkout.isError && <p className="form-error">{checkout.error.message}</p>}
               <button className="button button-system full-width" type="button" disabled={!submitReady || checkout.isPending || item.intake_status !== "open"} onClick={() => checkout.mutate()}>
-                {checkout.isPending ? "建立團購訂單中…" : method === "shipping" ? "參加並選擇物流" : "參加並前往付款"}
+                {checkout.isPending ? "建立共同購買訂單中…" : method === "shipping" ? "參加並選擇物流" : "參加並前往付款"}
               </button>
             </>
           )}

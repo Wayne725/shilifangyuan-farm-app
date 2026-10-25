@@ -273,7 +273,7 @@ async def _shipping_profile(
             or not campaign.can_ship
             or campaign.shipping_temperature is None
         ):
-            raise HTTPException(status_code=409, detail="此團購不支援物流")
+            raise HTTPException(status_code=409, detail="此共同購買不支援物流")
         temperatures = [campaign.shipping_temperature]
         channel_sets = [campaign.allowed_shipping_channels]
     else:
@@ -930,7 +930,7 @@ async def create_formal_logistics_order(
             != GroupDecisionStatus.CONFIRMED
         )
     ):
-        raise HTTPException(status_code=409, detail="團購確認成團後才能出貨")
+        raise HTTPException(status_code=409, detail="共同購買確認成團後才能出貨")
     if order.fulfillment is None or order.fulfillment.shipment is None:
         raise HTTPException(status_code=409, detail="訂單尚未選擇物流")
     if (

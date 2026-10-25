@@ -524,7 +524,7 @@ async def my_badges(
     rules = [
         ("points_100", "合作新芽", "累積 100 點", balance >= 100, {"points": 100}),
         ("votes_5", "民主實踐者", "參與 5 次社員表決", vote_count >= 5, {"votes": 5}),
-        ("groups_3", "揪團推手", "成功發起 3 次團購", successful_groups >= 3, {"successful_groups": 3}),
+        ("groups_3", "揪團推手", "成功發起 3 次共同購買", successful_groups >= 3, {"successful_groups": 3}),
         ("months_3", "持續支持者", "連續 3 個消費月份", consecutive_months >= 3, {"consecutive_purchase_months": 3}),
     ]
     for key, name, description, earned, rule in rules:
@@ -541,7 +541,16 @@ async def my_badges(
             select(MemberBadge, BadgeDefinition).join(BadgeDefinition, BadgeDefinition.id == MemberBadge.badge_id).where(MemberBadge.user_id == user.id).order_by(MemberBadge.granted_at)
         )
     ).all()
-    return [{"key": badge.key, "name": badge.name, "description": badge.description, "granted_at": grant.granted_at} for grant, badge in rows]
+    return [{
+        "key": badge.key,
+        "name": badge.name,
+        "description": (
+            "成功發起 3 次共同購買"
+            if badge.key == "groups_3" and badge.description == "成功發起 3 次團購"
+            else badge.description
+        ),
+        "granted_at": grant.granted_at,
+    } for grant, badge in rows]
 
 
 class PointAdjustment(BaseModel):
@@ -639,7 +648,7 @@ async def update_wish_status(
     if wish is None:
         raise HTTPException(status_code=404, detail="找不到願望")
     if body.status == WishStatus.LAUNCHED and not (body.launched_product_id or body.launched_campaign_id):
-        raise HTTPException(status_code=422, detail="成案需關聯正式商品或團購")
+        raise HTTPException(status_code=422, detail="成案需關聯正式商品或共同購買")
     first_launch = wish.status != WishStatus.LAUNCHED and body.status == WishStatus.LAUNCHED
     wish.status = body.status
     wish.admin_note = body.admin_note

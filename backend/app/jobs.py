@@ -531,18 +531,18 @@ async def _reconcile_proposals(
             continue
         changed += 1
         if proposal.status == ProposalStatus.CONVERSION_PENDING:
-            title = "團購投票已達門檻"
+            title = "共同購買投票已達門檻"
             body = "{} 已結束投票，等待管理員正式開團。".format(
                 proposal.target_name_snapshot
             )
         elif proposal.status == ProposalStatus.ENDED_UNMET:
-            title = "團購投票未達門檻"
+            title = "共同購買投票未達門檻"
             body = "{} 本次未達成投票門檻。".format(
                 proposal.target_name_snapshot
             )
         else:
-            title = "團購提案已逾開團期限"
-            body = "{} 未在期限內轉成正式團購。".format(
+            title = "共同購買提案已逾開團期限"
+            body = "{} 未在期限內轉成正式共同購買。".format(
                 proposal.target_name_snapshot
             )
         user = await session.get(User, proposal.proposer_id)
@@ -835,7 +835,7 @@ async def _reconcile_campaigns(
                 notification_service,
                 campaign,
                 "group.expired_unconfirmed",
-                "團購未在期限內確認",
+                "共同購買未在期限內確認",
             )
             changed += 1
             continue
@@ -863,7 +863,7 @@ async def _reconcile_campaigns(
                     notification_service,
                     campaign,
                     "group.failed_unmet",
-                    "團購未達成團門檻",
+                    "共同購買未達成團門檻",
                 )
             changed += 1
     await session.commit()
@@ -928,7 +928,7 @@ async def _enqueue_campaign_refunds(
     )
     actor = await session.get(User, campaign.created_by_id)
     if actor is None:
-        raise ValueError("找不到團購建立者")
+        raise ValueError("找不到共同購買建立者")
     for order in orders:
         if any(
             refund.status in {RefundStatus.PENDING, RefundStatus.COMPLETED}
@@ -936,7 +936,7 @@ async def _enqueue_campaign_refunds(
             for refund in order.refunds
         ):
             continue
-        await request_order_refund(session, order, actor, "團購未成立，自動退款")
+        await request_order_refund(session, order, actor, "共同購買未成立，自動退款")
 
 
 async def _process_outbox(
@@ -1604,8 +1604,8 @@ async def _process_domain_event(
                 NotificationCommand(
                     user_id=admin.id,
                     event_type=event.event_type,
-                    title="有新的團購提案待審核",
-                    body="{} 已送出團購投票提案。".format(
+                    title="有新的共同購買提案待審核",
+                    body="{} 已送出共同購買投票提案。".format(
                         event.payload.get("target_name", "商品")
                     ),
                     data={"proposal_id": event.aggregate_id},
@@ -1645,9 +1645,9 @@ async def _process_domain_event(
         user = await session.get(User, user_id)
         if user is not None:
             title = (
-                "團購提案已通過"
+                "共同購買提案已通過"
                 if event.event_type.endswith("approved")
-                else "團購提案未通過"
+                else "共同購買提案未通過"
             )
             await service.publish(
                 NotificationCommand(
@@ -1671,7 +1671,7 @@ async def _process_domain_event(
                 NotificationCommand(
                     user_id=admin.id,
                     event_type=event.event_type,
-                    title="團購投票已達門檻",
+                    title="共同購買投票已達門檻",
                     body="提案已達 {} 票。".format(
                         event.payload.get("vote_count", "")
                     ),
@@ -1694,8 +1694,8 @@ async def _process_domain_event(
                         NotificationCommand(
                             user_id=user.id,
                             event_type=event.event_type,
-                            title="正式團購已開放",
-                            body="你參與投票的商品已開始正式團購。",
+                            title="正式共同購買已開放",
+                            body="你參與投票的商品已開始正式共同購買。",
                             data={"campaign_id": event.aggregate_id},
                             email=user.email,
                             dedupe_key="outbox:{}:{}".format(event.id, user.id),
@@ -1714,11 +1714,11 @@ async def _process_domain_event(
                 )
             )
         titles = {
-            "group.confirmed": "團購已確認成團",
-            "group.rejected": "團購未確認成團",
-            "group.cancelled": "團購已取消",
+            "group.confirmed": "共同購買已確認成團",
+            "group.rejected": "共同購買未確認成團",
+            "group.cancelled": "共同購買已取消",
         }
-        title = titles.get(event.event_type, "團購狀態已更新")
+        title = titles.get(event.event_type, "共同購買狀態已更新")
         for user_id in user_ids:
             user = await session.get(User, user_id)
             if user is not None:

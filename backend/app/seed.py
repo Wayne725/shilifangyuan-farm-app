@@ -857,7 +857,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
 
     bundle = GroupBundle(
         name="家庭友善蔬果箱",
-        description="小白菜、玉米、地瓜與紅蘿蔔的固定團購套組。",
+        description="小白菜、玉米、地瓜與紅蘿蔔的固定共同購買套組。",
         member_price=320,
         nonmember_price=370,
         image_url="/assets/products/bok-choy.jpg",
@@ -1411,7 +1411,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         Notification(
             user_id=users[1].id,
             event_type="proposal.approved",
-            title="團購投票已通過審核",
+            title="共同購買投票已通過審核",
             body="放牧雞蛋已開始投票，目前 9/10 人。",
             data={"proposal_id": proposal.id},
         )
