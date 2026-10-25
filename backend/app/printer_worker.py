@@ -43,12 +43,17 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id).with_for_update())
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
             return True
-        if job.kind == "cancellation" and job.status == "pending":
-            sending = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == job.order_id, PrintJob.kind == "order", PrintJob.status == "sending").limit(1))
+        if job.kind in {"cancellation", "amendment"} and job.status == "pending":
+            sending = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == job.order_id, PrintJob.id != job.id, PrintJob.kind.in_({"order", "amendment"}), PrintJob.status == "sending").limit(1))
             if sending:
                 job.next_attempt_at = now + timedelta(seconds=settings.printer_poll_seconds)
                 await session.commit()
                 return True
+        order = await session.get(Order, job.order_id)
+        if job.status == "pending" and job.kind in {"order", "amendment"} and job.snapshot.get("revision", 1) != order.revision:
+            job.status, job.last_error = "failed", "order_revision_superseded"
+            await session.commit()
+            return True
         mode = "dry_run" if settings.printer_dry_run else "live"
         if job.mode != mode or job.printer_fingerprint != printer_fingerprint(settings):
             job.last_error = "printer_configuration_changed"

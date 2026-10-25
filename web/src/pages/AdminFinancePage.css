@@ -49,3 +49,11 @@
 .meal-finance-order-meta dd { overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .meal-finance-sale > summary { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; } .meal-finance-expand { grid-column: 2; justify-self: end; } }
 @media (max-width: 600px) { .meal-finance-sale > summary > div:first-child, .meal-finance-sale > summary > div:nth-child(2) { grid-column: 1 / -1; } .meal-finance-expand { grid-column: 1 / -1; } .meal-finance-item-list li { flex-wrap: wrap; } }
+
+.meal-finance-receipts { padding-block: 16px; border-top: 1px solid var(--line); }
+.meal-finance-receipts ol { margin: 16px 0 0; padding: 0; list-style: none; }
+.meal-finance-receipts li { padding-block: 16px; border-top: 1px solid var(--line); }
+.meal-finance-receipts li > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; }
+.meal-finance-receipts dl { display: grid; gap: 8px; }
+.meal-finance-receipts dl > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; }
+.meal-finance-receipts dd { margin: 0; overflow-wrap: anywhere; }

@@ -732,7 +732,56 @@ class InvoiceRead(ApiModel):
     void_reason: Optional[str] = None
 
 
+class OrderQuantityAmendmentItem(BaseModel):
+    order_item_id: str
+    quantity: int = Field(ge=0, le=999, strict=True)
+
+
+class OrderQuantityAmendmentRequest(BaseModel):
+    items: List[OrderQuantityAmendmentItem] = Field(min_length=1, max_length=100)
+    expected_revision: int = Field(ge=1, strict=True)
+
+
+class OrderQuantityAmendmentConfirm(OrderQuantityAmendmentRequest):
+    expected_total: int = Field(ge=0, strict=True)
+    client_request_id: UUID
+
+
+class OrderQuantityAmendmentQuoteLine(ApiModel):
+    order_item_id: str
+    product_name: str
+    unit_label: str
+    previous_quantity: int
+    quantity: int
+    unit_price: int
+    subtotal: int
+
+
+class OrderQuantityAmendmentQuote(ApiModel):
+    order_id: str
+    expected_revision: int
+    previous_total: int
+    amount_total: int
+    tax_amount: int
+    shipping_fee: int
+    discount_amount: int
+    items: List[OrderQuantityAmendmentQuoteLine]
+    promotion: Optional[dict] = None
+
+
+class OrderAmendmentRead(ApiModel):
+    id: str
+    previous_revision: int
+    revision: int
+    created_at: datetime
+    before_snapshot: dict
+    after_snapshot: dict
+
+
 class OrderRead(ApiModel):
+    revision: int = 1
+    amendment_blocked_reason: Optional[str] = None
+    amendments: List[OrderAmendmentRead] = Field(default_factory=list)
     payment_method: PaymentMethod = PaymentMethod.ONLINE
     id: str
     order_number: str
@@ -1473,6 +1522,7 @@ class MealOrderQuoteRead(ApiModel):
 
 
 class MealOrderItemRead(ApiModel):
+    order_item_id: str
     offering_id: str
     meal_id: str
     meal_name: str
@@ -1512,6 +1562,9 @@ class MealCancellationRequestRead(ApiModel):
 
 
 class MealOrderRead(ApiModel):
+    revision: int = 1
+    amendment_blocked_reason: Optional[str] = None
+    amendments: List[OrderAmendmentRead] = Field(default_factory=list)
     kitchen_note: Optional[str] = None
     onsite_payment: Optional[dict] = None
     payment_method: PaymentMethod = PaymentMethod.ONLINE

@@ -7,6 +7,7 @@ import logging
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+from types import SimpleNamespace
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
@@ -37,6 +38,7 @@ from ..integrations.ecpay_logistics import (
     ecpay_logistics_adapter_from_settings,
 )
 from ..integrations.invoice_service import enqueue_invoice_issue
+from ..integrations.payment_service import lock_order_payment_subject
 from ..integrations.pii_crypto import (
     VersionedPIICipher,
     pii_cipher_from_settings,
@@ -218,7 +220,8 @@ async def _load_order(
         )
     )
     if lock:
-        query = query.with_for_update()
+        await lock_order_payment_subject(session, order_id)
+        query = query.with_for_update().execution_options(populate_existing=True)
     order = await session.scalar(query)
     if order is None:
         raise HTTPException(status_code=404, detail="找不到訂單")
@@ -341,6 +344,27 @@ async def _effective_rate(
     return rate
 
 
+async def quote_quantity_amendment_shipping(
+    session: AsyncSession, order: Order, subtotal: int, included_item_ids: set[str],
+) -> int:
+    fulfillment = order.fulfillment
+    shipment = fulfillment.shipment if fulfillment else None
+    if shipment is None:
+        return 0
+    if shipment.status not in {ShipmentStatus.DRAFT, ShipmentStatus.SELECTION_PENDING, ShipmentStatus.READY_TO_CREATE}:
+        raise HTTPException(status_code=409, detail="物流已開始處理，請聯絡管理員修改訂單")
+    if not 1 <= subtotal <= 20000:
+        raise HTTPException(status_code=422, detail="綠界物流商品金額必須介於 1 至 20,000 元")
+    selection = SimpleNamespace(sales_channel=order.sales_channel, meal_event_id=order.meal_event_id,
+        order_kind=order.order_kind, group_campaign=order.group_campaign,
+        items=[item for item in order.items if item.id in included_item_ids])
+    temperature = await _shipping_profile(session, selection, shipment.channel)
+    if temperature != shipment.temperature:
+        raise HTTPException(status_code=409, detail="修改後的商品溫層與原物流不符，請重新選擇物流")
+    rate = await _effective_rate(session, shipment.channel, temperature)
+    return shipping_fee_for_rate(subtotal, rate)
+
+
 def _product_subtotal(
     order: Order,
     shipment: Optional[Shipment] = None,
@@ -384,16 +408,15 @@ async def _shipment_for_token(
     session: AsyncSession,
     token: str,
 ) -> Shipment:
-    shipment = await session.scalar(
-        select(Shipment)
-        .where(Shipment.selection_token_hash == _token_digest(token))
-        .options(
-            selectinload(Shipment.fulfillment).selectinload(
-                OrderFulfillment.order
-            )
-        )
-        .with_for_update()
-    )
+    identity = (await session.execute(select(Shipment.id, OrderFulfillment.order_id)
+        .join(OrderFulfillment).where(Shipment.selection_token_hash == _token_digest(token)))).first()
+    if identity is None:
+        raise HTTPException(status_code=404, detail="找不到物流選擇資料")
+    await lock_order_payment_subject(session, identity.order_id)
+    shipment = await session.scalar(select(Shipment).where(Shipment.id == identity.id,
+        Shipment.selection_token_hash == _token_digest(token))
+        .options(selectinload(Shipment.fulfillment).selectinload(OrderFulfillment.order))
+        .execution_options(populate_existing=True).with_for_update())
     if shipment is None:
         raise HTTPException(status_code=404, detail="找不到物流選擇資料")
     expires_at = shipment.selection_token_expires_at
@@ -418,9 +441,7 @@ async def _shipment_for_provider_callback(
     if identity is None:
         return None
     shipment_id, order_id = identity
-    await session.execute(
-        select(Order.id).where(Order.id == order_id).with_for_update()
-    )
+    await lock_order_payment_subject(session, order_id)
     return await session.scalar(
         select(Shipment)
         .where(Shipment.id == shipment_id)
@@ -822,6 +843,8 @@ async def receive_logistics_selection_result(
     settings: Settings = Depends(get_settings),
 ) -> RedirectResponse:
     order = await _load_order(session, order_id, lock=True)
+    if order.payment_status != PaymentStatus.PENDING:
+        raise HTTPException(status_code=409, detail="訂單已非待付款，無法重新選擇物流")
     if order.fulfillment is None or order.fulfillment.shipment is None:
         raise HTTPException(status_code=404, detail="找不到物流選擇資料")
     shipment = order.fulfillment.shipment

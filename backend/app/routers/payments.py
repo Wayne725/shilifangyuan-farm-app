@@ -96,6 +96,8 @@ def _payment_attempt_status(attempt: PaymentAttempt) -> dict[str, Any]:
         "expires_at": attempt.expires_at,
         "order_id": attempt.order_id,
         "membership_charge_id": attempt.membership_charge_id,
+        "order_revision": attempt.order_revision,
+        "superseded": attempt.superseded_at is not None,
     }
 
 
@@ -292,6 +294,11 @@ async def payment_checkout(
             .where(Order.id == attempt.order_id)
             .options(selectinload(Order.items), selectinload(Order.meal_event), selectinload(Order.fulfillment))
         )
+    if order is not None:
+        if attempt.superseded_at is not None or attempt.order_revision != order.revision:
+            raise HTTPException(status_code=410, detail="訂單數量已修改，請從訂單中心重新付款")
+        if attempt.amount != order.amount_total:
+            raise HTTPException(status_code=409, detail="訂單金額已更新，請從訂單中心重新付款")
     try:
         if order is not None:
             await ensure_order_payment_runtime_enabled(

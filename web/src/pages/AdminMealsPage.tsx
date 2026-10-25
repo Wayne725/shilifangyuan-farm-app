@@ -1,3 +1,4 @@
+import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
 import * as Tabs from "@radix-ui/react-tabs";
 import { BowlFood, Buildings, CalendarPlus, Copy, QrCode, SealCheck } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -175,6 +176,7 @@ function EventPickupOrders({ eventId }: { eventId: string }) {
       <div className="admin-review-list">{orders.data?.map((order) => <article className="admin-record-card" key={order.id}>
         <h4 className="order-number">{order.order_number}</h4>
         <p>付款方式：{order.payment_method === "cash_on_pickup" ? "合作社現場付款" : "線上付款"}</p>
+        <OrderQuantityAmendment order={order} />
         <AdminCancelOrder order={order} />
         <AdminCashPayment order={order} onDone={() => { void orders.refetch(); }} />
         {order.cancellation_request && <p className="meal-cancellation-reason"><strong>{order.cancellation_request.status === "pending" ? "退單待審，訂單尚未取消" : order.cancellation_request.status === "approved" ? "退單已核准" : "退單未核准"}</strong>：{order.cancellation_request.reason}</p>}

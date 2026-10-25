@@ -37,6 +37,7 @@ from .integrations.payment_service import (
     PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
     lock_order_payment_subject,
+    is_obsolete_order_refund,
     payment_adapter_from_settings,
     remaining_subject_payment_status,
     refund_adapter_from_settings,
@@ -310,6 +311,19 @@ async def periodic_reconciliation(settings: Settings):
         logger.info("reconcile_scheduler_stopped")
 
 
+async def _lock_expiring_payment_attempt(session: AsyncSession, attempt_id: str) -> Optional[PaymentAttempt]:
+    order_id = await session.scalar(select(PaymentAttempt.order_id).where(PaymentAttempt.id == attempt_id))
+    if order_id is not None:
+        await lock_order_payment_subject(session, order_id)
+    return await session.scalar(
+        select(PaymentAttempt)
+        .where(PaymentAttempt.id == attempt_id, PaymentAttempt.status == PaymentStatus.PENDING)
+        .options(selectinload(PaymentAttempt.reservations))
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+
+
 async def _reconcile_expired_payments(
     session: AsyncSession,
     settings: Settings,
@@ -404,15 +418,7 @@ async def _reconcile_expired_payments(
                 attempt_status == PaymentStatus.PENDING
                 and attempt_expires_at <= now
             ):
-                locked_attempt = await session.scalar(
-                    select(PaymentAttempt)
-                    .where(
-                        PaymentAttempt.id == attempt_id,
-                        PaymentAttempt.status == PaymentStatus.PENDING,
-                    )
-                    .options(selectinload(PaymentAttempt.reservations))
-                    .with_for_update()
-                )
+                locked_attempt = await _lock_expiring_payment_attempt(session, attempt_id)
                 if locked_attempt is not None:
                     await release_attempt_reservations(session, locked_attempt)
                     locked_attempt.status = PaymentStatus.EXPIRED
@@ -468,15 +474,7 @@ async def _reconcile_expired_payments(
         if attempt_status in {PaymentStatus.EXPIRED, PaymentStatus.FAILED}:
             continue
 
-        locked_attempt = await session.scalar(
-            select(PaymentAttempt)
-            .where(
-                PaymentAttempt.id == attempt_id,
-                PaymentAttempt.status == PaymentStatus.PENDING,
-            )
-            .options(selectinload(PaymentAttempt.reservations))
-            .with_for_update()
-        )
+        locked_attempt = await _lock_expiring_payment_attempt(session, attempt_id)
         if locked_attempt is None:
             continue
         await release_attempt_reservations(session, locked_attempt)
@@ -1171,14 +1169,22 @@ async def _load_locked_refund(session: AsyncSession, refund_filter) -> Refund:
     if identity is None:
         raise ValueError("找不到退款資料")
     # Order refunds follow callbacks: parent → order → attempt → refund.
-    # Membership refunds retain their existing membership-specific lock flow.
+    # Membership callbacks also take the attempt before the charge.
     if identity.order_id is not None:
         await lock_order_payment_subject(session, identity.order_id)
         if identity.payment_attempt_id is not None:
             await session.execute(select(PaymentAttempt.id).where(
                 PaymentAttempt.id == identity.payment_attempt_id
             ).with_for_update())
-    elif identity.membership_charge_id is None:
+    elif identity.membership_charge_id is not None:
+        if identity.payment_attempt_id is not None:
+            await session.execute(select(PaymentAttempt.id).where(
+                PaymentAttempt.id == identity.payment_attempt_id
+            ).with_for_update())
+        await session.execute(select(MembershipCharge.id).where(
+            MembershipCharge.id == identity.membership_charge_id
+        ).with_for_update())
+    else:
         raise ValueError("退款缺少訂單或入社款項")
     refund = await session.scalar(
         select(Refund).where(Refund.id == identity.id)
@@ -1226,9 +1232,6 @@ async def _process_refund_event(
         await session.execute(select(MembershipCharge.id).where(
             MembershipCharge.id == charge.id
         ).with_for_update())
-    subject_amount = order.amount_total if order is not None else charge.amount
-    if refund.amount != subject_amount:
-        raise ValueError("雷門規格只允許全額退款")
     attempt = refund.payment_attempt
     if attempt is None:
         subject_filter = (
@@ -1240,6 +1243,11 @@ async def _process_refund_event(
             select(PaymentAttempt)
             .where(
                 subject_filter,
+                *([
+                    PaymentAttempt.order_revision == order.revision,
+                    PaymentAttempt.amount == order.amount_total,
+                    PaymentAttempt.superseded_at.is_(None),
+                ] if order is not None else []),
                 PaymentAttempt.status.in_(
                     {
                         PaymentStatus.PAID,
@@ -1267,6 +1275,11 @@ async def _process_refund_event(
             .limit(1)
             .with_for_update()
         )
+    subject_amount = attempt.amount if attempt is not None else (order.amount_total if order is not None else charge.amount)
+    if refund.amount != subject_amount:
+        raise ValueError("雷門規格只允許全額退款")
+    if refund.purpose == "obsolete_order_revision" and attempt is None:
+        raise ValueError("舊版付款退款缺少原付款交易")
     provider = (
         attempt.provider
         if attempt is not None
@@ -1288,7 +1301,19 @@ async def _process_refund_event(
     await session.flush()
     adapter = refund_adapter_from_settings(resolved_settings, provider)
     if provider == "raygate":
-        query_result = await adapter.query_order(attempt.merchant_trade_no)
+        refund_id = refund.id
+        merchant_trade_no = attempt.merchant_trade_no
+        await session.commit()
+        query_result = await adapter.query_order(merchant_trade_no)
+        refund = await _load_locked_refund(session, Refund.id == refund_id)
+        if refund.status != RefundStatus.PENDING and not (
+            refund.status == RefundStatus.FAILED and query_result.get("RayGateStatus") == "3"
+        ):
+            return
+        order, charge, attempt = refund.order, refund.membership_charge, refund.payment_attempt
+        if attempt is None:
+            raise ValueError("找不到退款原付款交易")
+        await session.refresh(event)
         if (
             query_result.get("MerchantTradeNo")
             != attempt.merchant_trade_no
@@ -1357,34 +1382,21 @@ async def _process_refund_event(
                 **dict(query_result),
                 "platform_refund_state": "submission_started",
             }
-            await session.commit()
-            refund = await _load_locked_refund(session, Refund.id == refund.id)
-            if refund.status == RefundStatus.COMPLETED:
-                return
-            if refund.status != RefundStatus.PENDING:
-                return
-            order = refund.order
-            charge = refund.membership_charge
-            attempt = refund.payment_attempt
-            if order is None and charge is not None:
-                charge = await session.scalar(select(MembershipCharge).where(
-                    MembershipCharge.id == charge.id
-                ).execution_options(populate_existing=True).with_for_update())
-                if charge is None:
-                    raise ValueError("找不到退款入社款項")
-                if attempt is not None:
-                    attempt = await session.scalar(select(PaymentAttempt).where(
-                        PaymentAttempt.id == attempt.id
-                    ).execution_options(populate_existing=True).with_for_update())
-            if attempt is None or not attempt.provider_trade_no:
-                raise ValueError("找不到已付款的雷門交易")
-            result = await adapter.refund(
+            refund_args = dict(
                 provider_order_id=attempt.provider_trade_no,
                 payment_type=payment_type,
                 amount=refund.amount,
                 reason=refund.reason,
                 idempotency_key=refund.id,
             )
+            await session.commit()
+            result = await adapter.refund(**refund_args)
+            refund = await _load_locked_refund(session, Refund.id == refund_id)
+            if refund.status == RefundStatus.COMPLETED:
+                return
+            if refund.status not in {RefundStatus.PENDING, RefundStatus.FAILED}:
+                return
+            order, charge, attempt = refund.order, refund.membership_charge, refund.payment_attempt
             refund.provider_refund_id = result.refund_id
             refund.provider_response = dict(result.provider_response)
             completed_at = result.created_at
@@ -1409,7 +1421,10 @@ async def _process_refund_event(
             attempt,
         )
         attempt.status = PaymentStatus.REFUNDED
-    if order is not None:
+    obsolete_refund = order is not None and is_obsolete_order_refund(refund, attempt, order)
+    if obsolete_refund:
+        refund.purpose = "obsolete_order_revision"
+    if order is not None and not obsolete_refund:
         order.payment_status = remaining_payment_status or PaymentStatus.REFUNDED
         if remaining_payment_status is None:
             order.fulfillment_status = FulfillmentStatus.CANCELLED
@@ -1419,7 +1434,7 @@ async def _process_refund_event(
                 order,
                 refund.id,
             )
-    else:
+    elif charge is not None:
         if remaining_payment_status is None:
             charge.status = MembershipChargeStatus.REFUNDED
             charge.refunded_at = completed_at
@@ -1435,7 +1450,11 @@ async def _process_refund_event(
                 event_type="refund_completed",
                 title="退款完成" if provider_refund_performed else "Sandbox 退款完成",
                 body=(
-                    "訂單 {} 已完成退款。".format(order.order_number)
+                    f"訂單 {order.order_number} 第 {attempt.order_revision} 版付款 NT${refund.amount} 已退回，請依訂單中心最新狀態辦理。"
+                    if obsolete_refund and provider_refund_performed
+                    else f"訂單 {order.order_number} 第 {attempt.order_revision} 版付款 NT${refund.amount} 已建立系統內退款紀錄；測試環境未執行真實退刷。"
+                    if obsolete_refund
+                    else "訂單 {} 已完成退款。".format(order.order_number)
                     if provider_refund_performed
                     else "訂單 {} 已完成系統內退款紀錄；測試環境未執行真實退刷。".format(
                         order.order_number
@@ -1444,6 +1463,9 @@ async def _process_refund_event(
                 data={
                     "order_id": order.id,
                     "provider_refund_performed": provider_refund_performed,
+                    "refund_amount": refund.amount,
+                    "refund_purpose": refund.purpose,
+                    "order_revision": attempt.order_revision if attempt else None,
                 },
                 email=order.contact_email,
                 dedupe_key="refund:{}".format(refund.id),

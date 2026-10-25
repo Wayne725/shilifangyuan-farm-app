@@ -93,6 +93,7 @@ async def search_meal_orders(session: AsyncSession, filters: MealOrderSearchFilt
     orders = list(await session.scalars(query.options(
         selectinload(Order.user), selectinload(Order.meal_event), selectinload(Order.fulfillment),
         selectinload(Order.invoice), selectinload(Order.cancellation_requests),
+        selectinload(Order.amendments), selectinload(Order.payment_attempts),
         selectinload(Order.items).selectinload(OrderItem.selected_options),
     ).order_by(_pickup_at(), Order.id).offset(filters.offset).limit(filters.limit)))
     return orders, total or 0

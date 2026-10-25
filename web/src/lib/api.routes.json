@@ -235,6 +235,8 @@
   "POST /v1/orders/{order_id}/logistics/selection",
   "POST /v1/orders/{order_id}/logistics/selection-link",
   "POST /v1/orders/{order_id}/payment-attempts",
+  "POST /v1/orders/{order_id}/quantity-amendments",
+  "POST /v1/orders/{order_id}/quantity-amendments/quote",
   "POST /v1/payment-attempts/{attempt_id}/refresh",
   "POST /v1/products",
   "POST /v1/vote-proposals",

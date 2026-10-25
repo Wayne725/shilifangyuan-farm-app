@@ -1784,7 +1784,7 @@ class PrintJob(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending','sending','submitted','printed','failed','unknown','simulated')", name="valid_status"),
         CheckConstraint("mode IN ('dry_run','live')", name="valid_mode"),
-        CheckConstraint("kind IN ('order','cancellation')", name="valid_kind"),
+        CheckConstraint("kind IN ('order','cancellation','amendment')", name="valid_kind"),
         Index("ix_print_jobs_due", "status", "next_attempt_at"),
     )
 
@@ -1821,6 +1821,7 @@ class Order(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     client_request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     kitchen_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     order_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     order_kind: Mapped[OrderKind] = mapped_column(
@@ -1944,9 +1945,30 @@ class Order(Base):
     fulfillment: Mapped[Optional["OrderFulfillment"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", uselist=False
     )
+    amendments: Mapped[List["OrderAmendment"]] = relationship(back_populates="order", cascade="all, delete-orphan", order_by="OrderAmendment.revision")
     cancellation_requests: Mapped[List["MealCancellationRequest"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
+
+
+class OrderAmendment(Base):
+    __tablename__ = "order_amendments"
+    __table_args__ = (
+        UniqueConstraint("order_id", "client_request_id", name="uq_order_amendments_client_request"),
+        UniqueConstraint("order_id", "revision", name="uq_order_amendments_revision"),
+        CheckConstraint("revision = previous_revision + 1", name="revision_increment"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    client_request_id: Mapped[str] = mapped_column(String(36))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    previous_revision: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(Integer)
+    before_snapshot: Mapped[dict] = mapped_column(JSON)
+    after_snapshot: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    order: Mapped["Order"] = relationship(back_populates="amendments")
 
 
 class MealCancellationRequest(Base):
@@ -2291,6 +2313,8 @@ class PaymentAttempt(Base):
         nullable=True,
         index=True,
     )
+    order_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     provider: Mapped[str] = mapped_column(
         String(20), default="ecpay", index=True
     )
@@ -2380,6 +2404,7 @@ class Refund(Base):
         default=RefundStatus.PENDING,
         index=True,
     )
+    purpose: Mapped[str] = mapped_column(String(40), default="order_cancellation", server_default="order_cancellation")
     reason: Mapped[str] = mapped_column(Text)
     requested_by_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT")

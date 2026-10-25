@@ -132,7 +132,31 @@ export interface AdminInvoiceQueryResult {
 
 export type PaymentMethod = "online" | "cash_on_pickup" | "cash_on_delivery";
 
+export interface OrderAmendment {
+  id: string;
+  previous_revision: number;
+  revision: number;
+  created_at: string;
+  before_snapshot: { amount_total?: number; items?: Array<{ product_name?: string; quantity?: number }> };
+  after_snapshot: { amount_total?: number; items?: Array<{ product_name?: string; quantity?: number }> };
+}
+
+export interface OrderQuantityAmendmentQuote {
+  order_id: string;
+  expected_revision: number;
+  previous_total: number;
+  amount_total: number;
+  tax_amount: number;
+  shipping_fee: number;
+  discount_amount: number;
+  items: Array<{ order_item_id: string; product_name: string; unit_label: string; previous_quantity: number; quantity: number; unit_price: number; subtotal: number }>;
+  promotion: { name: string; discount: number; original_amount: number } | null;
+}
+
 export interface Order {
+  revision?: number;
+  amendment_blocked_reason?: string | null;
+  amendments?: OrderAmendment[];
   cancellation_request?: MealCancellationRequest | null;
   id: string;
   order_number: string;
@@ -577,6 +601,9 @@ export interface MealAdminOrderPage {
 }
 
 export interface MealOrder {
+  revision?: number;
+  amendment_blocked_reason?: string | null;
+  amendments?: OrderAmendment[];
   kitchen_note?: string | null;
   onsite_payment?: { method: string; reference: string; paid_at: string } | null;
   promotion?: {name: string; discount: number; original_amount: number} | null;
@@ -611,6 +638,7 @@ export interface MealOrder {
   created_at: string;
   available_actions: string[];
   items: Array<{
+    order_item_id?: string;
     offering_id: string;
     meal_id: string;
     meal_name: string;

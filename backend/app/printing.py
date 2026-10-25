@@ -37,7 +37,14 @@ def wrap_text(value: object, width: int) -> list[str]:
 
 
 def format_receipt(snapshot: dict, *, width: int = 32) -> str:
-    lines = ["十里方圓 合作社", "取消通知" if snapshot.get("kind") == "cancellation" else "訂餐單"]
+    titles = {"order": "訂餐單", "cancellation": "取消通知", "amendment": "數量修訂單"}
+    lines = ["十里方圓 合作社", titles.get(snapshot.get("kind", "order"), "訂餐單")]
+    if snapshot.get("revision"):
+        lines.append(f"訂單版本：{snapshot['revision']}")
+    if snapshot.get("kind") == "amendment":
+        lines.append("＊＊ 請依最新版調整原單 ＊＊")
+        for change in snapshot.get("quantity_changes", []):
+            lines.append(f"{change['name']}：{change['before']} → {change['after']} 份")
     if snapshot.get("reprint"):
         lines.append("＊＊ 補印 ＊＊")
     if snapshot.get("dry_run"):
@@ -73,33 +80,88 @@ def payment_snapshot(order: Order) -> dict:
     }
 
 
-def enqueue_order_print(session: AsyncSession, order: Order, user: User, settings: Settings) -> PrintJob | None:
-    if not settings.printer_enabled:
-        return None
+def order_print_snapshot(order: Order, customer_name: str) -> dict:
     pickup = order.fulfillment.pickup_at or order.fulfillment.pickup_starts_at
     if pickup.tzinfo is None:
         pickup = pickup.replace(tzinfo=ZoneInfo("UTC"))
     snapshot = {
-        "kind": "order", "order_number": order.order_number, "customer_name": user.display_name,
+        "kind": "order", "revision": order.revision or 1, "order_number": order.order_number, "customer_name": customer_name,
         "pickup_at": pickup.astimezone(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M"),
         "location": order.fulfillment.pickup_location, "amount_total": order.amount_total,
         "pickup_address": order.fulfillment.pickup_address,
         "needs_utensils": bool(order.fulfillment.needs_utensils),
         "note": order.kitchen_note, **payment_snapshot(order),
-        "items": [{"name": item.product_name, "quantity": item.quantity, "unit_price": item.unit_price,
+        "items": [{"id": item.id, "name": item.product_name, "quantity": item.quantity, "unit_price": item.unit_price,
                    "subtotal": item.subtotal, "options": [f"{option.group_name}：{option.option_name}" for option in item.selected_options]}
                   for item in order.items],
     }
+    return snapshot
+
+
+def enqueue_order_print(session: AsyncSession, order: Order, user: User, settings: Settings) -> PrintJob | None:
+    if not settings.printer_enabled:
+        return None
+    snapshot = order_print_snapshot(order, user.display_name)
     job = PrintJob(order_id=order.id, event_key=f"order:{order.id}:initial", kind="order",
         mode="dry_run" if settings.printer_dry_run else "live", printer_fingerprint=printer_fingerprint(settings), snapshot=snapshot)
     session.add(job)
     return job
 
 
+def _item_identity(item: dict):
+    return item.get("id") or (item["name"], tuple(item.get("options", [])))
+
+
+def quantity_changes(before: dict, after: dict) -> list[dict]:
+    # Legacy receipts lack item IDs, so compare their name/options snapshots.
+    use_ids = all(item.get("id") for item in before["items"])
+    def key(item):
+        return _item_identity(item) if use_ids else (item["name"], tuple(item.get("options", [])))
+    previous = {key(item): item for item in before["items"]}
+    current = {key(item): item for item in after["items"]}
+    return [{"name": (current.get(identity) or previous[identity])["name"],
+             "before": previous.get(identity, {}).get("quantity", 0),
+             "after": current.get(identity, {}).get("quantity", 0)}
+            for identity in dict.fromkeys([*previous, *current])
+            if previous.get(identity, {}).get("quantity", 0) != current.get(identity, {}).get("quantity", 0)]
+
+
+async def enqueue_amendment_print(session: AsyncSession, order: Order, before_snapshot: dict, settings: Settings) -> None:
+    if not order.meal_event_id:
+        return
+    jobs = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == order.id)
+        .order_by(PrintJob.created_at, PrintJob.id).with_for_update()))
+    originals = [job for job in jobs if job.kind in {"order", "amendment"}]
+    if not originals:
+        if settings.printer_enabled:
+            user = await session.get(User, order.user_id)
+            enqueue_order_print(session, order, user, settings)
+        return
+    targets = {(job.mode, job.printer_fingerprint) for job in originals}
+    for mode, fingerprint in sorted(targets):
+        key = f"order:{order.id}:revision:{order.revision}:{mode}:{fingerprint[:32]}"
+        if any(job.event_key == key for job in jobs):
+            continue
+        target_jobs = [job for job in originals if (job.mode, job.printer_fingerprint) == (mode, fingerprint)]
+        sent = [job for job in target_jobs if job.status in {"sending", "submitted", "printed", "unknown", "simulated"}]
+        source = max(sent or target_jobs, key=lambda job: (job.snapshot.get("revision", 1), job.created_at, job.id))
+        snapshot = order_print_snapshot(order, source.snapshot["customer_name"])
+        kind = "amendment" if sent else "order"
+        snapshot.update(kind=kind)
+        if sent:
+            snapshot["quantity_changes"] = quantity_changes(source.snapshot, snapshot)
+        for job in target_jobs:
+            if job.status == "pending":
+                job.status, job.last_error = "failed", "order_revision_superseded"
+        session.add(PrintJob(order_id=order.id, event_key=key, kind=kind, mode=mode,
+            printer_fingerprint=fingerprint, snapshot=snapshot))
+
+
 async def enqueue_cancellation_print(session: AsyncSession, order: Order, settings: Settings) -> None:
     # Called while holding the order lock, as is the worker claim.
-    jobs = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == order.id).with_for_update()))
-    originals = [job for job in jobs if job.kind == "order"]
+    jobs = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == order.id)
+        .order_by(PrintJob.created_at, PrintJob.id).with_for_update()))
+    originals = [job for job in jobs if job.kind in {"order", "amendment"}]
     if not originals:
         return
     targets = {(job.mode, job.printer_fingerprint): job for job in originals
@@ -111,14 +173,16 @@ async def enqueue_cancellation_print(session: AsyncSession, order: Order, settin
     for target, original in targets.items():
         if target in existing_targets:
             continue
+        latest = max((job for job in originals if (job.mode, job.printer_fingerprint) == target),
+            key=lambda job: (job.snapshot.get("revision", 1), job.created_at, job.id))
         session.add(PrintJob(order_id=order.id, event_key=f"order:{order.id}:cancel:{original.mode}:{original.printer_fingerprint[:32]}", kind="cancellation",
             mode=original.mode, printer_fingerprint=original.printer_fingerprint,
-            snapshot={**original.snapshot, "kind": "cancellation", "cancellation_reason": order.cancellation_reason, **payment_snapshot(order)}))
+            snapshot={**latest.snapshot, "kind": "cancellation", "cancellation_reason": order.cancellation_reason, **payment_snapshot(order)}))
 
 
 def job_read(job: PrintJob) -> dict:
     return {key: getattr(job, key) for key in (
         "id", "order_id", "kind", "mode", "status", "reprint_of_id", "attempts", "last_error",
         "last_result", "created_at", "updated_at", "submitted_at", "printed_at",
-    )} | {"order_number": job.snapshot["order_number"], "pickup_at": job.snapshot["pickup_at"],
+    )} | {"revision": job.snapshot.get("revision", 1), "order_number": job.snapshot["order_number"], "pickup_at": job.snapshot["pickup_at"],
            "can_query": bool(job.vendor_order_id) and job.status in {"submitted", "unknown"}}

@@ -1,3 +1,4 @@
+import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
 import {
   Buildings,
   MapPin,
@@ -151,6 +152,7 @@ export function AdminPage() {
             onCreateLogistics={() => createLogistics.mutate(order.id)}
             onShipment={(status) => advanceShipment.mutate({ orderId: order.id, status })}
           />
+          <OrderQuantityAmendment order={order} disabled={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending} />
           <AdminCancelOrder order={order} />
           <AdminOrderCancellationReview order={order} />
           <AdminInvoiceAdjustment order={order} />

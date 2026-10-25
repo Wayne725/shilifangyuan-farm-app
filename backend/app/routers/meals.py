@@ -29,6 +29,7 @@ from ..domain import (
     member_sale_is_tax_exempt,
     meal_cancellation_request_allowed,
     order_available_actions,
+    order_amendment_blocked_reason,
     sale_tax_type,
 )
 from ..integrations.notifications import (
@@ -310,6 +311,9 @@ async def _meal_order_read(
         kitchen_note=order.kitchen_note,
         onsite_payment=onsite_payment,
         id=order.id,
+        revision=order.revision,
+        amendment_blocked_reason=order_amendment_blocked_reason(order),
+        amendments=order.__dict__.get("amendments", []),
         order_number=order.order_number,
         sales_channel=order.sales_channel,
         fulfillment_method=order.fulfillment_method,
@@ -354,6 +358,7 @@ async def _meal_order_read(
         available_actions=order_available_actions(order, viewer_is_admin),
         items=[
             {
+                "order_item_id": item.id,
                 "offering_id": item.source_meal_offering_id or "",
                 "meal_id": meal_ids.get(item.source_meal_offering_id or "", ""),
                 "meal_name": item.product_name,
@@ -498,6 +503,8 @@ def _meal_order_query():
             selectinload(Order.fulfillment),
             selectinload(Order.invoice),
             selectinload(Order.cancellation_requests),
+            selectinload(Order.amendments),
+            selectinload(Order.payment_attempts),
         )
     )
 
@@ -1008,6 +1015,8 @@ async def list_meal_cancellation_requests(
         selectinload(MealCancellationRequest.order).selectinload(Order.fulfillment),
         selectinload(MealCancellationRequest.order).selectinload(Order.invoice),
         selectinload(MealCancellationRequest.order).selectinload(Order.cancellation_requests),
+        selectinload(MealCancellationRequest.order).selectinload(Order.amendments),
+        selectinload(MealCancellationRequest.order).selectinload(Order.payment_attempts),
         selectinload(MealCancellationRequest.requested_by),
     ).order_by(MealCancellationRequest.requested_at.desc(), MealCancellationRequest.id).offset(offset).limit(limit)))
     return MealCancellationQueueRead(
