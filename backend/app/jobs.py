@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
-from .domain import apply_proposal_clock, remove_paid_quantity
+from .domain import apply_proposal_clock
 from .meal_schedules import generate_scheduled_meal_events
 from .integrations.common import IntegrationError
 from .integrations.invoice_service import (
@@ -906,6 +906,8 @@ async def _notify_campaign_outcome(
 async def _enqueue_campaign_refunds(
     session: AsyncSession, campaign: GroupCampaign
 ) -> None:
+    from .routers.orders import request_order_refund
+
     orders = list(
         await session.scalars(
             select(Order)
@@ -914,55 +916,27 @@ async def _enqueue_campaign_refunds(
                 Order.payment_status == PaymentStatus.PAID,
             )
             .options(
-                selectinload(Order.refunds),
+                selectinload(Order.refunds).selectinload(Refund.payment_attempt),
                 selectinload(Order.reservations),
                 selectinload(Order.items),
+                selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),
             )
+            .order_by(Order.id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
     )
+    actor = await session.get(User, campaign.created_by_id)
+    if actor is None:
+        raise ValueError("找不到團購建立者")
     for order in orders:
         if any(
             refund.status in {RefundStatus.PENDING, RefundStatus.COMPLETED}
+            and not is_obsolete_order_refund(refund, refund.payment_attempt, order)
             for refund in order.refunds
         ):
             continue
-        refund = Refund(
-            order=order,
-            amount=order.amount_total,
-            status=RefundStatus.PENDING,
-            reason="團購未成立，自動退款",
-            requested_by_id=campaign.created_by_id,
-        )
-        session.add(refund)
-        await session.flush()
-        consumed_group_reservations = [
-            reservation
-            for reservation in order.reservations
-            if (
-                reservation.status == ReservationStatus.CONSUMED
-                and reservation.group_campaign_id == campaign.id
-            )
-        ]
-        remove_paid_quantity(
-            campaign,
-            sum(
-                reservation.quantity
-                for reservation in consumed_group_reservations
-            ),
-        )
-        for reservation in consumed_group_reservations:
-            reservation.status = ReservationStatus.RELEASED
-            reservation.released_at = datetime.now(timezone.utc)
-        order.payment_status = PaymentStatus.REFUND_PENDING
-        order.fulfillment_status = FulfillmentStatus.CANCELLED
-        session.add(
-            OutboxEvent(
-                event_type="refund.requested",
-                aggregate_type="refund",
-                aggregate_id=refund.id,
-                payload={"refund_id": refund.id, "order_id": order.id},
-            )
-        )
+        await request_order_refund(session, order, actor, "團購未成立，自動退款")
 
 
 async def _process_outbox(
@@ -1216,6 +1190,7 @@ async def _process_refund_event(
         refund_filter = (
             (Refund.order_id == event.aggregate_id)
             & (Refund.status == RefundStatus.PENDING)
+            & (Refund.purpose == "order_cancellation")
         )
     else:
         refund_filter = Refund.id == event.aggregate_id

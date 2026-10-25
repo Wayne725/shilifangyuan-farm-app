@@ -13,10 +13,11 @@ import { Link, useSearch } from "@tanstack/react-router";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
+import { MemberPointDetails, type CooperationTab } from "../components/MemberPointDetails";
 import { LineAccountLink } from "../components/LineLogin";
 import { useAuth } from "../context/AuthContext";
 import { openMembershipHandoff } from "../lib/checkout-navigation";
-import { apiFetch, formatDate, formatMoney } from "../lib/api";
+import { ApiError, apiFetch, formatDate, formatMoney } from "../lib/api";
 import { createMembershipPayment, refreshPaymentAttempt } from "../lib/commerce";
 import type {
   MemberBadge,
@@ -43,6 +44,15 @@ const chargeLabels: Record<string, string> = {
 export function AccountPage() {
   const { user, isAuthReady, openLogin, logout } = useAuth();
   const search = useSearch({ from: "/account" });
+  const [cooperationTab, setCooperationTab] = useState<CooperationTab>("points");
+  const openCooperation = (tab: CooperationTab) => {
+    setCooperationTab(tab);
+    requestAnimationFrame(() => {
+      const trigger = document.getElementById(`cooperation-${tab}-tab`);
+      trigger?.focus({ preventScroll: true });
+      trigger?.scrollIntoView({ block: "start", behavior: "instant" });
+    });
+  };
   const queryClient = useQueryClient();
   const confirmationStartedAt = useRef(Date.now());
   const paymentConfirmation = useQuery({
@@ -66,7 +76,7 @@ export function AccountPage() {
     queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
     enabled: Boolean(user),
   });
-  const isActiveMember = membership.data?.membership_type === "member";
+  const isActiveMember = membership.data?.membership_type === "member" && membership.data.membership?.status === "active";
   const [charges, notifications, points, badges, surplus] = useQueries({
     queries: [
       {
@@ -83,11 +93,13 @@ export function AccountPage() {
       {
         queryKey: ["my-points", user?.id],
         queryFn: () => apiFetch<PointSummary>("/v1/me/points"),
+        retry: (attempt, error) => !(error instanceof ApiError && [401, 403].includes(error.status)) && attempt < 1,
         enabled: Boolean(user && isActiveMember),
       },
       {
         queryKey: ["my-badges", user?.id],
         queryFn: () => apiFetch<MemberBadge[]>("/v1/me/badges"),
+        retry: (attempt, error) => !(error instanceof ApiError && [401, 403].includes(error.status)) && attempt < 1,
         enabled: Boolean(user && isActiveMember),
       },
       {
@@ -97,6 +109,9 @@ export function AccountPage() {
       },
     ],
   });
+  const cooperationAccess = isActiveMember && ![points.error, badges.error].some(
+    (error) => error instanceof ApiError && [401, 403].includes(error.status),
+  );
   const payCharge = useMutation({
     mutationFn: createMembershipPayment,
     onSuccess: (url, chargeId) => openMembershipHandoff(url, chargeId),
@@ -196,8 +211,8 @@ export function AccountPage() {
       )}
       {membership.data?.membership_type === "nonmember" && !user.email && <section className="content-section"><h2>我是社員，核對既有資格</h2><p>請由合作社管理員依社員名冊核對並連結資格。</p></section>}
       <section className="account-metrics">
-        <Metric icon={Coins} label="合作點數" value={isActiveMember ? String(points.data?.balance ?? "—") : "未開放"} />
-        <Metric icon={Certificate} label="已獲徽章" value={isActiveMember ? String(badges.data?.length ?? "—") : "—"} />
+        <Metric icon={Coins} label="合作點數" value={cooperationAccess ? String(points.isError ? "無法讀取" : points.data?.balance ?? "—") : "未開放"} onClick={cooperationAccess ? () => openCooperation("points") : undefined} />
+        <Metric icon={Certificate} label="已獲徽章" value={cooperationAccess ? String(badges.isError ? "無法讀取" : badges.data?.length ?? "—") : "—"} onClick={cooperationAccess ? () => openCooperation("badges") : undefined} />
         <Metric icon={CreditCard} label="待繳款項" value={String(charges.data?.filter((charge) => charge.status === "pending").length ?? "—")} />
         <Metric icon={Bell} label="未讀通知" value={String(unreadCount)} />
       </section>
@@ -268,16 +283,11 @@ export function AccountPage() {
             <div><p className="eyebrow">CO-OP RECORD / 合作成果</p><h2>合作成果</h2></div>
             <Sparkle size={27} weight="light" />
           </div>
-          {!isActiveMember ? (
+          {membership.isPending ? <LoadingLines count={2} /> : !cooperationAccess ? (
             <DataState title="正式社員功能尚未開放" detail="點數、徽章與盈餘分配只顯示已確認的合作社資料。" />
           ) : (
             <>
-              <div className="badge-list">
-                {badges.data?.map((badge) => (
-                  <article key={badge.key}><Certificate size={23} /><div><strong>{badge.name}</strong><small>{badge.description}</small></div></article>
-                ))}
-                {badges.data?.length === 0 && <p>參與消費、表決與共同購買後，達成的合作徽章會出現在這裡。</p>}
-              </div>
+              <MemberPointDetails key={user.id} tab={cooperationTab} onTabChange={setCooperationTab} points={points} badges={badges} />
               <div className="surplus-list">
                 {surplus.data?.map((item) => (
                   <div key={item.fiscal_year_id}><span>{item.label}</span><strong>{formatMoney(item.distribution_amount)}</strong><small>貢獻額 {formatMoney(item.contribution_amount)}</small></div>
@@ -348,8 +358,11 @@ function ExistingMemberClaimPanel({ onDone }: { onDone: () => void }) {
   );
 }
 
-function Metric({ icon: Icon, label, value }: { icon: typeof Coins; label: string; value: string }) {
-  return <article><Icon size={22} weight="light" /><span>{label}</span><strong>{value}</strong></article>;
+function Metric({ icon: Icon, label, value, onClick }: { icon: typeof Coins; label: string; value: string; onClick?: () => void }) {
+  const content = <><Icon size={22} weight="light" /><span>{label}</span><strong>{value}</strong></>;
+  return onClick
+    ? <article className="account-metric-link"><button type="button" onClick={onClick} aria-label={`${label} ${value}，查看明細`} aria-controls="cooperation-details">{content}</button></article>
+    : <article>{content}</article>;
 }
 
 function chargeStatusLabel(status: string): string {
