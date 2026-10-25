@@ -2823,10 +2823,31 @@ class PointTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class MeetingCategory(Base):
+    __tablename__ = "meeting_categories"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_meeting_categories_name"),
+        UniqueConstraint("legacy_type", name="uq_meeting_categories_legacy_type"),
+        CheckConstraint("sort_order >= 0", name="sort_order_nonnegative"),
+        CheckConstraint("length(name) BETWEEN 1 AND 80 AND name = trim(name)", name="name_valid"),
+        CheckConstraint("legacy_type IS NULL OR legacy_type IN ('general_assembly', 'affairs')", name="legacy_type_valid"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(80))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    legacy_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Meeting(Base):
     __tablename__ = "meetings"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    category_id: Mapped[str] = mapped_column(ForeignKey("meeting_categories.id", ondelete="RESTRICT"), index=True)
+    category: Mapped[MeetingCategory] = relationship()
     meeting_type: Mapped[MeetingType] = mapped_column(
         enum_type(MeetingType, "meeting_type"), index=True
     )

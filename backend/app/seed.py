@@ -57,6 +57,7 @@ from .models import (
     MemberProposalVote,
     MemberVoteChoice,
     Meeting,
+    MeetingCategory,
     MeetingAttendance,
     MeetingResolution,
     Membership,
@@ -1092,8 +1093,29 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         admin_note="已聯繫兩位友善耕作供應者，等待樣品與報價。",
         created_at=now - timedelta(days=5),
     )
+    meeting_categories = {
+        category.legacy_type: category
+        for category in (await session.scalars(select(MeetingCategory))).all()
+        if category.legacy_type is not None
+    }
+    for category_id, legacy_type, name, sort_order in (
+        ("00000000-0000-4000-8000-000000000001", "general_assembly", "社員大會", 0),
+        ("00000000-0000-4000-8000-000000000002", "affairs", "社務會議", 1),
+    ):
+        if legacy_type not in meeting_categories:
+            category = MeetingCategory(
+                id=category_id,
+                legacy_type=legacy_type,
+                name=name,
+                sort_order=sort_order,
+                is_active=True,
+            )
+            session.add(category)
+            meeting_categories[legacy_type] = category
+    await session.flush()
     meeting = Meeting(
         id="meeting-affairs-demo",
+        category_id=meeting_categories["affairs"].id,
         meeting_type=MeetingType.AFFAIRS,
         title="八月社務會議（展示）",
         agenda=[
@@ -1774,6 +1796,7 @@ async def reset_demo_data(session: AsyncSession) -> dict[str, int]:
         MeetingResolution,
         MeetingAttendance,
         Meeting,
+        MeetingCategory,
         PointTransaction,
         PointAccount,
         EducationAttempt,

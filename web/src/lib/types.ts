@@ -259,12 +259,22 @@ export interface Activity {
   } | null;
 }
 
+export interface MeetingCategory {
+  id: string;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+  updated_at: string;
+}
+
 export interface Meeting {
   id: string;
   title: string;
   starts_at: string;
   location: string;
   meeting_type: string;
+  category_id: string;
+  category_name: string;
   agenda: Array<Record<string, unknown>>;
   attended_count: number;
   eligible_member_count: number;

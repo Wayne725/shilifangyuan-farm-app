@@ -38,8 +38,8 @@ async function fixture(t, userRole = 'admin') {
       state.reads.push(path);
       if (path === rosterPath) return route.fulfill({ json: state.roster });
       if (path === membersPath) return route.fulfill({ json: state.members });
-      if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'member', membership: { member_number: 'ISOLATED-001', share_capital_amount: 999999, share_count: 999, share_certificate_number: 'MUST-NOT-DISPLAY' }, directory: { is_public: false } } });
-      if (['/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/wishes', '/v1/meetings', '/v1/activities', '/v1/member-proposals', '/v1/notifications'].includes(path)) return route.fulfill({ json: [] });
+      if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'member', membership: { status: 'active', member_number: 'ISOLATED-001', share_capital_amount: 999999, share_count: 999, share_certificate_number: 'MUST-NOT-DISPLAY' }, directory: { is_public: false } } });
+      if (['/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/activities', '/v1/member-proposals', '/v1/notifications'].includes(path)) return route.fulfill({ json: [] });
     }
     if (method === 'PATCH' && [ `${rosterPath}/roster-claimed/shares`, `${rosterPath}/roster-unclaimed/shares`, `${membersPath}/membership-claimed/shares` ].includes(path)) {
       const payload = request.postDataJSON();
@@ -64,7 +64,7 @@ function rosterCard(page, claimed = true) {
 }
 
 function memberCard(page) {
-  return page.locator('.admin-review-card').filter({ has: page.getByRole('heading', { name: 'ISOLATED-001', exact: true }) });
+  return page.locator('.admin-review-card').filter({ has: page.getByRole('heading', { name: '隔離已認領社員 · ISOLATED-001', exact: true }) });
 }
 
 async function beginRosterEdit(page, claimed = true) {
@@ -92,7 +92,7 @@ test('已認領名冊可修正股金股數，必填原因且成功同步重新�
   assert.deepEqual(state.writes, [{ path: `${rosterPath}/roster-claimed/shares`, payload: { share_capital_amount: 2400, share_count: 4, reason: '核對合作社股籍紀錄', expected_updated_at: originalVersion } }]);
   assert.ok(state.reads.filter((path) => path === rosterPath).length > rosterReads);
   assert.ok(state.reads.filter((path) => path === membersPath).length > memberReads);
-  await page.getByRole('tab', { name: '審核工作', exact: true }).click();
+  await page.getByRole('tab', { name: '會籍管理', exact: true }).click();
   await memberCard(page).getByText('股金 2400 元 · 4 股', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('main').innerText(), /股票號碼|股票代號/);
   assert.deepEqual(state.unknownApi, []);
@@ -101,6 +101,7 @@ test('已認領名冊可修正股金股數，必填原因且成功同步重新�
 test('會籍股籍可反向修正並同步名冊，零元零股不觸發退款', { timeout: 20000 }, async (t) => {
   const { page, state } = await fixture(t);
   await page.goto(`${base}/admin/social`);
+  await page.getByRole('tab', { name: '會籍管理', exact: true }).click();
   const card = memberCard(page);
   await card.getByRole('button', { name: '編輯股金／股數', exact: true }).click();
   const form = card.getByRole('form', { name: '修改股金與股數', exact: true });

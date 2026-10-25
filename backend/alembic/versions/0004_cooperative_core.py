@@ -40,10 +40,34 @@ NEW_TABLES = [
 ]
 
 
+def _create_legacy_meetings(bind) -> None:
+    # Keep the pre-category schema independent of later model changes.
+    if sa.inspect(bind).has_table("meetings"):
+        return
+    op.create_table(
+        "meetings",
+        sa.Column("id", sa.String(36), nullable=False),
+        sa.Column("meeting_type", sa.Enum("general_assembly", "affairs", name="meeting_type", native_enum=False), nullable=False),
+        sa.Column("title", sa.String(160), nullable=False),
+        sa.Column("agenda", sa.JSON(), nullable=False),
+        sa.Column("starts_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("location", sa.String(240), nullable=False),
+        sa.Column("created_by_id", sa.String(36), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["created_by_id"], ["users.id"], name=op.f("fk_meetings_created_by_id_users"), ondelete="RESTRICT"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_meetings")),
+    )
+    op.create_index("ix_meetings_meeting_type", "meetings", ["meeting_type"])
+    op.create_index("ix_meetings_starts_at", "meetings", ["starts_at"])
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     for table_name in NEW_TABLES:
-        Base.metadata.tables[table_name].create(bind, checkfirst=True)
+        if table_name == "meetings":
+            _create_legacy_meetings(bind)
+        else:
+            Base.metadata.tables[table_name].create(bind, checkfirst=True)
 
     with op.batch_alter_table("member_proposals") as batch:
         batch.add_column(

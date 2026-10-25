@@ -28,6 +28,7 @@ from .models import (
     InvoiceCarrierType,
     InvoiceStatus,
     MealEventStatus,
+    MeetingType,
     MemberProposalStatus,
     MemberProposalType,
     MemberVoteChoice,
@@ -1943,3 +1944,110 @@ class SupplierRead(BaseModel):
     updated_at: datetime
     accreditations: List[SupplierAccreditationRead] = Field(default_factory=list)
     documents: List[SupplierDocumentRead] = Field(default_factory=list)
+
+
+class MeetingCategoryRead(ApiModel):
+    id: str
+    name: str
+    sort_order: int
+    is_active: bool
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def normalize_updated_at(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class MeetingCategoryCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=80)
+    sort_order: int = Field(default=0, strict=True, ge=0, le=2147483647)
+    is_active: bool = Field(default=True, strict=True)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+class MeetingCategoryUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    sort_order: Optional[int] = Field(default=None, strict=True, ge=0, le=2147483647)
+    is_active: Optional[bool] = Field(default=None, strict=True)
+    expected_updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_values(cls, value: Any) -> Any:
+        if isinstance(value, dict) and any(item is None for item in value.values()):
+            raise ValueError("會議類別欄位不可為 null")
+        return value
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("expected_updated_at", mode="before")
+    @classmethod
+    def require_version_datetime(cls, value: Any) -> Any:
+        if not isinstance(value, (str, datetime)):
+            raise ValueError("資料更新時間必須為含時區的 ISO 日期時間")
+        return value
+
+    @field_validator("expected_updated_at")
+    @classmethod
+    def require_version_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("資料更新時間必須包含時區")
+        return value.astimezone(timezone.utc)
+
+
+class MeetingCreate(BaseModel):
+    category_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
+    meeting_type: Optional[MeetingType] = None
+    title: str = Field(min_length=1, max_length=160)
+    agenda: List[Dict[str, Any]] = Field(default_factory=list)
+    starts_at: datetime
+    location: str = Field(default="", max_length=240)
+
+    @model_validator(mode="after")
+    def require_category(self) -> "MeetingCreate":
+        if self.category_id is None and self.meeting_type is None:
+            raise ValueError("請選擇會議類別")
+        return self
+
+
+class MeetingResolutionRead(ApiModel):
+    id: str
+    title: str
+    resolution_text: str
+    member_proposal_id: Optional[str]
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def normalize_created_at(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class MeetingRead(ApiModel):
+    id: str
+    category_id: str
+    category_name: str
+    meeting_type: MeetingType
+    title: str
+    agenda: List[Dict[str, Any]]
+    starts_at: datetime
+    location: str
+    attended_count: int
+    eligible_member_count: int
+    attendance_rate: float
+    resolutions: List[MeetingResolutionRead]
+
+    @field_validator("starts_at")
+    @classmethod
+    def normalize_starts_at(cls, value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)

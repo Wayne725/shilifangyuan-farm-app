@@ -12,6 +12,7 @@ import { SocialNav } from "../components/SocialNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate } from "../lib/api";
+import { meetingAccessDenied, retryMeetingRead } from "../lib/meetings";
 import { proposalStatusLabel } from "../lib/labels";
 import type { Meeting, MembershipSummary, Proposal } from "../lib/types";
 
@@ -23,6 +24,7 @@ export function SocialPage() {
     enabled: Boolean(user),
   });
   const isMember = membership.data?.membership_type === "member";
+  const canReadMeetings = isMember && membership.data?.membership?.status === "active";
   const [proposals, meetings] = useQueries({
     queries: [
       {
@@ -31,12 +33,15 @@ export function SocialPage() {
         enabled: Boolean(isMember),
       },
       {
-        queryKey: ["meetings"],
+        queryKey: ["meetings", user?.id],
         queryFn: () => apiFetch<Meeting[]>("/v1/meetings"),
-        enabled: Boolean(isMember),
+        enabled: canReadMeetings,
+        retry: retryMeetingRead,
       },
     ],
   });
+
+  const visibleMeetings = canReadMeetings && !meetings.isError ? meetings.data : undefined;
 
   return (
     <>
@@ -101,8 +106,8 @@ export function SocialPage() {
               </Link>
               <Link className="social-feature" to="/meetings">
                 <CalendarCheck size={28} weight="light" />
-                <span>社員會議</span>
-                <strong>{meetings.data?.length ?? 0}</strong>
+                <span>各項會議</span>
+                <strong>{visibleMeetings?.length ?? "—"}</strong>
                 <small>場會議與紀錄</small>
                 <ArrowRight size={20} />
               </Link>
@@ -120,11 +125,11 @@ export function SocialPage() {
                 ))}
               </section>
               <section className="social-feed">
-                <header><div><p className="eyebrow">MEMBER MEETINGS / 社員會議</p><h2>社員會議</h2></div><Link className="text-link" to="/meetings">查看會議</Link></header>
-                {meetings.isPending && <LoadingLines count={2} />}
-                {meetings.isError && <DataState kind="error" title="會議暫時無法讀取" detail={meetings.error.message} />}
-                {meetings.data?.length === 0 && <DataState title="目前沒有會議紀錄" detail="合作社公告後會顯示在這裡。" />}
-                {meetings.data?.slice(0, 3).map((meeting) => (
+                <header><div><p className="eyebrow">MEETINGS / 各項會議</p><h2>各項會議</h2></div><Link className="text-link" to="/meetings">查看會議</Link></header>
+                {canReadMeetings && meetings.isPending && <LoadingLines count={2} />}
+                {!canReadMeetings || meetingAccessDenied(meetings.error) ? <DataState title="各項會議限有效正式社員查閱" detail="" /> : meetings.isError && <DataState kind="error" title="會議暫時無法讀取" detail={meetings.error.message} />}
+                {visibleMeetings?.length === 0 && <DataState title="目前沒有會議紀錄" detail="合作社公告後會顯示在這裡。" />}
+                {visibleMeetings?.slice(0, 3).map((meeting) => (
                   <article key={meeting.id}>
                     <time>{formatDate(meeting.starts_at)}</time>
                     <div><strong>{meeting.title}</strong><small>{meeting.location}</small></div>

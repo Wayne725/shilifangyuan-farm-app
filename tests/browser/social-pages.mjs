@@ -26,14 +26,15 @@ async function fixture(t, membershipType = 'member', meetingFailure = false) {
     } });
     if (url.pathname === '/v1/members/me') return route.fulfill({ json: {
       membership_type: membershipType,
-      membership: { member_number: 'ISOLATED-001', share_count: 999, share_capital_amount: 999999, share_certificate_number: 'MUST-NOT-DISPLAY' },
+      membership: { status: membershipType === 'member' ? 'active' : 'trainee', member_number: 'ISOLATED-001', share_count: 999, share_capital_amount: 999999, share_certificate_number: 'MUST-NOT-DISPLAY' },
       directory: { is_public: false },
     } });
     if (url.pathname === '/v1/member-proposals') return route.fulfill({ json: [{
       id: 'proposal-isolated', title: '隔離測試提案', body: '只供本機測試', status: 'discussing', proposal_type: 'resolution', created_by_name: '測試社員', tally: { total: 0 },
     }] });
+    if (url.pathname === '/v1/meeting-categories') return route.fulfill({ json: [{ id: 'general-category', name: '社員大會', sort_order: 0, is_active: true, updated_at: '2030-01-01T00:00:00Z' }] });
     if (url.pathname === '/v1/meetings') return route.fulfill({ status: meetingFailure ? 503 : 200, json: meetingFailure ? { detail: '隔離會議服務暫不可用' } : [{
-      id: 'meeting-isolated', meeting_type: 'general_assembly', title: '隔離測試社員大會', starts_at: '2026-09-20T04:00:00Z', location: '本機測試地點',
+      id: 'meeting-isolated', meeting_type: 'general_assembly', category_id: 'general-category', category_name: '社員大會', title: '隔離測試社員大會', starts_at: '2026-09-20T04:00:00Z', location: '本機測試地點',
       agenda: [{ title: '測試議程' }], resolutions: [{ id: 'resolution-isolated', title: '測試決議', resolution_text: '本機內容' }],
       attendance_rate: 0.5, attended_count: 1, eligible_member_count: 2,
     }] });
@@ -51,7 +52,7 @@ test('社員提案及會議各自載入獨立內容，手機導覽可切換', as
   await page.getByRole('heading', { name: '隔離測試提案', exact: true }).waitFor();
   assert.equal(await page.getByRole('heading', { name: '隔離測試社員大會', exact: true }).count(), 0);
   assert.equal(reads.includes('/v1/meetings'), false);
-  await page.getByRole('navigation', { name: '社務功能' }).getByRole('link', { name: '社員會議', exact: true }).click();
+  await page.getByRole('navigation', { name: '社務功能' }).getByRole('link', { name: '各項會議', exact: true }).click();
   await page.getByRole('heading', { name: '隔離測試社員大會', exact: true }).waitFor();
   assert.equal(await page.getByRole('heading', { name: '隔離測試提案', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '提出提案', exact: true }).count(), 0);
@@ -61,7 +62,7 @@ test('社員提案及會議各自載入獨立內容，手機導覽可切換', as
   assert.deepEqual(unknownApi, []);
 });
 
-test('未轉正帳號不能讀取社員會議', async (t) => {
+test('未轉正帳號不能讀取各項會議', async (t) => {
   const { page, reads } = await fixture(t, 'trainee');
   await page.goto(`${base}/meetings`);
   await page.getByRole('heading', { name: '此功能開放給正式社員', exact: true }).waitFor();
@@ -82,7 +83,7 @@ test('社員首頁保留社員編號，隱藏股金股數且分列提案會議',
   const content = await page.locator('main').innerText();
   assert.doesNotMatch(content, /股數|股金|股票號碼|999999|MUST-NOT-DISPLAY/);
   await page.getByRole('heading', { name: '提案進度', exact: true }).waitFor();
-  await page.getByRole('heading', { name: '社員會議', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '各項會議', exact: true }).waitFor();
   assert.equal(await page.getByRole('navigation', { name: '社務功能' }).getByRole('link', { name: '永續活動', exact: true }).count(), 0);
   assert.equal(await page.locator('main a[href="/activities"]').count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);

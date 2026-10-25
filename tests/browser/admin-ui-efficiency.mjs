@@ -22,7 +22,7 @@ for (const width of [1280, 816, 390]) test(`${width}px 社務待辦、搜尋、�
     if(path==='/v1/admin/activities') return route.fulfill({json:activities});
     if(path==='/v1/admin/members') return route.fulfill({json:[{id:'m1',user_id:'u1',member_number:'M001',status:'active',share_count:1,share_capital_amount:1000},{id:'m2',user_id:'u2',member_number:'M002',status:'suspended',share_count:1,share_capital_amount:1000}]});
     if(path==='/v1/admin/member-roster') return route.fulfill({json:[{id:'r1',member_number:'M001',legal_name:'陳小明',email_masked:'c***',phone_masked:'09***',is_active:true,claimed:true,share_count:1,share_capital_amount:1000}]});
-    if(['/v1/admin/member-proposals','/v1/admin/membership-applications','/v1/wishes','/v1/meetings'].includes(path)) return route.fulfill({json:[]});
+    if(['/v1/admin/member-proposals','/v1/admin/membership-applications','/v1/wishes','/v1/meetings', '/v1/admin/meetings'].includes(path)) return route.fulfill({json:[]});
     unknown.push(`${req.method()} ${path}`); return route.fulfill({status:404,json:{detail:'unknown fixture'}});
   });
   const page=await context.newPage();page.setDefaultTimeout(7000);page.on('pageerror',e=>errors.push(e.message));
