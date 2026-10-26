@@ -1,3 +1,5 @@
+from .activity_payments import router as activity_payments_router
+from .activity_finance import router as activity_finance_router
 from .photos import photos_router
 from .auth import auth_router
 from .line_auth import line_auth_router
@@ -26,6 +28,8 @@ from .invoice_reports import invoice_reports_router
 from .financial_statements import router as financial_statements_router
 
 ALL_ROUTERS = [
+    activity_payments_router,
+    activity_finance_router,
     photos_router,
     financial_statements_router,
     invoice_reports_router,

@@ -64,6 +64,7 @@ class MigrationDatabase:
         command.upgrade(self.config, REVISION)
 
     def assert_schema_matches(self):
+        command.upgrade(self.config, "head")
         if self.url.startswith("sqlite"):
             command.check(self.config)
             return

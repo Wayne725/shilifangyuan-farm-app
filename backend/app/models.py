@@ -235,6 +235,7 @@ class ActivityStatus(str, enum.Enum):
 
 
 class ActivityRegistrationStatus(str, enum.Enum):
+    PENDING_PAYMENT = "pending_payment"
     REGISTERED = "registered"
     WAITLISTED = "waitlisted"
     CANCELLED = "cancelled"
@@ -1324,6 +1325,8 @@ class GroupCampaign(Base):
 class Activity(Base):
     __tablename__ = "activities"
     __table_args__ = (
+        CheckConstraint("member_price >= 0 AND non_member_price >= 0", name="activity_prices_nonnegative"),
+        CheckConstraint("payment_window_hours BETWEEN 1 AND 168", name="activity_payment_window_valid"),
         CheckConstraint("capacity > 0", name="capacity_positive"),
         CheckConstraint("ends_at > starts_at", name="time_range_valid"),
         CheckConstraint(
@@ -1345,6 +1348,9 @@ class Activity(Base):
     registration_deadline: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True
     )
+    member_price: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    non_member_price: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    payment_window_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
     capacity: Mapped[int] = mapped_column(Integer)
     waitlist_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[ActivityStatus] = mapped_column(
@@ -1383,6 +1389,7 @@ class ActivityRegistration(Base):
     __table_args__ = (
         UniqueConstraint("activity_id", "user_id"),
         CheckConstraint("queue_position > 0", name="queue_position_positive"),
+        CheckConstraint("revision >= 1", name="registration_revision_positive"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -1400,6 +1407,9 @@ class ActivityRegistration(Base):
         default=ActivityRegistrationStatus.REGISTERED,
         index=True,
     )
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    contact_name: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    contact_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     queue_position: Mapped[int] = mapped_column(Integer)
     registered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
@@ -1411,8 +1421,65 @@ class ActivityRegistration(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    charges: Mapped[List["ActivityCharge"]] = relationship(foreign_keys="ActivityCharge.registration_id", back_populates="registration")
     activity: Mapped[Activity] = relationship(back_populates="registrations")
     user: Mapped[User] = relationship()
+
+
+class ActivityCharge(Base):
+    __tablename__ = "activity_charges"
+    __table_args__ = (
+        UniqueConstraint("registration_id", "registration_revision", name="uq_activity_charge_registration_revision"),
+        CheckConstraint("amount > 0", name="activity_charge_amount_positive"),
+        CheckConstraint("registration_revision >= 1", name="activity_charge_revision_positive"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    number: Mapped[str] = mapped_column(String(40), unique=True)
+    activity_id: Mapped[str] = mapped_column(ForeignKey("activities.id", ondelete="RESTRICT"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    registration_id: Mapped[str] = mapped_column(ForeignKey("activity_registrations.id", ondelete="RESTRICT"), index=True)
+    registration_revision: Mapped[int] = mapped_column(Integer)
+    activity_title: Mapped[str] = mapped_column(String(160))
+    contact_name: Mapped[str] = mapped_column(String(160))
+    contact_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    membership_type: Mapped[MembershipType] = mapped_column(enum_type(MembershipType, "activity_charge_membership_type"))
+    amount: Mapped[int] = mapped_column(Integer)
+    payment_status: Mapped[PaymentStatus] = mapped_column(enum_type(PaymentStatus, "activity_charge_payment_status"), default=PaymentStatus.PENDING, server_default="pending")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    activity: Mapped[Activity] = relationship()
+    registration: Mapped[ActivityRegistration] = relationship(back_populates="charges")
+    user: Mapped[User] = relationship()
+    payment_attempts: Mapped[List["PaymentAttempt"]] = relationship(back_populates="activity_charge")
+    refunds: Mapped[List["Refund"]] = relationship(back_populates="activity_charge")
+    refund_requests: Mapped[List["ActivityRefundRequest"]] = relationship(back_populates="activity_charge")
+
+
+class ActivityRefundRequest(Base):
+    __tablename__ = "activity_refund_requests"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="activity_refund_request_amount_positive"),
+        CheckConstraint("version >= 1", name="activity_refund_request_version_positive"),
+        CheckConstraint("status IN ('pending_review', 'approved', 'rejected', 'externally_refunded')", name="activity_refund_request_status_valid"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    activity_charge_id: Mapped[str] = mapped_column(ForeignKey("activity_charges.id", ondelete="RESTRICT"), index=True)
+    payment_attempt_id: Mapped[str] = mapped_column(ForeignKey("payment_attempts.id", ondelete="RESTRICT"), unique=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    amount: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="pending_review", server_default="pending_review")
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    requested_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reviewed_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    activity_charge: Mapped[ActivityCharge] = relationship(back_populates="refund_requests")
+    payment_attempt: Mapped["PaymentAttempt"] = relationship()
 
 
 class MemberProposal(Base):
@@ -2304,8 +2371,9 @@ class PaymentAttempt(Base):
         ),
         CheckConstraint("amount >= 0", name="amount_nonnegative"),
         CheckConstraint(
-            "(order_id IS NOT NULL AND membership_charge_id IS NULL) OR "
-            "(order_id IS NULL AND membership_charge_id IS NOT NULL)",
+            "(order_id IS NOT NULL AND membership_charge_id IS NULL AND activity_charge_id IS NULL) OR "
+            "(order_id IS NULL AND membership_charge_id IS NOT NULL AND activity_charge_id IS NULL) OR "
+            "(order_id IS NULL AND membership_charge_id IS NULL AND activity_charge_id IS NOT NULL)",
             name="exactly_one_payment_subject",
         ),
     )
@@ -2314,6 +2382,7 @@ class PaymentAttempt(Base):
     order_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    activity_charge_id: Mapped[Optional[str]] = mapped_column(ForeignKey("activity_charges.id", ondelete="RESTRICT"), nullable=True, index=True)
     membership_charge_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("membership_charges.id", ondelete="CASCADE"),
         nullable=True,
@@ -2357,6 +2426,7 @@ class PaymentAttempt(Base):
     )
 
     order: Mapped[Optional[Order]] = relationship(back_populates="payment_attempts")
+    activity_charge: Mapped[Optional[ActivityCharge]] = relationship(back_populates="payment_attempts")
     membership_charge: Mapped[Optional[MembershipCharge]] = relationship(
         back_populates="payment_attempts"
     )
@@ -2379,8 +2449,9 @@ class Refund(Base):
         ),
         CheckConstraint("amount >= 0", name="amount_nonnegative"),
         CheckConstraint(
-            "(order_id IS NOT NULL AND membership_charge_id IS NULL) OR "
-            "(order_id IS NULL AND membership_charge_id IS NOT NULL)",
+            "(order_id IS NOT NULL AND membership_charge_id IS NULL AND activity_charge_id IS NULL) OR "
+            "(order_id IS NULL AND membership_charge_id IS NOT NULL AND activity_charge_id IS NULL) OR "
+            "(order_id IS NULL AND membership_charge_id IS NULL AND activity_charge_id IS NOT NULL)",
             name="exactly_one_refund_subject",
         ),
     )
@@ -2389,6 +2460,7 @@ class Refund(Base):
     order_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("orders.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    activity_charge_id: Mapped[Optional[str]] = mapped_column(ForeignKey("activity_charges.id", ondelete="RESTRICT"), nullable=True, index=True)
     membership_charge_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("membership_charges.id", ondelete="CASCADE"),
         nullable=True,
@@ -2425,6 +2497,7 @@ class Refund(Base):
     )
 
     order: Mapped[Optional[Order]] = relationship(back_populates="refunds")
+    activity_charge: Mapped[Optional[ActivityCharge]] = relationship(back_populates="refunds")
     membership_charge: Mapped[Optional[MembershipCharge]] = relationship(
         back_populates="refunds"
     )

@@ -38,6 +38,7 @@ from ..integrations.raygate import (
     canonical_event_key as raygate_event_key,
 )
 from ..models import (
+    ActivityCharge,
     AdminAudit,
     FulfillmentStatus,
     MembershipCharge,
@@ -84,6 +85,8 @@ async def _owned_payment_attempt(
                 MembershipCharge.id == attempt.membership_charge_id
             )
         )
+    elif attempt.activity_charge_id is not None:
+        subject_owner_id = await session.scalar(select(ActivityCharge.user_id).where(ActivityCharge.id == attempt.activity_charge_id))
     if subject_owner_id != user.id:
         raise HTTPException(status_code=404, detail="找不到付款資料")
     return attempt
@@ -96,6 +99,7 @@ def _payment_attempt_status(attempt: PaymentAttempt) -> dict[str, Any]:
         "expires_at": attempt.expires_at,
         "order_id": attempt.order_id,
         "membership_charge_id": attempt.membership_charge_id,
+        "activity_charge_id": attempt.activity_charge_id,
         "order_revision": attempt.order_revision,
         "superseded": attempt.superseded_at is not None,
     }
@@ -231,7 +235,7 @@ async def refresh_payment_attempt_status(
             PaymentStatus.EXPIRED,
             PaymentStatus.FAILED,
         }
-        and datetime.now(timezone.utc) <= retry_until
+        and (datetime.now(timezone.utc) <= retry_until or attempt.activity_charge_id is not None and attempt.unpaid_verified_at is None)
     ):
         response["status"] = "confirming"
     return response
@@ -287,6 +291,11 @@ async def payment_checkout(
     attempt = await session.get(PaymentAttempt, attempt_id)
     if attempt is None:
         raise HTTPException(status_code=404, detail="找不到付款頁")
+    if attempt.activity_charge_id is not None:
+        from ..activity_payments import lock_activity_payment_subject, payable
+        charge = await lock_activity_payment_subject(session, attempt.activity_charge_id)
+        if charge is None or not payable(charge, charge.registration, charge.activity) or attempt.amount != charge.amount:
+            raise HTTPException(410, "活動繳款或名額已失效，請重新查詢報名")
     order = None
     if attempt.order_id is not None:
         order = await session.scalar(
@@ -529,6 +538,7 @@ async def raygate_payment_result(
     merchant_trade_no = attempt.merchant_trade_no
     order_id = attempt.order_id
     membership_charge_id = attempt.membership_charge_id
+    activity_charge_id = attempt.activity_charge_id
     payment_state = attempt.status.value
     if attempt.status in {
         PaymentStatus.PENDING,
@@ -561,6 +571,7 @@ async def raygate_payment_result(
             payment_state,
             order_id=order_id,
             membership_charge_id=membership_charge_id,
+            activity_charge_id=activity_charge_id,
             attempt_id=attempt_id,
         ),
         status_code=status.HTTP_303_SEE_OTHER,
@@ -594,6 +605,7 @@ async def ecpay_payment_result(
         raise HTTPException(status_code=404, detail="找不到付款資料")
     order_id = attempt.order_id
     membership_charge_id = attempt.membership_charge_id
+    activity_charge_id = attempt.activity_charge_id
     try:
         repository = SQLAlchemyPaymentCallbackRepository(session)
         await repository.apply_ecpay_payment_callback(
@@ -616,6 +628,7 @@ async def ecpay_payment_result(
             payment_state,
             order_id=order_id,
             membership_charge_id=membership_charge_id,
+            activity_charge_id=activity_charge_id,
         ),
         status_code=status.HTTP_303_SEE_OTHER,
     )
@@ -628,7 +641,12 @@ def _payment_result_location(
     order_id: str | None,
     membership_charge_id: str | None,
     attempt_id: str | None = None,
+    activity_charge_id: str | None = None,
 ) -> str:
+    if activity_charge_id is not None:
+        query = urlencode({"activity_charge_id": activity_charge_id, "payment": payment_state,
+            **({"attempt_id": attempt_id} if attempt_id else {})})
+        return f"{settings.web_base_url.rstrip('/')}/activities/registrations?{query}"
     if order_id is not None:
         query = urlencode(
             {

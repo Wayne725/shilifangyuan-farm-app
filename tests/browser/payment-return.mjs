@@ -64,6 +64,7 @@ test(`${entry} 付款上一頁、下一頁與重整都接續原訂單，不重�
     });
     const page = await context.newPage();
     await page.goto(`${base}/${entry}`);
+    if (entry === 'orders') await page.getByRole('tab', { name: '一般訂單', exact: true }).click();
     await page.getByRole('button', { name: '前往線上付款', exact: true }).click();
     await page.getByRole('heading', { name: '隔離金流付款頁' }).waitFor({ timeout: 10000 }).catch(async (error) => {
       throw new Error(`${error.message}\n${JSON.stringify(requests)}\n${await page.locator('body').innerText()}`);
@@ -145,18 +146,21 @@ test("管理端分頁搜尋、重查及重送必填原因，不使用確認視�
     const page = await context.newPage();
     let dialogs = 0;
     page.on('dialog', async (dialog) => { dialogs++; await dialog.dismiss(); });
-    await page.goto(`${base}/admin`);
+    await page.goto(`${base}/admin?section=issues`);
     const retry = page.getByRole('button', { name: '排入重試', exact: true });
     await retry.waitFor();
     assert.equal(await retry.isDisabled(), true);
     await page.getByLabel('處理原因', { exact: true }).fill('已修正寄信設定');
     await retry.click();
-    await page.getByText('目前沒有失敗工作。', { exact: true }).waitFor();
+    await page.getByText('目前沒有待處理問題。', { exact: true }).waitFor();
+    await page.getByRole('navigation', { name: '訂單營運子頁面' }).getByRole('link', { name: '訂單、付款與發票', exact: true }).click();
     await page.getByRole('navigation', { name: '訂單分頁' }).getByRole('button', { name: '下一頁', exact: true }).click();
     await page.getByText('SLF-SECOND', { exact: true }).waitFor();
     await page.getByLabel('搜尋訂單', { exact: true }).fill('SECOND');
     await page.getByRole('button', { name: '搜尋', exact: true }).click();
     await page.getByText('共 1 筆 · 第 1 頁', { exact: true }).waitFor();
+    await page.locator('summary').filter({ hasText: /^查詢付款$/ }).click();
+    await page.getByRole('form', { name: '付款狀態查詢' }).locator('summary').filter({ hasText: /^其他查詢原因$/ }).click();
     const query = page.getByRole('button', { name: '重新查詢雷門付款', exact: true });
     assert.equal(await query.isDisabled(), true);
     await page.getByLabel('金流查詢原因', { exact: true }).fill('核對付款未更新');

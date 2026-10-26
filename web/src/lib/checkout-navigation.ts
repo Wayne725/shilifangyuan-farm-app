@@ -10,3 +10,8 @@ export async function openMembershipHandoff(url: string, chargeId: string): Prom
   await router.navigate({ to: "/account", search: { membership_charge_id: chargeId }, replace: true });
   window.location.assign(url);
 }
+
+export async function openActivityHandoff(url: string, chargeId: string, attemptId: string): Promise<void> {
+  await router.navigate({to: "/activities/registrations", search: {activity_charge_id: chargeId, attempt_id: attemptId, payment: "confirming"}, replace: true});
+  window.location.assign(url);
+}

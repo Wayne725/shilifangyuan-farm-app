@@ -222,6 +222,7 @@ export interface PaymentAttemptStatus {
   expires_at: string;
   order_id?: string | null;
   membership_charge_id?: string | null;
+  activity_charge_id?: string | null;
 }
 
 export interface PickupLocation {
@@ -250,14 +251,11 @@ export interface Activity {
   registration_count: number;
   waitlist_count: number;
   review_reason?: string | null;
-  my_registration?: {
-    id: string;
-    status: string;
-    queue_position: number;
-    registered_at?: string;
-    cancelled_at?: string | null;
-    checked_in_at?: string | null;
-  } | null;
+  member_price?: number;
+  non_member_price?: number;
+  payment_window_hours?: number;
+  updated_at?: string;
+  my_registration?: import("./activities").ActivityRegistration | null;
 }
 
 export interface MeetingCategory {
