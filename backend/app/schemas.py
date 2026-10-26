@@ -416,6 +416,7 @@ class CampaignCreate(BaseModel):
     supply_cap: int = Field(ge=1)
     per_user_cap: int = Field(default=5, ge=1)
     deadline: datetime
+    confirmation_deadline: Optional[datetime] = None
     estimated_pickup_start: datetime
     estimated_pickup_end: datetime
     can_ship: bool = False
@@ -423,11 +424,11 @@ class CampaignCreate(BaseModel):
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
 
     @field_validator(
-        "deadline", "estimated_pickup_start", "estimated_pickup_end"
+        "deadline", "confirmation_deadline", "estimated_pickup_start", "estimated_pickup_end"
     )
     @classmethod
-    def ensure_timezone(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
+    def ensure_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and value.tzinfo is None:
             raise ValueError("時間必須包含時區")
         return value
 
@@ -498,8 +499,34 @@ class CampaignUpdate(BaseModel):
         return value
 
 
+class CampaignReviewDeadlineUpdate(BaseModel):
+    confirmation_deadline: datetime
+    expected_confirmation_deadline: Optional[datetime]
+    expected_updated_at: datetime
+    estimated_pickup_start: Optional[datetime] = None
+    estimated_pickup_end: Optional[datetime] = None
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("confirmation_deadline", "expected_confirmation_deadline", "expected_updated_at", "estimated_pickup_start", "estimated_pickup_end")
+    @classmethod
+    def ensure_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("時間必須包含時區")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def trim_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("請填寫調整原因")
+        return value.strip()
+
+
 class CampaignDecision(BaseModel):
     final_pickup_at: datetime
+    expected_threshold_version: int = Field(ge=0)
+    allow_below_threshold: bool = False
+    reason: str = Field(default="", max_length=1000)
 
     @field_validator("final_pickup_at")
     @classmethod
@@ -511,6 +538,13 @@ class CampaignDecision(BaseModel):
 
 class CampaignReject(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def trim_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("請填寫處理原因")
+        return value.strip()
 
 
 class CampaignRead(ApiModel):
@@ -536,6 +570,16 @@ class CampaignRead(ApiModel):
     decision_status: GroupDecisionStatus
     intake_status: GroupIntakeStatus
     confirmation_deadline: Optional[datetime]
+    threshold_version: int = 0
+    updated_at: datetime
+    review_overdue: bool = False
+    can_confirm: bool = False
+    can_edit_review_deadline: bool = False
+    confirmation_blocked_reason: Optional[str] = None
+    confirmed_paid_quantity: Optional[int] = None
+    confirmed_min_paid_quantity: Optional[int] = None
+    confirmed_threshold_version: Optional[int] = None
+    confirmation_exception_reason: Optional[str] = None
     confirmed_at: Optional[datetime]
     core_locked_at: Optional[datetime]
     can_ship: bool = False
@@ -791,6 +835,7 @@ class OrderRead(ApiModel):
     sales_channel: SalesChannel = SalesChannel.REGULAR
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
     group_campaign_id: Optional[str]
+    group_campaign_deadline: Optional[datetime] = None
     meal_event_id: Optional[str] = None
     membership_type_snapshot: MembershipType
     member_tax_exempt_snapshot: bool = False

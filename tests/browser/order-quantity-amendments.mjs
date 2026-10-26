@@ -250,3 +250,11 @@ test('手機放大字級仍可鍵盤預覽與返回，不溢出也不提交訂�
   await page.keyboard.press('Escape'); await trigger.waitFor(); assert.equal(await trigger.evaluate(node => document.activeElement === node), true);
   assert.deepEqual(state.writes, []); assert.equal(state.quotes.length, 1); await assertClean(page, state);
 });
+
+
+test('共同購買未付款訂單可依額滿時後端授權減量，保持付款版本流程', async t => {
+  const {page,state,visit}=await fixture(t,{channel:'group',width:390});state.order.group_campaign_deadline='2030-01-03T02:00:00Z';await visit();const dialog=await openEditor(page);await dialog.getByLabel('隔離紅豆數量',{exact:true}).selectOption('1');await preview(page,dialog);assert.deepEqual(state.writes,[]);await dialog.getByRole('button',{name:'確認修改',exact:true}).click();await page.locator('.order-quantity-amendment [role="status"]').waitFor();assert.equal(state.order.items[1].quantity,1);assert.equal(state.order.revision,2);assert.equal(state.writes[0].expected_revision,1);await assertClean(page,state);
+});
+test('共同購買預覽開著到截止時禁止確認改量及新付款，不沿用快取action', async t => {
+  const {page,state,visit}=await fixture(t,{channel:'group',width:390});state.order.group_campaign_deadline='2030-01-02T02:00:15Z';await visit();const dialog=await openEditor(page);await dialog.getByLabel('隔離紅豆數量',{exact:true}).selectOption('1');await preview(page,dialog);await page.clock.runFor(16000);assert.equal(await dialog.getByRole('button',{name:'確認修改',exact:true}).isDisabled(),true);assert.deepEqual(state.writes,[]);await page.keyboard.press('Escape');assert.equal(await page.getByRole('button',{name:'修改數量',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'前往線上付款',exact:true}).count(),0);await assertClean(page,state);
+});

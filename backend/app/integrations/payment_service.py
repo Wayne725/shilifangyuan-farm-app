@@ -662,6 +662,13 @@ async def create_payment_attempt(
         PaymentStatus.LATE_PAID_REFUND_REQUIRED,
     }:
         raise PaymentApplicationError("此訂單目前無法付款")
+    if order.group_campaign_id:
+        from ..group_review import order_has_uncertain_group_payment
+        campaign = order.group_campaign
+        if campaign is None or current >= _aware(campaign.deadline):
+            raise PaymentApplicationError("共同購買已截止")
+        if order_has_uncertain_group_payment(order, current):
+            raise PaymentApplicationError("付款結果仍待核對，請勿重複付款")
     if order.amount_total <= 0:
         raise PaymentApplicationError("訂單金額必須大於零")
     if (
@@ -799,6 +806,8 @@ async def create_payment_attempt(
         ):
             raise PaymentApplicationError("共同購買剩餘名額不足")
         campaign.reserved_quantity += quantity
+        from ..domain import refresh_campaign_intake
+        refresh_campaign_intake(campaign, current)
         reservation = InventoryReservation(
             order=order,
             group_campaign_id=campaign.id,
@@ -949,6 +958,21 @@ async def create_membership_payment_attempt(
     return attempt
 
 
+def _invalidate_group_unpaid_proof(attempt: PaymentAttempt, payload: Mapping[str, str]) -> None:
+    from ..group_review import current_order_attempt, UNSETTLED_STATUSES
+    order = attempt.order
+    if (order is None or not order.group_campaign_id or not current_order_attempt(attempt, order)
+        or attempt.status not in UNSETTLED_STATUSES):
+        return
+    if payload.get("PaymentDisposition") != "pending" and payload.get("RtnCode") == "1" and payload.get("SimulatePaid") != "1":
+        return
+    current = datetime.now(timezone.utc)
+    had_proof = attempt.unpaid_verified_at is not None
+    attempt.unpaid_verified_at = None
+    if had_proof or _aware(attempt.expires_at) <= current or payload.get("PaymentDisposition") != "pending":
+        attempt.settlement_unknown_since = attempt.settlement_unknown_since or current
+
+
 class SQLAlchemyPaymentCallbackRepository:
     """Applies a verified provider callback once inside the request transaction."""
 
@@ -976,15 +1000,6 @@ class SQLAlchemyPaymentCallbackRepository:
         event_provider = (
             "ecpay_aio" if provider == "ecpay" else "raygate_payment"
         )
-        existing_event = await self.session.scalar(
-            select(ExternalEvent).where(
-                ExternalEvent.provider == event_provider,
-                ExternalEvent.external_event_key == event_key,
-            )
-        )
-        if existing_event is not None:
-            return "duplicate"
-
         tombstone = await self.session.scalar(
             select(ExternalEvent).where(
                 ExternalEvent.provider == f"{provider}_reset",
@@ -1059,6 +1074,14 @@ class SQLAlchemyPaymentCallbackRepository:
         if received_amount != attempt.amount:
             raise PaymentApplicationError("付款回傳金額不符")
 
+        existing_event = await self.session.scalar(select(ExternalEvent).where(
+            ExternalEvent.provider == event_provider,
+            ExternalEvent.external_event_key == event_key))
+        if existing_event is not None:
+            _invalidate_group_unpaid_proof(attempt, payload)
+            await self.session.commit()
+            return "duplicate"
+
         event = ExternalEvent(
             provider=event_provider,
             external_event_key=event_key,
@@ -1107,6 +1130,12 @@ class SQLAlchemyPaymentCallbackRepository:
 
         if provider == "ecpay" and payload.get("SimulatePaid") == "1":
             attempt.provider_response = dict(payload)
+            if attempt.order is not None and attempt.order.group_campaign_id and not is_obsolete_order_attempt(attempt, attempt.order):
+                _invalidate_group_unpaid_proof(attempt, payload)
+                event.processed = True
+                event.processed_at = datetime.now(timezone.utc)
+                await self.session.commit()
+                return "simulated_payment_rejected"
             if attempt.status == PaymentStatus.PENDING:
                 attempt.status = PaymentStatus.FAILED
                 await self._release_attempt_reservations(attempt)
@@ -1116,6 +1145,7 @@ class SQLAlchemyPaymentCallbackRepository:
             return "simulated_payment_rejected"
 
         if disposition == "pending":
+            _invalidate_group_unpaid_proof(attempt, payload)
             attempt.provider_response = dict(payload)
             event.processed = True
             event.processed_at = datetime.now(timezone.utc)
@@ -1123,6 +1153,14 @@ class SQLAlchemyPaymentCallbackRepository:
             return "pending"
 
         if payload.get("RtnCode") != "1":
+            if attempt.order is not None and attempt.order.group_campaign_id and not is_obsolete_order_attempt(attempt, attempt.order):
+                attempt.provider_response = dict(payload)
+                attempt.unpaid_verified_at = None
+                attempt.settlement_unknown_since = attempt.settlement_unknown_since or datetime.now(timezone.utc)
+                event.processed = True
+                event.processed_at = datetime.now(timezone.utc)
+                await self.session.commit()
+                return "pending"
             if attempt.status == PaymentStatus.PENDING:
                 attempt.status = PaymentStatus.FAILED
                 attempt.provider_response = dict(payload)
@@ -1161,6 +1199,8 @@ class SQLAlchemyPaymentCallbackRepository:
         order = attempt.order
         await self._assign_provider_trade_no(attempt, payload)
         attempt.provider_response = dict(payload)
+        attempt.unpaid_verified_at = None
+        attempt.settlement_unknown_since = None
 
         if attempt.membership_charge_id is not None:
             loaded_charge = attempt.membership_charge
@@ -1444,8 +1484,12 @@ class SQLAlchemyPaymentCallbackRepository:
                 reservation is not None
                 and payment_time <= _aware(attempt.expires_at)
             )
+            from ..group_review import order_accepts_group_payment
+            decision_accepts_payment = order_accepts_group_payment(order) and campaign is not None and (
+                campaign.decision_status in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.PENDING_CONFIRMATION}
+                or (campaign.decision_status == GroupDecisionStatus.CONFIRMED and campaign.legacy_confirmed_intake))
             can_reacquire = (
-                campaign is not None
+                decision_accepts_payment
                 and reservation is not None
                 and campaign.paid_quantity
                 + campaign.reserved_quantity
@@ -1465,7 +1509,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 reservation.status = ReservationStatus.ACTIVE
                 reservation.released_at = None
             capacity_available = (
-                campaign is not None
+                decision_accepts_payment
                 and reservation is not None
                 and reservation.status == ReservationStatus.ACTIVE
                 and order.fulfillment_status != FulfillmentStatus.CANCELLED
@@ -2191,6 +2235,8 @@ async def release_attempt_reservations(
                 campaign.reserved_quantity = max(
                     0, campaign.reserved_quantity - reservation.quantity
                 )
+                from ..domain import refresh_campaign_intake
+                refresh_campaign_intake(campaign, current)
         elif reservation.source_product_id is not None:
             product = await session.scalar(
                 select(Product)

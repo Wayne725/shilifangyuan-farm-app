@@ -252,35 +252,32 @@ def test_join_enforces_person_and_supply_caps() -> None:
         )
 
 
-def test_paid_threshold_pauses_until_admin_confirmation() -> None:
+def test_paid_threshold_keeps_intake_open_until_cutoff() -> None:
     campaign = make_campaign()
     apply_paid_quantity(campaign, quantity=2, now=NOW)
     assert campaign.paid_quantity == 10
     assert campaign.reserved_quantity == 0
-    assert campaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION
-    assert campaign.intake_status == GroupIntakeStatus.PAUSED
-    confirm_campaign(campaign, NOW + timedelta(days=2), now=NOW)
-    assert campaign.decision_status == GroupDecisionStatus.CONFIRMED
-    assert campaign.intake_status == GroupIntakeStatus.OPEN
-
-
-def test_post_deadline_refund_returns_campaign_to_settling() -> None:
-    campaign = make_campaign(
-        deadline=NOW - timedelta(minutes=1),
-        min_paid_quantity=10,
-        paid_quantity=10,
-        reserved_quantity=0,
-        decision_status=GroupDecisionStatus.PENDING_CONFIRMATION,
-        intake_status=GroupIntakeStatus.PAUSED,
-        confirmation_deadline=NOW + timedelta(hours=1),
-    )
-
-    remove_paid_quantity(campaign, quantity=1, now=NOW)
-
-    assert campaign.paid_quantity == 9
     assert campaign.decision_status == GroupDecisionStatus.RECRUITING
-    assert campaign.intake_status == GroupIntakeStatus.SETTLING
-    assert campaign.confirmation_deadline is None
+    assert campaign.intake_status == GroupIntakeStatus.OPEN
+    with pytest.raises(DomainError, match="截止"):
+        confirm_campaign(campaign, NOW + timedelta(days=2), now=NOW, expected_threshold_version=1)
+    campaign.decision_status = GroupDecisionStatus.PENDING_CONFIRMATION
+    campaign.intake_status = GroupIntakeStatus.CLOSED
+    confirm_campaign(campaign, NOW + timedelta(days=2), now=NOW + timedelta(days=1), expected_threshold_version=1)
+    assert campaign.decision_status == GroupDecisionStatus.CONFIRMED
+    assert campaign.intake_status == GroupIntakeStatus.CLOSED
+    assert campaign.confirmed_paid_quantity == 10
+
+
+def test_post_deadline_refund_preserves_review_deadline_and_decision() -> None:
+    campaign = make_campaign(deadline=NOW - timedelta(minutes=1), paid_quantity=10,
+        reserved_quantity=0, decision_status=GroupDecisionStatus.PENDING_CONFIRMATION,
+        intake_status=GroupIntakeStatus.CLOSED, confirmation_deadline=NOW + timedelta(hours=1))
+    remove_paid_quantity(campaign, quantity=1, now=NOW)
+    assert campaign.paid_quantity == 9
+    assert campaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION
+    assert campaign.intake_status == GroupIntakeStatus.CLOSED
+    assert campaign.confirmation_deadline == NOW + timedelta(hours=1)
 
 
 def test_regular_paid_order_can_only_be_cancelled_by_admin_before_delivery() -> None:

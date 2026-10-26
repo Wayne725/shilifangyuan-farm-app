@@ -19,12 +19,14 @@ import {
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
-import { apiFetch, formatDate, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
+import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import {
   beginGroupCheckout,
   shippingChannelLabels,
   temperatureLabels,
 } from "../lib/commerce";
+import { campaignAccessDenied, campaignDateTime, campaignOrderBlockReason, campaignStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
+import { useDeadlineClock } from "../lib/use-deadline-clock";
 import type { GroupCampaign, PickupLocation, ShippingChannel } from "../lib/types";
 
 interface GroupQuote {
@@ -55,12 +57,16 @@ export function GroupCampaignPage() {
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [invoicePreference, setInvoicePreference] = useInvoicePreference(notificationEmail);
-  const orderBlockReason = storefrontOrderBlockReason(platform.data, "group")
-    || (method === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
   const campaign = useQuery({
     queryKey: ["group-campaign", campaignId],
     queryFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaignId}`),
+    retry: retryCampaignRead,
+    refetchInterval: query => campaignAccessDenied(query.state.error) ? false : 30000,
   });
+  const now = useDeadlineClock(campaign.data?.deadline);
+  const orderBlockReason = storefrontOrderBlockReason(platform.data, "group")
+    || (campaign.data ? campaignOrderBlockReason(campaign.data, now) : "")
+    || (method === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
   const locations = useQuery({
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
@@ -77,12 +83,12 @@ export function GroupCampaignPage() {
         shipping_channel: method === "shipping" ? shippingChannel : null,
       }),
     }),
-    enabled: Boolean(user && campaign.data && !orderBlockReason && (method === "pickup" || shippingChannel)),
+    enabled: Boolean(user && campaign.data && !campaign.isError && !orderBlockReason && (method === "pickup" || shippingChannel)),
   });
   const checkout = useMutation({
     mutationFn: async () => {
       if (!user || !campaign.data) throw new Error("請先登入");
-      if (orderBlockReason) throw new Error(orderBlockReason);
+      if (orderBlockReason || campaignOrderBlockReason(campaign.data)) throw new Error(orderBlockReason || campaignOrderBlockReason(campaign.data));
       if (invoicePreference.carrierType === "mobile_barcode") {
         await saveMobileBarcode(invoicePreference.carrierValue || "");
       }
@@ -139,6 +145,7 @@ export function GroupCampaignPage() {
   }
 
   const item = campaign.data;
+  const currentQuote = !orderBlockReason && !quote.isError ? quote.data : undefined;
   const shippingReady = Boolean(shippingChannel && recipientName.trim() && recipientPhone.trim() && shippingAddress.trim());
   const submitReady = Boolean(
     !orderBlockReason && quote.data && !quote.isFetching && !quote.isError &&
@@ -152,17 +159,18 @@ export function GroupCampaignPage() {
       <div className="offer-hero">
         <div className="offer-image">
           <img src={resolveAsset(item.image_url)} alt={item.title} onError={replaceBrokenAsset} />
-          <span>{item.intake_status}</span>
+          <span>{campaignStatusLabel(item, now)}</span>
         </div>
         <div className="offer-copy">
           <p className="eyebrow">BUYING TOGETHER / 共同購買</p>
           <h1>{item.title}</h1>
           <p>{item.description}</p>
           <dl>
-            <div><dt>已付款</dt><dd>{item.paid_quantity}／{item.min_paid_quantity} 份成團</dd></div>
+            <div><dt>已付款</dt><dd>{item.paid_quantity}／{item.min_paid_quantity} 份門檻</dd></div>
             <div><dt>剩餘供應</dt><dd>{item.available_quantity} 份</dd></div>
-            <div><dt>截止時間</dt><dd>{formatDate(item.deadline)}</dd></div>
-            <div><dt>預計取貨</dt><dd>{formatDate(item.estimated_pickup_start)}</dd></div>
+            <div><dt>付款截止（台灣）</dt><dd>{campaignDateTime(item.deadline)}</dd></div>
+            {item.confirmation_deadline && <div><dt>審核截止（台灣）</dt><dd>{campaignDateTime(item.confirmation_deadline)}</dd></div>}
+            <div><dt>{item.final_pickup_at ? "最終取貨" : "預計取貨"}</dt><dd>{campaignDateTime(item.final_pickup_at || item.estimated_pickup_start)}</dd></div>
           </dl>
         </div>
       </div>
@@ -172,9 +180,9 @@ export function GroupCampaignPage() {
         <div>
           <div className="checkout-step-title"><span>01</span><div><small>QUANTITY</small><h2>選擇數量</h2></div></div>
           <div className="offer-quantity">
-            <button type="button" onClick={() => setQuantity((value) => Math.max(1, value - 1))}><Minus size={16} /></button>
+            <button aria-label="減少數量" disabled={Boolean(orderBlockReason) || checkout.isPending || quantity <= 1} type="button" onClick={() => setQuantity((value) => Math.max(1, value - 1))}><Minus size={16} /></button>
             <strong>{quantity}</strong>
-            <button type="button" onClick={() => setQuantity((value) => Math.min(item.per_user_cap, item.available_quantity, value + 1))}><Plus size={16} /></button>
+            <button aria-label="增加數量" disabled={Boolean(orderBlockReason) || checkout.isPending || quantity >= Math.min(item.per_user_cap, item.available_quantity)} type="button" onClick={() => setQuantity((value) => Math.min(item.per_user_cap, item.available_quantity, value + 1))}><Plus size={16} /></button>
             <span>每人上限 {item.per_user_cap} 份</span>
           </div>
 
@@ -231,12 +239,12 @@ export function GroupCampaignPage() {
               <dl>
                 {method === "pickup" && <div><dt>取貨地點</dt><dd>{locations.isError ? "暫時無法使用" : selectedPickupLocation?.name || "尚未選擇"}</dd></div>}
                 {method === "pickup" && !locations.isError && selectedPickupLocation?.address && <div><dt>取貨地址</dt><dd>{selectedPickupLocation.address}</dd></div>}
-                <div><dt>社員單價</dt><dd>{formatMoney(quote.data?.unit_price || item.member_price)}</dd></div>
-                <div><dt>商品小計</dt><dd>{formatMoney(quote.data?.product_subtotal || 0)}</dd></div>
-                {shippingEnabled && <div><dt>運費</dt><dd>{formatMoney(quote.data?.shipping_fee || 0)}</dd></div>}
+                <div><dt>社員單價</dt><dd>{formatMoney(currentQuote?.unit_price ?? item.member_price)}</dd></div>
+                <div><dt>商品小計</dt><dd>{currentQuote ? formatMoney(currentQuote.product_subtotal) : "—"}</dd></div>
+                {shippingEnabled && <div><dt>運費</dt><dd>{currentQuote ? formatMoney(currentQuote.shipping_fee) : "—"}</dd></div>}
                 <InvoicePreferenceSummary value={invoicePreference} />
-                {quote.data && <InvoiceTaxSummary items={[{ tax_type: quote.data.tax_type }]} memberTaxExempt={quote.data.member_tax_exempt} shippingFee={quote.data.shipping_fee} taxAmount={quote.data.tax_amount} />}
-                <div className="offer-total"><dt>合計</dt><dd>{formatMoney(quote.data?.amount_total || 0)}</dd></div>
+                {currentQuote && <InvoiceTaxSummary items={[{ tax_type: currentQuote.tax_type }]} memberTaxExempt={currentQuote.member_tax_exempt} shippingFee={currentQuote.shipping_fee} taxAmount={currentQuote.tax_amount} />}
+                <div className="offer-total"><dt>合計</dt><dd>{currentQuote ? formatMoney(currentQuote.amount_total) : "—"}</dd></div>
               </dl>
               {checkout.isError && <p className="form-error">{checkout.error.message}</p>}
               <button className="button button-system full-width" type="button" disabled={!submitReady || checkout.isPending || item.intake_status !== "open"} onClick={() => checkout.mutate()}>

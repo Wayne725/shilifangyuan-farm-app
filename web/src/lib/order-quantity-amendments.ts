@@ -1,3 +1,4 @@
+import { campaignTimestamp } from "./group-campaigns";
 import type { MealOrder, Order, OrderQuantityAmendmentQuote } from "./types";
 
 export type AmendableOrder = Order | MealOrder;
@@ -8,8 +9,9 @@ export function amendmentItems(order: AmendableOrder) {
     : { id: item.id, name: item.product_name, quantity: item.quantity, unit: item.unit_label, unit_price: item.unit_price, selections: "" });
 }
 
-export function canAmendOrder(order: AmendableOrder) {
-  return order.available_actions.includes("amend_quantities")
+export function canAmendOrder(order: AmendableOrder, now = Date.now()) {
+  return !("group_campaign_deadline" in order && order.group_campaign_deadline && campaignTimestamp(order.group_campaign_deadline) <= now)
+    && order.available_actions.includes("amend_quantities")
     && Number.isInteger(order.revision) && (order.revision || 0) > 0
     && order.items.length > 0 && amendmentItems(order).every((item) => Boolean(item.id));
 }

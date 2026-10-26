@@ -338,7 +338,7 @@ async def make_meal_order(
 
 
 @pytest.mark.asyncio
-async def test_post_deadline_threshold_drop_refunds_remaining_group_orders(
+async def test_post_deadline_threshold_drop_waits_for_admin_without_refunds(
     database_session,
 ) -> None:
     now = datetime(2026, 7, 31, 8, 0, tzinfo=timezone.utc)
@@ -440,20 +440,12 @@ async def test_post_deadline_threshold_drop_refunds_remaining_group_orders(
     refund = await database_session.scalar(
         select(Refund).where(Refund.order_id == remaining_order.id)
     )
-    assert refund is not None
-    refund_event = await database_session.scalar(
-        select(OutboxEvent).where(
-            OutboxEvent.event_type == "refund.requested",
-            OutboxEvent.aggregate_id == refund.id,
-        )
-    )
     assert changed == 1
-    assert campaign.decision_status == GroupDecisionStatus.FAILED_UNMET
+    assert campaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION
     assert campaign.intake_status == GroupIntakeStatus.CLOSED
-    assert remaining_order.payment_status == PaymentStatus.REFUND_PENDING
-    assert remaining_reservation.status == ReservationStatus.RELEASED
-    assert refund.reason == "共同購買未成立，自動退款"
-    assert refund_event is not None
+    assert remaining_order.payment_status == PaymentStatus.PAID
+    assert remaining_reservation.status == ReservationStatus.CONSUMED
+    assert refund is None
 
 
 @pytest.mark.asyncio

@@ -150,6 +150,12 @@ def apply_proposal_clock(
 
 
 def validate_campaign_schedule(campaign: GroupCampaign, now: datetime) -> None:
+    if campaign.confirmation_deadline is None:
+        campaign.confirmation_deadline = aware(campaign.deadline) + timedelta(hours=72)
+    if aware(campaign.confirmation_deadline) <= aware(campaign.deadline):
+        raise DomainError("管理員審核期限必須晚於付款截止")
+    if aware(campaign.confirmation_deadline) > aware(campaign.estimated_pickup_start):
+        raise DomainError("管理員審核期限不可晚於預估取貨開始")
     if campaign.min_paid_quantity > campaign.supply_cap:
         raise DomainError("成團門檻不可高於供應上限")
     if aware(campaign.deadline) <= now:
@@ -206,70 +212,53 @@ def apply_paid_quantity(
     campaign.reserved_quantity = max(0, campaign.reserved_quantity - quantity)
     if campaign.core_locked_at is None:
         campaign.core_locked_at = current
-    if campaign.paid_quantity >= campaign.supply_cap:
-        campaign.intake_status = GroupIntakeStatus.FULL
-    if (
-        campaign.decision_status == GroupDecisionStatus.RECRUITING
-        and campaign.paid_quantity >= campaign.min_paid_quantity
-    ):
-        campaign.decision_status = GroupDecisionStatus.PENDING_CONFIRMATION
-        campaign.intake_status = GroupIntakeStatus.PAUSED
-        if current <= aware(campaign.deadline):
-            campaign.confirmation_deadline = aware(campaign.deadline)
-        else:
-            campaign.confirmation_deadline = current + timedelta(
-                hours=get_settings().late_confirmation_hours
-            )
+    refresh_campaign_intake(campaign, current)
 
 
-def remove_paid_quantity(
-    campaign: GroupCampaign,
-    quantity: int,
-    now: Optional[datetime] = None,
-) -> None:
-    current = now or utcnow()
+def refresh_campaign_intake(campaign: GroupCampaign, now: datetime) -> None:
+    if campaign.decision_status not in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}:
+        return
+    if now >= aware(campaign.deadline):
+        campaign.intake_status = (GroupIntakeStatus.CLOSED if campaign.decision_status == GroupDecisionStatus.CONFIRMED else GroupIntakeStatus.SETTLING)
+    elif campaign.decision_status == GroupDecisionStatus.RECRUITING or campaign.legacy_confirmed_intake:
+        campaign.intake_status = (GroupIntakeStatus.FULL if campaign_available_quantity(campaign) == 0 else GroupIntakeStatus.OPEN)
+
+
+def remove_paid_quantity(campaign: GroupCampaign, quantity: int, now: Optional[datetime] = None) -> None:
     campaign.paid_quantity = max(0, campaign.paid_quantity - quantity)
     campaign.threshold_version = (campaign.threshold_version or 0) + 1
-    if (
-        campaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION
-        and campaign.paid_quantity < campaign.min_paid_quantity
-    ):
-        if current < aware(campaign.deadline):
-            campaign.decision_status = GroupDecisionStatus.RECRUITING
-            campaign.intake_status = GroupIntakeStatus.OPEN
-            campaign.confirmation_deadline = None
-        else:
-            campaign.decision_status = GroupDecisionStatus.RECRUITING
-            campaign.intake_status = GroupIntakeStatus.SETTLING
-            campaign.confirmation_deadline = None
+    refresh_campaign_intake(campaign, now or utcnow())
 
 
 def confirm_campaign(
     campaign: GroupCampaign,
     final_pickup_at: datetime,
     now: Optional[datetime] = None,
+    *, expected_threshold_version: int,
+    allow_below_threshold: bool = False,
+    reason: str = "",
 ) -> None:
     current = now or utcnow()
-    if campaign.decision_status != GroupDecisionStatus.PENDING_CONFIRMATION:
-        raise DomainError("只有待確認成團的共同購買可以確認")
-    if campaign.paid_quantity < campaign.min_paid_quantity:
-        raise DomainError("已付款數量尚未達成團門檻")
-    if (
-        campaign.confirmation_deadline is not None
-        and current > aware(campaign.confirmation_deadline)
-    ):
-        raise DomainError("管理員確認期限已過")
+    if current < aware(campaign.deadline):
+        raise DomainError("付款截止後才可確認共同購買")
+    if campaign.decision_status != GroupDecisionStatus.PENDING_CONFIRMATION or campaign.intake_status != GroupIntakeStatus.CLOSED:
+        raise DomainError("共同購買尚在付款核對中或已完成決定")
+    if expected_threshold_version != (campaign.threshold_version or 0):
+        raise DomainError("付款數量已變更，請重新核對後確認")
+    if campaign.paid_quantity <= 0:
+        raise DomainError("沒有已付款數量，無法確認成團")
+    if campaign.paid_quantity < campaign.min_paid_quantity and (not allow_below_threshold or not reason.strip()):
+        raise DomainError("未達成團門檻，請勾選例外確認並填寫原因")
     if aware(final_pickup_at) < current:
         raise DomainError("最終取貨時間不可早於現在")
     campaign.final_pickup_at = final_pickup_at
     campaign.confirmed_at = current
+    campaign.confirmed_paid_quantity = campaign.paid_quantity
+    campaign.confirmed_min_paid_quantity = campaign.min_paid_quantity
+    campaign.confirmed_threshold_version = campaign.threshold_version or 0
+    campaign.confirmation_exception_reason = reason.strip() if campaign.paid_quantity < campaign.min_paid_quantity else None
     campaign.decision_status = GroupDecisionStatus.CONFIRMED
-    if current < aware(campaign.deadline) and campaign.paid_quantity < campaign.supply_cap:
-        campaign.intake_status = GroupIntakeStatus.OPEN
-    elif campaign.paid_quantity >= campaign.supply_cap:
-        campaign.intake_status = GroupIntakeStatus.FULL
-    else:
-        campaign.intake_status = GroupIntakeStatus.CLOSED
+    campaign.intake_status = GroupIntakeStatus.CLOSED
 
 
 def meal_payment_window_open(order: Order, now: datetime) -> bool:
@@ -337,8 +326,11 @@ def order_amendment_blocked_reason(order: Order, now: Optional[datetime] = None)
         except ValueError as exc:
             return str(exc)
     elif order.group_campaign_id is not None:
+        from .group_review import order_has_uncertain_group_payment
+        if order_has_uncertain_group_payment(order, current):
+            return "付款結果仍待核對，暫時無法修改數量"
         campaign = order.__dict__.get("group_campaign")
-        if (campaign is None or campaign.intake_status != GroupIntakeStatus.OPEN
+        if (campaign is None or campaign.intake_status not in {GroupIntakeStatus.OPEN, GroupIntakeStatus.FULL}
             or campaign.decision_status not in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}
             or current >= aware(campaign.deadline)):
             return "共同購買已截止或停止接單，無法修改數量"
@@ -384,7 +376,19 @@ def order_available_actions(
                 in {ShipmentStatus.READY_TO_CREATE, ShipmentStatus.CREATED}
             )
         )
-        if payment_ready and order.payment_method in {None, PaymentMethod.ONLINE} and (
+        campaign = order.__dict__.get("group_campaign")
+        from .group_review import order_has_uncertain_group_payment, current_order_attempt
+        has_open_group_checkout = any(
+            current_order_attempt(attempt, order) and attempt.status == PaymentStatus.PENDING
+            and aware(attempt.expires_at) > current and bool(attempt.checkout_payload)
+            for attempt in order.__dict__.get("payment_attempts", []))
+        group_payment_ready = not order.group_campaign_id or (
+            campaign is not None and current < aware(campaign.deadline)
+            and campaign.decision_status in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}
+            and (campaign.intake_status == GroupIntakeStatus.OPEN
+                 or (campaign.intake_status == GroupIntakeStatus.FULL and has_open_group_checkout))
+            and not order_has_uncertain_group_payment(order, current))
+        if payment_ready and group_payment_ready and order.payment_method in {None, PaymentMethod.ONLINE} and (
             not is_meal
             or (not meal_fulfillment_closed and meal_payment_window_open(order, current))
         ):

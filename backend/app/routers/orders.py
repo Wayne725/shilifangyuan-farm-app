@@ -115,6 +115,7 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         sales_channel=order.sales_channel,
         fulfillment_method=order.fulfillment_method,
         group_campaign_id=order.group_campaign_id,
+        group_campaign_deadline=aware(order.group_campaign.deadline) if order.__dict__.get("group_campaign") else None,
         meal_event_id=order.meal_event_id,
         membership_type_snapshot=order.membership_type_snapshot,
         member_tax_exempt_snapshot=order.member_tax_exempt_snapshot,

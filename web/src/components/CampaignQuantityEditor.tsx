@@ -1,22 +1,26 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { useDeadlineClock } from "../lib/use-deadline-clock";
+import { campaignAccessDenied, campaignQuantityBlockReason } from "../lib/group-campaigns";
 import { apiFetch } from "../lib/api";
 import type { GroupCampaign } from "../lib/types";
 
-export function CampaignQuantityEditor({ campaign, unit = "組", onDone }: { campaign: GroupCampaign; unit?: string; onDone: () => void }) {
+export function CampaignQuantityEditor({ campaign, unit = "組", onDone, onAccessDenied }: { campaign: GroupCampaign; unit?: string; onDone: () => void; onAccessDenied?: () => void }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => quantities(campaign));
   const [original, setOriginal] = useState(() => quantities(campaign));
   const [saved, setSaved] = useState(false);
-  const locked = Boolean(campaign.core_locked_at);
-  const closed = !["recruiting", "pending_confirmation", "confirmed"].includes(campaign.decision_status);
+  const now = useDeadlineClock(campaign.deadline);
+  const blockReason = campaignQuantityBlockReason(campaign, now);
+  const closed = Boolean(blockReason);
   const error = Object.values(draft).some((value) => !Number.isInteger(value) || value < 1) ? "數量必須是大於 0 的整數"
     : draft.min_paid_quantity > draft.supply_cap ? "成團所需總數量不可高於本團供應上限" : "";
   const changes = Object.fromEntries(Object.entries(draft).filter(([key, value]) => value !== original[key as keyof typeof draft]));
   const update = useMutation({
     mutationFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaign.id}`, { method: "PATCH", body: JSON.stringify(changes) }),
     onSuccess: () => { setOpen(false); setSaved(true); onDone(); },
+    onError: error => { if (campaignAccessDenied(error)) onAccessDenied?.(); },
   });
   return <section className="admin-create-block campaign-quantity-settings" aria-label="共同購買數量設定">
     <dl className="campaign-quantity-summary">
@@ -24,11 +28,10 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone }: { cam
       <div><dt>成團所需總數量</dt><dd>{campaign.min_paid_quantity} {unit}</dd></div>
       <div><dt>本團供應上限</dt><dd>{campaign.supply_cap} {unit}</dd></div>
     </dl>
-    <button className="button button-system" type="button" disabled={locked || closed || update.isPending} onClick={() => { setDraft(quantities(campaign)); setOriginal(quantities(campaign)); setOpen((value) => !value); setSaved(false); update.reset(); }}>編輯數量設定</button>
-    {locked && <p className="form-error">已有付款，限購與成團數量已鎖定。</p>}
-    {!locked && closed && <p className="form-error">此團已結束，無法修改數量設定。</p>}
+    <button className="button button-system" type="button" disabled={closed || update.isPending} onClick={() => { setDraft(quantities(campaign)); setOriginal(quantities(campaign)); setOpen((value) => !value); setSaved(false); update.reset(); }}>編輯數量設定</button>
+    {blockReason && <p className="form-error">{blockReason}</p>}
     {saved && <p className="form-success" role="status">共同購買數量設定已儲存</p>}
-    {open && !locked && !closed && <form className="social-form admin-master-form" aria-label="編輯共同購買數量" onSubmit={(event) => { event.preventDefault(); if (!error && Object.keys(changes).length) update.mutate(); }}>
+    {open && !closed && <form className="social-form admin-master-form" aria-label="編輯共同購買數量" onSubmit={(event) => { event.preventDefault(); if (!error && Object.keys(changes).length) update.mutate(); }}>
       <div className="form-heading"><div><p className="eyebrow">CAMPAIGN QUANTITIES / 數量設定</p><h3>編輯共同購買數量</h3></div></div>
       <div className="field-grid three-columns">
         {([

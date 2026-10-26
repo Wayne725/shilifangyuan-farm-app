@@ -18,6 +18,9 @@ from sqlalchemy.orm import selectinload
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
 from .domain import apply_proposal_clock
+from .group_review import current_order_attempt, reconcile_campaign_state, remind_campaign_review, valid_notification_email, publish_campaign_notification_once
+from .integrations.raygate import RayGateTransactionNotFoundError
+from .integrations.ecpay import verify_check_mac_value
 from .meal_schedules import generate_scheduled_meal_events
 from .integrations.common import IntegrationError
 from .integrations.invoice_service import (
@@ -317,11 +320,47 @@ async def _lock_expiring_payment_attempt(session: AsyncSession, attempt_id: str)
         await lock_order_payment_subject(session, order_id)
     return await session.scalar(
         select(PaymentAttempt)
-        .where(PaymentAttempt.id == attempt_id, PaymentAttempt.status == PaymentStatus.PENDING)
+        .where(PaymentAttempt.id == attempt_id, PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
         .options(selectinload(PaymentAttempt.reservations))
         .execution_options(populate_existing=True)
         .with_for_update()
     )
+
+
+async def _record_group_payment_verification(session: AsyncSession, attempt_id: str, now: datetime,
+                                             *, verified_unpaid: bool, response: Optional[dict] = None) -> bool:
+    attempt = await _lock_expiring_payment_attempt(session, attempt_id)
+    if attempt is None or attempt.order_id is None:
+        await session.commit()
+        return False
+    order = await session.scalar(select(Order).where(Order.id == attempt.order_id).execution_options(populate_existing=True))
+    if order is None or order.group_campaign_id is None or not current_order_attempt(attempt, order):
+        await session.commit()
+        return False
+    if response is not None:
+        attempt.provider_response = dict(response)
+    if _aware(attempt.expires_at) <= now:
+        if verified_unpaid:
+            await release_attempt_reservations(session, attempt)
+            attempt.status = PaymentStatus.EXPIRED
+            attempt.unpaid_verified_at = now
+            attempt.settlement_unknown_since = None
+        else:
+            attempt.unpaid_verified_at = None
+            attempt.settlement_unknown_since = attempt.settlement_unknown_since or now
+    await session.commit()
+    return True
+
+
+def _verified_ecpay_unpaid(adapter, attempt: PaymentAttempt, payload: dict) -> bool:
+    config = getattr(adapter, "settings", None)
+    if config is None or str(payload.get("TradeStatus", "")) != "10200095":
+        return False
+    return (payload.get("MerchantID") == config.merchant_id
+            and payload.get("MerchantTradeNo") == attempt.merchant_trade_no
+            and str(payload.get("TradeAmt", "")) == str(attempt.amount)
+            and bool(payload.get("CheckMacValue"))
+            and verify_check_mac_value(payload, config.hash_key, config.hash_iv))
 
 
 async def _reconcile_expired_payments(
@@ -341,6 +380,14 @@ async def _reconcile_expired_payments(
                 due,
                 PaymentAttempt.provider.in_({"raygate", "ecpay"}),
                 or_(
+                    exists(select(Order.id).where(
+                        Order.id == PaymentAttempt.order_id, Order.group_campaign_id.is_not(None),
+                        Order.cancelled_at.is_(None), Order.fulfillment_status != FulfillmentStatus.CANCELLED,
+                        Order.payment_status.notin_({PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}),
+                        PaymentAttempt.superseded_at.is_(None), PaymentAttempt.order_revision == Order.revision,
+                        PaymentAttempt.amount == Order.amount_total, PaymentAttempt.unpaid_verified_at.is_(None),
+                        PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+                        PaymentAttempt.expires_at <= now)),
                     (
                         (PaymentAttempt.status == PaymentStatus.PENDING)
                         & (
@@ -412,8 +459,11 @@ async def _reconcile_expired_payments(
                 else payment_adapter_from_settings(settings, attempt_provider)
             )
             query_result = await adapter.query_order(attempt.merchant_trade_no)
-        except (IntegrationError, ValueError):
+        except (IntegrationError, ValueError) as exc:
             await session.rollback()
+            if await _record_group_payment_verification(session, attempt_id, now, verified_unpaid=isinstance(exc, RayGateTransactionNotFoundError)):
+                processed += 1
+                continue
             if (
                 attempt_status == PaymentStatus.PENDING
                 and attempt_expires_at <= now
@@ -448,6 +498,11 @@ async def _reconcile_expired_payments(
                     attempt_provider,
                 )
                 continue
+            processed += 1
+            continue
+
+        verified_unpaid = attempt_provider == "ecpay" and _verified_ecpay_unpaid(adapter, attempt, query_result)
+        if await _record_group_payment_verification(session, attempt_id, now, verified_unpaid=verified_unpaid, response=query_result):
             processed += 1
             continue
 
@@ -780,92 +835,21 @@ async def _reconcile_campaigns(
     now: datetime,
     limit: int,
 ) -> int:
-    campaigns = list(
-        await session.scalars(
-            select(GroupCampaign)
-            .where(
-                or_(
-                    (
-                        GroupCampaign.decision_status
-                        == GroupDecisionStatus.RECRUITING
-                    )
-                    & (GroupCampaign.deadline <= now),
-                    (
-                        GroupCampaign.decision_status
-                        == GroupDecisionStatus.PENDING_CONFIRMATION
-                    )
-                    & (GroupCampaign.confirmation_deadline <= now),
-                    (
-                        GroupCampaign.decision_status
-                        == GroupDecisionStatus.CONFIRMED
-                    )
-                    & (GroupCampaign.deadline <= now)
-                    & (GroupCampaign.intake_status == GroupIntakeStatus.OPEN),
-                    GroupCampaign.intake_status == GroupIntakeStatus.SETTLING,
-                )
-            )
-            .order_by(GroupCampaign.deadline)
-            .limit(limit)
-            .with_for_update()
-        )
-    )
+    campaigns = list(await session.scalars(select(GroupCampaign).where(
+        GroupCampaign.deadline <= now,
+        GroupCampaign.decision_status.in_({GroupDecisionStatus.RECRUITING, GroupDecisionStatus.PENDING_CONFIRMATION, GroupDecisionStatus.CONFIRMED}),
+    ).order_by(func.coalesce(GroupCampaign.review_checked_at, GroupCampaign.deadline), GroupCampaign.id).limit(limit)
+        .execution_options(populate_existing=True).with_for_update()))
     changed = 0
-    notification_service = NotificationService(
-        SQLAlchemyNotificationRepository(session)
-    )
     for campaign in campaigns:
-        if (
-            campaign.decision_status == GroupDecisionStatus.CONFIRMED
-            and _aware(campaign.deadline) <= now
-        ):
-            campaign.intake_status = GroupIntakeStatus.CLOSED
-            changed += 1
-            continue
-        if (
-            campaign.decision_status
-            == GroupDecisionStatus.PENDING_CONFIRMATION
-            and campaign.confirmation_deadline is not None
-            and _aware(campaign.confirmation_deadline) <= now
-        ):
-            campaign.decision_status = GroupDecisionStatus.EXPIRED_UNCONFIRMED
-            campaign.intake_status = GroupIntakeStatus.CLOSED
-            await _enqueue_campaign_refunds(session, campaign)
-            await _notify_campaign_outcome(
-                session,
-                notification_service,
-                campaign,
-                "group.expired_unconfirmed",
-                "共同購買未在期限內確認",
-            )
-            changed += 1
-            continue
-        if (
-            campaign.decision_status == GroupDecisionStatus.RECRUITING
-            and _aware(campaign.deadline) <= now
-        ) or campaign.intake_status == GroupIntakeStatus.SETTLING:
-            if campaign.reserved_quantity > 0:
-                campaign.intake_status = GroupIntakeStatus.SETTLING
-                continue
-            if campaign.paid_quantity >= campaign.min_paid_quantity:
-                campaign.decision_status = (
-                    GroupDecisionStatus.PENDING_CONFIRMATION
-                )
-                campaign.intake_status = GroupIntakeStatus.PAUSED
-                campaign.confirmation_deadline = now + timedelta(
-                    hours=settings.late_confirmation_hours
-                )
-            else:
-                campaign.decision_status = GroupDecisionStatus.FAILED_UNMET
-                campaign.intake_status = GroupIntakeStatus.CLOSED
-                await _enqueue_campaign_refunds(session, campaign)
-                await _notify_campaign_outcome(
-                    session,
-                    notification_service,
-                    campaign,
-                    "group.failed_unmet",
-                    "共同購買未達成團門檻",
-                )
-            changed += 1
+        before = (campaign.decision_status, campaign.intake_status)
+        previous_updated_at = campaign.updated_at
+        await reconcile_campaign_state(session, campaign, now)
+        await remind_campaign_review(session, campaign, now)
+        state_changed = before != (campaign.decision_status, campaign.intake_status)
+        changed += state_changed
+        await session.execute(update(GroupCampaign).where(GroupCampaign.id == campaign.id).values(
+            review_checked_at=now, updated_at=now if state_changed else previous_updated_at))
     await session.commit()
     return changed
 
@@ -1680,6 +1664,7 @@ async def _process_domain_event(
                 )
             )
     elif event.event_type == "group.opened":
+        await session.execute(select(GroupCampaign.id).where(GroupCampaign.id == event.aggregate_id).with_for_update())
         proposal_id = event.payload.get("proposal_id")
         if proposal_id:
             voter_ids = list(
@@ -1690,49 +1675,43 @@ async def _process_domain_event(
             for user_id in set(voter_ids):
                 user = await session.get(User, user_id)
                 if user is not None:
-                    await service.publish(
+                    await publish_campaign_notification_once(session,
                         NotificationCommand(
                             user_id=user.id,
                             event_type=event.event_type,
                             title="正式共同購買已開放",
                             body="你參與投票的商品已開始正式共同購買。",
                             data={"campaign_id": event.aggregate_id},
-                            email=user.email,
+                            email=valid_notification_email(user.notification_email, user.email),
                             dedupe_key="outbox:{}:{}".format(event.id, user.id),
                         )
                     )
     elif event.event_type.startswith("group."):
-        user_ids = {
-            str(user_id) for user_id in event.payload.get("user_ids", [])
-        }
-        if not user_ids:
-            user_ids = set(
-                await session.scalars(
-                    select(Order.user_id).where(
-                        Order.group_campaign_id == event.aggregate_id
-                    )
-                )
-            )
-        titles = {
-            "group.confirmed": "共同購買已確認成團",
-            "group.rejected": "共同購買未確認成團",
-            "group.cancelled": "共同購買已取消",
-        }
+        campaign = await session.scalar(select(GroupCampaign).where(GroupCampaign.id == event.aggregate_id)
+            .execution_options(populate_existing=True).with_for_update())
+        if campaign is None:
+            return
+        orders = list(await session.scalars(select(Order).where(Order.group_campaign_id == campaign.id).order_by(Order.created_at.desc(), Order.id)))
+        requested_users = {str(value) for value in event.payload.get("user_ids", [])}
+        user_ids = requested_users or {order.user_id for order in orders}
+        titles = {"group.confirmed": "共同購買已確認成團", "group.rejected": "共同購買未確認成團", "group.cancelled": "共同購買已取消"}
         title = titles.get(event.event_type, "共同購買狀態已更新")
-        for user_id in user_ids:
+        for user_id in sorted(user_ids):
             user = await session.get(User, user_id)
-            if user is not None:
-                await service.publish(
-                    NotificationCommand(
-                        user_id=user.id,
-                        event_type=event.event_type,
-                        title=title,
-                        body=str(event.payload.get("reason") or title),
-                        data={"campaign_id": event.aggregate_id},
-                        email=user.email,
-                        dedupe_key="outbox:{}:{}".format(event.id, user.id),
-                    )
-                )
+            if user is None:
+                continue
+            contacts = [order.contact_email for order in orders if order.user_id == user_id]
+            body = f"「{campaign.title}」{title}。"
+            if event.event_type == "group.confirmed" and event.payload.get("final_pickup_at"):
+                from zoneinfo import ZoneInfo
+                pickup = datetime.fromisoformat(str(event.payload["final_pickup_at"])).astimezone(ZoneInfo("Asia/Taipei"))
+                body += f"取貨時間（台灣）：{pickup:%Y/%m/%d %H:%M}。"
+            elif event.event_type in {"group.cancelled", "group.rejected"}:
+                body += "已付款訂單已送出退款處理，退款進度請至訂單中心查詢。"
+            await publish_campaign_notification_once(session, NotificationCommand(
+                user_id=user.id, event_type=event.event_type, title=title, body=body,
+                data={"campaign_id": campaign.id}, email=valid_notification_email(*contacts, user.notification_email, user.email),
+                dedupe_key=f"outbox:{event.id}:{user.id}"))
     elif event.event_type == "order.cancelled":
         order = await session.get(Order, event.aggregate_id)
         if order is not None:

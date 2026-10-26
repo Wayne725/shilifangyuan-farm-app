@@ -39,7 +39,7 @@ async def test_admin_quantity_settings_apply_to_proposal_campaign_and_lock_after
     assert locked.status_code == 409 and "首筆付款" in locked.json()["detail"]
     apply_paid_quantity(campaign, 2, datetime.now(timezone.utc))
     await session.commit()
-    assert (await client.get(path)).json()["decision_status"] == "pending_confirmation"
+    assert (await client.get(path)).json()["decision_status"] == "recruiting"
 
 
 @pytest.mark.asyncio

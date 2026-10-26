@@ -53,8 +53,8 @@ def campaign_payload(product_id: str, **overrides) -> dict:
         "supply_cap": 20,
         "per_user_cap": 3,
         "deadline": (now + timedelta(days=2)).isoformat(),
-        "estimated_pickup_start": (now + timedelta(days=3)).isoformat(),
-        "estimated_pickup_end": (now + timedelta(days=4)).isoformat(),
+        "estimated_pickup_start": (now + timedelta(days=5)).isoformat(),
+        "estimated_pickup_end": (now + timedelta(days=6)).isoformat(),
         "can_ship": True,
         "shipping_temperature": "chilled",
         "allowed_shipping_channels": ["home_delivery"],
@@ -391,8 +391,12 @@ async def test_active_payment_reservation_temporarily_blocks_shipping_changes(
         },
         headers=headers,
     )
-    assert after_expiry.status_code == 200
-    assert after_expiry.json()["shipping_temperature"] == "ambient"
+    assert after_expiry.status_code == 409
+    reservation.status = ReservationStatus.RELEASED
+    await session.commit()
+    after_verification = await client.patch(f"/v1/group-campaigns/{campaign_id}", json={"shipping_temperature": "ambient", "allowed_shipping_channels": ["seven_eleven"]}, headers=headers)
+    assert after_verification.status_code == 200
+    assert after_verification.json()["shipping_temperature"] == "ambient"
 
 
 @pytest.mark.asyncio

@@ -122,6 +122,7 @@
   "PATCH /v1/admin/suppliers/{supplier_id}",
   "PATCH /v1/auth/preferences",
   "PATCH /v1/group-campaigns/{campaign_id}",
+  "PATCH /v1/group-campaigns/{campaign_id}/admin/review-deadline",
   "PATCH /v1/notifications/{notification_id}/read",
   "PATCH /v1/orders/{order_id}/admin/fulfillment",
   "PATCH /v1/products/{product_id}",

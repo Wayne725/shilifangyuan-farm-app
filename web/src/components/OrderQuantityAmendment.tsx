@@ -3,12 +3,14 @@ import { X } from "@phosphor-icons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
 
+import { useDeadlineClock } from "../lib/use-deadline-clock";
 import { ApiError, apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import { amendmentItems, canAmendOrder, replaceAmendedOrder, type AmendableOrder } from "../lib/order-quantity-amendments";
 import type { Order, OrderQuantityAmendmentQuote } from "../lib/types";
 import "./OrderQuantityAmendment.css";
 
 export function OrderQuantityAmendment({ order, disabled = false }: { order: AmendableOrder; disabled?: boolean }) {
+  useDeadlineClock("group_campaign_deadline" in order ? order.group_campaign_deadline : null);
   const client = useQueryClient();
   const id = useId();
   const [open, setOpen] = useState(false);
