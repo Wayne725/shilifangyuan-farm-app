@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
 import { channelMatchesCategory, orderCategoryLabels, type OrderCategory } from "../lib/order-category";
+import { ActivityFinance } from "../components/ActivityFinance";
 import { AdminNav } from "../components/AdminNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
@@ -21,6 +22,11 @@ const refundNames: Record<string, string> = { pending: "待退款", completed: "
 const channelNames = { all: "全部銷售", meal_preorder: "便當", regular: "日常選品", group: "共同購買" };
 
 export function AdminFinancePage() {
+  const {user,openLogin}=useAuth();
+  if(user?.user_role!=="admin") return <section className="admin-gate"><h1>財務報表只向管理員開放。</h1>{!user&&<button className="button button-primary" onClick={openLogin}>管理員登入</button>}</section>;
+  return <section className="admin-module-page meal-finance-page"><header className="workspace-heading"><div><p className="eyebrow">FINANCE / 財務報表</p><h1>收款與銷售報表</h1></div></header><AdminNav/><Tabs.Root key={user.id} defaultValue="sales"><Tabs.List className="tab-list" aria-label="財務來源"><Tabs.Trigger value="sales">商品銷售</Tabs.Trigger><Tabs.Trigger value="activities">活動收款</Tabs.Trigger></Tabs.List><Tabs.Content value="sales"><ProductFinance/></Tabs.Content><Tabs.Content value="activities"><ActivityFinance/></Tabs.Content></Tabs.Root></section>;
+}
+function ProductFinance() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const [draft, setDraft] = useState(() => ({ ...financePeriodPreset("month"), search: "", salesChannel: "all", orderCategory: "all" as OrderCategory }));
@@ -45,9 +51,8 @@ export function AdminFinancePage() {
     const next = { ...financePeriodPreset(mode), search: "", salesChannel: draft.salesChannel, orderCategory: draft.orderCategory };
     setDraft(next); setFilters(next); setOffset(0); setFormError("");
   };
-  return <section className="admin-module-page meal-finance-page">
-    <header className="workspace-heading"><div><p className="eyebrow">SALES REPORT / 財務報表</p><h1>銷售明細與統整</h1></div></header>
-    <AdminNav />
+  return <section>
+    <h2>銷售明細與統整</h2>
 
     <OrderCategoryFilter value={filters.orderCategory} onChange={(orderCategory) => {
       const next = { ...filters, orderCategory, salesChannel: "all" };

@@ -53,6 +53,8 @@ from .integrations.email_sender import (
     email_sender_from_settings,
 )
 from .models import (
+    ActivityCharge,
+    ActivityRefundRequest,
     Activity,
     ActivityRegistrationStatus,
     ActivityStatus,
@@ -146,6 +148,8 @@ async def reconcile_once(
     report.payment_attempts = await _reconcile_expired_payments(
         session, active_settings, current, limit
     )
+    from .activity_payments import reconcile_charges
+    await reconcile_charges(session, current, limit)
     await _reconcile_expired_cash_orders(session, current, limit)
     report.proposals = await _reconcile_proposals(session, current, limit)
     report.campaigns = await _reconcile_campaigns(
@@ -318,6 +322,10 @@ async def _lock_expiring_payment_attempt(session: AsyncSession, attempt_id: str)
     order_id = await session.scalar(select(PaymentAttempt.order_id).where(PaymentAttempt.id == attempt_id))
     if order_id is not None:
         await lock_order_payment_subject(session, order_id)
+    activity_charge_id = await session.scalar(select(PaymentAttempt.activity_charge_id).where(PaymentAttempt.id == attempt_id))
+    if activity_charge_id is not None:
+        from .activity_payments import lock_activity_payment_subject
+        await lock_activity_payment_subject(session, activity_charge_id)
     return await session.scalar(
         select(PaymentAttempt)
         .where(PaymentAttempt.id == attempt_id, PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
@@ -329,6 +337,9 @@ async def _lock_expiring_payment_attempt(session: AsyncSession, attempt_id: str)
 
 async def _record_group_payment_verification(session: AsyncSession, attempt_id: str, now: datetime,
                                              *, verified_unpaid: bool, response: Optional[dict] = None) -> bool:
+    from .activity_payments import record_payment_verification
+    if await record_payment_verification(session, attempt_id, now, verified_unpaid=verified_unpaid, response=response):
+        return True
     attempt = await _lock_expiring_payment_attempt(session, attempt_id)
     if attempt is None or attempt.order_id is None:
         await session.commit()
@@ -380,6 +391,9 @@ async def _reconcile_expired_payments(
                 due,
                 PaymentAttempt.provider.in_({"raygate", "ecpay"}),
                 or_(
+                    (PaymentAttempt.activity_charge_id.is_not(None)
+                     & PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED})
+                     & PaymentAttempt.unpaid_verified_at.is_(None) & (PaymentAttempt.expires_at <= now)),
                     exists(select(Order.id).where(
                         Order.id == PaymentAttempt.order_id, Order.group_campaign_id.is_not(None),
                         Order.cancelled_at.is_(None), Order.fulfillment_status != FulfillmentStatus.CANCELLED,
@@ -704,6 +718,7 @@ async def _reconcile_activities(
             .options(selectinload(Activity.registrations))
             .order_by(Activity.ends_at)
             .limit(limit)
+            .execution_options(populate_existing=True)
             .with_for_update()
         )
     )
@@ -1038,6 +1053,7 @@ async def _notify_refund_terminal_failure(
                     "refund_id": refund.id,
                     "order_id": refund.order_id,
                     "membership_charge_id": refund.membership_charge_id,
+                    "activity_charge_id": refund.activity_charge_id,
                     "outbox_event_id": event.id,
                 },
                 email=admin.email,
@@ -1121,7 +1137,7 @@ async def _dispatch_outbox_event(
 
 async def _load_locked_refund(session: AsyncSession, refund_filter) -> Refund:
     identity = (await session.execute(
-        select(Refund.id, Refund.order_id, Refund.membership_charge_id, Refund.payment_attempt_id)
+        select(Refund.id, Refund.order_id, Refund.membership_charge_id, Refund.activity_charge_id, Refund.payment_attempt_id)
         .where(refund_filter).order_by(Refund.created_at.desc()).limit(1)
     )).first()
     if identity is None:
@@ -1142,8 +1158,12 @@ async def _load_locked_refund(session: AsyncSession, refund_filter) -> Refund:
         await session.execute(select(MembershipCharge.id).where(
             MembershipCharge.id == identity.membership_charge_id
         ).with_for_update())
+    elif identity.activity_charge_id is not None:
+        from .activity_payments import lock_activity_payment_subject
+        await lock_activity_payment_subject(session, identity.activity_charge_id)
+        await session.execute(select(PaymentAttempt.id).where(PaymentAttempt.id == identity.payment_attempt_id).with_for_update())
     else:
-        raise ValueError("退款缺少訂單或入社款項")
+        raise ValueError("退款缺少付款主體")
     refund = await session.scalar(
         select(Refund).where(Refund.id == identity.id)
         .options(
@@ -1153,6 +1173,8 @@ async def _load_locked_refund(session: AsyncSession, refund_filter) -> Refund:
             selectinload(Refund.order).selectinload(Order.invoice),
             selectinload(Refund.payment_attempt),
             selectinload(Refund.membership_charge),
+            selectinload(Refund.activity_charge).selectinload(ActivityCharge.registration),
+            selectinload(Refund.activity_charge).selectinload(ActivityCharge.activity),
         )
         .execution_options(populate_existing=True).with_for_update()
     )
@@ -1184,10 +1206,14 @@ async def _process_refund_event(
     if refund.status != RefundStatus.PENDING:
         raise ValueError("退款目前不可處理")
     order = refund.order
-    charge = refund.membership_charge
+    charge = refund.membership_charge or refund.activity_charge
+    if refund.activity_charge_id is not None:
+        approved = await session.scalar(select(ActivityRefundRequest.id).where(ActivityRefundRequest.payment_attempt_id == refund.payment_attempt_id, ActivityRefundRequest.activity_charge_id == refund.activity_charge_id, ActivityRefundRequest.status == "approved", ActivityRefundRequest.amount == refund.amount))
+        if approved is None or refund.payment_attempt is None:
+            raise ValueError("活動退款尚未核准或缺少原付款，不可送金流")
     if order is None and charge is None:
         raise ValueError("退款缺少訂單或入社款項")
-    if order is None:
+    if refund.membership_charge_id is not None:
         await session.execute(select(MembershipCharge.id).where(
             MembershipCharge.id == charge.id
         ).with_for_update())
@@ -1269,7 +1295,7 @@ async def _process_refund_event(
             refund.status == RefundStatus.FAILED and query_result.get("RayGateStatus") == "3"
         ):
             return
-        order, charge, attempt = refund.order, refund.membership_charge, refund.payment_attempt
+        order, charge, attempt = refund.order, refund.membership_charge or refund.activity_charge, refund.payment_attempt
         if attempt is None:
             raise ValueError("找不到退款原付款交易")
         await session.refresh(event)
@@ -1311,7 +1337,7 @@ async def _process_refund_event(
                         title="退款尚未完成",
                         body="金流回報退款失敗，工作人員將協助確認。",
                         data={"refund_id": refund.id},
-                        email=user.email,
+                        email=charge.contact_email if refund.activity_charge_id is not None else user.email,
                         dedupe_key="refund-failed:{}".format(refund.id),
                     )
                 )
@@ -1355,7 +1381,7 @@ async def _process_refund_event(
                 return
             if refund.status not in {RefundStatus.PENDING, RefundStatus.FAILED}:
                 return
-            order, charge, attempt = refund.order, refund.membership_charge, refund.payment_attempt
+            order, charge, attempt = refund.order, refund.membership_charge or refund.activity_charge, refund.payment_attempt
             refund.provider_refund_id = result.refund_id
             refund.provider_response = dict(result.provider_response)
             completed_at = result.created_at
@@ -1380,6 +1406,11 @@ async def _process_refund_event(
             attempt,
         )
         attempt.status = PaymentStatus.REFUNDED
+    if refund.activity_charge_id is not None:
+        from .activity_payments import apply_refund_completion
+        await apply_refund_completion(session, charge, attempt, refund)
+        await session.commit()
+        return
     obsolete_refund = order is not None and is_obsolete_order_refund(refund, attempt, order)
     if obsolete_refund:
         refund.purpose = "obsolete_order_revision"

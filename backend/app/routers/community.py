@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from .. import activity_payments as activity_service
 from ..auth import (
     get_current_user,
     get_optional_user,
@@ -18,6 +19,9 @@ from ..auth import (
 from ..database import get_session
 from ..models import (
     Activity,
+    ActivityCharge,
+    PaymentAttempt,
+    PaymentStatus,
     ActivityRegistration,
     ActivityRegistrationStatus,
     ActivityStatus,
@@ -40,6 +44,9 @@ from ..models import (
 from ..schemas import (
     AdminActivityRegistrationRead,
     ActivityCreate,
+    ActivityRegistrationCreate,
+    ActivityCancelRegistration,
+    ActivityCancellationConfirm,
     ActivityRead,
     ActivityRegistrationRead,
     ActivityReview,
@@ -103,6 +110,7 @@ def _activity_read(
         for registration in activity.registrations
         if registration.status
         in {
+            ActivityRegistrationStatus.PENDING_PAYMENT,
             ActivityRegistrationStatus.REGISTERED,
             ActivityRegistrationStatus.ATTENDED,
             ActivityRegistrationStatus.NO_SHOW,
@@ -123,6 +131,8 @@ def _activity_read(
     )
     return ActivityRead(
         id=activity.id,
+        member_price=activity.member_price, non_member_price=activity.non_member_price,
+        payment_window_hours=activity.payment_window_hours, updated_at=activity_service.aware(activity.updated_at),
         created_by_id=activity.created_by_id,
         title=activity.title,
         description=activity.description,
@@ -142,9 +152,10 @@ def _activity_read(
             else None
         ),
         registration_count=len(registered),
+        available_capacity=max(0, activity.capacity - len(registered)),
         waitlist_count=len(waitlisted),
         my_registration=(
-            ActivityRegistrationRead.model_validate(mine)
+            activity_service.registration_read(mine, activity)
             if mine is not None
             else None
         ),
@@ -197,18 +208,7 @@ async def _load_activity(
     *,
     for_update: bool = False,
 ) -> Optional[Activity]:
-    query = (
-        select(Activity)
-        .where(Activity.id == activity_id)
-        .options(
-            selectinload(Activity.registrations).selectinload(
-                ActivityRegistration.user
-            )
-        )
-    )
-    if for_update:
-        query = query.with_for_update()
-    return await session.scalar(query)
+    return await activity_service.load_activity(session, activity_id, lock=for_update)
 
 
 async def _load_proposal(
@@ -241,7 +241,7 @@ async def list_activities(
         await session.scalars(
             select(Activity)
             .where(Activity.status == ActivityStatus.PUBLISHED)
-            .options(selectinload(Activity.registrations))
+            .options(*activity_service.activity_options())
             .order_by(Activity.starts_at)
         )
     ).all()
@@ -276,6 +276,8 @@ async def create_activity(
     user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRead:
+    if user.user_role != UserRole.ADMIN and (body.member_price or body.non_member_price or body.payment_window_hours != 24):
+        raise HTTPException(403, "活動收費與繳款期限須由管理員設定")
     activity = Activity(
         created_by_id=user.id,
         status=ActivityStatus.PENDING_REVIEW,
@@ -302,66 +304,11 @@ async def create_activity(
 )
 async def register_activity(
     activity_id: str,
+    body: Optional[ActivityRegistrationCreate] = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRegistrationRead:
-    activity = await _load_activity(session, activity_id, for_update=True)
-    if activity is None or activity.status != ActivityStatus.PUBLISHED:
-        raise HTTPException(status_code=404, detail="找不到活動")
-    existing = next(
-        (
-            registration
-            for registration in activity.registrations
-            if registration.user_id == user.id
-        ),
-        None,
-    )
-    if existing is not None and existing.status != (
-        ActivityRegistrationStatus.CANCELLED
-    ):
-        return ActivityRegistrationRead.model_validate(existing)
-    active_count = sum(
-        registration.status
-        in {
-            ActivityRegistrationStatus.REGISTERED,
-            ActivityRegistrationStatus.ATTENDED,
-            ActivityRegistrationStatus.NO_SHOW,
-        }
-        for registration in activity.registrations
-    )
-    try:
-        next_status = next_activity_registration_status(
-            activity,
-            active_count,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    queue_position = (
-        max(
-            (
-                registration.queue_position
-                for registration in activity.registrations
-            ),
-            default=0,
-        )
-        + 1
-    )
-    if existing is None:
-        registration = ActivityRegistration(
-            activity_id=activity.id,
-            user_id=user.id,
-            queue_position=queue_position,
-            status=next_status,
-        )
-        session.add(registration)
-    else:
-        registration = existing
-        registration.status = next_status
-        registration.queue_position = queue_position
-        registration.registered_at = datetime.now(timezone.utc)
-        registration.cancelled_at = None
-    await session.commit()
-    return ActivityRegistrationRead.model_validate(registration)
+    return await activity_service.register(session, activity_id, user, body)
 
 
 @community_router.post(
@@ -370,46 +317,11 @@ async def register_activity(
 )
 async def cancel_activity_registration(
     activity_id: str,
+    body: Optional[ActivityCancelRegistration] = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRegistrationRead:
-    activity = await _load_activity(session, activity_id, for_update=True)
-    if activity is None:
-        raise HTTPException(status_code=404, detail="找不到活動")
-    registration = next(
-        (
-            item
-            for item in activity.registrations
-            if item.user_id == user.id
-            and item.status
-            in {
-                ActivityRegistrationStatus.REGISTERED,
-                ActivityRegistrationStatus.WAITLISTED,
-            }
-        ),
-        None,
-    )
-    if registration is None:
-        raise HTTPException(status_code=409, detail="目前沒有可取消的報名")
-    was_registered = (
-        registration.status == ActivityRegistrationStatus.REGISTERED
-    )
-    registration.status = ActivityRegistrationStatus.CANCELLED
-    registration.cancelled_at = datetime.now(timezone.utc)
-    if was_registered:
-        promoted = promote_activity_waitlist(activity.registrations)
-        if promoted is not None:
-            session.add(
-                Notification(
-                    user_id=promoted.user_id,
-                    event_type="activity.waitlist_promoted",
-                    title="活動候補遞補成功",
-                    body=f"你已遞補為「{activity.title}」正式名額",
-                    data={"activity_id": activity.id},
-                )
-            )
-    await session.commit()
-    return ActivityRegistrationRead.model_validate(registration)
+    return await activity_service.cancel_registration(session, activity_id, user, body or ActivityCancelRegistration())
 
 
 @community_router.get(
@@ -423,7 +335,7 @@ async def admin_list_activities(
     activities = (
         await session.scalars(
             select(Activity)
-            .options(selectinload(Activity.registrations))
+            .options(*activity_service.activity_options())
             .order_by(Activity.created_at.desc())
         )
     ).all()
@@ -444,9 +356,7 @@ async def admin_list_activity_registrations(
         raise HTTPException(status_code=404, detail="找不到活動")
     return [
         AdminActivityRegistrationRead(
-            **ActivityRegistrationRead.model_validate(
-                registration
-            ).model_dump(),
+            **activity_service.registration_read(registration, activity).model_dump(),
             display_name=registration.user.display_name,
             email=registration.user.email,
         )
@@ -533,7 +443,7 @@ async def reject_activity(
 )
 async def cancel_activity(
     activity_id: str,
-    body: ActivityReview,
+    body: ActivityCancellationConfirm,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRead:
@@ -545,24 +455,34 @@ async def cancel_activity(
         ActivityStatus.COMPLETED,
     }:
         raise HTTPException(status_code=409, detail="此活動目前不可取消")
+    preview = await activity_service.cancellation_preview(session, activity)
+    has_finance = await session.scalar(select(ActivityCharge.id).where(ActivityCharge.activity_id == activity.id).limit(1))
+    if has_finance or body.preview_token is not None:
+        if (body.preview_token != preview["preview_token"] or body.expected_updated_at is None
+            or activity_service.aware(body.expected_updated_at) != activity_service.aware(activity.updated_at)
+            or preview["paid_count"] and not body.approve_refunds):
+            raise HTTPException(409, "請重新預覽取消人數與退款金額，並明確核准整筆退款")
     activity.status = ActivityStatus.CANCELLED
     activity.cancelled_at = datetime.now(timezone.utc)
+    await session.flush()
+    attempts = list(await session.scalars(select(PaymentAttempt).join(ActivityCharge, PaymentAttempt.activity_charge_id == ActivityCharge.id)
+        .where(ActivityCharge.activity_id == activity.id, PaymentAttempt.status.in_({PaymentStatus.PAID, PaymentStatus.LATE_PAID_REFUND_REQUIRED})).order_by(PaymentAttempt.id)))
+    for attempt in attempts:
+        charge = await activity_service.lock_activity_payment_subject(session, attempt.activity_charge_id)
+        request = await activity_service.request_refund(session, charge, attempt, kind="activity_cancellation", reason=body.reason, actor_id=admin.id)
+        if request.status == "pending_review":
+            await activity_service.approve_refund(session, request, charge, admin, reason=body.reason)
+    activity = await _load_activity(session, activity_id, for_update=True)
     for registration in activity.registrations:
-        if registration.status in {
-            ActivityRegistrationStatus.REGISTERED,
-            ActivityRegistrationStatus.WAITLISTED,
-        }:
+        if registration.status in activity_service.OCCUPIED | {ActivityRegistrationStatus.WAITLISTED}:
             registration.status = ActivityRegistrationStatus.CANCELLED
             registration.cancelled_at = datetime.now(timezone.utc)
-            session.add(
-                Notification(
-                    user_id=registration.user_id,
-                    event_type="activity.cancelled",
-                    title="活動已取消",
-                    body=f"「{activity.title}」已取消：{body.reason}",
-                    data={"activity_id": activity.id},
-                )
-            )
+            charge = activity_service.current_charge(registration)
+            if charge and charge.payment_status == PaymentStatus.PENDING:
+                charge.payment_status = PaymentStatus.EXPIRED
+            await activity_service.notify_once(session, user_id=registration.user_id,
+                key=f"activity-cancel:{activity.id}:{registration.id}:{registration.revision}", title="活動已取消",
+                body=f"「{activity.title}」已取消：{body.reason}", email=registration.contact_email, activity_id=activity.id)
     session.add(
         AdminAudit(
             actor_id=admin.id,
@@ -626,6 +546,7 @@ async def mark_activity_attendance(
         ActivityRegistrationStatus.NO_SHOW,
     }:
         raise HTTPException(status_code=422, detail="無效的出席狀態")
+    await session.execute(select(Activity.id).where(Activity.id == activity_id).with_for_update())
     registration = await session.scalar(
         select(ActivityRegistration)
         .where(

@@ -96,7 +96,7 @@ test('對帳分類與查詢同步到統計、清單及完整篩選CSV', async t 
   await page.getByRole('button', {name: '匯出對帳結果 CSV', exact: true}).click(); await download;
   assert.deepEqual(state.downloads.at(-1), {result: 'difference', order_category: 'meal', q: 'SLF-TEST-2'});
   await page.getByRole('button', {name: '清除篩選', exact: true}).click();
-  await page.getByText('全部訂單 · 共 3 筆', {exact: true}).waitFor();
+  await page.getByText('全部來源 · 共 3 筆', {exact: true}).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });

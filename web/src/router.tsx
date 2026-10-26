@@ -139,6 +139,17 @@ const activitiesRoute = createRoute({
   component: page("./pages/ActivitiesPage", "ActivitiesPage"),
 });
 
+const activityRegistrationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/activities/registrations",
+  component: page("./pages/ActivityRegistrationsPage", "ActivityRegistrationsPage"),
+  validateSearch: (search: Record<string, unknown>): {activity_charge_id?: string; attempt_id?: string; payment?: string} => ({
+    activity_charge_id: typeof search.activity_charge_id === "string" ? search.activity_charge_id : undefined,
+    attempt_id: typeof search.attempt_id === "string" ? search.attempt_id : undefined,
+    payment: typeof search.payment === "string" ? search.payment : undefined,
+  }),
+});
+
 const governanceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/governance",
@@ -372,6 +383,7 @@ const routeTree = rootRoute.addChildren([
   productDetailRoute,
   socialRoute,
   activitiesRoute,
+  activityRegistrationsRoute,
   governanceRoute,
   meetingsRoute,
   proposalDetailRoute,

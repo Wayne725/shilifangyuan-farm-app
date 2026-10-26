@@ -1127,6 +1127,9 @@ class MembershipMeRead(BaseModel):
 
 
 class ActivityCreate(BaseModel):
+    member_price: int = Field(default=0, ge=0, le=1000000)
+    non_member_price: int = Field(default=0, ge=0, le=1000000)
+    payment_window_hours: int = Field(default=24, ge=1, le=168)
     title: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=10000)
     image_url: Optional[str] = Field(default=None, max_length=500)
@@ -1136,6 +1139,13 @@ class ActivityCreate(BaseModel):
     registration_deadline: datetime
     capacity: int = Field(ge=1, le=100000)
     waitlist_enabled: bool = True
+
+    @field_validator("starts_at", "ends_at", "registration_deadline")
+    @classmethod
+    def require_timezone(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("活動日期時間必須包含時區")
+        return value
 
     @model_validator(mode="after")
     def validate_timeline(self) -> "ActivityCreate":
@@ -1150,7 +1160,91 @@ class ActivityReview(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
 
 
+class ActivityRegistrationCreate(BaseModel):
+    contact_name: str = Field(min_length=1, max_length=160)
+    contact_email: EmailStr
+
+
+class ActivityCancelRegistration(BaseModel):
+    reason: str = Field(default="本人申請取消活動報名", min_length=1, max_length=2000)
+    expected_revision: Optional[int] = Field(default=None, ge=1)
+
+
+class ActivityPaymentSettings(BaseModel):
+    member_price: int = Field(ge=0, le=1000000)
+    non_member_price: int = Field(ge=0, le=1000000)
+    payment_window_hours: int = Field(ge=1, le=168)
+    expected_updated_at: datetime
+
+
+class ActivityRefundReview(BaseModel):
+    decision: Literal["approve", "reject"]
+    expected_version: int = Field(ge=1)
+    expected_amount: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ActivityCancellationConfirm(ActivityReview):
+    expected_updated_at: Optional[datetime] = None
+    preview_token: Optional[str] = None
+    approve_refunds: bool = False
+
+
+class ActivityRefundRequestRead(ApiModel):
+    id: str
+    activity_charge_id: str
+    payment_attempt_id: str
+    kind: str
+    status: Literal["pending_review", "approved", "rejected", "externally_refunded"]
+    amount: int
+    reason: str
+    version: int
+    review_reason: Optional[str]
+    created_at: datetime
+    reviewed_at: Optional[datetime]
+
+    @field_validator("created_at", "reviewed_at", mode="after")
+    @classmethod
+    def utc_dates(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
+class ActivityChargeRead(ApiModel):
+    id: str
+    number: str
+    activity_id: str
+    registration_id: str
+    registration_revision: int
+    activity_title: str
+    contact_name: str
+    contact_email: Optional[str]
+    membership_type: MembershipType
+    amount: int
+    payment_status: PaymentStatus
+    expires_at: datetime
+    paid_at: Optional[datetime]
+    created_at: datetime
+    available_actions: List[str] = Field(default_factory=list)
+    refund_requests: List[ActivityRefundRequestRead] = Field(default_factory=list)
+
+    @field_validator("expires_at", "paid_at", "created_at", mode="after")
+    @classmethod
+    def utc_dates(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
 class ActivityRegistrationRead(ApiModel):
+    activity_id: str
+    activity_title: str = ""
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    location: str = ""
+    available_actions: List[str] = Field(default_factory=list)
+    revision: int = 1
+    contact_name: str = ""
+    contact_email: Optional[str] = None
+    charge: Optional[ActivityChargeRead] = None
+    refund_request: Optional[ActivityRefundRequestRead] = None
     id: str
     user_id: str
     status: ActivityRegistrationStatus
@@ -1159,6 +1253,11 @@ class ActivityRegistrationRead(ApiModel):
     cancelled_at: Optional[datetime]
     checked_in_at: Optional[datetime]
 
+    @field_validator("registered_at", "cancelled_at", "checked_in_at", "starts_at", "ends_at", mode="after")
+    @classmethod
+    def utc_dates(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
 
 class AdminActivityRegistrationRead(ActivityRegistrationRead):
     display_name: str
@@ -1166,6 +1265,10 @@ class AdminActivityRegistrationRead(ActivityRegistrationRead):
 
 
 class ActivityRead(ApiModel):
+    member_price: int = 0
+    non_member_price: int = 0
+    payment_window_hours: int = 24
+    updated_at: datetime
     id: str
     created_by_id: str
     title: str
@@ -1181,8 +1284,14 @@ class ActivityRead(ApiModel):
     reviewed_at: Optional[datetime]
     review_reason: Optional[str]
     registration_count: int = 0
+    available_capacity: int = 0
     waitlist_count: int = 0
     my_registration: Optional[ActivityRegistrationRead] = None
+
+    @field_validator("starts_at", "ends_at", "registration_deadline", "reviewed_at", "updated_at", mode="after")
+    @classmethod
+    def utc_dates(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
 
 
 class ProposalOptionInput(BaseModel):

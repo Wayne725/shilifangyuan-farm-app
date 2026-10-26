@@ -188,8 +188,10 @@ def xls_export(selected, original, start, end):
     return output.getvalue()
 
 
-async def export_accounting(session, source, start, end, batch_id, order_category='all'):
+async def export_accounting(session, source, start, end, batch_id, order_category='all', subject_type='all'):
     validate_period(start, end)
+    if source == 'invoice' and subject_type == 'activity':
+        raise HTTPException(422, '活動憑證由主辦單位開立，不能匯出商品發票')
     if batch_id:
         batch = await session.scalar(select(FinancialStatementImport).where(FinancialStatementImport.id == batch_id).options(undefer(FinancialStatementImport.file_content), undefer(FinancialStatementImport.rows)))
         if batch is None:
@@ -198,8 +200,8 @@ async def export_accounting(session, source, start, end, batch_id, order_categor
             raise HTTPException(422, '明細檔與匯出格式不符')
         content = batch.file_content
         selected = await run_in_threadpool(batch_rows, content, batch.filename, source, start, end)
-        if order_category != 'all':
-            matched_rows = filter_reconciliation(await reconcile_statement(session, batch), order_category=order_category)
+        if order_category != 'all' or subject_type != 'all':
+            matched_rows = filter_reconciliation(await reconcile_statement(session, batch), order_category=order_category, subject_type=subject_type)
             row_numbers = {row['row_number'] for row in matched_rows}
             selected = [row for row in selected if row[0] in row_numbers]
             if not selected:

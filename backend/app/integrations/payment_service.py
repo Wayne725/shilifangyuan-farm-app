@@ -20,6 +20,8 @@ from ..domain import (
     remove_paid_quantity,
 )
 from ..models import (
+    ActivityCharge,
+    ActivityRefundRequest,
     ExternalEvent,
     FulfillmentMethod,
     FulfillmentState,
@@ -370,6 +372,8 @@ async def remaining_subject_payment_status(
         PaymentAttempt.order_id == attempt.order_id
         if attempt.order_id is not None
         else PaymentAttempt.membership_charge_id == attempt.membership_charge_id
+        if attempt.membership_charge_id is not None
+        else PaymentAttempt.activity_charge_id == attempt.activity_charge_id
     )
     revision_filters = []
     if attempt.order_id is not None:
@@ -424,14 +428,25 @@ async def create_provider_aware_refund(
     requested_by_id: str,
     order: Optional[Order] = None,
     membership_charge: Optional[MembershipCharge] = None,
+    activity_charge: Optional[ActivityCharge] = None,
     payment_attempt: Optional[PaymentAttempt] = None,
     defer_completion: bool = False,
     purpose: str = "order_cancellation",
     allow_unbound_local_completion: bool = False,
     now: Optional[datetime] = None,
 ) -> tuple[Refund, bool]:
-    if (order is None) == (membership_charge is None):
+    if sum(item is not None for item in (order, membership_charge, activity_charge)) != 1:
         raise ValueError("退款必須且只能指定一種付款主體")
+    if activity_charge is not None:
+        if payment_attempt is None or payment_attempt.activity_charge_id != activity_charge.id or payment_attempt.amount != amount:
+            raise PaymentApplicationError("活動退款必須綁定正確原付款並整筆退還")
+        approved = await session.scalar(select(ActivityRefundRequest.id).where(
+            ActivityRefundRequest.payment_attempt_id == payment_attempt.id,
+            ActivityRefundRequest.activity_charge_id == activity_charge.id,
+            ActivityRefundRequest.amount == amount, ActivityRefundRequest.status == "approved"))
+        if approved is None:
+            raise PaymentApplicationError("活動退款必須先由管理員核准")
+        defer_completion = True
     if payment_attempt is None:
         subject_filter = (
             PaymentAttempt.order_id == order.id
@@ -502,6 +517,7 @@ async def create_provider_aware_refund(
     refund = Refund(
         order=order,
         membership_charge=membership_charge,
+        activity_charge=activity_charge,
         payment_attempt=payment_attempt,
         provider=provider,
         amount=amount,
@@ -527,6 +543,7 @@ async def create_provider_aware_refund(
                 aggregate_id=refund.id,
                 payload={
                     "refund_id": refund.id,
+                    "activity_charge_id": activity_charge.id if activity_charge else None,
                     "order_id": order.id if order is not None else None,
                     "membership_charge_id": (
                         membership_charge.id
@@ -1031,6 +1048,11 @@ class SQLAlchemyPaymentCallbackRepository:
         )
         if order_id is not None:
             await lock_order_payment_subject(self.session, order_id)
+        from ..activity_payments import lock_activity_payment_subject, invalidate_unpaid_proof
+        activity_charge_id = await self.session.scalar(select(PaymentAttempt.activity_charge_id).where(
+            PaymentAttempt.merchant_trade_no == payload["MerchantTradeNo"]))
+        if activity_charge_id is not None:
+            await lock_activity_payment_subject(self.session, activity_charge_id)
         attempt = await self.session.scalar(
             select(PaymentAttempt)
             .where(
@@ -1079,6 +1101,7 @@ class SQLAlchemyPaymentCallbackRepository:
             ExternalEvent.external_event_key == event_key))
         if existing_event is not None:
             _invalidate_group_unpaid_proof(attempt, payload)
+            invalidate_unpaid_proof(attempt, payload)
             await self.session.commit()
             return "duplicate"
 
@@ -1095,6 +1118,14 @@ class SQLAlchemyPaymentCallbackRepository:
         except IntegrityError:
             await self.session.rollback()
             return "duplicate"
+
+        if attempt.activity_charge_id is not None:
+            from ..activity_payments import apply_callback
+            result = await apply_callback(self.session, self, attempt, payload)
+            event.processed = True
+            event.processed_at = datetime.now(timezone.utc)
+            await self.session.commit()
+            return result
 
         disposition = payload.get("PaymentDisposition")
         if (

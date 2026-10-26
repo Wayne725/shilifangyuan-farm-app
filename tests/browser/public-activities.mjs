@@ -23,7 +23,7 @@ async function fixture(t, membershipType = null, width = 390) {
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/activities' && req.method() === 'GET') return route.fulfill({ json: [activity] });
     if (path === '/v1/activities/public-activity/register' && req.method() === 'POST') {
-      state.writes.push(path); activity.registration_count = 1; activity.my_registration = { id: 'registration', user_id: user.id, status: 'registered' };
+      state.writes.push(path); activity.registration_count = 1; activity.my_registration = { id: 'registration', activity_id: activity.id, user_id: user.id, revision: 1, status: 'registered', queue_position: 0, contact_name: user.display_name, contact_email: user.email, charge: null, refund_request: null, available_actions: ['cancel'] };
       return route.fulfill({ json: activity.my_registration });
     }
     if (path === '/v1/activities/public-activity/cancel-registration' && req.method() === 'POST') {
@@ -66,7 +66,9 @@ for (const membershipType of ['nonmember', 'trainee', 'member']) test(`${members
   if (membershipType === 'member') await page.getByRole('button', { name: '發起活動', exact: true }).waitFor();
   else assert.equal(await page.getByRole('button', { name: '發起活動', exact: true }).count(), 0);
   await page.getByRole('button', { name: '立即報名', exact: true }).click();
+  await page.getByRole('button', { name: '確認報名', exact: true }).click();
   await page.getByRole('button', { name: '取消報名', exact: true }).click();
+  await page.getByRole('button', { name: '確認取消', exact: true }).click();
   await page.getByRole('button', { name: '立即報名', exact: true }).waitFor();
   assert.deepEqual(state.writes, ['/v1/activities/public-activity/register', '/v1/activities/public-activity/cancel-registration']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);

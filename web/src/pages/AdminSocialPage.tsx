@@ -6,6 +6,8 @@ import { Link } from "@tanstack/react-router";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { SocialActionButton } from "../components/SocialActionButton";
+import { AdminActivityCard, ActivityRefundInbox } from "../components/AdminActivityPayments";
+import { activityAccessDenied, retryActivityRead, type ActivityRefundRequest } from "../lib/activities";
 import { AdminNav } from "../components/AdminNav";
 import { MeetingFilters, MeetingSetup } from "../components/MeetingTools";
 import { filterMeetings, meetingAccessDenied, meetingCategoryName, meetingCategoryOptions, retryMeetingRead } from "../lib/meetings";
@@ -32,13 +34,6 @@ interface AdminMembership extends ShareholdingRecord {
   trainee_number?: string | null;
 }
 
-interface AdminActivityRegistration {
-  id: string;
-  display_name: string;
-  email: string;
-  status: string;
-  queue_position: number;
-}
 
 interface MemberRosterEntry extends ShareholdingRecord {
   member_number: string;
@@ -53,6 +48,7 @@ interface MemberRosterEntry extends ShareholdingRecord {
 export function AdminSocialPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
+  const [activityAccessRevoked, setActivityAccessRevoked] = useState(false);
   const [reviewScope, setReviewScope] = useState("pending");
   const [memberSearch, setMemberSearch] = useState("");
   const [memberStatus, setMemberStatus] = useState("");
@@ -60,20 +56,22 @@ export function AdminSocialPage() {
   const [meetingKeyword, setMeetingKeyword] = useState("");
   const [meetingAccessRevoked, setMeetingAccessRevoked] = useState(false);
   const queryClient = useQueryClient();
-  const [activities, proposals, applications, wishes, meetings, memberships, roster] = useQueries({ queries: [
-    { queryKey: ["admin-activities"], queryFn: () => apiFetch<Activity[]>("/v1/admin/activities"), enabled: isAdmin },
+  const [activities, proposals, applications, wishes, meetings, memberships, roster, activityRefunds] = useQueries({ queries: [
+    { queryKey: ["admin-activities", user?.id], queryFn: () => apiFetch<Activity[]>("/v1/admin/activities"), enabled: isAdmin && !activityAccessRevoked, retry: retryActivityRead },
     { queryKey: ["admin-member-proposals"], queryFn: () => apiFetch<Proposal[]>("/v1/admin/member-proposals"), enabled: isAdmin },
     { queryKey: ["admin-membership-applications"], queryFn: () => apiFetch<MembershipApplication[]>("/v1/admin/membership-applications"), enabled: isAdmin },
     { queryKey: ["wishes"], queryFn: () => apiFetch<Wish[]>("/v1/wishes"), enabled: isAdmin },
     { queryKey: ["admin-meetings"], queryFn: () => apiFetch<Meeting[]>("/v1/admin/meetings"), enabled: isAdmin, retry: retryMeetingRead },
     { queryKey: ["admin-members"], queryFn: () => apiFetch<AdminMembership[]>("/v1/admin/members"), enabled: isAdmin },
     { queryKey: ["admin-member-roster"], queryFn: () => apiFetch<MemberRosterEntry[]>("/v1/admin/member-roster"), enabled: isAdmin },
+    { queryKey: ["admin-activity-refunds", user?.id, "pending_review"], queryFn: () => apiFetch<ActivityRefundRequest[]>("/v1/admin/activity-refund-requests?status=pending_review"), enabled: isAdmin && !activityAccessRevoked, retry: retryActivityRead },
   ] });
 
   if (!isAdmin) {
     return <section className="admin-gate"><div className="admin-gate-mark"><UsersThree size={38} weight="light" /></div><p className="eyebrow">SOCIAL OPERATIONS / 社務管理</p><h1>社務管理只向管理者開放。</h1><p>請使用管理者帳號登入。</p>{!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button> : <Link className="button button-quiet" to="/social">返回社務系統</Link>}</section>;
   }
 
+  const activityDenied = activityAccessRevoked || activityAccessDenied(activities.error) || activityAccessDenied(activityRefunds.error);
   const pendingActivities = activities.data?.filter((item) => item.status === "pending_review") || [];
   const pendingProposals = proposals.data?.filter((item) => item.status === "pending_review") || [];
   const pendingApplications = applications.data?.filter((item) => ["submitted", "needs_supplement"].includes(item.status)) || [];
@@ -93,7 +91,7 @@ export function AdminSocialPage() {
     <section className="admin-social-page">
       <header className="workspace-heading">
         <div><p className="eyebrow">SOCIAL OPERATIONS / 社務管理</p><h1>審核、排程與社員服務</h1></div>
-        <p>{[activities, proposals, applications, memberships].some(query => query.isPending) ? "讀取待辦中…" : [activities, proposals, applications, memberships].some(query => query.isError) ? "待辦資料未完整載入" : `${pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length} 件待處理事項`}</p>
+        <p>{[activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending) ? "讀取待辦中…" : [activities, proposals, applications, memberships, activityRefunds].some(query => query.isError) ? "待辦資料未完整載入" : `${pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0)} 件待處理事項`}</p>
       </header>
       <AdminNav />
 
@@ -108,9 +106,9 @@ export function AdminSocialPage() {
 
         <Tabs.Content className="tab-content" value="reviews">
           <label className="field social-review-scope"><span>審核範圍</span><select value={reviewScope} onChange={(event) => setReviewScope(event.target.value)}><option value="pending">待處理</option><option value="all">全部</option><option value="done">已處理</option></select></label>
-          {(reviewScope !== "pending" || visibleActivities.length > 0 || activities.isPending || activities.isError) && <AdminReviewSection icon={CalendarBlank} title="活動管理" count={visibleActivities.length} pending={activities.isPending} error={activities.error?.message} empty="沒有符合條件的活動">
-            {visibleActivities.map((activity) => <ActivityReviewCard key={activity.id} activity={activity} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-activities"] })} />)}
-          </AdminReviewSection>}
+          {activityDenied ? <p role="alert">活動管理權限已失效，請重新登入。</p> : <><ActivityRefundInbox onDenied={()=>setActivityAccessRevoked(true)}/>{(reviewScope !== "pending" || visibleActivities.length > 0 || activities.isPending || activities.isError) && <AdminReviewSection icon={CalendarBlank} title="活動管理" count={visibleActivities.length} pending={activities.isPending} error={activities.error?.message} empty="沒有符合條件的活動">
+            {visibleActivities.map((activity) => <AdminActivityCard key={`${user?.id}:${activity.id}`} activity={activity} onDone={() => { for (const key of ["admin-activities", "admin-activity-registrations", "admin-activity-refunds", "admin-activity-charge", "activity-finance", "activities", "activity-registrations", "activity-charges"]) void queryClient.invalidateQueries({ queryKey: [key] }); }} onDenied={()=>setActivityAccessRevoked(true)} />)}
+          </AdminReviewSection>}</>}
           {(reviewScope !== "pending" || visibleProposals.length > 0 || proposals.isPending || proposals.isError) && <AdminReviewSection icon={NotePencil} title="提案管理" count={visibleProposals.length} pending={proposals.isPending} error={proposals.error?.message} empty="沒有符合條件的提案">
             {visibleProposals.map((proposal) => <ProposalReviewCard key={proposal.id} proposal={proposal} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-proposals"] })} />)}
           </AdminReviewSection>}
@@ -118,7 +116,7 @@ export function AdminSocialPage() {
             {visibleApplications.map((application) => <MembershipReviewCard key={application.id} application={application} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-membership-applications"] })} />)}
           </AdminReviewSection>}
 
-          {reviewScope === "pending" && ![activities, proposals, applications, memberships].some(query => query.isPending || query.isError) && pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length === 0 && <p role="status">目前沒有待處理事項</p>}
+          {reviewScope === "pending" && ![activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending || query.isError) && pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0) === 0 && <p role="status">目前沒有待處理事項</p>}
           {memberships.isError && <p role="alert" className="form-error">會籍待辦無法讀取：{memberships.error.message}</p>}
           {visibleTrainees.length > 0 && <AdminReviewSection icon={UsersThree} title="待轉正式社員" count={visibleTrainees.length} pending={memberships.isPending} empty="沒有待轉正式社員">{visibleTrainees.map(membership => <MembershipStatusCard key={membership.id} membership={membership} onDone={() => queryClient.invalidateQueries({queryKey: ["admin-members"]})} />)}</AdminReviewSection>}
         </Tabs.Content>
@@ -255,50 +253,6 @@ function ShareholdingEditor({ record, source }: { record: ShareholdingRecord; so
       <div className="form-actions"><button type="button" disabled={save.isPending || reload.isPending} onClick={() => setOpen(false)}>取消編輯</button><button type="submit" disabled={!valid || !versionReady || save.isPending || reload.isPending}>{save.isPending ? "儲存中…" : "儲存股籍修正"}</button></div>
     </form>}
   </div>;
-}
-
-function ActivityReviewCard({ activity, onDone }: { activity: Activity; onDone: () => void }) {
-  const [showRegistrations, setShowRegistrations] = useState(false);
-  const queryClient = useQueryClient();
-  const registrations = useQuery({
-    queryKey: ["admin-activity-registrations", activity.id],
-    queryFn: () => apiFetch<AdminActivityRegistration[]>(`/v1/admin/activities/${activity.id}/registrations`),
-    enabled: showRegistrations,
-  });
-  const action = useMutation({
-    mutationFn: ({decision, reason}: {decision: "approve" | "reject" | "cancel" | "complete"; reason: string}) => apiFetch(`/v1/admin/activities/${activity.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) }),
-    onSuccess: onDone,
-  });
-  const attendance = useMutation({
-    mutationFn: ({ registrationId, status }: { registrationId: string; status: "attended" | "no_show" }) => apiFetch(`/v1/admin/activities/${activity.id}/registrations/${registrationId}/${status}`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-activity-registrations", activity.id] }),
-  });
-  const canComplete = activity.status === "published" && new Date(activity.ends_at).getTime() <= Date.now();
-  return (
-    <article className="admin-review-card admin-review-card-expandable">
-      <div className="review-card-copy"><span className="status-chip">{activityAdminStatus(activity.status)}</span><h3>{activity.title}</h3><p>{formatDateTime(activity.starts_at)} · {activity.location} · {activity.registration_count}/{activity.capacity} 人</p><small>{activity.description}</small></div>
-      <div className="review-card-actions">
-
-        <div>
-          {activity.status === "pending_review" && <SocialActionButton disabled={action.isPending} action="approve" requireReason={false} onConfirm={reason => action.mutate({decision: "approve", reason})}><CheckCircle size={16} />核准</SocialActionButton>}
-          {activity.status === "pending_review" && <SocialActionButton disabled={action.isPending} action="reject" requireReason={true} onConfirm={reason => action.mutate({decision: "reject", reason})}>駁回</SocialActionButton>}
-          {activity.status === "published" && <SocialActionButton disabled={action.isPending} action="cancel" requireReason={true} onConfirm={reason => action.mutate({decision: "cancel", reason})}>取消活動</SocialActionButton>}
-          {canComplete && <SocialActionButton disabled={action.isPending} action="complete" requireReason={false} onConfirm={reason => action.mutate({decision: "complete", reason})}>完成活動</SocialActionButton>}
-          {activity.status !== "pending_review" && <button type="button" onClick={() => setShowRegistrations((value) => !value)}>{showRegistrations ? "收起名單" : "報名名單"}</button>}
-        </div>
-        {action.isSuccess && <p role="status">處理完成</p>}{(action.isError || attendance.isError) && <p className="form-error">{action.error?.message || attendance.error?.message}</p>}
-      </div>
-      {showRegistrations && (
-        <div className="registration-admin-list">
-          {registrations.isPending && <LoadingLines count={2} />}
-          {registrations.data?.length === 0 && <p>目前沒有報名紀錄。</p>}
-          {registrations.data?.map((registration) => (
-            <div key={registration.id}><span>{registration.queue_position}</span><strong>{registration.display_name}</strong><small>{registration.email} · {registrationStatusLabel(registration.status)}</small>{registration.status === "registered" && <div><button type="button" onClick={() => attendance.mutate({ registrationId: registration.id, status: "attended" })}>已出席</button><button type="button" onClick={() => attendance.mutate({ registrationId: registration.id, status: "no_show" })}>未出席</button></div>}</div>
-          ))}
-        </div>
-      )}
-    </article>
-  );
 }
 
 function ProposalReviewCard({ proposal, onDone }: { proposal: Proposal; onDone: () => void }) {
