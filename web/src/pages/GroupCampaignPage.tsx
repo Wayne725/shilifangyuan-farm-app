@@ -18,6 +18,7 @@ import {
   invoicePreferenceIsValid,
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
+import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import {
@@ -89,9 +90,7 @@ export function GroupCampaignPage() {
     mutationFn: async () => {
       if (!user || !campaign.data) throw new Error("請先登入");
       if (orderBlockReason || campaignOrderBlockReason(campaign.data)) throw new Error(orderBlockReason || campaignOrderBlockReason(campaign.data));
-      if (invoicePreference.carrierType === "mobile_barcode") {
-        await saveMobileBarcode(invoicePreference.carrierValue || "");
-      }
+      await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
       if (method === "shipping") {
         if (!shippingChannel || !campaign.data.shipping_temperature) throw new Error("請選擇配送通路");
         return beginGroupCheckout({

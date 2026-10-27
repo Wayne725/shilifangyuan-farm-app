@@ -4,7 +4,7 @@ type Section = "orders" | "summary" | "issues" | "suppliers" | "locations";
 
 const items: Array<{ section: Section; label: string }> = [
   { section: "orders", label: "訂單、付款與發票" },
-  { section: "summary", label: "訂單匯總" },
+  { section: "summary", label: "訂單彙整" },
   { section: "issues", label: "問題回報" },
   { section: "suppliers", label: "供應者與審核狀態" },
   { section: "locations", label: "取貨點維護" },

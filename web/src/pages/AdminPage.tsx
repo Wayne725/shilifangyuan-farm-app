@@ -209,7 +209,7 @@ export function AdminPage() {
 
   return <>
     <section className="admin-intro admin-operations-intro">
-      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "summary" ? "訂單匯總" : section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
+      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "summary" ? "訂單彙整" : section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
       <div className="admin-intro-meta"><span>管理者</span><strong>{user.display_name}</strong></div>
     </section>
     <AdminNav />

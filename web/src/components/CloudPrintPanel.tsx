@@ -37,9 +37,9 @@ export function CloudPrintPanel() {
       <form className="cloud-print-filters" aria-label="列印紀錄查詢" onSubmit={event => {event.preventDefault(); setSearch(searchDraft.trim()); setOffset(0); setSelected(null);}}>
         <label className="field"><span>查詢列印紀錄</span><input type="search" maxLength={100} placeholder="訂單編號、姓名、餐點名稱" value={searchDraft} onChange={event => setSearchDraft(event.target.value)} /></label>
         <label className="field"><span>列印狀態</span><select aria-label="列印狀態" value={filter} onChange={event => {setFilter(event.target.value); setOffset(0); setSelected(null);}}><option value="">全部狀態</option>{Object.entries(states).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-        <div className="cloud-print-filter-actions"><button className="button button-primary" type="submit">查詢</button><button className="button button-quiet" type="button" onClick={() => {setSearchDraft(""); setSearch(""); setFilter(""); setOffset(0); setSelected(null);}}>清除</button><button className="button button-quiet" type="button" disabled={device.isFetching} onClick={() => void device.refetch()}>查詢設備</button></div>
+        <div className="cloud-print-filter-actions"><button className="button button-primary" type="submit">查詢</button><button className="button button-quiet" type="button" onClick={() => {setSearchDraft(""); setSearch(""); setFilter(""); setOffset(0); setSelected(null);}}>清除</button></div>
       </form>
-      <div className="cloud-print-result-heading"><p role="status">{jobs.data ? `共 ${jobs.data.total} 筆列印紀錄` : "讀取列印紀錄"}</p><Link to="/help">出單操作說明</Link></div>
+      <div className="cloud-print-result-heading"><p role="status">{jobs.data ? `共 ${jobs.data.total} 筆列印紀錄` : "讀取列印紀錄"}</p><div className="cloud-print-tools"><button className="button button-quiet" type="button" disabled={device.isFetching} onClick={() => void device.refetch()}>查詢設備</button><Link className="text-link" to="/help">出單操作說明</Link></div></div>
       {device.isError && <p role="alert">{device.error.message}</p>}{device.data?.error && <p role="alert">{errorText(device.data.error)}</p>}
       {jobs.isError && <p role="alert">{jobs.error.message}</p>}
       {jobs.data?.items.length === 0 && <p role="status">沒有符合的列印工作</p>}

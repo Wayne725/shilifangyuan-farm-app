@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../lib/api";
+import { lineLoginReturnTo } from "../lib/login-navigation";
 
 interface LineStatus {
   ready: boolean;
@@ -27,7 +28,7 @@ export function LineLoginButton({ intent = "nonmember", rememberMe = true, mode 
   const start = useMutation({
     mutationFn: () => apiFetch<{ authorization_url: string }>("/v1/auth/line/start", { method: "POST", body: JSON.stringify({
       intent, remember_me: rememberMe, mode, ...(memberClaim ? { member_claim: memberClaim } : {}), data_consent_version: "line-data-v1",
-      return_to: returnTo || `${window.location.pathname}${window.location.search}`,
+      return_to: lineLoginReturnTo(returnTo || `${window.location.pathname}${window.location.search}`),
     }) }),
     onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
   });

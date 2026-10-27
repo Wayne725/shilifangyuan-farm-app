@@ -109,6 +109,7 @@ const httpCommerceGateway: CommerceGateway = {
 export type InvoicePreference = {
   carrierType: "cloud" | "mobile_barcode";
   carrierValue?: string;
+  saveCarrier?: boolean;
   buyerEmail: string;
 } & (
   | {

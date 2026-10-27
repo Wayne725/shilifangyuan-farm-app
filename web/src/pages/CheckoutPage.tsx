@@ -20,6 +20,7 @@ import {
   invoicePreferenceIsValid,
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
+import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
 import { useCommerce } from "../context/CommerceContext";
 import { maxOrderItemQuantity } from "../lib/cart-quantity";
 import { openOrderHandoff } from "../lib/checkout-navigation";
@@ -108,9 +109,7 @@ export function CheckoutPage() {
     mutationFn: async () => {
       if (!user) throw new Error("請先登入");
       if (orderBlockReason) throw new Error(orderBlockReason);
-      if (invoicePreference.carrierType === "mobile_barcode") {
-        await saveMobileBarcode(invoicePreference.carrierValue || "");
-      }
+      await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
       if (checkoutMethod === "shipping") {
         if (!shippingChannel || !eligibility.temperature) {
           throw new Error("這筆商品目前無法使用配送");

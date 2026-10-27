@@ -2,7 +2,7 @@ import { ArrowLeft } from "@phosphor-icons/react";
 import { Link, Navigate, useSearch } from "@tanstack/react-router";
 
 import { useState } from "react";
-import { loginReturnTo } from "../lib/login-navigation";
+import { lineLoginReturnTo } from "../lib/login-navigation";
 
 import { LineLoginButton } from "../components/LineLogin";
 import { LoadingLines } from "../components/Shared";
@@ -12,7 +12,7 @@ import "../styles/auth-options.css";
 export function LineConsentPage() {
   const { user, isAuthReady } = useAuth();
   const search = useSearch({ from: "/line-consent" });
-  const returnTo = loginReturnTo(search.return_to || "/shop");
+  const returnTo = lineLoginReturnTo(search.return_to || "/shop");
   const [loginEntry, setLoginEntry] = useState<"nonmember" | "existing">();
   const loginUrl = `/login?return_to=${encodeURIComponent(returnTo)}`;
   if (!isAuthReady) return <section className="line-consent-page" aria-label="正在確認登入"><LoadingLines count={3} /></section>;
