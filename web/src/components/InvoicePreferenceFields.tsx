@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import type { InvoicePreference } from "../lib/commerce";
+import "./InvoicePreferenceFields.css";
 
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -19,6 +20,7 @@ export function defaultInvoicePreference(email = "", barcode?: string | null): I
     buyerType: "personal",
     buyerEmail: email,
     carrierType: barcode ? "mobile_barcode" : "cloud",
+    saveCarrier: false,
     ...(barcode ? { carrierValue: barcode } : {}),
   };
 }
@@ -78,17 +80,17 @@ function InvoiceCarrierFields({
   sectionNumber: string;
 }) {
   const { user, saveMobileBarcode } = useAuth();
-  const [saveState, setSaveState] = useState({ barcode: "", status: "", error: "" });
+  const [saveState, setSaveState] = useState({ status: "", error: "" });
   const saveSequence = useRef(0);
-  const barcode = (value.carrierValue || "").trim().toUpperCase();
-  const saveBarcode = (next: string | null) => {
-    if (!user || (next !== null && !/^\/[0-9A-Z+\-.]{7}$/.test(next))) return;
+  const removeSavedBarcode = () => {
+    if (!user) return;
+    onChange({ ...value, saveCarrier: false });
     const sequence = ++saveSequence.current;
-    setSaveState({ barcode: next || "", status: "saving", error: "" });
-    void saveMobileBarcode(next).then(() => {
-      if (sequence === saveSequence.current) setSaveState({ barcode: next || "", status: "saved", error: "" });
+    setSaveState({ status: "saving", error: "" });
+    void saveMobileBarcode(null).then(() => {
+      if (sequence === saveSequence.current) setSaveState({ status: "saved", error: "" });
     }).catch((reason: unknown) => {
-      if (sequence === saveSequence.current) setSaveState({ barcode: next || "", status: "error", error: reason instanceof Error ? reason.message : "載具儲存失敗，請重試" });
+      if (sequence === saveSequence.current) setSaveState({ status: "error", error: reason instanceof Error ? reason.message : "移除載具失敗，請重試" });
     });
   };
   const cloudTitle = value.buyerType === "personal"
@@ -121,21 +123,24 @@ function InvoiceCarrierFields({
           <input
             autoCapitalize="characters"
             maxLength={8}
-            aria-invalid={saveState.barcode === barcode && saveState.status === "error"}
-            aria-describedby={saveState.barcode === barcode && saveState.status === "error" ? `invoice-barcode-error-${sectionNumber}` : undefined}
             onChange={(event) => {
               const next = event.target.value.trim().toUpperCase();
               onChange({ ...value, carrierValue: next });
-              saveBarcode(next);
             }}
             placeholder="/AB12+-."
             value={value.carrierValue || ""}
           />
         </label>
-        {saveState.barcode === barcode && saveState.status === "saving" && <p role="status">正在儲存載具…</p>}
-        {saveState.barcode === barcode && saveState.status === "saved" && <p role="status">{barcode ? "載具已儲存" : "已移除儲存載具"}</p>}
-        {saveState.barcode === barcode && saveState.status === "error" && <div role="alert"><p id={`invoice-barcode-error-${sectionNumber}`} className="invoice-field-error">{saveState.error}</p><button className="text-link" type="button" onClick={() => saveBarcode(barcode || null)}>重試儲存載具</button></div>}
-        {user?.saved_mobile_barcode && <button className="text-link" type="button" disabled={saveState.status === "saving"} onClick={() => { onChange({ ...value, carrierValue: "" }); saveBarcode(null); }}>移除已儲存載具</button>}
+        {user && <div className="invoice-carrier-storage">
+          <label className="invoice-save-carrier">
+            <input type="checkbox" checked={value.saveCarrier === true} disabled={saveState.status === "saving"} onChange={event => onChange({ ...value, saveCarrier: event.target.checked })} />
+            <span>結帳時儲存此手機條碼供下次使用</span>
+          </label>
+          {saveState.status === "saving" && <p role="status">正在移除載具…</p>}
+          {saveState.status === "saved" && <p role="status">已移除儲存載具</p>}
+          {saveState.status === "error" && <div role="alert"><p className="invoice-field-error">{saveState.error}</p><button className="text-link" type="button" onClick={removeSavedBarcode}>重試移除載具</button></div>}
+          {user.saved_mobile_barcode && <button className="text-link" type="button" disabled={saveState.status === "saving"} onClick={removeSavedBarcode}>移除已儲存載具</button>}
+        </div>}
       </>}
     </div>
   );
@@ -218,6 +223,7 @@ export function InvoicePreferenceFields({
             buyerEmail: value.buyerEmail,
             carrierType: value.carrierType,
             carrierValue: value.carrierValue,
+            saveCarrier: value.saveCarrier,
           })}
           role="radio"
           type="button"
@@ -234,6 +240,7 @@ export function InvoicePreferenceFields({
             buyerEmail: value.buyerEmail,
             carrierType: value.carrierType,
             carrierValue: value.carrierValue,
+            saveCarrier: value.saveCarrier,
           })}
           role="radio"
           type="button"

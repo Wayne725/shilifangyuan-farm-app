@@ -109,7 +109,7 @@ for (const selected of products) {
     const card = page.locator('.product-card').filter({ has: page.getByText(selected.sku, { exact: true }) });
     await card.waitFor();
     assert.equal(await page.locator('.product-card').count(), 2);
-    await card.getByRole('button', { name: `加入 ${selected.name}`, exact: true }).click();
+    await card.getByRole('button', { name: `加入購物車：${selected.name}`, exact: true }).click();
     await page.getByRole('link', { name: /查看結帳清單/ }).click();
     await page.waitForURL(`${base}/checkout`);
     const checkout = page.locator('.checkout-page');

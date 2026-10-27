@@ -2,7 +2,6 @@ import { StorefrontClosed, useStorefrontStatus } from "../components/StorefrontS
 import {
   ArrowLeft,
   BowlFood,
-  MapPin,
   Minus,
   Plus,
 } from "@phosphor-icons/react";
@@ -25,6 +24,9 @@ import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatMoney } from "../lib/api";
 import { beginMealCheckout, invoicePreferencePayload } from "../lib/commerce";
 import { taxTypeLabel } from "../lib/invoice-tax";
+import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
+import { mealSubmissionFingerprint } from "../lib/meal-submission";
+import "./MealEventPage.css";
 import { clearMealDraft, emptyMealDraft, mealDraftWasAdjusted, readMealDraft, reconcileMealDraft, writeMealDraft } from "../lib/meal-draft";
 import { formatMealDateTime, mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions, shiftMealDate, taipeiDate, taipeiInputToIso, validPickupTime } from "../lib/meal-time";
 import type {
@@ -153,8 +155,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       if (!event.data || !mealOrderingOpen(event.data)) throw new Error("只能提前一天預訂，且須在本場次的開放時間內送出");
       if (!event.data || !validPickupTime(pickupAt, event.data)) throw new Error("請重新選擇可預訂的半小時取餐時段");
       if (!pickupLocationReady) throw new Error("請選擇可用的取餐點");
-      if (paymentMethod === "online" && invoicePreference.carrierType === "mobile_barcode") {
-        await saveMobileBarcode(invoicePreference.carrierValue ?? null);
+      if (paymentMethod === "online") {
+        await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
       }
       const input = {
         eventId,
@@ -169,7 +171,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         paymentMethod,
         kitchenNote: kitchenNote.trim(),
       };
-      const fingerprint = JSON.stringify({userId: user.id, ...input});
+      const fingerprint = mealSubmissionFingerprint(user.id, input);
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprint));
       const storageKey = `meal-submission:${Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("")}`;
       const id = sessionStorage.getItem(storageKey) || crypto.randomUUID();
@@ -245,7 +247,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     });
   const estimatedTotal = selectedMeals.reduce((sum, item) => sum + item.subtotal, 0);
   const confirmedQuote = quote.isError || !canOrder ? undefined : quote.data;
-  const pickupLocationName = locations.isError ? "取餐點暫時無法使用" : selectedPickupLocation?.name || (locations.isPending ? "載入取餐點中…" : mealEvent.location);
   const pickupAddress = confirmedQuote?.pickup.address || selectedPickupLocation?.address;
   const selectedMealQuantity = selectedMeals.reduce((sum, item) => sum + item.quantity, 0);
   const totalLabel = confirmedQuote ? "合計" : "預估合計";
@@ -295,24 +296,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
 
       <div className="offer-checkout meal-checkout">
         <div>
-          <section className="meal-selected-date" aria-label="已選取餐日期">
-            <span className="meal-pickup-label">取餐安排</span>
-            <p><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}{pickupReady && ` · ${pickupAt.slice(11)}`} · {pickupLocationName}</strong><Link className="text-link" to="/shop">更換取餐時間</Link></p>
-          </section>
-          <div className="field-grid two-columns meal-order-preferences">
-            <label className="field"><span id="meal-pickup-location-label">取餐點</span>
-              <select aria-labelledby="meal-pickup-location-label" value={pickupLocationId} required={Boolean(activeLocations?.length)} disabled={checkout.isPending || locations.isPending || locations.isError || !activeLocations?.length} onChange={(event) => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupLocationId: event.target.value })); }}>
-                <option value="" disabled={Boolean(activeLocations?.length)}>{locations.isPending ? "載入取餐點中…" : locations.isError ? "取餐點暫時無法使用" : activeLocations?.length ? "請選擇取餐點" : mealEvent.location}</option>
-                {!locations.isError && activeLocations?.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
-              </select>
-            </label>
-            <label className="field"><span id="meal-utensils-label">是否需要餐具</span>
-              <select aria-labelledby="meal-utensils-label" value={needsUtensils ? "yes" : "no"} disabled={checkout.isPending} onChange={(event) => setDraft((current) => ({ ...current, needsUtensils: event.target.value === "yes" }))}>
-                <option value="no">不需要餐具</option><option value="yes">需要餐具</option>
-              </select>
-            </label>
-          </div>
-          {locations.isError && <DataState kind="error" title="取餐點暫時無法使用" detail={locations.error.message} onAction={() => locations.refetch()} />}
           {draftAdjusted && <p className="meal-selection-notice" role="status">選餐已依最新庫存、取餐點或可選時段調整，請再次確認餐點、份數與取餐安排。</p>}
           <div className="meal-offering-list">
             {activeOfferings.map((offering) => {
@@ -390,14 +373,12 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         <aside className="offer-summary meal-summary" id="meal-order-summary" tabIndex={-1} aria-labelledby="meal-summary-heading">
           <BowlFood size={29} weight="light" />
           <h2 id="meal-summary-heading">確認訂單明細</h2>
-          <div className="pickup-window"><MapPin size={19} /><div><strong>{confirmedQuote?.pickup.location || pickupLocationName}</strong>{pickupAddress && <small>{pickupAddress}</small>}<small>{mealServiceDate(mealEvent).replaceAll("-", "/")}{pickupReady && ` · ${pickupAt.slice(11)}`}</small></div></div>
           {quote.isFetching && <LoadingLines count={2} />}
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}
           {!pickupAt && <p className="meal-selection-notice">請選擇預計取餐時間。</p>}
           {!orderingOpen && <p className="meal-selection-notice">今天僅可預訂明天的餐點；本場次也須在開放時間內才能送出。</p>}
           <dl>
-            <div><dt>餐具</dt><dd>{needsUtensils ? "需要餐具" : "不需要餐具"}</dd></div>
             {confirmedQuote ? confirmedQuote.items.map((item) => (
               <div className="meal-quote-line" key={item.offering_id}>
                 <dt><strong>{item.meal_name} × {item.quantity}</strong><small>{taxTypeLabel(item.tax_type)}</small>{item.selections.length > 0 && <small>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</small>}</dt>
@@ -412,22 +393,35 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             {confirmedQuote?.promotion && <div><dt>{confirmedQuote.promotion.name}</dt><dd>已折抵 {formatMoney(confirmedQuote.promotion.discount)}</dd></div>}
             {confirmedQuote && <InvoiceTaxSummary items={confirmedQuote.items} memberTaxExempt={confirmedQuote.member_tax_exempt} taxAmount={confirmedQuote.tax_amount} />}
           </dl>
+          <section className="meal-pickup-settings" aria-labelledby="meal-pickup-heading">
+            <div className="meal-pickup-heading"><h3 id="meal-pickup-heading">取餐安排</h3><Link className="text-link" to="/shop">更換取餐日期</Link></div>
+            <p className="meal-pickup-date"><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}</strong></p>
+            <label className="field"><span>預計取餐時間（台灣時間）</span>
+              <select value={pickupReady ? pickupAt : ""} required disabled={!orderingOpen || checkout.isPending || !pickupOptions.length} onChange={(event) => { const value = event.target.value; setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: value })); void navigate({ search: { pickup_at: value }, replace: true }); }}>
+                <option value="" disabled>請選擇取餐時間</option>
+                {pickupOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
+            <label className="field"><span id="meal-pickup-location-label">取餐點</span>
+              <select aria-labelledby="meal-pickup-location-label" value={pickupLocationId} required={Boolean(activeLocations?.length)} disabled={checkout.isPending || locations.isPending || locations.isError || !activeLocations?.length} onChange={(event) => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupLocationId: event.target.value })); }}>
+                <option value="" disabled={Boolean(activeLocations?.length)}>{locations.isPending ? "載入取餐點中…" : locations.isError ? "取餐點暫時無法使用" : activeLocations?.length ? "請選擇取餐點" : mealEvent.location}</option>
+                {!locations.isError && activeLocations?.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+              </select>
+            </label>
+            {pickupAddress && <p className="meal-pickup-address">{pickupAddress}</p>}
+            {locations.isError && <DataState kind="error" title="取餐點暫時無法使用" detail={locations.error.message} onAction={() => locations.refetch()} />}
+            <label className="field"><span id="meal-utensils-label">是否需要餐具</span>
+              <select aria-labelledby="meal-utensils-label" value={needsUtensils ? "yes" : "no"} disabled={checkout.isPending} onChange={(event) => setDraft((current) => ({ ...current, needsUtensils: event.target.value === "yes" }))}>
+                <option value="no">不需要餐具</option><option value="yes">需要餐具</option>
+              </select>
+            </label>
+          </section>
           <details className="meal-coupon-disclosure">
             <summary>{couponCode ? `優惠碼：${couponCode}` : "使用優惠碼"}</summary>
             <div className="meal-coupon-field"><label className="field"><span>優惠碼</span><input maxLength={32} value={couponInput} onChange={event => setCouponInput(event.target.value.toUpperCase())} /></label><button className="button button-quiet" type="button" onClick={() => setCouponCode(couponInput.trim())}>套用優惠碼</button>{couponCode && <button type="button" className="text-link" onClick={() => {setCouponCode(""); setCouponInput("");}}>移除優惠碼</button>}</div>
           </details>
           <div className="meal-checkout-settings">
-            <details className="meal-pickup-selection" open={!pickupReady ? true : undefined}><summary>修改取餐時間</summary>
-
-              <label className="field">預計取餐時間（台灣時間）
-                <select value={pickupReady ? pickupAt : ""} required disabled={!orderingOpen || checkout.isPending || !pickupOptions.length} onChange={(event) => { const value = event.target.value; setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: value })); void navigate({ search: { pickup_at: value }, replace: true }); }}>
-                  <option value="" disabled>請選擇取餐時間</option>
-                  {pickupOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-              </label>
-              {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
-              {pickupReady && <p className="meal-pickup-confirmation" role="status">已選取餐時間：{formatMealDateTime(taipeiInputToIso(pickupAt))}</p>}
-            </details>
             {paymentMethod === "cash_on_pickup" ? <section className="meal-invoice-settings"><h3>合作社現場開票</h3><label className="field"><span>訂單通知 Email</span><input type="email" autoComplete="email" required value={invoicePreference.buyerEmail} onChange={event => setInvoicePreference({ ...invoicePreference, buyerEmail: event.target.value })} /></label></section> : <section className="meal-invoice-settings" aria-label="電子發票設定">
               <div className="meal-invoice-heading"><h3>電子發票</h3>
                 {invoicePreferenceIsValid(invoicePreference) && <button type="button" className="text-link" aria-expanded={editingInvoice} aria-controls="meal-invoice-fields" onClick={() => setEditingInvoice(!editingInvoice)}>{editingInvoice ? "完成發票設定" : "修改發票設定"}</button>}

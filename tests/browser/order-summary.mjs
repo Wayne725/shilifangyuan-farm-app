@@ -112,7 +112,7 @@ async function screenshot(page, name) {
 }
 
 async function wait_for_summary(page) {
-  await page.getByRole('heading', { name: '訂單匯總', level: 1, exact: true }).waitFor();
+  await page.getByRole('heading', { name: '訂單彙整', level: 1, exact: true }).waitFor();
   await page.locator('.admin-order-summary > [aria-busy="false"]').waitFor();
 }
 
@@ -135,10 +135,10 @@ for (const width of [882, 390]) {
     await page.getByRole('heading', { name: '訂單、付款與發票', exact: true }).waitFor();
     await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
     assert.equal(state.reads.includes('/v1/admin/order-search'), true);
-    await page.getByRole('navigation', { name: '訂單營運子頁面', exact: true }).getByRole('link', { name: '訂單匯總', exact: true }).click();
+    await page.getByRole('navigation', { name: '訂單營運子頁面', exact: true }).getByRole('link', { name: '訂單彙整', exact: true }).click();
     await wait_for_summary(page);
     assert.equal(new URL(page.url()).searchParams.get('section'), 'summary');
-    assert.equal(await page.getByRole('navigation', { name: '訂單營運子頁面', exact: true }).getByRole('link', { name: '訂單匯總', exact: true }).getAttribute('aria-current'), 'page');
+    assert.equal(await page.getByRole('navigation', { name: '訂單營運子頁面', exact: true }).getByRole('link', { name: '訂單彙整', exact: true }).getAttribute('aria-current'), 'page');
     assert.equal(state.summaries[0].query.sales_channel, 'all');
     assert.equal(state.summaries[0].query.status, 'active');
     await verify_summary(page, state.summaries.at(-1).report.summary);
@@ -225,7 +225,7 @@ test('直接開啟匯總不讀取訂單清單，通路與狀態查詢及日期�
 test('匯總服務失敗不顯示假零筆，重新連線恢復，空查詢顯示真正零筆', { timeout: 30000 }, async (t) => {
   const { page, state } = await fixture(t, { failing: true, width: 390 });
   await page.goto(`${base}/admin?section=summary`);
-  await page.getByRole('heading', { name: '訂單匯總無法讀取', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '訂單彙整無法讀取', exact: true }).waitFor();
   assert.equal(await page.locator('dl[aria-label="查詢結果統計"]').count(), 0);
   assert.equal(await page.getByRole('heading', { name: '沒有符合條件的訂單', exact: true }).count(), 0);
   assert.equal(state.summaries.every((request) => request.failed), true);

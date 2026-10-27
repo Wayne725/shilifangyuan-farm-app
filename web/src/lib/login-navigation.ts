@@ -23,3 +23,8 @@ export function verificationReturnTo(value: unknown): string {
     return "/shop";
   }
 }
+
+export function lineLoginReturnTo(value: unknown): string {
+  const target = loginReturnTo(value);
+  return new URL(target, "https://return.invalid").pathname === "/" ? "/account" : target;
+}

@@ -1,4 +1,4 @@
-import { Basket, Check, Plus } from "@phosphor-icons/react";
+import { Basket, Check } from "@phosphor-icons/react";
 import { useEffect, useId, useState } from "react";
 
 import { useCommerce } from "../context/CommerceContext";
@@ -41,7 +41,7 @@ export function ProductAddButton({ product, onAdd, compact = false }: {
 
   return <div className={`product-add-control${compact ? " product-add-control--compact" : ""}`}>
     <div className="product-add-quantity">
-      <label><span>數量</span>
+      {choice !== "custom" && <label><span>數量</span>
         <select aria-label={`${product.name}加入數量`} value={remaining ? choice : "0"} disabled={!remaining}
           aria-describedby={message ? errorId : undefined}
           onChange={(event) => { setChoice(event.target.value); setError(""); setAddition(null); }}>
@@ -50,20 +50,21 @@ export function ProductAddButton({ product, onAdd, compact = false }: {
           {choice !== "custom" && Number(choice) > commonMaximum && remaining > 0 && <option value={choice} disabled>{choice} {product.unit}（超過可加數量）</option>}
           {(remaining > 10 || choice === "custom") && <option value="custom">其他數量</option>}
         </select>
-      </label>
+      </label>}
       {choice === "custom" && remaining > 0 && <label><span>自訂數量</span>
         <input type="number" inputMode="numeric" min={1} max={remaining} step={1} required
           aria-label={`${product.name}自訂數量`} aria-invalid={customQuantity !== "" && !valid}
           aria-describedby={message ? errorId : undefined} value={customQuantity}
           onChange={(event) => { setCustomQuantity(event.target.value); setError(""); setAddition(null); }} />
       </label>}
+      {choice === "custom" && <button className="product-quantity-reset" type="button" onClick={() => { setChoice("1"); setCustomQuantity(""); setError(""); setAddition(null); }}>改用常用數量</button>}
     </div>
     <button
-      className={compact ? "icon-button add-button" : "button button-primary full-width"}
+      className="button button-primary product-add-submit"
       type="button"
       disabled={!valid}
       aria-describedby={message ? errorId : undefined}
-      aria-label={compact ? `加入 ${product.name}` : undefined}
+      aria-label={`加入購物車：${product.name}`}
       onClick={() => {
         setError("");
         try {
@@ -75,8 +76,8 @@ export function ProductAddButton({ product, onAdd, compact = false }: {
         }
       }}
     >
-      {added ? <Check size={compact ? 20 : 18} aria-hidden="true" /> : compact ? <Plus size={20} weight="light" aria-hidden="true" /> : <Basket size={18} aria-hidden="true" />}
-      {!compact && (product.stock_quantity <= 0 ? "目前缺貨" : remaining ? "加入結帳清單" : "已達可購數量")}
+      {added ? <Check size={18} aria-hidden="true" /> : <Basket size={18} aria-hidden="true" />}
+      {product.stock_quantity <= 0 ? "目前缺貨" : remaining ? "加入購物車" : "已達可購數量"}
     </button>
     <p className="cart-add-feedback" role="status" aria-live="polite" aria-atomic="true">
       {added && quantity > 0 ? `${product.name}已加入，清單共 ${quantity} ${product.unit}` : ""}

@@ -48,7 +48,7 @@ for (const width of [1440, 390]) for (const detail of [false, true]) {
   test(`${width}px ${detail ? '商品詳情' : '商品卡片'}加入立即回饋，快速多次累加正確且成功結果會消失`, async (t) => {
     const { page, state } = await fixture(t, width, detail ? `/products/${product.id}` : '/shop');
     const scope = detail ? page.locator('.product-detail-copy') : page.locator('.product-card').filter({ has: page.getByRole('heading', { name: product.name, exact: true }) });
-    const button = scope.getByRole('button', { name: detail ? '加入結帳清單' : `加入 ${product.name}`, exact: true });
+    const button = scope.getByRole('button', { name: `加入購物車：${product.name}`, exact: true });
     const result = scope.getByRole('status');
     await button.waitFor();
     assert.equal(await result.textContent(), '');
@@ -78,7 +78,7 @@ for (const width of [1440, 390]) for (const detail of [false, true]) {
     assert.equal(await result.textContent(), '', '成功回饋不應跨頁面重整保留');
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart')).find((row) => row.product.id === 'feedback-product').quantity), 6);
     if (!detail) {
-      const disabled = page.getByRole('button', { name: `加入 ${soldOut.name}`, exact: true });
+      const disabled = page.getByRole('button', { name: `加入購物車：${soldOut.name}`, exact: true });
       assert.equal(await disabled.isDisabled(), true);
       assert.equal(await disabled.locator('..').getByRole('status').textContent(), '');
     }
@@ -88,10 +88,10 @@ for (const width of [1440, 390]) for (const detail of [false, true]) {
 
 test('缺貨詳情保留禁用，切換商品不沿用另一商品加入成功結果', async (t) => {
   const { page, state } = await fixture(t, 390, `/products/${product.id}`);
-  await page.getByRole('button', { name: '加入結帳清單', exact: true }).click();
+  await page.getByRole('button', { name: `加入購物車：${product.name}`, exact: true }).click();
   await page.getByRole('status').filter({ hasText: '清單共 3 瓶' }).waitFor();
   await page.goto(`${base}/products/${soldOut.id}`);
-  const disabled = page.getByRole('button', { name: '目前缺貨', exact: true });
+  const disabled = page.getByRole('button', { name: `加入購物車：${soldOut.name}`, exact: true });
   await disabled.waitFor();
   assert.equal(await disabled.isDisabled(), true);
   assert.equal(await page.locator('.cart-add-feedback').textContent(), '');
@@ -101,7 +101,7 @@ test('缺貨詳情保留禁用，切換商品不沿用另一商品加入成功�
 
 test('首次儲存失敗保留所選三份且不改清單，重試成功只增加三份', async (t) => {
   const { page, state } = await fixture(t, 390, `/products/${product.id}`);
-  const button = page.getByRole('button', { name: '加入結帳清單', exact: true });
+  const button = page.getByRole('button', { name: `加入購物車：${product.name}`, exact: true });
   const result = page.locator('.cart-add-feedback');
   await button.waitFor();
   await page.getByRole('combobox', { name: `${product.name}加入數量`, exact: true }).selectOption('3');
@@ -133,7 +133,9 @@ for (const width of [1440, 390]) for (const path of ['/', '/shop', `/products/${
     const scope = path.startsWith('/products/') ? page.locator('.product-detail-copy') : page.locator('.product-card').filter({ has: page.getByRole('heading', { name: product.name, exact: true }) });
     const select = scope.getByRole('combobox', { name: `${product.name}加入數量`, exact: true });
     await select.selectOption('3');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 2, '選取數量不應直接加入購物車');
     const button = scope.locator('.product-add-control > button');
+    assert.equal(await button.textContent(), '加入購物車');
     await button.focus(); await button.press('Enter');
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity === 5);
     assert.equal(await scope.getByRole('status').textContent(), `${product.name}已加入，清單共 5 瓶`);
@@ -173,6 +175,7 @@ test('大量庫存只有常用下拉與自訂數量，不能超過單項 999 或
   await select.waitFor();
   assert.equal(await select.locator('option').count(), 11);
   await select.selectOption('custom');
+  assert.equal(await select.count(), 0, '自訂模式不可同時顯示數量下拉');
   const input = page.getByRole('spinbutton', { name: `${product.name}自訂數量`, exact: true });
   const button = page.locator('.product-add-control > button');
   assert.equal(await input.getAttribute('max'), '997');
@@ -183,7 +186,9 @@ test('大量庫存只有常用下拉與自訂數量，不能超過單項 999 或
   }
   await input.fill('997'); await button.click();
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 999);
-  assert.equal(await button.isDisabled(), true); assert.equal(await select.isDisabled(), true);
+  assert.equal(await button.isDisabled(), true);
+  await page.getByRole('button', { name: '改用常用數量', exact: true }).click();
+  assert.equal(await select.isDisabled(), true);
   assert.match(await page.getByRole('alert').textContent(), /可購上限為 999/);
   assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });

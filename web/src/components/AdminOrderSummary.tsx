@@ -61,7 +61,7 @@ export function AdminOrderSummary() {
   };
   const dateError = formError ? "order-summary-date-error" : undefined;
 
-  return <section className="admin-order-summary" aria-label="訂單品項匯總">
+  return <section className="admin-order-summary" aria-label="訂單品項彙整">
     <OrderCategoryFilter value={filters.orderCategory} onChange={(orderCategory) => {
       const next = { ...filters, orderCategory, salesChannel: "all" as const, category: "" };
       setDraft(next); setFilters(next); setOffset(0); setFormError("");
@@ -92,7 +92,7 @@ export function AdminOrderSummary() {
       <button className="button button-quiet" type="button" disabled={report.isFetching} onClick={() => void report.refetch()}><ArrowClockwise size={18} />{report.isFetching && !report.isPending ? "更新中…" : "更新"}</button>
     </div>
     <div aria-busy={report.isFetching}>
-      {report.isPending ? <LoadingLines count={5} /> : report.isError ? <DataState kind="error" title="訂單匯總無法讀取" detail={report.error.message} onAction={() => void report.refetch()} /> : report.data && <>
+      {report.isPending ? <LoadingLines count={5} /> : report.isError ? <DataState kind="error" title="訂單彙整無法讀取" detail={report.error.message} onAction={() => void report.refetch()} /> : report.data && <>
         <dl className="admin-order-summary-metrics" aria-label="查詢結果統計">
           <div><dt>訂單數</dt><dd>{formatCount(report.data.summary.order_count)}<span>筆</span></dd></div>
           <div><dt>品項數量</dt><dd>{formatCount(report.data.summary.quantity)}</dd></div>

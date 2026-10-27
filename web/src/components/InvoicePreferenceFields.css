@@ -1,0 +1,33 @@
+.invoice-carrier-storage {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.invoice-save-carrier {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding-block: 10px;
+  cursor: pointer;
+}
+
+.invoice-save-carrier input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 2px 0 0;
+  accent-color: var(--moss-dark);
+}
+
+.invoice-carrier-storage > .text-link {
+  justify-self: start;
+  min-height: 44px;
+  white-space: normal;
+}
+
+.invoice-carrier-storage p {
+  margin: 0;
+}
