@@ -137,7 +137,7 @@ async def _check_resources(session, order, quantities, now):
         if resource is None:
             raise HTTPException(409, "原品項已不存在，請移除該品項或聯絡管理員")
         increasing = requested > old_by_source[source_id]
-        enabled = resource.is_active and (resource.meal.is_active if isinstance(resource, MealEventOffering) else True)
+        enabled = resource.is_active and (resource.meal.is_active if isinstance(resource, MealEventOffering) else resource.daily_sales_enabled)
         if increasing and not enabled:
             raise HTTPException(409, "已停用品項只能減少數量")
         remaining = (resource.capacity - resource.paid_quantity - resource.reserved_quantity

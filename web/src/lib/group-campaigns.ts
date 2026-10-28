@@ -49,11 +49,11 @@ export function campaignConfirmBlockReason(campaign: GroupCampaign, now = Date.n
 
 export function campaignScheduleError(deadline: string, reviewDeadline: string, pickupStart: string, pickupEnd: string, now = Date.now(), editing = false) {
   const values = [deadline, reviewDeadline, pickupStart, pickupEnd].map(value => value ? new Date(`${value}:00+08:00`).getTime() : NaN);
-  if (!values.every(Number.isFinite)) return "請填寫完整的付款、審核與取貨時間";
+  if (!values.every(Number.isFinite)) return "請填寫完整的付款截止、處理提醒日與取貨時間";
   const [payment, review, start, end] = values;
   if (!editing && payment <= now) return "付款截止必須晚於現在";
-  if (review <= payment || review <= now) return "審核截止須晚於付款截止及現在";
-  if (start < review) return "預計取貨開始不可早於審核截止";
+  if (review <= payment || review <= now) return "處理提醒日須晚於付款截止及現在";
+  if (start < review) return "預計取貨開始不可早於處理提醒日";
   if (end <= start) return "預計取貨結束須晚於開始時間";
   return "";
 }

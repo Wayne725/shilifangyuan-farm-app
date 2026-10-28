@@ -153,9 +153,9 @@ def validate_campaign_schedule(campaign: GroupCampaign, now: datetime) -> None:
     if campaign.confirmation_deadline is None:
         campaign.confirmation_deadline = aware(campaign.deadline) + timedelta(hours=72)
     if aware(campaign.confirmation_deadline) <= aware(campaign.deadline):
-        raise DomainError("管理員審核期限必須晚於付款截止")
+        raise DomainError("管理員處理提醒日必須晚於付款截止")
     if aware(campaign.confirmation_deadline) > aware(campaign.estimated_pickup_start):
-        raise DomainError("管理員審核期限不可晚於預估取貨開始")
+        raise DomainError("管理員處理提醒日不可晚於預估取貨開始")
     if campaign.min_paid_quantity > campaign.supply_cap:
         raise DomainError("成團門檻不可高於供應上限")
     if aware(campaign.deadline) <= now:

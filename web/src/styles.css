@@ -8649,6 +8649,10 @@ html[data-text-size="large"] { font-size: 20px; }
 .group-proposal-card > .admin-create-block { grid-column: 1 / -1; width: 100%; min-width: 0; }
 .group-proposal-card .admin-master-form .field-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
 .group-proposal-card .admin-master-form :is(input, select) { min-width: 0; width: 100%; max-width: 100%; }
+.campaign-new-product { min-width: 0; margin: 0; padding: 1rem; border: 1px solid var(--line); }
+.campaign-new-product legend { padding: 0 .5rem; }
+.campaign-reminder-settings > summary { cursor: pointer; }
+.campaign-reminder-settings > .field { max-width: 24rem; margin-top: 1rem; }
 
 .campaign-quantity-summary { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 1rem; margin: 0 0 1rem; }
 .campaign-quantity-summary dd { margin: .35rem 0 0; font-size: 1.15rem; }

@@ -5,11 +5,13 @@ from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user, get_optional_user, require_admin
 from ..database import get_session
+from ..product_creation import create_product_record
 from ..config import get_settings
 from ..domain import apply_proposal_clock, aware, validate_campaign_schedule
 from ..models import (
@@ -461,9 +463,9 @@ async def open_proposal_campaign(proposal_id: str, body: CampaignCreate, admin: 
         if changed:
             await session.commit()
         raise HTTPException(status_code=409, detail="此提案尚未進入開團階段")
-    await resolve_target(session, body.target_type, body.target_id)
     if proposal.target_type != ProposalTargetType.CUSTOM and (
-        body.target_type != proposal.target_type
+        body.new_product is not None
+        or body.target_type != proposal.target_type
         or body.target_id != proposal.target_id
     ):
         raise HTTPException(status_code=422, detail="開團目標與提案不一致")
@@ -472,29 +474,43 @@ async def open_proposal_campaign(proposal_id: str, body: CampaignCreate, admin: 
         and body.source_proposal_id != proposal.id
     ):
         raise HTTPException(status_code=422, detail="來源提案編號不一致")
-    campaign = GroupCampaign(
-        **body.model_dump(exclude={"source_proposal_id"}),
-        source_proposal_id=proposal.id,
-        created_by_id=admin.id,
-    )
     try:
-        validate_campaign_schedule(campaign, datetime.now(timezone.utc))
+        validate_campaign_schedule(body, datetime.now(timezone.utc))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    proposal.status = ProposalStatus.CONVERTED
-    session.add(campaign)
-    await session.flush()
-    session.add(AdminAudit(actor_id=admin.id, action="proposal.open_direct" if direct else "proposal.convert", aggregate_type="vote_proposal", aggregate_id=proposal.id,
-                           data={"campaign_id": campaign.id, "vote_count": len(proposal.votes), "threshold": proposal.threshold}))
-    session.add(
-        OutboxEvent(
-            event_type="group.opened",
-            aggregate_type="group_campaign",
-            aggregate_id=campaign.id,
-            payload={"proposal_id": proposal.id},
+    if body.new_product is None:
+        await resolve_target(session, body.target_type, body.target_id)
+    try:
+        target_id = body.target_id
+        if body.new_product is not None:
+            product = await create_product_record(session, body.new_product, admin.id)
+            target_id = product.id
+        campaign = GroupCampaign(
+            **body.model_dump(exclude={"source_proposal_id", "target_id", "new_product"}),
+            target_id=target_id,
+            source_proposal_id=proposal.id,
+            created_by_id=admin.id,
         )
-    )
-    await session.commit()
+        proposal.status = ProposalStatus.CONVERTED
+        session.add(campaign)
+        await session.flush()
+        session.add(AdminAudit(actor_id=admin.id, action="proposal.open_direct" if direct else "proposal.convert", aggregate_type="vote_proposal", aggregate_id=proposal.id,
+                               data={"campaign_id": campaign.id, "vote_count": len(proposal.votes), "threshold": proposal.threshold}))
+        session.add(
+            OutboxEvent(
+                event_type="group.opened",
+                aggregate_type="group_campaign",
+                aggregate_id=campaign.id,
+                payload={"proposal_id": proposal.id},
+            )
+        )
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="商品代碼或共同購買已存在，請重新確認") from exc
+    except Exception:
+        await session.rollback()
+        raise
     await session.refresh(campaign)
     from .groups import campaign_read
     return campaign_read(campaign)

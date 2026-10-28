@@ -25,6 +25,7 @@ export function ShopPage() {
     queryKey: ["products"],
     queryFn: () => apiFetch<Product[]>("/v1/products"),
   });
+  const dailyProducts = products.data?.filter((item) => item.is_active !== false && item.daily_sales_enabled !== false);
   const campaigns = useQuery({
     queryKey: ["group-campaigns"],
     queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns"),
@@ -86,11 +87,11 @@ export function ShopPage() {
               onAction={() => products.refetch()}
             />
           )}
-          {products.data?.length === 0 && (
+          {dailyProducts?.length === 0 && (
             <DataState title="商品整理中" detail="完成正式商品與 SKU 建檔後，選品會出現在這裡。" />
           )}
           <div className="product-grid catalog-grid">
-            {products.data?.map((product) => (
+            {dailyProducts?.map((product) => (
               <ProductCard key={product.id} product={product} onAdd={addToCart} />
             ))}
           </div>

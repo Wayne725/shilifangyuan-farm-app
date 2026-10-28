@@ -39,6 +39,10 @@ export function ProductAddButton({ product, onAdd, compact = false }: {
     return () => window.clearTimeout(timer);
   }, [addition]);
 
+  if (product.is_active === false || product.daily_sales_enabled === false) {
+    return <button className="button button-primary product-add-submit" type="button" disabled>{product.is_active === false ? "商品已停用" : "未上架日常選購"}</button>;
+  }
+
   return <div className={`product-add-control${compact ? " product-add-control--compact" : ""}`}>
     <div className="product-add-quantity">
       {choice !== "custom" && <label><span>數量</span>

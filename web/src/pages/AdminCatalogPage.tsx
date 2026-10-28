@@ -56,6 +56,7 @@ interface ProductDraft {
   shipping_temperature: ShippingTemperature;
   allowed_shipping_channels: ShippingChannel[];
   is_active: boolean;
+  daily_sales_enabled: boolean;
 }
 
 const emptyProduct: ProductDraft = {
@@ -74,6 +75,7 @@ const emptyProduct: ProductDraft = {
   shipping_temperature: "ambient",
   allowed_shipping_channels: [],
   is_active: true,
+  daily_sales_enabled: true,
 };
 
 interface SupplierDraft {
@@ -130,7 +132,11 @@ export function AdminCatalogPage() {
     );
   }
 
-  const refreshProducts = () => queryClient.invalidateQueries({ queryKey: ["admin-products"] });
+  const refreshProducts = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["admin-products"] }),
+    queryClient.invalidateQueries({ queryKey: ["products"] }),
+    queryClient.invalidateQueries({ queryKey: ["product"] }),
+  ]);
   const refreshSuppliers = () => queryClient.invalidateQueries({ queryKey: ["admin-suppliers"] });
   const refreshLocations = () => queryClient.invalidateQueries({ queryKey: ["admin-pickup-locations"] });
 
@@ -212,7 +218,7 @@ function ProductCreateForm({ suppliers, onDone }: { suppliers: Supplier[]; onDon
   return (
     <section className="admin-create-block">
       <button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />新增商品</button>
-      {open && <ProductForm title="上架新商品" draft={draft} photo={photo} removePhoto={false} onPhotoChange={(file) => setPhoto(file)} suppliers={suppliers} busy={create.isPending} error={create.error?.message} onChange={setDraft} onCancel={() => { setOpen(false); setDraft(emptyProduct); setPhoto(null); setCreatedId(""); create.reset(); onDone(); }} onSubmit={() => create.mutate()} />}
+      {open && <ProductForm title="新增商品" draft={draft} photo={photo} removePhoto={false} onPhotoChange={(file) => setPhoto(file)} suppliers={suppliers} busy={create.isPending} error={create.error?.message} onChange={setDraft} onCancel={() => { setOpen(false); setDraft(emptyProduct); setPhoto(null); setCreatedId(""); create.reset(); onDone(); }} onSubmit={() => create.mutate()} />}
     </section>
   );
 }
@@ -225,6 +231,7 @@ function ProductEditor({ product, suppliers, onDone }: { product: Product; suppl
     member_price: product.member_price, nonmember_price: product.nonmember_price, stock_quantity: product.stock_quantity,
     tax_type: product.tax_type, can_ship: product.can_ship, shipping_temperature: product.shipping_temperature || "ambient",
     allowed_shipping_channels: product.allowed_shipping_channels, is_active: product.is_active,
+    daily_sales_enabled: product.daily_sales_enabled !== false,
   }));
   const [photo, setPhoto] = useState<File | null>(null);
   const [removePhoto, setRemovePhoto] = useState(false);
@@ -239,10 +246,10 @@ function ProductEditor({ product, suppliers, onDone }: { product: Product; suppl
   if (editing) return <ProductForm title={product.name} draft={draft} currentPhoto={product.image_url} photo={photo} removePhoto={removePhoto} onPhotoChange={(file, remove) => { setPhoto(file); setRemovePhoto(remove); }} suppliers={suppliers} busy={update.isPending} error={update.error?.message} onChange={setDraft} onCancel={() => { setEditing(false); setPhoto(null); setRemovePhoto(false); update.reset(); }} onSubmit={() => update.mutate()} />;
   return (
     <article className="admin-record-card">
-      <span className={`status-chip ${product.is_active ? "passed" : ""}`}>{product.is_active ? "上架" : "下架"}</span>
+      <span className={`status-chip ${product.is_active ? "passed" : ""}`}>{product.is_active ? "啟用" : "停用"}</span>
       <h3>{product.name}</h3>
       <p>{product.supplier_name || "未指定供應者"} · {product.sku || product.product_number || "未編號"}</p>
-      <dl><div><dt>社員價</dt><dd>{formatMoney(product.member_price)}</dd></div><div><dt>庫存</dt><dd>{product.stock_quantity} {product.unit}</dd></div><div><dt>物流</dt><dd>{product.can_ship ? temperatureLabels[product.shipping_temperature || "ambient"] : "僅取貨"}</dd></div></dl>
+      <dl><div><dt>社員價</dt><dd>{formatMoney(product.member_price)}</dd></div><div><dt>庫存</dt><dd>{product.stock_quantity} {product.unit}</dd></div><div><dt>日常選購</dt><dd>{product.daily_sales_enabled === false ? "未上架" : "上架"}</dd></div><div><dt>物流</dt><dd>{product.can_ship ? temperatureLabels[product.shipping_temperature || "ambient"] : "僅取貨"}</dd></div></dl>
       <button type="button" onClick={() => setEditing(true)}>編輯商品</button>
     </article>
   );
@@ -268,7 +275,7 @@ function ProductForm({ title, draft, photo, removePhoto, currentPhoto, onPhotoCh
         <PhotoPicker label="商品照片" current={currentPhoto} file={photo} remove={removePhoto} disabled={busy} onChange={onPhotoChange} />
         <label className="field wide"><span>商品說明</span><textarea rows={4} value={draft.description} onChange={(event) => onChange({ ...draft, description: event.target.value })} /></label>
       </div>
-      <div className="admin-option-row"><label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />上架商品</label><label className="switch-field"><input type="checkbox" checked={draft.can_ship} onChange={(event) => onChange({ ...draft, can_ship: event.target.checked, allowed_shipping_channels: event.target.checked ? draft.allowed_shipping_channels : [] })} />開放配送</label></div>
+      <div className="admin-option-row"><label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />啟用商品</label><label className="switch-field"><input type="checkbox" checked={draft.daily_sales_enabled} onChange={(event) => onChange({ ...draft, daily_sales_enabled: event.target.checked })} />上架日常選購</label><label className="switch-field"><input type="checkbox" checked={draft.can_ship} onChange={(event) => onChange({ ...draft, can_ship: event.target.checked, allowed_shipping_channels: event.target.checked ? draft.allowed_shipping_channels : [] })} />開放配送</label></div>
       {draft.can_ship && <div className="shipping-config"><label className="field"><span>物流溫層</span><select value={draft.shipping_temperature} onChange={(event) => onChange({ ...draft, shipping_temperature: event.target.value as ShippingTemperature })}><option value="ambient">常溫</option><option value="chilled">冷藏</option><option value="frozen">冷凍</option></select></label><div className="channel-checks">{shippingChannels.map((channel) => <label key={channel} className="check-field"><input type="checkbox" checked={draft.allowed_shipping_channels.includes(channel)} onChange={() => toggleChannel(channel)} />{shippingChannelLabels[channel]}</label>)}</div></div>}
       {draft.member_price > draft.nonmember_price && <p className="form-error">社員價不可高於一般價</p>}
       {draft.can_ship && draft.allowed_shipping_channels.length === 0 && <p className="form-error">配送商品至少選擇一個物流通路</p>}

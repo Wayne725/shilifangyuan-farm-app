@@ -43,6 +43,7 @@ export interface Product {
   shipping_temperature?: ShippingTemperature | null;
   allowed_shipping_channels: ShippingChannel[];
   is_active: boolean;
+  daily_sales_enabled: boolean;
 }
 
 export type FulfillmentMethod =
