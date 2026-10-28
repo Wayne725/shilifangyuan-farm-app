@@ -141,9 +141,12 @@ for (const width of [882, 390]) {
     assert.equal(await page.getByRole('navigation', { name: '訂單營運子頁面', exact: true }).getByRole('link', { name: '訂單彙整', exact: true }).getAttribute('aria-current'), 'page');
     assert.equal(state.summaries[0].query.sales_channel, 'all');
     assert.equal(state.summaries[0].query.status, 'active');
+    assert.equal(state.summaries[0].query.order_category, 'meal');
     await verify_summary(page, state.summaries.at(-1).report.summary);
 
-    const summary = page.getByRole('region', { name: '訂單品項匯總', exact: true });
+    const summary = page.getByRole('region', { name: '訂單品項彙整', exact: true });
+    await summary.getByRole('button', { name: '一般訂單', exact: true }).click();
+    await wait_for_summary(page);
     const before_draft = state.summaries.length;
     await summary.getByLabel('下單日期起（台灣）', { exact: true }).fill('2030-01-01');
     await summary.getByLabel('下單日期迄（台灣）', { exact: true }).fill('2030-01-03');
@@ -155,7 +158,7 @@ for (const width of [882, 390]) {
     await summary.getByRole('button', { name: '查詢', exact: true }).click();
     await page.getByRole('status').getByText('共 27 種品項', { exact: true }).waitFor();
     await wait_for_summary(page);
-    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', sales_channel: 'regular', order_category: 'all', status: 'paid', category: category_name, search: '隔離白米', limit: '25', offset: '0' };
+    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', sales_channel: 'regular', order_category: 'general', status: 'paid', category: category_name, search: '隔離白米', limit: '25', offset: '0' };
     assert.deepEqual(state.summaries.at(-1).query, expected_query);
     const expected_summary = { order_count: 9, quantity: 54, product_count: 27 };
     await verify_summary(page, expected_summary);
@@ -203,7 +206,9 @@ test('直接開啟匯總不讀取訂單清單，通路與狀態查詢及日期�
   await page.goto(`${base}/admin?section=summary`);
   await wait_for_summary(page);
   assert.equal(state.reads.includes('/v1/admin/order-search'), false);
-  const summary = page.getByRole('region', { name: '訂單品項匯總', exact: true });
+  const summary = page.getByRole('region', { name: '訂單品項彙整', exact: true });
+  await page.getByRole('group', { name: '訂單分類', exact: true }).getByRole('button', { name: '一般訂單', exact: true }).click();
+  await wait_for_summary(page);
   const requests = state.summaries.length;
   await summary.getByLabel('下單日期起（台灣）', { exact: true }).fill('2030-02-01');
   await summary.getByRole('button', { name: '查詢', exact: true }).click();
@@ -233,7 +238,7 @@ test('匯總服務失敗不顯示假零筆，重新連線恢復，空查詢顯�
   await page.getByRole('button', { name: '重新連線', exact: true }).click();
   await wait_for_summary(page);
   await verify_summary(page, state.summaries.at(-1).report.summary);
-  const summary = page.getByRole('region', { name: '訂單品項匯總', exact: true });
+  const summary = page.getByRole('region', { name: '訂單品項彙整', exact: true });
   await summary.getByLabel('品項名稱', { exact: true }).fill('找不到的隔離品項');
   await summary.getByRole('button', { name: '查詢', exact: true }).click();
   await page.getByRole('heading', { name: '沒有符合條件的訂單', exact: true }).waitFor();
@@ -253,7 +258,7 @@ for (const role of ['guest', 'customer']) {
       return signed_in ? account?.tagName === 'A' : account?.tagName === 'BUTTON' && !account.disabled;
     }, role !== 'guest');
     await page.getByRole('heading', { name: '管理工作台', level: 1, exact: true }).waitFor();
-    assert.equal(await page.getByRole('region', { name: '訂單品項匯總', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('region', { name: '訂單品項彙整', exact: true }).count(), 0);
     assert.equal(state.reads.some((path) => path.startsWith('/v1/admin/')), false);
     assert.deepEqual(state.summaries, []);
     await verify_read_only(page, state);
@@ -265,9 +270,12 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   const { page, state } = await fixture(t, { width: 390 });
   await page.goto(`${base}/admin?section=summary`);
   await wait_for_summary(page);
-  const summary = page.getByRole('region', { name: '訂單品項匯總', exact: true });
-  const categories = summary.getByRole('combobox', { name: '訂單分類', exact: true });
-  await categories.selectOption('general');
+  const summary = page.getByRole('region', { name: '訂單品項彙整', exact: true });
+  const categories = summary.getByRole('group', { name: '訂單分類', exact: true });
+  assert.equal(await categories.getByRole('button').count(), 2);
+  assert.equal(await categories.getByRole('button', { name: '便當訂單', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await summary.getByRole('combobox', { name: '訂單分類', exact: true }).count(), 0);
+  await categories.getByRole('button', { name: '一般訂單', exact: true }).click();
   await wait_for_summary(page);
   await verify_summary(page, { order_count: 10, quantity: 61, product_count: 28 });
   assert.equal(await summary.getByRole('combobox', { name: '銷售類型', exact: true }).locator('option[value="meal_preorder"]').count(), 0);
@@ -275,7 +283,7 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '25');
-  await categories.selectOption('meal');
+  await categories.getByRole('button', { name: '便當訂單', exact: true }).press('Enter');
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '0');
   assert.equal(state.summaries.at(-1).query.order_category, 'meal');
