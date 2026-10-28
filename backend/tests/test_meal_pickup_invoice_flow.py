@@ -117,6 +117,7 @@ async def test_production_rejects_new_demo_meal_transactions(pickup_context, eve
 @pytest.mark.parametrize("invoice_status", [InvoiceStatus.PENDING, InvoiceStatus.ISSUED, InvoiceStatus.FAILED])
 async def test_invoice_details_are_independent_of_paid_pickup(pickup_context, invoice_status):
     client, session, buyer, other, admin, event, order = pickup_context
+    event.title = "第 9384 場取餐驗收"
     order.invoice_status = invoice_status
     if invoice_status == InvoiceStatus.ISSUED:
         order.invoice = Invoice(
@@ -138,7 +139,10 @@ async def test_invoice_details_are_independent_of_paid_pickup(pickup_context, in
     assert (detail.json()["invoice_date"] is not None) == (invoice_status == InvoiceStatus.ISSUED)
     assert "private-invoice" not in detail.text
     assert "not-for-customer" not in detail.text
-    assert "9384" not in detail.text
+    assert detail.json()["meal_event_title"] == "第 9384 場取餐驗收"
+    assert '"random_number"' not in detail.text
+    assert '"provider_response"' not in detail.text
+    assert '"9384"' not in detail.text
     credential = await client.get(f"/v1/meal-orders/{order.id}/pickup-credential", headers=auth_headers(buyer))
     assert credential.status_code == 200
     other_credential = await client.get(f"/v1/meal-orders/{order.id}/pickup-credential", headers=auth_headers(other))
