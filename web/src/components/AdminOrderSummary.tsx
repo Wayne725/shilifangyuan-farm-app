@@ -12,7 +12,6 @@ import {
   type OrderSummaryReport,
 } from "../lib/order-summary";
 import { channelMatchesCategory, orderCategoryLabels } from "../lib/order-category";
-import { OrderCategoryFilter } from "./OrderCategoryFilter";
 import { DataState, LoadingLines } from "./Shared";
 import "./AdminOrderSummary.css";
 
@@ -24,7 +23,7 @@ export function AdminOrderSummary() {
   const { user } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const [draft, setDraft] = useState<OrderSummaryFilters>(() => ({
-    ...financePeriodPreset("month"), salesChannel: "all", orderCategory: "all", status: "active", category: "", search: "",
+    ...financePeriodPreset("month"), salesChannel: "all", orderCategory: "meal", status: "active", category: "", search: "",
   }));
   const [filters, setFilters] = useState(draft);
   const [preset, setPreset] = useState<keyof typeof periodLabels | "">("month");
@@ -62,10 +61,16 @@ export function AdminOrderSummary() {
   const dateError = formError ? "order-summary-date-error" : undefined;
 
   return <section className="admin-order-summary" aria-label="訂單品項彙整">
-    <OrderCategoryFilter value={filters.orderCategory} onChange={(orderCategory) => {
-      const next = { ...filters, orderCategory, salesChannel: "all" as const, category: "" };
-      setDraft(next); setFilters(next); setOffset(0); setFormError("");
-    }} />
+    <div className="tab-list order-summary-category-tabs" role="group" aria-label="訂單分類">
+      {(["meal", "general"] as const).map((orderCategory) => <button key={orderCategory} type="button"
+        aria-pressed={filters.orderCategory === orderCategory}
+        data-state={filters.orderCategory === orderCategory ? "active" : "inactive"}
+        onClick={() => {
+          if (filters.orderCategory === orderCategory) return;
+          const next = { ...filters, orderCategory, salesChannel: "all" as const, category: "" };
+          setDraft(next); setFilters(next); setOffset(0); setFormError("");
+        }}>{orderCategoryLabels[orderCategory]}</button>)}
+    </div>
     <div className="admin-order-summary-presets" role="group" aria-label="下單日期快速選擇">
       {(Object.keys(periodLabels) as Array<keyof typeof periodLabels>).map((mode) => <button key={mode} className="button button-quiet" type="button" aria-pressed={preset === mode} onClick={() => applyPreset(mode)}>{periodLabels[mode]}</button>)}
     </div>
