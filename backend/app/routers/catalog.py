@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import hmac
-import re
-import unicodedata
 from typing import List, Optional
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -35,27 +32,10 @@ from ..schemas import (
     ProductUpdate,
 )
 from ..seed import reset_demo_data
+from ..product_creation import create_product_record, is_slug_conflict, make_product_slug
 
 
 catalog_router = APIRouter(tags=["catalog"])
-
-
-def make_product_slug(name: str) -> str:
-    ascii_name = (
-        unicodedata.normalize("NFKD", name)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-        .lower()
-    )
-    base = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-") or "product"
-    return f"{base[:67]}-{uuid4().hex[:12]}"
-
-
-def is_slug_conflict(exc: IntegrityError) -> bool:
-    message = str(exc.orig).lower()
-    return "slug" in message and (
-        "unique" in message or "duplicate" in message
-    )
 
 
 def bundle_read(bundle: GroupBundle) -> BundleRead:
@@ -119,31 +99,10 @@ async def create_product(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> Product:
-    values = body.model_dump(mode="json")
-    if body.supplier_id is not None:
-        supplier = await session.scalar(
-            select(Supplier).where(
-                Supplier.id == body.supplier_id,
-                Supplier.is_active.is_(True),
-            )
-        )
-        if supplier is None:
-            raise HTTPException(status_code=422, detail="找不到已啟用的供應者")
     admin_id = admin.id
     for _attempt in range(3):
-        product = Product(slug=make_product_slug(body.name), **values)
-        session.add(product)
         try:
-            await session.flush()
-            session.add(
-                AdminAudit(
-                    actor_id=admin_id,
-                    action="product.create",
-                    aggregate_type="product",
-                    aggregate_id=product.id,
-                    data={"name": product.name},
-                )
-            )
+            product = await create_product_record(session, body, admin_id, slug=make_product_slug(body.name))
             await session.commit()
         except IntegrityError as exc:
             await session.rollback()

@@ -6,6 +6,7 @@ from typing import List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,6 +16,7 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
+from ..product_creation import create_product_record
 from ..platform_settings import require_accepting_orders
 from ..config import Settings, get_settings
 from ..sales_scope import require_sales_scope_allows
@@ -248,32 +250,45 @@ async def create_campaign(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> CampaignRead:
-    await target_order_snapshot(session, body.target_type, body.target_id)
     if body.source_proposal_id is not None:
         raise HTTPException(
             status_code=422,
             detail="由投票轉團請使用提案的 convert API",
         )
-    campaign = GroupCampaign(
-        **body.model_dump(),
-        created_by_id=admin.id,
-    )
     try:
-        validate_campaign_schedule(campaign, datetime.now(timezone.utc))
+        validate_campaign_schedule(body, datetime.now(timezone.utc))
     except DomainError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    session.add(campaign)
-    await session.flush()
-    session.add(
-        AdminAudit(
-            actor_id=admin.id,
-            action="campaign.create",
-            aggregate_type="group_campaign",
-            aggregate_id=campaign.id,
-            data={"title": campaign.title},
+    if body.new_product is None:
+        await target_order_snapshot(session, body.target_type, body.target_id)
+    try:
+        target_id = body.target_id
+        if body.new_product is not None:
+            product = await create_product_record(session, body.new_product, admin.id)
+            target_id = product.id
+        campaign = GroupCampaign(
+            **body.model_dump(exclude={"target_id", "new_product"}),
+            target_id=target_id,
+            created_by_id=admin.id,
         )
-    )
-    await session.commit()
+        session.add(campaign)
+        await session.flush()
+        session.add(
+            AdminAudit(
+                actor_id=admin.id,
+                action="campaign.create",
+                aggregate_type="group_campaign",
+                aggregate_id=campaign.id,
+                data={"title": campaign.title},
+            )
+        )
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="商品代碼或共同購買已存在，請重新確認") from exc
+    except Exception:
+        await session.rollback()
+        raise
     await session.refresh(campaign)
     return campaign_read(campaign)
 
@@ -335,7 +350,7 @@ async def update_campaign(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    candidate_dump = candidate.model_dump(exclude={"source_proposal_id"})
+    candidate_dump = candidate.model_dump(exclude={"source_proposal_id", "new_product"})
     fields_to_consider = set(updates)
     if "can_ship" in updates and not candidate.can_ship:
         fields_to_consider.update(
@@ -635,14 +650,14 @@ async def update_review_deadline(
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
     if campaign.decision_status in TERMINAL_DECISIONS:
-        raise HTTPException(status_code=409, detail="已完成決定的共同購買不可修改審核期限")
+        raise HTTPException(status_code=409, detail="已完成決定的共同購買不可修改管理員處理提醒日")
     previous_deadline = aware(campaign.confirmation_deadline) if campaign.confirmation_deadline else None
     if aware(campaign.updated_at) != body.expected_updated_at or previous_deadline != body.expected_confirmation_deadline:
         raise HTTPException(status_code=409, detail="審核時程已更新，請重新核對")
     start = body.estimated_pickup_start or aware(campaign.estimated_pickup_start)
     end = body.estimated_pickup_end or aware(campaign.estimated_pickup_end)
     if body.confirmation_deadline <= max(datetime.now(timezone.utc), aware(campaign.deadline)) or body.confirmation_deadline > start or end < start:
-        raise HTTPException(status_code=422, detail="審核期限須晚於現在與付款截止，且不晚於預估取貨開始；取貨結束不可早於開始")
+        raise HTTPException(status_code=422, detail="管理員處理提醒日須晚於現在與付款截止，且不晚於預估取貨開始；取貨結束不可早於開始")
     before = {"confirmation_deadline": previous_deadline.isoformat() if previous_deadline else None,
               "estimated_pickup_start": aware(campaign.estimated_pickup_start).isoformat(),
               "estimated_pickup_end": aware(campaign.estimated_pickup_end).isoformat()}

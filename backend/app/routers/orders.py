@@ -166,13 +166,15 @@ async def quote_products(
     invoice_buyer_type: InvoiceBuyerType = InvoiceBuyerType.PERSONAL,
 ) -> OrderQuoteRead:
     query = select(Product).where(
-        Product.id.in_(quantities.keys()), Product.is_active.is_(True)
+        Product.id.in_(quantities.keys()),
+        Product.is_active.is_(True),
+        Product.daily_sales_enabled.is_(True),
     )
     if lock:
         query = query.with_for_update()
     products = list(await session.scalars(query))
     if len(products) != len(quantities):
-        raise HTTPException(status_code=422, detail="購物車包含不存在的商品")
+        raise HTTPException(status_code=422, detail="購物車包含不存在或未開放日常選購的商品")
     lines: List[OrderQuoteLine] = []
     membership_type = membership_type_for_user(user)
     for product in sorted(products, key=lambda item: item.name):

@@ -23,6 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     text,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1064,6 +1065,7 @@ class Product(Base):
     )
     allowed_shipping_channels: Mapped[List[str]] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    daily_sales_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )

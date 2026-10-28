@@ -228,6 +228,7 @@ class ProductRead(ApiModel):
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
     is_active: bool
+    daily_sales_enabled: bool
 
 
 class ProductCreate(BaseModel):
@@ -247,6 +248,7 @@ class ProductCreate(BaseModel):
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
     is_active: bool = True
+    daily_sales_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_price_order(self) -> "ProductCreate":
@@ -282,6 +284,7 @@ class ProductUpdate(BaseModel):
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: Optional[List[ShippingChannel]] = None
     is_active: Optional[bool] = None
+    daily_sales_enabled: Optional[bool] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -403,10 +406,24 @@ class ProposalRead(ApiModel):
     created_at: datetime
 
 
+class CampaignProductCreate(ProductCreate):
+    is_active: Literal[True] = True
+    daily_sales_enabled: bool = False
+
+    @field_validator("name", "unit")
+    @classmethod
+    def require_nonblank_label(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("商品名稱與單位不可空白")
+        return value
+
+
 class CampaignCreate(BaseModel):
     source_proposal_id: Optional[str] = None
     target_type: TargetType
-    target_id: str
+    target_id: Optional[str] = Field(default=None, min_length=1)
+    new_product: Optional[CampaignProductCreate] = None
     title: str = Field(min_length=1, max_length=120)
     description: str = ""
     image_url: Optional[str] = None
@@ -422,6 +439,14 @@ class CampaignCreate(BaseModel):
     can_ship: bool = False
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "CampaignCreate":
+        if (self.target_id is None) == (self.new_product is None):
+            raise ValueError("請選擇既有商品或新增商品，不可同時指定")
+        if self.new_product is not None and self.target_type != TargetType.PRODUCT:
+            raise ValueError("只有單一商品可以直接新增商品")
+        return self
 
     @field_validator(
         "deadline", "confirmation_deadline", "estimated_pickup_start", "estimated_pickup_end"

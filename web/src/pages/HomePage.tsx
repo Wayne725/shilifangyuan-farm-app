@@ -21,7 +21,8 @@ export function HomePage() {
     queryKey: ["activities", user?.id],
     queryFn: () => apiFetch<Activity[]>("/v1/activities"),
   });
-  const heroProduct = products.data?.find((item) => item.image_url);
+  const dailyProducts = products.data?.filter((item) => item.is_active !== false && item.daily_sales_enabled !== false);
+  const heroProduct = dailyProducts?.find((item) => item.image_url);
 
   return (
     <>
@@ -114,11 +115,11 @@ export function HomePage() {
             onAction={() => products.refetch()}
           />
         )}
-        {products.data && products.data.length === 0 && (
+        {dailyProducts?.length === 0 && (
           <DataState title="尚未上架商品" detail="管理員完成商品建檔後會顯示在這裡。" />
         )}
         <div className="product-grid feature-products">
-          {products.data?.slice(0, 3).map((product) => (
+          {dailyProducts?.slice(0, 3).map((product) => (
             <ProductCard key={product.id} product={product} onAdd={addToCart} />
           ))}
         </div>
