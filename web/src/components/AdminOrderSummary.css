@@ -23,6 +23,7 @@
 .admin-order-summary-statuses dt { color: var(--ink-soft); }
 .admin-order-summary-statuses dd { margin: 0; font-variant-numeric: tabular-nums; }
 .admin-order-summary-breakdowns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; margin: 32px 0; }
+.admin-order-summary-breakdowns.single { grid-template-columns: 1fr; }
 .admin-order-summary-breakdowns > section, .admin-order-summary-products { min-width: 0; }
 .admin-order-summary h2 { margin: 0 0 16px; font-size: 1.25rem; }
 .admin-order-summary-products .admin-order-summary-result-heading h2 { margin: 0; }
@@ -37,6 +38,8 @@
 .admin-order-summary td:nth-last-child(-n+2), .admin-order-summary th:nth-last-child(-n+2) { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .admin-order-summary-product-table { min-width: 680px; }
 .admin-order-summary-product-table th[scope="row"] { min-width: 180px; }
+.admin-order-summary-product-table.compact { min-width: 0; }
+.admin-order-summary-product-table.compact th[scope="row"] { min-width: 0; overflow-wrap: anywhere; }
 .admin-order-summary .admin-pagination { gap: 12px; }
 .admin-order-summary .admin-pagination span { text-align: center; }
 

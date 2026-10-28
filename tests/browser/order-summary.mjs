@@ -152,21 +152,22 @@ for (const width of [882, 390]) {
     await summary.getByLabel('下單日期迄（台灣）', { exact: true }).fill('2030-01-03');
     await summary.getByRole('combobox', { name: '銷售類型', exact: true }).selectOption('regular');
     await summary.getByRole('combobox', { name: '訂單狀態', exact: true }).selectOption('paid');
-    await summary.getByRole('combobox', { name: '品類', exact: true }).selectOption(category_name);
+    assert.equal(await summary.getByRole('combobox', { name: '品類', exact: true }).count(), 0);
     await summary.getByLabel('品項名稱', { exact: true }).fill('  隔離白米  ');
     assert.equal(state.summaries.length, before_draft, '尚未送出篩選時不能查詢新條件');
     await summary.getByRole('button', { name: '查詢', exact: true }).click();
     await page.getByRole('status').getByText('共 27 種品項', { exact: true }).waitFor();
     await wait_for_summary(page);
-    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', sales_channel: 'regular', order_category: 'general', status: 'paid', category: category_name, search: '隔離白米', limit: '25', offset: '0' };
+    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', sales_channel: 'regular', order_category: 'general', status: 'paid', category: '', search: '隔離白米', limit: '25', offset: '0' };
     assert.deepEqual(state.summaries.at(-1).query, expected_query);
     const expected_summary = { order_count: 9, quantity: 54, product_count: 27 };
     await verify_summary(page, expected_summary);
     const products = page.getByRole('region', { name: '商品明細表格', exact: true });
     assert.equal(await products.locator('tbody tr').count(), 25);
     assert.equal(await products.getByRole('rowheader', { name: '隔離白米現場付款', exact: true }).count(), 0);
-    const category = page.getByRole('region', { name: '品類匯總表格', exact: true });
-    assert.deepEqual(await category.locator('tbody tr').allTextContents(), [`${category_name}954`]);
+    assert.equal(await page.getByRole('region', { name: '品類匯總表格', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('region', { name: '銷售類型匯總表格', exact: true }).count(), 0);
+    assert.deepEqual(await products.locator('thead th').allTextContents(), ['品項', '訂單數', '數量／單位']);
 
     const pagination = page.getByRole('navigation', { name: '商品明細分頁', exact: true });
     assert.equal(await pagination.getByRole('button', { name: '上一頁', exact: true }).isDisabled(), true);
@@ -177,7 +178,7 @@ for (const width of [882, 390]) {
     assert.equal(await products.locator('tbody tr').count(), 2);
     await verify_summary(page, expected_summary);
     assert.equal(await pagination.getByRole('button', { name: '下一頁', exact: true }).isDisabled(), true);
-    assert.equal(await summary.getByRole('combobox', { name: '品類', exact: true }).inputValue(), category_name);
+    assert.equal(await summary.getByRole('combobox', { name: '品類', exact: true }).count(), 0);
     await verify_read_only(page, state);
     await screenshot(page, `order-summary-${width}-standard.png`);
 
@@ -189,7 +190,7 @@ for (const width of [882, 390]) {
     const dimensions = await products.evaluate((region) => ({ width: region.clientWidth, content: region.scrollWidth, tabIndex: region.tabIndex, overflow: getComputedStyle(region).overflowX }));
     assert.equal(dimensions.tabIndex, 0);
     assert.equal(dimensions.overflow, 'auto');
-    if (width === 390) assert.ok(dimensions.content > dimensions.width, '手機商品表格需要保留可讀欄寬並獨立橫捲');
+    assert.equal(await products.locator('table').evaluate((table) => table.classList.contains('compact')), true);
     if (dimensions.content > dimensions.width) {
       await products.focus();
       await page.keyboard.press('ArrowRight');
@@ -287,6 +288,8 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '0');
   assert.equal(state.summaries.at(-1).query.order_category, 'meal');
+  assert.equal(await summary.getByRole('combobox', { name: '銷售類型', exact: true }).count(), 0);
+  assert.equal(await summary.getByRole('combobox', { name: '品類', exact: true }).count(), 0);
   await verify_summary(page, { order_count: 1, quantity: 4, product_count: 1 });
   await summary.getByLabel('品項名稱', { exact: true }).fill('白米');
   await summary.getByRole('button', { name: '查詢', exact: true }).click();
