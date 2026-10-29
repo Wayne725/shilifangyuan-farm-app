@@ -1,9 +1,13 @@
-import type { AuthResponse } from "./types";
+import type { AuthResponse, User } from "./types";
 import { fetchWithTimeout, RequestTimeoutError } from "./http";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 let accessToken: string | null = null;
+let currentSession: AuthResponse | null = null;
+let credentialRevision = 0;
+let identityRevision = 0;
 let refreshPromise: Promise<AuthResponse | null> | null = null;
+const sessionListeners = new Set<(user: User | null, identityChanged: boolean) => void>();
 
 if (typeof window !== "undefined") {
   localStorage.removeItem("slf_access_token");
@@ -24,12 +28,47 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+function identityKey(user?: User | null): string {
+  return user ? JSON.stringify([user.id, user.user_role, user.membership_type, user.membership_status]) : "anonymous";
+}
+
+function publishSession(session: AuthResponse | null): void {
+  const identityChanged = identityKey(currentSession?.user) !== identityKey(session?.user);
+  currentSession = session;
+  if (identityChanged) identityRevision += 1;
+  for (const listener of sessionListeners) listener(session?.user ?? null, identityChanged);
+}
+
+export function subscribeSession(listener: (user: User | null, identityChanged: boolean) => void): () => void {
+  sessionListeners.add(listener);
+  return () => { sessionListeners.delete(listener); };
+}
+
+export function updateSessionUser(user: User): void {
+  if (!currentSession || currentSession.user.id !== user.id) throw sessionChangedError();
+  publishSession({ ...currentSession, user });
+}
+
 export function saveSession(session: AuthResponse): void {
   accessToken = session.access_token;
+  credentialRevision += 1;
+  refreshPromise = null;
+  publishSession(session);
 }
 
 export function clearSession(): void {
   accessToken = null;
+  credentialRevision += 1;
+  refreshPromise = null;
+  publishSession(null);
+}
+
+function sessionChangedError(): ApiError {
+  return new ApiError(409, "登入身分已變更，請確認目前帳號後重新操作。");
+}
+
+function requireSameIdentity(revision: number): void {
+  if (revision !== identityRevision) throw sessionChangedError();
 }
 
 function apiUrl(path: string): string {
@@ -72,30 +111,38 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
 
 export async function restoreSession(): Promise<AuthResponse | null> {
   if (refreshPromise) return refreshPromise;
-  refreshPromise = (async () => {
+  const startedAt = credentialRevision;
+  const restoring = (async () => {
     try {
       const response = await requestApi("/v1/auth/refresh", {
         method: "POST",
       });
+      if (startedAt !== credentialRevision) return currentSession;
       if (response.status === 401) {
         clearSession();
         return null;
       }
       if (!response.ok) throw await errorFromResponse(response);
       const session = (await response.json()) as AuthResponse;
+      if (startedAt !== credentialRevision) return currentSession;
       saveSession(session);
       return session;
+    } catch (error) {
+      if (startedAt !== credentialRevision) return currentSession;
+      throw error;
     } finally {
-      refreshPromise = null;
+      if (startedAt === credentialRevision) refreshPromise = null;
     }
   })();
-  return refreshPromise;
+  refreshPromise = restoring;
+  return restoring;
 }
 
-export async function apiFetch<T>(
+async function authenticatedResponse(
   path: string,
   init: RequestInit = {},
-): Promise<T> {
+): Promise<{ response: Response; identity: number }> {
+  const identity = identityRevision;
   const headers = new Headers(init.headers);
   const token = getAccessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -103,11 +150,13 @@ export async function apiFetch<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const request = () => requestApi(path, {
-    ...init,
-    headers,
-  });
+  let requestedCredentials = credentialRevision;
+  const request = () => {
+    requestedCredentials = credentialRevision;
+    return requestApi(path, { ...init, headers });
+  };
   let response = await request();
+  requireSameIdentity(identity);
   const cannotRefresh = new Set([
     "/v1/auth/login",
     "/v1/auth/refresh",
@@ -123,31 +172,38 @@ export async function apiFetch<T>(
     "/v1/auth/line/pending",
   ]);
   if (response.status === 401 && !cannotRefresh.has(path)) {
-    const restored = await restoreSession();
-    if (restored) {
-      headers.set("Authorization", `Bearer ${restored.access_token}`);
+    if (token === getAccessToken()) await restoreSession();
+    requireSameIdentity(identity);
+    const refreshedToken = getAccessToken();
+    if (refreshedToken) {
+      headers.set("Authorization", `Bearer ${refreshedToken}`);
       response = await request();
+      requireSameIdentity(identity);
     }
   }
   if (!response.ok) {
-    if (response.status === 401) clearSession();
+    if (response.status === 401 && !cannotRefresh.has(path) && requestedCredentials === credentialRevision) clearSession();
     throw await errorFromResponse(response);
   }
+  return { response, identity };
+}
+
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const { response, identity } = await authenticatedResponse(path, init);
   if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  const result = await response.json() as T;
+  requireSameIdentity(identity);
+  return result;
 }
 
 export async function fetchApiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
-  const request = () => {
-    const headers = new Headers();
-    const token = getAccessToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-    return requestApi(path, { headers, signal });
-  };
-  let response = await request();
-  if (response.status === 401 && await restoreSession()) response = await request();
-  if (!response.ok) throw await errorFromResponse(response);
-  return response.blob();
+  const { response, identity } = await authenticatedResponse(path, { signal });
+  const blob = await response.blob();
+  requireSameIdentity(identity);
+  return blob;
 }
 
 export async function downloadApiFile(path: string, filename: string): Promise<void> {

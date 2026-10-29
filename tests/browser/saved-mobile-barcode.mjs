@@ -209,10 +209,15 @@ test('舊分頁過期後 refresh 到另一帳號，保存仍綁原帳號且拒�
   await barcodeInput().fill('/NEW1234');
   await storageOption(page).check();
   await pay.click();
-  await page.getByText('登入帳號已變更，請重新整理後再試', { exact: true }).waitFor();
-  assert.deepEqual(state.owners, ['buyer-a', 'buyer-a']);
+  await page.waitForFunction(() => document.querySelector('a[aria-label="會員中心：buyer-b"]'));
+  await barcodeInput().waitFor();
+  assert.deepEqual(state.owners, ['buyer-a']);
   assert.equal(state.user.id, 'buyer-b');
   assert.equal(state.user.saved_mobile_barcode, '/BBB1234');
+  assert.equal(await barcodeInput().inputValue(), '/BBB1234');
+  assert.equal(await page.getByRole('textbox', { name: '發票通知 Email', exact: true }).inputValue(), 'buyer-b@example.test');
+  assert.equal(await storageOption(page).isChecked(), false);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), [{ product, quantity: 1 }]);
   assert.deepEqual(state.writes, []);
 });
 

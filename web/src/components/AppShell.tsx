@@ -27,7 +27,7 @@ const navItems = [
 
 export function AppShell() {
   const { itemCount } = useCommerce();
-  const { user, isAuthReady, sessionError, retrySession, openLogin, logout } = useAuth();
+  const { user, isAuthReady, sessionError, sessionScope, retrySession, openLogin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const readingMenu = useRef<HTMLDetailsElement>(null);
@@ -199,7 +199,7 @@ export function AppShell() {
             <p>目前尚未判定為登出，請重試連線，不需要立即重新輸入帳號密碼。</p>
             <button className="button button-primary" type="button" onClick={retrySession}>重試連線</button>
           </section>
-        ) : <Outlet />}
+        ) : <Outlet key={sessionScope} />}
       </main>
 
       <footer className="site-footer">
