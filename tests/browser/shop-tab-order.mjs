@@ -12,9 +12,9 @@ if (!['127.0.0.1', 'localhost'].includes(testUrl.hostname)
 const base = testUrl.origin;
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const tabs = [
-  { name: '便當預購', heading: '選取餐時間' },
-  { name: '共同購買', heading: '把需求聚在一起' },
-  { name: '日常選品', heading: '合作社選品' },
+  { name: '便當預購', heading: '選取餐時間', value: 'meals' },
+  { name: '共同購買', heading: '把需求聚在一起', value: 'groups' },
+  { name: '日常選品', heading: '合作社選品', value: 'products' },
 ];
 
 for (const width of [1440, 390]) {
@@ -67,8 +67,9 @@ for (const width of [1440, 390]) {
       assert.ok(positions[index].x >= positions[index - 1].x + positions[index - 1].width - 1);
       assert.ok(Math.abs(positions[index].y - positions[0].y) <= 1);
     }
-    for (const { name, heading } of tabs) {
+    for (const { name, heading, value } of tabs) {
       await tabList.getByRole('tab', { name, exact: true }).click();
+      await page.waitForURL((url) => (url.searchParams.get('tab') || 'meals') === value);
       assert.equal(await tabList.getByRole('tab', { selected: true }).innerText(), name);
       const panel = page.getByRole('tabpanel', { name, exact: true });
       await panel.getByRole('heading', { name: heading, exact: true }).waitFor();
@@ -77,10 +78,16 @@ for (const width of [1440, 390]) {
     }
     await page.reload();
     await tabList.waitFor();
-    assert.equal(await selected.innerText(), '便當預購');
-    await page.getByRole('tabpanel', { name: '便當預購', exact: true })
-      .getByRole('heading', { name: '選取餐時間', exact: true }).waitFor();
+    assert.equal(await selected.innerText(), '日常選品');
+    await page.getByRole('tabpanel', { name: '日常選品', exact: true })
+      .getByRole('heading', { name: '合作社選品', exact: true }).waitFor();
     assert.equal(await page.getByRole('tabpanel').count(), 1);
+    await page.goBack();
+    await page.getByRole('tabpanel', { name: '共同購買', exact: true }).waitFor();
+    await page.goto(`${base}/shop?tab=groups`);
+    assert.equal(await selected.innerText(), '共同購買');
+    await page.goto(`${base}/shop?tab=unknown`);
+    assert.equal(await selected.innerText(), '便當預購');
     assert.deepEqual(unknownApi, []);
     assert.deepEqual(mutations, []);
     assert.equal(new URL(page.url()).pathname, '/shop');

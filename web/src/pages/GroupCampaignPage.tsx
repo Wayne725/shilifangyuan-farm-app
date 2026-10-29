@@ -29,6 +29,7 @@ import {
 import { campaignAccessDenied, campaignDateTime, campaignOrderBlockReason, campaignStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import type { GroupCampaign, PickupLocation, ShippingChannel } from "../lib/types";
+import "../styles/fulfillment-methods.css";
 
 interface GroupQuote {
   membership_type: string;
@@ -144,6 +145,7 @@ export function GroupCampaignPage() {
   }
 
   const item = campaign.data;
+  const shippingAvailable = shippingEnabled && item.can_ship;
   const currentQuote = !orderBlockReason && !quote.isError ? quote.data : undefined;
   const shippingReady = Boolean(shippingChannel && recipientName.trim() && recipientPhone.trim() && shippingAddress.trim());
   const submitReady = Boolean(
@@ -154,7 +156,7 @@ export function GroupCampaignPage() {
 
   return (
     <section className="offer-page">
-      <Link className="text-link" to="/shop"><ArrowLeft size={17} />回到共同購買</Link>
+      <Link className="text-link" to="/shop" search={{ tab: "groups" }}><ArrowLeft size={17} />回到共同購買</Link>
       <div className="offer-hero">
         <div className="offer-image">
           <img src={resolveAsset(item.image_url)} alt={item.title} onError={replaceBrokenAsset} />
@@ -187,13 +189,23 @@ export function GroupCampaignPage() {
 
           <div className="checkout-step-title pickup-title"><span>02</span><div><small>FULFILLMENT</small><h2>取貨方式</h2></div></div>
           <div className="checkout-fulfillment">
-            <label className="field">
-              取貨方式
-              <select value={method} disabled={checkout.isPending} onChange={(event) => setMethod(event.target.value as "pickup" | "shipping")}>
-                <option value="pickup">合作社取貨</option>
-                {(shippingEnabled || method === "shipping") && <option value="shipping" disabled={!shippingEnabled || !item.can_ship}>宅配／超商取貨{!shippingEnabled ? "（目前未開放配送）" : !item.can_ship ? "（此共同購買未開放配送）" : `（${temperatureLabels[item.shipping_temperature || "ambient"]}）`}</option>}
-              </select>
-            </label>
+            {shippingAvailable || method === "shipping" ? (
+              <fieldset className="fulfillment-method-choice" disabled={checkout.isPending}>
+                <legend>取貨方式</legend>
+                <div className="fulfillment-method-options">
+                  <label className={`fulfillment-method-option${method === "pickup" ? " selected" : ""}`}>
+                    <input type="radio" name="group_fulfillment_method" value="pickup" checked={method === "pickup"} onChange={() => setMethod("pickup")} />
+                    <span>合作社取貨</span>
+                  </label>
+                  <label className={`fulfillment-method-option${method === "shipping" ? " selected" : ""}${!shippingAvailable ? " unavailable" : ""}`}>
+                    <input type="radio" name="group_fulfillment_method" value="shipping" checked={method === "shipping"} disabled={!shippingAvailable} onChange={() => setMethod("shipping")} />
+                    <span>宅配／超商取貨{!shippingEnabled ? "（目前未開放配送）" : !item.can_ship ? "（此共同購買未開放配送）" : `（${temperatureLabels[item.shipping_temperature || "ambient"]}）`}</span>
+                  </label>
+                </div>
+              </fieldset>
+            ) : (
+              <dl className="fulfillment-method-summary"><dt>取貨方式</dt><dd>合作社取貨</dd></dl>
+            )}
             {method === "pickup" && <label className="field">
               取貨地點
               <select value={pickupLocationId} required disabled={checkout.isPending || locations.isPending || locations.isError || !locations.data?.length} onChange={(event) => setPickupLocationId(event.target.value)}>

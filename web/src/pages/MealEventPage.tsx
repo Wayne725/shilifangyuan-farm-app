@@ -285,7 +285,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
 
   return (
     <section className="offer-page meal-offer-page">
-      <Link className="text-link" to="/shop"><ArrowLeft size={17} />回到便當預購</Link>
+      <Link className="text-link" to="/shop" search={{ tab: "meals" }}><ArrowLeft size={17} />回到便當預購</Link>
       <div className="offer-hero meal-offer-hero">
         <div className="offer-copy">
           <p className="eyebrow">MEAL PREORDER / 便當預訂</p>
@@ -394,7 +394,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             {confirmedQuote && <InvoiceTaxSummary items={confirmedQuote.items} memberTaxExempt={confirmedQuote.member_tax_exempt} taxAmount={confirmedQuote.tax_amount} />}
           </dl>
           <section className="meal-pickup-settings" aria-labelledby="meal-pickup-heading">
-            <div className="meal-pickup-heading"><h3 id="meal-pickup-heading">取餐安排</h3><Link className="text-link" to="/shop">更換取餐日期</Link></div>
+            <div className="meal-pickup-heading"><h3 id="meal-pickup-heading">取餐安排</h3><Link className="text-link" to="/shop" search={{ tab: "meals" }}>更換取餐日期</Link></div>
             <p className="meal-pickup-date"><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}</strong></p>
             <label className="field"><span>預計取餐時間（台灣時間）</span>
               <select value={pickupReady ? pickupAt : ""} required disabled={!orderingOpen || checkout.isPending || !pickupOptions.length} onChange={(event) => { const value = event.target.value; setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: value })); void navigate({ search: { pickup_at: value }, replace: true }); }}>

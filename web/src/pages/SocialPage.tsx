@@ -73,7 +73,7 @@ export function SocialPage() {
           <p>
             {membership.data?.membership_type === "trainee"
               ? "完成線下流程並由管理員轉正後，即可使用完整社務功能。"
-              : "填寫入社資料、送出申請並完成款項後，合作社會接續審核。"}
+              : "填妥基本資料後，可送出申請並查看處理進度。"}
           </p>
           <Link className="button button-system" to="/membership">查看入社資料</Link>
         </section>

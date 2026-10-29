@@ -40,6 +40,7 @@ import type {
   ShippingChannel,
   ShippingRate,
 } from "../lib/types";
+import "../styles/fulfillment-methods.css";
 
 type CheckoutMethod = Extract<FulfillmentMethod, "cooperative_pickup"> | "shipping";
 const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
@@ -72,6 +73,7 @@ export function CheckoutPage() {
     || (checkoutMethod === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
   const itemKey = items.map((item) => `${item.product_id}:${item.quantity}`).join("|");
   const eligibility = useMemo(() => shippingEligibility(cart), [cart]);
+  const shippingAvailable = shippingEnabled && eligibility.blockers.length === 0;
 
   const locations = useQuery({
     queryKey: ["pickup-locations"],
@@ -191,7 +193,7 @@ export function CheckoutPage() {
   return (
     <section className="checkout-page">
       <div className="checkout-heading">
-        <Link className="text-link" to="/shop">
+        <Link className="text-link" to="/shop" search={{ tab: "products" }}>
           <ArrowLeft size={17} weight="light" />
           回到生活消費
         </Link>
@@ -236,16 +238,23 @@ export function CheckoutPage() {
               <div><small>FULFILLMENT</small><h2>選擇取貨方式</h2></div>
             </div>
             <div className="checkout-fulfillment">
-              <label className="field">
-                取貨方式
-                <select
-                  value={checkoutMethod}
-                  onChange={(event) => setCheckoutMethod(event.target.value as CheckoutMethod)}
-                >
-                  <option value="cooperative_pickup">合作社取貨</option>
-                  {(shippingEnabled || checkoutMethod === "shipping") && <option value="shipping" disabled={!shippingEnabled || Boolean(eligibility.blockers.length)}>宅配／超商取貨</option>}
-                </select>
-              </label>
+              {shippingAvailable || checkoutMethod === "shipping" ? (
+                <fieldset className="fulfillment-method-choice" disabled={createOrder.isPending}>
+                  <legend>取貨方式</legend>
+                  <div className="fulfillment-method-options">
+                    <label className={`fulfillment-method-option${checkoutMethod === "cooperative_pickup" ? " selected" : ""}`}>
+                      <input type="radio" name="checkout_fulfillment_method" value="cooperative_pickup" checked={checkoutMethod === "cooperative_pickup"} onChange={() => setCheckoutMethod("cooperative_pickup")} />
+                      <span>合作社取貨</span>
+                    </label>
+                    <label className={`fulfillment-method-option${checkoutMethod === "shipping" ? " selected" : ""}${!shippingAvailable ? " unavailable" : ""}`}>
+                      <input type="radio" name="checkout_fulfillment_method" value="shipping" checked={checkoutMethod === "shipping"} disabled={!shippingAvailable} onChange={() => setCheckoutMethod("shipping")} />
+                      <span>宅配／超商取貨</span>
+                    </label>
+                  </div>
+                </fieldset>
+              ) : (
+                <dl className="fulfillment-method-summary"><dt>取貨方式</dt><dd>合作社取貨</dd></dl>
+              )}
               {checkoutMethod === "cooperative_pickup" && (
                 <label className="field">
                   取貨地點

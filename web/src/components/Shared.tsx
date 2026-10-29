@@ -14,7 +14,7 @@ export function SectionHeading({
   eyebrow: string;
   title: string;
   description?: string;
-  action?: { label: string; to: "/" | "/shop" | "/social" | "/activities" | "/checkout" | "/admin" };
+  action?: { label: string; to: "/" | "/shop" | "/social" | "/activities" | "/checkout" | "/admin"; search?: { tab: "meals" | "groups" | "products" } };
 }) {
   return (
     <div className="section-heading">
@@ -24,7 +24,7 @@ export function SectionHeading({
         {description && <p className="section-description">{description}</p>}
       </div>
       {action && (
-        <Link className="text-link" to={action.to}>
+        <Link className="text-link" to={action.to} search={action.search}>
           {action.label}
           <ArrowRight size={18} weight="light" />
         </Link>

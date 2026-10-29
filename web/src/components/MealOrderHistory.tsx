@@ -53,11 +53,11 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
 
 
   if (!isAuthReady) return <section className="orders-page meal-orders-page" aria-label="正在恢復登入"><LoadingLines count={3} /></section>;
-  if (!user) return <section className="account-gate meal-orders-page"><BowlFood size={45} weight="light" /><h1>我的便當訂單</h1><p>登入後可查看餐點明細、付款狀態與取餐碼。</p><button className="button button-primary" type="button" onClick={openLogin}>登入查看訂單</button><Link className="text-link" to="/shop">先查看明天的餐點</Link></section>;
+  if (!user) return <section className="account-gate meal-orders-page"><BowlFood size={45} weight="light" /><h1>我的便當訂單</h1><p>登入後可查看餐點明細、付款狀態與取餐碼。</p><button className="button button-primary" type="button" onClick={openLogin}>登入查看訂單</button><Link className="text-link" to="/shop" search={{ tab: "meals" }}>先查看明天的餐點</Link></section>;
 
   return (
     <section className={embedded ? "meal-orders-embedded" : "orders-page meal-orders-page"}>
-      {!embedded && <><Link className="text-link" to="/shop"><ArrowLeft size={17} />回到便當預訂</Link>
+      {!embedded && <><Link className="text-link" to="/shop" search={{ tab: "meals" }}><ArrowLeft size={17} />回到便當預訂</Link>
       <header className="workspace-heading"><div><h1>餐點訂單</h1></div><Link className="text-link" to="/orders">訂單中心</Link></header></>}
       <OrderSearch query={query} payment={payment} onQuery={setQuery} onPayment={setPayment} count={visibleOrders.length} />
       {orders.data && orders.data.length > 0 && visibleOrders.length === 0 && <DataState title="沒有符合條件的餐點訂單" detail="請調整關鍵字或付款狀態。" />}
@@ -81,7 +81,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} taxAmount={selected.tax_amount} />
       <p className="meal-order-created-at">下單時間：{formatDateTime(selected.created_at)}</p>
       {pay.isError && <p className="form-error">{pay.error.message}</p>}<OrderCancellationContact /></article> : <DataState title="找不到這筆便當訂單" detail="請從左方或上方的訂單清單選擇一筆訂單。" />}</div>}
-      <div className="orders-footnote"><Link className="button button-quiet" to="/shop">我要訂餐</Link></div>
+      <div className="orders-footnote"><Link className="button button-quiet" to="/shop" search={{ tab: "meals" }}>我要訂餐</Link></div>
     </section>
   );
 }

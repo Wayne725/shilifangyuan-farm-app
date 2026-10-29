@@ -2,7 +2,7 @@ import { StorefrontClosed, useStorefrontStatus } from "../components/StorefrontS
 import * as Tabs from "@radix-ui/react-tabs";
 import { ArrowRight, BowlFood, CalendarBlank, Package, UsersThree } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
@@ -15,7 +15,9 @@ import type { GroupCampaign, MealEvent, Product } from "../lib/types";
 export function ShopPage() {
   const platform = useStorefrontStatus();
   const { addToCart, itemCount } = useCommerce();
-  const [activeTab, setActiveTab] = useState("meals");
+  const { tab } = useSearch({ from: "/shop" });
+  const navigate = useNavigate({ from: "/shop" });
+  const activeTab = tab || "meals";
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
@@ -51,7 +53,11 @@ export function ShopPage() {
         {activeTab === "meals" && <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link></nav>}
       </section>
 
-      <Tabs.Root className="market-tabs" value={activeTab} onValueChange={setActiveTab}>
+      <Tabs.Root className="market-tabs" value={activeTab} onValueChange={(next) => {
+        if (next === "meals" || next === "groups" || next === "products") {
+          void navigate({ search: { tab: next }, resetScroll: false });
+        }
+      }}>
         <div className="tab-list market-navigation">
           <Tabs.List className="market-type-tabs" aria-label="消費類型">
             <Tabs.Trigger value="meals">

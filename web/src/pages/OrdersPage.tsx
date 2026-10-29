@@ -358,7 +358,7 @@ export function OrdersPage() {
         <Clock size={18} weight="light" />
         <span>付款或物流回傳可能需要數秒；本頁會自動更新，也可稍後再回來查看。</span>
         <Link className="text-link" to="/meal-orders">便當取餐憑證</Link>
-        <Link className="text-link" to="/shop">繼續選購</Link>
+        <Link className="text-link" to="/shop" search={{ tab: "products" }}>繼續選購</Link>
       </div>
         </Tabs.Content>
       </Tabs.Root>}

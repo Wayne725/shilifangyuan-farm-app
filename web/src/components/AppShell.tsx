@@ -142,7 +142,7 @@ export function AppShell() {
 
       {mobileOpen && (
         <nav className="mobile-nav site-menu" id="site-menu" aria-label="網站選單">
-          {navItems.map(({ to, label }) => (
+          {visibleNavItems.map(({ to, label }) => (
             <Link key={to} to={to} onClick={() => setMobileOpen(false)}>
               {label}
             </Link>
