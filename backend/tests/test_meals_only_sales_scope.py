@@ -46,7 +46,7 @@ from app.models import (
 )
 from app.routers import groups, logistics, membership, orders
 from app.routers.payments import payments_router
-from app.sales_scope import MEALS_ONLY_MESSAGE, SalesScopeError, ensure_sales_scope_allows
+from app.sales_scope import MEALS_ONLY_MESSAGE, PICKUP_ONLY_MESSAGE, SalesScopeError, ensure_sales_scope_allows
 from tests.support import api_test_context, auth_headers, make_test_settings
 from tests.test_payment_return import payment_return_context, payment_settings, successful_result
 from tests.test_raygate import raygate_callback_context
@@ -423,9 +423,9 @@ async def test_production_stale_invoice_context_blocks_new_charge_without_rebind
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope", ["meals_only", "all"])
+@pytest.mark.parametrize("scope", ["meals_only", "pickup", "all"])
 async def test_membership_approval_cannot_create_new_charges_during_meal_launch(database_session, scope):
-    settings = meal_production_settings() if scope == "meals_only" else make_test_settings(
+    settings = meal_production_settings(sales_scope=scope) if scope != "all" else make_test_settings(
         pii_encryption_keys_json=meal_production_settings().pii_encryption_keys_json,
     )
     admin = User(email="admin-scope@example.com", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
@@ -461,9 +461,9 @@ async def test_membership_approval_cannot_create_new_charges_during_meal_launch(
     await database_session.refresh(application)
     charge_count = await database_session.scalar(select(func.count(MembershipCharge.id)))
     membership_count = await database_session.scalar(select(func.count(Membership.id)))
-    if scope == "meals_only":
+    if scope != "all":
         assert result.status_code == 409
-        assert result.json()["detail"] == MEALS_ONLY_MESSAGE
+        assert result.json()["detail"] == (MEALS_ONLY_MESSAGE if scope == "meals_only" else PICKUP_ONLY_MESSAGE)
         assert charge_count == membership_count == 0
         assert application.status == MembershipApplicationStatus.SUBMITTED
         assert application.reviewed_at is None

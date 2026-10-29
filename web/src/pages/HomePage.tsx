@@ -104,7 +104,7 @@ export function HomePage() {
           eyebrow="DAILY PROVISIONS / 日常選品"
           title="今天，從這裡開始。"
           description="當期商品、即時庫存與社員價格，以結帳時狀態為準。"
-          action={{ label: "瀏覽全部選品", to: "/shop" }}
+          action={{ label: "瀏覽全部選品", to: "/shop", search: { tab: "products" } }}
         />
         {products.isPending && <LoadingLines count={3} />}
         {products.isError && (

@@ -118,6 +118,9 @@ const resetPasswordRoute = createRoute({
 const shopRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/shop",
+  validateSearch: (search: Record<string, unknown>): { tab?: "meals" | "groups" | "products" } => ({
+    tab: search.tab === "meals" || search.tab === "groups" || search.tab === "products" ? search.tab : undefined,
+  }),
   component: page("./pages/ShopPage", "ShopPage"),
 });
 

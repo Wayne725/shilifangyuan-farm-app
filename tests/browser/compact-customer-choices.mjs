@@ -113,13 +113,14 @@ for (const width of [1440, 390]) {
     assert.equal(await page.locator('.offer-summary').getByText('教育學院大樓', { exact: true }).count(), 1);
     assert.equal(await page.locator('.offer-summary').getByText('新竹市教育路 2 號', { exact: true }).count(), 1);
     assert.equal(await page.locator('.offer-summary').getByText('新竹市合作路 1 號', { exact: true }).count(), 0);
-    await page.getByRole('combobox', { name: '取貨方式', exact: true }).selectOption('shipping');
-    assert.match(await page.getByRole('combobox', { name: '取貨方式', exact: true }).locator('option:checked').innerText(), /常溫/);
+    const groupShipping = page.getByRole('radio', { name: '宅配／超商取貨（常溫）', exact: true });
+    await groupShipping.check();
+    assert.equal(await groupShipping.isChecked(), true);
     await page.getByRole('combobox', { name: '配送通路', exact: true }).selectOption('family_mart');
     await page.waitForFunction(() => document.querySelector('.shipping-form select')?.value === 'family_mart');
     await verify(page, state);
     await page.goto(`${base}/checkout`);
-    await page.getByRole('combobox', { name: '取貨方式', exact: true }).selectOption('shipping');
+    await page.getByRole('radio', { name: '宅配／超商取貨', exact: true }).check();
     const channel = page.getByRole('combobox', { name: '配送通路', exact: true });
     await channel.selectOption('seven_eleven');
     assert.equal(await channel.inputValue(), 'seven_eleven');

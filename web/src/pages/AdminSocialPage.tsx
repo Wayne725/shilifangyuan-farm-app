@@ -12,6 +12,7 @@ import { AdminNav } from "../components/AdminNav";
 import { MeetingFilters, MeetingSetup } from "../components/MeetingTools";
 import { filterMeetings, meetingAccessDenied, meetingCategoryName, meetingCategoryOptions, retryMeetingRead } from "../lib/meetings";
 import { RosterCsvImport } from "../components/RosterCsvImport";
+import { useStorefrontStatus } from "../components/StorefrontStatus";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, formatDateTime } from "../lib/api";
 import { proposalStatusLabel } from "../lib/labels";
@@ -48,6 +49,7 @@ interface MemberRosterEntry extends ShareholdingRecord {
 export function AdminSocialPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
+  const platform = useStorefrontStatus();
   const [activityAccessRevoked, setActivityAccessRevoked] = useState(false);
   const [reviewScope, setReviewScope] = useState("pending");
   const [memberSearch, setMemberSearch] = useState("");
@@ -82,6 +84,13 @@ export function AdminSocialPage() {
   const visibleProposals = filterReviews(proposals.data, item => item.status === "pending_review");
   const visibleApplications = filterReviews(applications.data, item => ["submitted", "needs_supplement"].includes(item.status));
   const visibleTrainees = reviewScope === "done" ? [] : traineeMemberships;
+  const admissionApprovalBlockedReason = platform.isPending
+    ? "正在確認入社核准是否開放。"
+    : platform.isError || !platform.data?.sales_scope
+      ? "無法確認入社核准狀態，請稍後重新整理。"
+      : platform.data.sales_scope !== "all"
+        ? "完整入社流程尚未開放，暫不能核准或建立繳費通知；仍可要求補件或駁回。"
+        : "";
   const visibleMembers = (memberships.data || []).map(item => ({...item, display_name: roster.data?.find(entry => entry.member_number === item.member_number)?.legal_name ?? item.display_name})).filter(item => (!memberStatus || item.status === memberStatus) && `${item.display_name || ""} ${item.member_number || ""} ${item.trainee_number || ""} ${item.user_id}`.toLowerCase().includes(memberSearch.trim().toLowerCase()));
 
   const visibleMeetings = filterMeetings(meetings.data || [], meetingCategory, meetingKeyword);
@@ -113,7 +122,8 @@ export function AdminSocialPage() {
             {visibleProposals.map((proposal) => <ProposalReviewCard key={proposal.id} proposal={proposal} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-proposals"] })} />)}
           </AdminReviewSection>}
           {(reviewScope !== "pending" || visibleApplications.length > 0 || applications.isPending || applications.isError) && <AdminReviewSection icon={IdentificationCard} title="入社審核" count={visibleApplications.length} pending={applications.isPending} error={applications.error?.message} empty="沒有符合條件的申請">
-            {visibleApplications.map((application) => <MembershipReviewCard key={application.id} application={application} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-membership-applications"] })} />)}
+            {admissionApprovalBlockedReason && visibleApplications.some(application => application.status === "submitted") && <p className="form-error" role="status">{admissionApprovalBlockedReason}</p>}
+            {visibleApplications.map((application) => <MembershipReviewCard key={application.id} application={application} approvalBlockedReason={admissionApprovalBlockedReason} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-membership-applications"] })} />)}
           </AdminReviewSection>}
 
           {reviewScope === "pending" && ![activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending || query.isError) && pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0) === 0 && <p role="status">目前沒有待處理事項</p>}
@@ -269,8 +279,11 @@ function ProposalReviewCard({ proposal, onDone }: { proposal: Proposal; onDone: 
   return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{proposalStatusLabel(proposal.status)}</span><h3>{proposal.title}</h3><p>提案人 {proposal.created_by_name} · {proposal.tally.total} 票</p><small>{proposal.body}</small></div><div className="review-card-actions schedule-fields">{proposal.status === "pending_review" && <><label className="field"><span>討論截止</span><input type="datetime-local" value={discussionEndsAt} onChange={(event) => setDiscussionEndsAt(event.target.value)} /></label><label className="field"><span>投票截止</span><input type="datetime-local" value={votingEndsAt} onChange={(event) => setVotingEndsAt(event.target.value)} /></label><label className="field"><span>最低投票數</span><input min={1} type="number" value={minimumVoters} onChange={(event) => setMinimumVoters(Number(event.target.value))} /></label></>}<div>{proposal.status === "pending_review" && <SocialActionButton disabled={!discussionEndsAt || !votingEndsAt || action.isPending} action="approve" requireReason={false} onConfirm={reason => action.mutate({decision: "approve", reason})}><CheckCircle size={16} />核准排程</SocialActionButton>}{proposal.status === "pending_review" && <SocialActionButton disabled={action.isPending} action="reject" requireReason={true} onConfirm={reason => action.mutate({decision: "reject", reason})}>駁回</SocialActionButton>}{["passed", "rejected"].includes(proposal.status) && <SocialActionButton disabled={action.isPending} action="close" requireReason={true} onConfirm={reason => action.mutate({decision: "close", reason})}>完成結案</SocialActionButton>}<Link to="/proposals/$proposalId" params={{ proposalId: proposal.id }}>查看提案</Link></div>{action.isSuccess && <p role="status">處理完成</p>}{action.isError && <p className="form-error" role="alert">{action.error.message}</p>}</div></article>;
 }
 
-function MembershipReviewCard({ application, onDone }: { application: MembershipApplication; onDone: () => void }) {
-  const action = useMutation({ mutationFn: ({decision, reason}: {decision: "approve" | "request-supplement" | "reject"; reason: string}) => apiFetch(`/v1/admin/membership-applications/${application.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) }), onSuccess: onDone });
+function MembershipReviewCard({ application, approvalBlockedReason, onDone }: { application: MembershipApplication; approvalBlockedReason: string; onDone: () => void }) {
+  const action = useMutation({ mutationFn: ({decision, reason}: {decision: "approve" | "request-supplement" | "reject"; reason: string}) => {
+    if (decision === "approve" && approvalBlockedReason) throw new Error(approvalBlockedReason);
+    return apiFetch(`/v1/admin/membership-applications/${application.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) });
+  }, onSuccess: onDone });
   const openDocument = useMutation({
     mutationFn: (documentId: string) => apiFetch<{ download_url: string }>(`/v1/admin/membership-applications/${application.id}/documents/${documentId}/download-url`),
     onSuccess: ({ download_url }) => window.open(download_url, "_blank", "noopener,noreferrer"),
@@ -299,7 +312,7 @@ function MembershipReviewCard({ application, onDone }: { application: Membership
       <div className="review-card-actions">
 
         <div>
-          {application.status === "submitted" && <SocialActionButton disabled={action.isPending} action="approve" requireReason={false} onConfirm={reason => action.mutate({decision: "approve", reason})}><CheckCircle size={16} />核准</SocialActionButton>}
+          {application.status === "submitted" && <SocialActionButton disabled={action.isPending || Boolean(approvalBlockedReason)} action="approve" requireReason={false} onConfirm={reason => action.mutate({decision: "approve", reason})}><CheckCircle size={16} />{approvalBlockedReason ? "暫不可核准" : "核准"}</SocialActionButton>}
           {application.status === "submitted" && <SocialActionButton disabled={action.isPending} action="request-supplement" requireReason={true} onConfirm={reason => action.mutate({decision: "request-supplement", reason})}>要求補件</SocialActionButton>}
           {reviewable && <SocialActionButton disabled={action.isPending} action="reject" requireReason={true} onConfirm={reason => action.mutate({decision: "reject", reason})}>駁回</SocialActionButton>}
         </div>
