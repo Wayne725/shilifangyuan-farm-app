@@ -13,7 +13,7 @@ const event = { id: 'line-meal', title: '隔離便當場次', location: '合作�
   pickup_starts_at: '2030-01-03T11:00:00+08:00', pickup_ends_at: '2030-01-03T13:30:00+08:00',
   offerings: [{ id: 'line-dish', meal_id: 'line-dish', meal_name: '隔離便當', price: 120, description: '', capacity: 50, available_quantity: 50, reserved_quantity: 0, paid_quantity: 0, is_active: true, position: 0, option_groups: [] }] };
 const campaign = { id: 'line-group', title: '隔離團購', description: '', member_price: 120, nonmember_price: 120, target_type: 'product', target_id: product.id,
-  status: 'open', intake_status: 'open', deadline: '2030-01-04T00:00:00Z', estimated_pickup_start: '2030-01-05T00:00:00Z', estimated_pickup_end: '2030-01-06T00:00:00Z',
+  status: 'open', intake_status: 'open', decision_status: 'recruiting', deadline: '2030-01-04T00:00:00Z', estimated_pickup_start: '2030-01-05T00:00:00Z', estimated_pickup_end: '2030-01-06T00:00:00Z',
   paid_quantity: 0, min_paid_quantity: 1, supply_cap: 50, per_user_cap: 10, available_quantity: 50, allowed_shipping_channels: [], can_ship: false };
 
 for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'group']) for (const saved of [false, true]) {

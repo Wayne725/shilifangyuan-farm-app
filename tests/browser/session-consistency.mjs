@@ -18,7 +18,7 @@ const order = (id = 'a') => ({ id: `session-order-${id}`, order_number: `ISOLATE
 const deferred = () => { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fixture(t, { width = 1280 } = {}) {
+async function fixture(t, { width = 1280, authenticated = true } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
   await context.addInitScript(initialCart => {
@@ -35,7 +35,7 @@ async function fixture(t, { width = 1280 } = {}) {
   }, cart);
   const state = {
     refreshMode: 'same', refreshes: [], requests: [], acceptedOrders: [], payments: [], unknown: [], errors: [],
-    failNext: new Map(), expiredToken: null, loggedOut: false, nextVersion: 1,
+    failNext: new Map(), expiredToken: null, loggedOut: false, authenticated, nextVersion: 1,
     holdRefresh: null, heldRefreshStarted: false, holdDirectory: null, heldDirectoryStarted: false,
     switchOnCharges: false, chargesSwitched: false,
   };
@@ -45,7 +45,7 @@ async function fixture(t, { width = 1280 } = {}) {
     const number = state.refreshes.length + 1;
     const mode = number === 1 ? 'same' : state.refreshMode;
     state.refreshes.push(mode);
-    if (state.loggedOut || mode === 'expired') return route.fulfill({ status: 401, json: { detail: '隔離登入已失效' } });
+    if (!state.authenticated || state.loggedOut || mode === 'expired') return route.fulfill({ status: 401, json: { detail: '隔離登入已失效' } });
     if (mode === 'unavailable') return route.fulfill({ status: 503, json: { detail: '隔離續期服務暫時無法使用' } });
     const id = mode === 'switch' ? 'b' : 'a';
     const payload = { access_token: `session-${id}-v${state.nextVersion++}`, token_type: 'bearer', user: fakeUser(id) };
@@ -65,6 +65,10 @@ async function fixture(t, { width = 1280 } = {}) {
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, sales_scope: 'pickup', shipping_enabled: false, support_phone: '0912345678' } });
     const key = `${method} ${path}`;
     if (state.failNext.get(key) > 0) { state.failNext.set(key, state.failNext.get(key) - 1); return route.fulfill({ status: 401, json: { detail: '隔離access token已到期' } }); }
+    if (path === '/v1/auth/login' && method === 'POST') {
+      state.authenticated = true;
+      return route.fulfill({ json: { access_token: `session-a-v${state.nextVersion++}`, token_type: 'bearer', user: fakeUser() } });
+    }
     if (state.expiredToken === token || state.loggedOut && path !== '/v1/activities') return route.fulfill({ status: 401, json: { detail: '隔離access token已到期' } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'member', membership: { status: 'active', member_number: `ISOLATED-${owner.toUpperCase()}` }, directory: { is_public: false } } });
     if (path === '/v1/members/directory') {
@@ -117,6 +121,32 @@ async function fixture(t, { width = 1280 } = {}) {
 
 const assertCartPreserved = async page => assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), cart);
 const header = (page, id) => page.locator(`a[aria-label="會員中心：${userName(id)}"]`);
+
+test('Email登入失敗可重試，成功返回原結帳頁並完成一次建單付款', async t => {
+  const { page, state } = await fixture(t, { width: 390, authenticated: false });
+  await page.goto(`${base}/login?return_to=%2Fcheckout`);
+  await page.getByLabel('電子信箱', { exact: true }).fill('a@session.example.test');
+  await page.getByLabel('密碼', { exact: true }).fill('isolated-session-password');
+  state.failNext.set('POST /v1/auth/login', 1);
+  await page.getByRole('button', { name: '登入系統', exact: true }).click();
+  await page.getByRole('alert').getByText('隔離access token已到期', { exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, '/login');
+  assert.equal(await header(page, 'a').count(), 0);
+  await assertCartPreserved(page);
+  await page.getByRole('button', { name: '登入系統', exact: true }).click();
+  await page.waitForURL(`${base}/checkout`);
+  await header(page, 'a').waitFor({ state: 'attached' });
+  await page.waitForFunction(() => document.querySelector('.checkout-fulfillment select[required]')?.value === 'session-pickup');
+  assert.equal(await page.getByRole('textbox', { name: '發票通知 Email', exact: true }).inputValue(), 'a@session.example.test');
+  await assertCartPreserved(page);
+  await page.getByRole('button', { name: '前往線上付款', exact: true }).click();
+  await page.waitForURL(`${base}/isolated-session-payment`);
+  assert.equal(state.requests.filter(item => item.path === '/v1/auth/login').length, 2);
+  assert.equal(state.acceptedOrders.length, 1);
+  assert.equal(state.acceptedOrders[0].owner, 'a');
+  assert.equal(state.payments.length, 1);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), []);
+});
 
 test('同帳號access 401續期後GET只安全重試一次，訂單與購物車保留', async t => {
   const { page, state } = await fixture(t);
