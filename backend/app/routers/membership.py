@@ -43,6 +43,7 @@ from ..member_claims import (
     verified_roster_entry,
 )
 from ..member_shares import MemberSharesError, update_member_shares
+from ..membership_admission_guards import has_admission_round, require_legacy_admission_allowed
 from ..roster_csv import (
     MAX_CSV_BYTES, RosterCsvEntry, RosterCsvImport, RosterCsvImported,
     RosterCsvPreview, duplicate_numbers, parse_roster_csv,
@@ -441,6 +442,7 @@ async def _ensure_membership_charges(
     session: AsyncSession,
     application: MembershipApplication,
 ) -> Membership:
+    await require_legacy_admission_allowed(session, application.user_id)
     membership = await session.scalar(
         select(Membership)
         .where(Membership.user_id == application.user_id)
@@ -1226,6 +1228,11 @@ async def approve_membership_application(
     settings: Settings = Depends(get_settings),
 ) -> MembershipRead:
     require_sales_scope_allows(settings)
+    application_user_id = await session.scalar(
+        select(MembershipApplication.user_id).where(MembershipApplication.id == application_id)
+    )
+    if application_user_id is not None:
+        await require_legacy_admission_allowed(session, application_user_id)
     application = await session.scalar(
         select(MembershipApplication)
         .where(MembershipApplication.id == application_id)
@@ -1705,6 +1712,11 @@ async def activate_trainee_membership(
 ) -> MembershipRead:
     if not body.reason:
         raise HTTPException(status_code=422, detail="請填寫轉正原因")
+    membership_user_id = await session.scalar(
+        select(Membership.user_id).where(Membership.id == membership_id)
+    )
+    if membership_user_id is not None:
+        await require_legacy_admission_allowed(session, membership_user_id)
     membership = await session.scalar(
         select(Membership)
         .where(Membership.id == membership_id)
@@ -1963,6 +1975,8 @@ async def start_traineeship_if_fully_paid(
             MembershipApplicationStatus.APPROVED,
         }
     ):
+        return membership
+    if await has_admission_round(session, membership.user_id):
         return membership
     paid_kinds = {
         charge.charge_kind

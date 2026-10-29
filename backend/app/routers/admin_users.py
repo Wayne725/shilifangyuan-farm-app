@@ -13,6 +13,7 @@ from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..meal_schedules import TAIPEI
 from ..member_claims import normalize_member_number
+from ..membership_admission_guards import require_legacy_admission_allowed
 from ..models import (
     AdminAudit, MemberRosterEntry, Membership, MembershipApplication,
     MembershipApplicationStatus, MembershipCharge, MembershipChargeStatus,
@@ -95,6 +96,7 @@ async def confirm_offline_membership(
         raise HTTPException(status_code=404, detail="找不到使用者")
     if not user.is_active:
         raise HTTPException(status_code=409, detail="停用帳號不能授予會籍")
+    await require_legacy_admission_allowed(session, user_id)
     requested_number = body.member_number or None
     charge_ids = list(await session.scalars(select(MembershipCharge.id).where(MembershipCharge.user_id == user_id)))
     attempts = list(await session.scalars(select(PaymentAttempt).where(PaymentAttempt.membership_charge_id.in_(charge_ids)).order_by(PaymentAttempt.id).execution_options(populate_existing=True).with_for_update())) if charge_ids else []

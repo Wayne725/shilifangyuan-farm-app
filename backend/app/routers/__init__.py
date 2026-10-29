@@ -12,6 +12,8 @@ from .invoices import invoices_router
 from .logistics import logistics_router
 from .meals import meals_router
 from .membership import membership_router
+from .membership_admission import membership_admission_router
+from .membership_education_admin import membership_education_admin_router
 from .notifications import notifications_router
 from .orders import orders_router
 from .order_summary import order_summary_router
@@ -42,6 +44,8 @@ ALL_ROUTERS = [
     admin_users_router,
     catalog_router,
     membership_router,
+    membership_admission_router,
+    membership_education_admin_router,
     community_router,
     cooperative_router,
     meals_router,

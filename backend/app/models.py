@@ -3041,3 +3041,99 @@ class ProfilePhotoAsset(Base):
     user_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, unique=True)
     content: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MembershipAdmissionRound(Base):
+    __tablename__ = "membership_admission_rounds"
+    __table_args__ = (
+        UniqueConstraint("user_id", "round_number", name="uq_admission_round_user_number"),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_admission_round_user_request"),
+        CheckConstraint("round_number >= 1 AND version >= 1", name="round_version_positive"),
+        CheckConstraint("status IN ('draft','submitted','needs_supplement','approved','rejected','withdrawn')", name="status_valid"),
+        CheckConstraint("requested_share_count BETWEEN 0 AND 100", name="requested_shares_valid"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    round_number: Mapped[int] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(36))
+    flow_version: Mapped[str] = mapped_column(String(40), default="education-review-v1", server_default="education-review-v1")
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    status: Mapped[str] = mapped_column(String(32), default="draft", server_default="draft", index=True)
+    profile_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    requested_share_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    student_claimed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    discovery_channel: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    discovery_other_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    declaration_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    privacy_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    consented_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    material_version: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    material_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    quiz_version: Mapped[str] = mapped_column(String(64), default="2026-10-29.v1", server_default="2026-10-29.v1")
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decision_reference: Mapped[Optional[str]] = mapped_column(String(240), nullable=True)
+    student_verified: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MembershipAdmissionQuizAttempt(Base):
+    __tablename__ = "membership_admission_quiz_attempts"
+    __table_args__ = (
+        UniqueConstraint("round_id", "attempt_number", name="uq_admission_quiz_round_number"),
+        UniqueConstraint("round_id", "idempotency_key", name="uq_admission_quiz_round_request"),
+        CheckConstraint("attempt_number >= 1", name="attempt_number_positive"),
+        CheckConstraint("score BETWEEN 0 AND 100", name="score_valid"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    round_id: Mapped[str] = mapped_column(ForeignKey("membership_admission_rounds.id", ondelete="RESTRICT"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(36))
+    quiz_version: Mapped[str] = mapped_column(String(64))
+    answers: Mapped[List[Dict[str, Any]]] = mapped_column(JSON)
+    results: Mapped[List[Dict[str, Any]]] = mapped_column(JSON)
+    score: Mapped[int] = mapped_column(Integer)
+    passed: Mapped[bool] = mapped_column(Boolean)
+    settings_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_limit: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    retry_interval_minutes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MembershipAdmissionSubmission(Base):
+    __tablename__ = "membership_admission_submissions"
+    __table_args__ = (
+        UniqueConstraint("round_id", "revision_number"),
+        CheckConstraint("revision_number >= 1", name="revision_positive"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    round_id: Mapped[str] = mapped_column(ForeignKey("membership_admission_rounds.id", ondelete="RESTRICT"), index=True)
+    revision_number: Mapped[int] = mapped_column(Integer)
+    profile_encrypted: Mapped[str] = mapped_column(Text)
+    facts: Mapped[Dict[str, Any]] = mapped_column(JSON)
+    quiz_attempt_id: Mapped[str] = mapped_column(ForeignKey("membership_admission_quiz_attempts.id", ondelete="RESTRICT"))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MembershipAdmissionReview(Base):
+    __tablename__ = "membership_admission_reviews"
+    __table_args__ = (
+        UniqueConstraint("submission_id"),
+        CheckConstraint("decision IN ('approve','request_supplement','reject')", name="decision_valid"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    round_id: Mapped[str] = mapped_column(ForeignKey("membership_admission_rounds.id", ondelete="RESTRICT"), index=True)
+    submission_id: Mapped[str] = mapped_column(ForeignKey("membership_admission_submissions.id", ondelete="RESTRICT"))
+    reviewer_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    decision: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str] = mapped_column(Text)
+    decision_reference: Mapped[Optional[str]] = mapped_column(String(240), nullable=True)
+    student_verified: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
