@@ -36,3 +36,14 @@ def test_admission_migration_matches_metadata_and_preserves_history(tmp_path, mo
             )))
     finally:
         get_settings.cache_clear()
+
+
+def test_admission_unique_indexes_have_distinct_postgres_names():
+    from app.database import Base
+    import app.models
+
+    names = [constraint.name for name, table in Base.metadata.tables.items()
+             if name.startswith("membership_admission_") for constraint in table.constraints
+             if isinstance(constraint, sa.UniqueConstraint)]
+    assert len(names) == len(set(names))
+    assert all(name and len(name) <= 63 for name in names)

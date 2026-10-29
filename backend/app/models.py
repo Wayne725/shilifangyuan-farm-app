@@ -3046,8 +3046,8 @@ class ProfilePhotoAsset(Base):
 class MembershipAdmissionRound(Base):
     __tablename__ = "membership_admission_rounds"
     __table_args__ = (
-        UniqueConstraint("user_id", "round_number"),
-        UniqueConstraint("user_id", "idempotency_key"),
+        UniqueConstraint("user_id", "round_number", name="uq_admission_round_user_number"),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_admission_round_user_request"),
         CheckConstraint("round_number >= 1 AND version >= 1", name="round_version_positive"),
         CheckConstraint("status IN ('draft','submitted','needs_supplement','approved','rejected','withdrawn')", name="status_valid"),
         CheckConstraint("requested_share_count BETWEEN 0 AND 100", name="requested_shares_valid"),
@@ -3084,8 +3084,8 @@ class MembershipAdmissionRound(Base):
 class MembershipAdmissionQuizAttempt(Base):
     __tablename__ = "membership_admission_quiz_attempts"
     __table_args__ = (
-        UniqueConstraint("round_id", "attempt_number"),
-        UniqueConstraint("round_id", "idempotency_key"),
+        UniqueConstraint("round_id", "attempt_number", name="uq_admission_quiz_round_number"),
+        UniqueConstraint("round_id", "idempotency_key", name="uq_admission_quiz_round_request"),
         CheckConstraint("attempt_number >= 1", name="attempt_number_positive"),
         CheckConstraint("score BETWEEN 0 AND 100", name="score_valid"),
     )

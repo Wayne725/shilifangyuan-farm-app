@@ -168,7 +168,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
             if not value:
                 return self.controls("請先建立一輪申請。")
             if path.endswith("/approve"):
-                value.update({"status": "approved", "reviewed_at": timestamp(), "review_reason": "隔離審核同意", "decision_reference": "ISOLATED-DECISION", "can_edit": False, "can_submit": False})
+                value.update({"status": "approved", "reviewed_at": timestamp(), "review_reason": "隔離審核同意", "decision_reference": "ISOLATED-DECISION", "can_edit": False, "can_submit": False, "can_withdraw": False})
             elif path.endswith("/allow-retry"):
                 value["quiz_eligibility"] = {"allowed": True, "remaining_attempts": 1, "next_available_at": None, "reason": None, "settings_configured": True}
             elif path.endswith("/bump-version"):
@@ -259,7 +259,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                     return self.respond({"detail": "無管理員權限"}, 403)
                 if decision == "approve" and (not body.get("decision_reference") or value["student_claimed"] and not body.get("student_verified")):
                     return self.respond({"detail": "請填決議並核驗學生資格"}, 422)
-                value.update({"status": {"approve": "approved", "request_supplement": "needs_supplement", "reject": "rejected"}[decision], "reviewed_at": timestamp(), "review_reason": body["reason"], "decision_reference": body.get("decision_reference"), "student_verified": body.get("student_verified"), "can_edit": decision == "request_supplement", "can_submit": decision == "request_supplement"})
+                value.update({"status": {"approve": "approved", "request_supplement": "needs_supplement", "reject": "rejected"}[decision], "reviewed_at": timestamp(), "review_reason": body["reason"], "decision_reference": body.get("decision_reference"), "student_verified": body.get("student_verified"), "can_edit": decision == "request_supplement", "can_submit": decision == "request_supplement", "can_withdraw": decision == "request_supplement"})
                 value["reviews"].append({"id": str(uuid4()), "decision": decision, "reason": body["reason"], "decision_reference": body.get("decision_reference"), "student_verified": body.get("student_verified"), "reviewed_at": timestamp()})
             else:
                 STATE["unknown"].append(f"{self.command} {path}")
