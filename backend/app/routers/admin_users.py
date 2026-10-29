@@ -91,7 +91,7 @@ async def confirm_offline_membership(
     now = datetime.now(timezone.utc)
     if not body.confirmed_offline or body.confirmed_on > now.astimezone(TAIPEI).date():
         raise HTTPException(status_code=422, detail="請確認已核對本人與線下入社／繳費，日期不能在未來")
-    user = await session.scalar(select(User).where(User.id == user_id).execution_options(populate_existing=True).with_for_update())
+    user = await session.scalar(select(User).where(User.id == user_id).execution_options(populate_existing=True).with_for_update(key_share=True))
     if user is None:
         raise HTTPException(status_code=404, detail="找不到使用者")
     if not user.is_active:

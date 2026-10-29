@@ -17,6 +17,7 @@ async def has_admission_round(session: AsyncSession, user_id: str) -> bool:
 
 
 async def require_legacy_admission_allowed(session: AsyncSession, user_id: str) -> None:
-    await session.scalar(select(User.id).where(User.id == user_id).with_for_update())
+    # NO KEY UPDATE serializes admission writes while allowing notification FK checks.
+    await session.scalar(select(User.id).where(User.id == user_id).with_for_update(key_share=True))
     if await has_admission_round(session, user_id):
         raise HTTPException(status_code=409, detail=LEGACY_ADMISSION_BLOCKED)
