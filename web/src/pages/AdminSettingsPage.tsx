@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { MembershipEducationSettings } from "../components/MembershipEducationSettings";
 import { AdminNav } from "../components/AdminNav";
 import { DataState, LoadingLines } from "../components/Shared";
 import type { StorefrontStatus } from "../components/StorefrontStatus";
@@ -32,5 +33,6 @@ export function AdminSettingsPage() {
       <section className="admin-settings-section"><p className="eyebrow">INVOICE / 電子發票</p><h2>發票設定</h2><dl><div><dt>發票供應商</dt><dd>{settings.data?.invoice_provider === "fanyu" ? "汎宇雲端發票" : settings.data?.invoice_provider || "未設定"}</dd></div><div><dt>開立規則</dt><dd>確認付款成功後開立</dd></div><div><dt>字軌與配號</dt><dd>由發票供應商管理</dd></div></dl><Link className="button button-quiet" to="/admin/invoices">發票開立與查詢</Link></section>
       {save.isError && <p className="form-error" role="alert">{save.error.message}</p>}{save.isSuccess && <p className="form-success" role="status">設定已儲存</p>}<div className="form-actions"><button className="button button-primary" disabled={save.isPending}>{save.isPending ? "儲存中…" : "儲存平台設定"}</button></div>
     </form>}
+    <MembershipEducationSettings />
   </section>;
 }

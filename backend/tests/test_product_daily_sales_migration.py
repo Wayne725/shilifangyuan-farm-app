@@ -23,7 +23,9 @@ def test_product_daily_listing_migration_preserves_legacy_and_guards_downgrade(t
         after = database.rows("products")[0]
         assert after.pop("daily_sales_enabled") is True
         assert after == before
+        command.upgrade(database.config, "head")
         command.check(database.config)
+        command.downgrade(database.config, "0039_product_daily_sales")
         command.downgrade(database.config, "0038_activity_payments")
         assert database.rows("products")[0] == before
         command.upgrade(database.config, "0039_product_daily_sales")

@@ -186,6 +186,12 @@ const directoryRoute = createRoute({
 const membershipRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/membership",
+  component: page("./pages/MembershipAdmissionPage", "MembershipAdmissionPage"),
+});
+
+const membershipLegacyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/membership/legacy",
   component: page("./pages/MembershipApplicationPage", "MembershipApplicationPage"),
 });
 
@@ -393,6 +399,7 @@ const routeTree = rootRoute.addChildren([
   wishesRoute,
   directoryRoute,
   membershipRoute,
+  membershipLegacyRoute,
   checkoutRoute,
   legacyCartRoute,
   ordersRoute,

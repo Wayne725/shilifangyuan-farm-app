@@ -7,3 +7,5 @@
 .admin-settings-section .status-chip { justify-self: start; }
 .admin-settings-section .check-field { min-height: 48px; }
 @media (max-width: 680px) { .admin-settings-page form { margin-inline: 22px; } .admin-settings-section dl > div { grid-template-columns: 1fr; gap: 6px; } }
+
+.membership-education-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 22px; }

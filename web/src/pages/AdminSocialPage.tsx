@@ -7,6 +7,7 @@ import { Link } from "@tanstack/react-router";
 import { DataState, LoadingLines } from "../components/Shared";
 import { SocialActionButton } from "../components/SocialActionButton";
 import { AdminActivityCard, ActivityRefundInbox } from "../components/AdminActivityPayments";
+import { AdminAdmissionInbox } from "../components/AdminAdmissionInbox";
 import { activityAccessDenied, retryActivityRead, type ActivityRefundRequest } from "../lib/activities";
 import { AdminNav } from "../components/AdminNav";
 import { MeetingFilters, MeetingSetup } from "../components/MeetingTools";
@@ -100,7 +101,7 @@ export function AdminSocialPage() {
     <section className="admin-social-page">
       <header className="workspace-heading">
         <div><p className="eyebrow">SOCIAL OPERATIONS / 社務管理</p><h1>審核、排程與社員服務</h1></div>
-        <p>{[activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending) ? "讀取待辦中…" : [activities, proposals, applications, memberships, activityRefunds].some(query => query.isError) ? "待辦資料未完整載入" : `${pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0)} 件待處理事項`}</p>
+        <p>{[activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending) ? "讀取其他及舊版待辦中…" : [activities, proposals, applications, memberships, activityRefunds].some(query => query.isError) ? "其他及舊版待辦未完整載入" : `其他及舊版待辦 ${pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0)} 件`}</p>
       </header>
       <AdminNav />
 
@@ -114,6 +115,7 @@ export function AdminSocialPage() {
         </Tabs.List>
 
         <Tabs.Content className="tab-content" value="reviews">
+          <AdminAdmissionInbox />
           <label className="field social-review-scope"><span>審核範圍</span><select value={reviewScope} onChange={(event) => setReviewScope(event.target.value)}><option value="pending">待處理</option><option value="all">全部</option><option value="done">已處理</option></select></label>
           {activityDenied ? <p role="alert">活動管理權限已失效，請重新登入。</p> : <><ActivityRefundInbox onDenied={()=>setActivityAccessRevoked(true)}/>{(reviewScope !== "pending" || visibleActivities.length > 0 || activities.isPending || activities.isError) && <AdminReviewSection icon={CalendarBlank} title="活動管理" count={visibleActivities.length} pending={activities.isPending} error={activities.error?.message} empty="沒有符合條件的活動">
             {visibleActivities.map((activity) => <AdminActivityCard key={`${user?.id}:${activity.id}`} activity={activity} onDone={() => { for (const key of ["admin-activities", "admin-activity-registrations", "admin-activity-refunds", "admin-activity-charge", "activity-finance", "activities", "activity-registrations", "activity-charges"]) void queryClient.invalidateQueries({ queryKey: [key] }); }} onDenied={()=>setActivityAccessRevoked(true)} />)}
@@ -121,12 +123,12 @@ export function AdminSocialPage() {
           {(reviewScope !== "pending" || visibleProposals.length > 0 || proposals.isPending || proposals.isError) && <AdminReviewSection icon={NotePencil} title="提案管理" count={visibleProposals.length} pending={proposals.isPending} error={proposals.error?.message} empty="沒有符合條件的提案">
             {visibleProposals.map((proposal) => <ProposalReviewCard key={proposal.id} proposal={proposal} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-proposals"] })} />)}
           </AdminReviewSection>}
-          {(reviewScope !== "pending" || visibleApplications.length > 0 || applications.isPending || applications.isError) && <AdminReviewSection icon={IdentificationCard} title="入社審核" count={visibleApplications.length} pending={applications.isPending} error={applications.error?.message} empty="沒有符合條件的申請">
+          {(reviewScope !== "pending" || visibleApplications.length > 0 || applications.isPending || applications.isError) && <AdminReviewSection icon={IdentificationCard} title="舊版入社資料" count={visibleApplications.length} pending={applications.isPending} error={applications.error?.message} empty="沒有符合條件的舊版申請">
             {admissionApprovalBlockedReason && visibleApplications.some(application => application.status === "submitted") && <p className="form-error" role="status">{admissionApprovalBlockedReason}</p>}
             {visibleApplications.map((application) => <MembershipReviewCard key={application.id} application={application} approvalBlockedReason={admissionApprovalBlockedReason} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-membership-applications"] })} />)}
           </AdminReviewSection>}
 
-          {reviewScope === "pending" && ![activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending || query.isError) && pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0) === 0 && <p role="status">目前沒有待處理事項</p>}
+          {reviewScope === "pending" && ![activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending || query.isError) && pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0) === 0 && <p role="status">其他及舊版審核目前沒有待處理事項</p>}
           {memberships.isError && <p role="alert" className="form-error">會籍待辦無法讀取：{memberships.error.message}</p>}
           {visibleTrainees.length > 0 && <AdminReviewSection icon={UsersThree} title="待轉正式社員" count={visibleTrainees.length} pending={memberships.isPending} empty="沒有待轉正式社員">{visibleTrainees.map(membership => <MembershipStatusCard key={membership.id} membership={membership} onDone={() => queryClient.invalidateQueries({queryKey: ["admin-members"]})} />)}</AdminReviewSection>}
         </Tabs.Content>

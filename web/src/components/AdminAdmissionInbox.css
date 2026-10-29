@@ -1,0 +1,42 @@
+.admission-inbox-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.admission-inbox-filters .form-actions { margin: 0; }
+.admission-review-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, .85fr);
+  gap: 28px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.admission-review-card h3 { margin: 12px 0; font-size: 1.35rem; }
+.admission-review-card p { margin-block: 8px; }
+.admission-review-card details { margin-top: 12px; }
+.admission-review-card summary { min-height: 44px; padding-block: 10px; cursor: pointer; }
+.admission-review-facts, .admission-review-profile { display: grid; gap: 12px; margin-block: 20px; }
+.admission-review-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.admission-review-facts dt, .admission-review-profile dt { color: var(--ink-soft); font-size: .875rem; }
+.admission-review-facts dd, .admission-review-profile dd { margin: 4px 0 0; }
+.admission-review-actions form { display: grid; gap: 16px; }
+.admission-review-decisions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; }
+.admission-review-decisions legend { padding: 0 0 8px; }
+.admission-review-decisions label { display: inline-flex; gap: 7px; align-items: center; min-height: 44px; padding: 10px 12px; }
+.admission-review-decisions label.selected { background: var(--ink); color: var(--paper-light); }
+.admission-review-decisions input { width: 16px; height: 16px; margin: 0; }
+.admission-inbox-pagination { display: flex; justify-content: center; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 24px; }
+
+@media (max-width: 900px) {
+  .admission-inbox-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .admission-inbox-filters .form-actions { grid-column: 1 / -1; }
+  .admission-review-card { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 520px) {
+  .admission-inbox-filters { grid-template-columns: minmax(0, 1fr); }
+  .admission-review-facts { grid-template-columns: minmax(0, 1fr); }
+}
