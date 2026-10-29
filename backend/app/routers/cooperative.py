@@ -11,6 +11,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -46,6 +48,7 @@ from ..models import (
     SalesChannel,
     SurplusDistribution,
     SurplusLedger,
+    SystemSetting,
     TaxType,
     User,
     Wish,
@@ -198,8 +201,19 @@ async def confirm_surplus(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    lock = insert(SystemSetting).values(key="surplus_confirmation_lock", value={})
+    # The no-op UPSERT holds the database lock through the confirmation commit.
+    await session.execute(lock.on_conflict_do_update(
+        index_elements=[SystemSetting.key], set_={"key": lock.excluded.key},
+    ))
     if await session.scalar(select(FiscalYear).where(FiscalYear.label == body.label)):
         raise HTTPException(status_code=409, detail="此會計年度已確認，不可重複或修改")
+    if await session.scalar(select(FiscalYear.id).where(
+        FiscalYear.starts_on <= body.ends_on,
+        FiscalYear.ends_on >= body.starts_on,
+    ).limit(1)):
+        raise HTTPException(status_code=409, detail="此期間與既有結餘分配期間重疊，不可重複確認")
     result = await _surplus_result(session, body)
     fiscal_year = FiscalYear(
         label=body.label,
