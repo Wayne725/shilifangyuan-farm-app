@@ -85,11 +85,17 @@ jobs:
       - name: Verify migration re-upgrade
         run: alembic upgrade head
       - name: Verify pytest exit diagnostics controls
-        run: python -m pytest audits/test_pytest_exit_diagnostics.py -q
+        run: python -m pytest audits/test_pytest_exit_diagnostics.py --basetemp pytest-exit-evidence/controls -q
       - name: Verify PostgreSQL payment and invoice concurrency
-        run: TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/postgres -- pgtests -q --durations=10
+        run: |
+          set -euo pipefail
+          mkdir -p pytest-exit-evidence
+          TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/postgres -- pgtests -q --durations=10 2>&1 | tee pytest-exit-evidence/postgres.log
       - name: Run pytest
-        run: TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/full -- -q --durations=20
+        run: |
+          set -euo pipefail
+          mkdir -p pytest-exit-evidence
+          TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/full -- -q --durations=20 2>&1 | tee pytest-exit-evidence/full.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

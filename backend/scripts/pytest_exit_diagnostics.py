@@ -9,6 +9,8 @@ import faulthandler
 import json
 import os
 from pathlib import Path
+import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -30,6 +32,125 @@ class ExitPolicy:
 class ExitInterrupted(BaseException):
     def __init__(self, signum):
         self.signum = signum
+
+
+class ChildExit:
+    """Observe termination without releasing the PID that anchors our group."""
+    def __init__(self):
+        self.queue, self.pid, self.ended = None, None, False
+        if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+            self.kind = "waitid_wnowait"
+        elif sys.platform == "darwin" and hasattr(select, "kqueue"):
+            self.kind, self.queue = "kqueue_note_exit", select.kqueue()
+        else:
+            raise RuntimeError("Non-reaping child exit observation is unavailable")
+
+    def attach(self, pid):
+        if self.queue is not None:
+            self.queue.control([select.kevent(pid, filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=select.KQ_NOTE_EXIT)], 0, 0)
+        self.pid = pid
+
+    def exited(self):
+        if self.pid is None:
+            raise RuntimeError("Child exit observation was not registered")
+        if not self.ended:
+            if self.queue is None:
+                self.ended = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+            else:
+                self.ended = bool(self.queue.control([], 1, 0))
+        return self.ended
+
+    def close(self):
+        if self.queue is not None:
+            self.queue.close()
+
+
+def live_group_members(pgid, deadline):
+    def query(arguments):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Owned group query deadline expired")
+        return subprocess.run(arguments, capture_output=True, text=True, timeout=min(1, remaining))
+    found = query(["pgrep", "-g", str(pgid)])
+    if found.returncode == 1:
+        return []
+    if found.returncode:
+        raise RuntimeError("Owned process group query failed")
+    pids = [int(value) for value in found.stdout.split()]
+    if not pids or len(pids) > 256:
+        raise RuntimeError("Owned process group query exceeded its bounded PID list")
+    states = query(["ps", "-o", "pid=,stat=", "-p", ",".join(str(pid) for pid in pids)])
+    if states.returncode not in [0, 1]:
+        raise RuntimeError("Owned process state query failed")
+    live = []
+    for line in states.stdout.splitlines():
+        pid, state = line.split()
+        pid = int(pid)
+        if pid not in pids or state.startswith(("Z", "X")):
+            continue
+        try:
+            if os.getpgid(pid) == pgid and os.getsid(pid) == pgid:
+                live.append(pid)
+        except ProcessLookupError:
+            continue
+    return live
+
+
+def cleanup_group(child, observer, policy, result):
+    # No poll/wait/send_signal before this returns: the unreaped leader reserves
+    # its PID, so the original PGID cannot be reused for an unrelated group.
+    if child.returncode is not None:
+        raise RuntimeError("Refusing to signal a reaped child's former group")
+    record = {"pgid": child.pid, "leader_pinned_until_cleanup": True, "signals": [], "remaining_live_members": None}
+    result["group_cleanup"] = record
+    def members(deadline):
+        try:
+            return live_group_members(child.pid, deadline)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            result["issues"].append({"type": "owned_group_query", "error_type": type(error).__name__})
+            return None
+    live = members(time.monotonic() + 1)
+    if observer.ended and live:
+        result["issues"].append({"type": "owned_descendants_after_leader_exit"})
+    signals = [signal.SIGTERM, signal.SIGKILL]
+    if result.get("interrupted_signal") == signal.SIGINT:
+        signals.insert(0, signal.SIGINT)
+    for signum in signals:
+        if live == []:
+            break
+        try:
+            os.killpg(child.pid, signum)
+            record["signals"].append(int(signum))
+        except ProcessLookupError:
+            live = []
+            break
+        deadline = time.monotonic() + policy.terminate_grace
+        while time.monotonic() < deadline:
+            live = members(deadline)
+            if live == []:
+                break
+            time.sleep(min(.02, max(0, deadline - time.monotonic())))
+    record["remaining_live_members"] = live
+    if live != []:
+        result["issues"].append({"type": "owned_group_not_quiescent"})
+
+
+def cleanup_group_after_error(child, policy, result):
+    """Only a diagnostic failure uses this still-pinned, unverified fallback."""
+    if child.returncode is not None:
+        raise RuntimeError("Refusing fallback signals after the child was reaped")
+    result["group_cleanup_fallback"] = {"pgid": child.pid, "signals": [], "verification": "unavailable"}
+    for signum in [signal.SIGTERM, signal.SIGKILL]:
+        try:
+            os.killpg(child.pid, signum)
+            result["group_cleanup_fallback"]["signals"].append(int(signum))
+        except ProcessLookupError:
+            return
+        except OSError as error:
+            result["issues"].append({"type": "owned_group_signal", "error_type": type(error).__name__})
+        if signum == signal.SIGTERM:
+            time.sleep(policy.terminate_grace)
 
 
 def read_phases(directory):
@@ -99,18 +220,25 @@ def run_pytest(arguments, directory, *, cwd=None, environment=None, policy=ExitP
         "summary_grace_seconds": policy.summary_grace, "dump_after_seconds": policy.dump_after,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "issues": [], "traceback_contains_locals": False}
-    child, summary, next_dump, previous_handlers = None, None, None, {}
+    child, observer, summary, next_dump, previous_handlers = None, None, None, None, {}
     started = time.monotonic()
     def interrupted(signum, frame):
         raise ExitInterrupted(signum)
     try:
+        if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+            raise RuntimeError("Child PID anchoring requires the caller's default SIGCHLD disposition")
+        if not all(shutil.which(command) for command in ["pgrep", "ps"]):
+            raise RuntimeError("Targeted owned-group inspection is unavailable")
+        observer = ChildExit()
+        result["exit_observer"] = observer.kind
         for signum in [signal.SIGINT, signal.SIGTERM]:
             previous_handlers[signum] = signal.signal(signum, interrupted)
         child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--child", "--evidence-dir", str(directory), "--", *arguments],
             cwd=cwd, env=environment, start_new_session=True)
         result["owned_child_pid"] = child.pid
         result["owned_child_session_id"] = child.pid
-        while child.poll() is None:
+        observer.attach(child.pid)
+        while not observer.exited():
             events = read_phases(directory)
             completed = [event for event in events if event["event"] == "TERMINAL_SUMMARY"]
             if completed and summary is None:
@@ -118,49 +246,42 @@ def run_pytest(arguments, directory, *, cwd=None, environment=None, policy=ExitP
                 next_dump = summary + policy.dump_after
             now = time.monotonic()
             if next_dump is not None and now >= next_dump:
-                child.send_signal(signal.SIGUSR1)
-                result["stack_requests"] = result.get("stack_requests", 0) + 1
+                try:
+                    os.kill(child.pid, signal.SIGUSR1)
+                    result["stack_requests"] = result.get("stack_requests", 0) + 1
+                except ProcessLookupError:
+                    pass
                 next_dump = now + 10
             if summary is not None and now - summary >= policy.summary_grace:
                 result["exit_timeout"] = True
                 result["issues"].append({"type": "post_summary_exit_timeout"})
                 break
             time.sleep(.02)
-        if not result["exit_timeout"]:
-            result["child_exit_code"] = child.wait()
     except ExitInterrupted as error:
         result["interrupted_signal"] = error.signum
         result["issues"].append({"type": "wrapper_interrupted"})
-        if child is not None and child.poll() is None:
-            try:
-                os.killpg(child.pid, error.signum)
-                child.wait(timeout=policy.terminate_grace)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
-                pass
     except BaseException as error:
         result["issues"].append({"type": type(error).__name__})
     finally:
         for signum in previous_handlers:
             signal.signal(signum, signal.SIG_IGN)
-        if child is not None and child.poll() is None:
+        if child is not None:
             try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+                cleanup_group(child, observer, policy, result)
+            except (OSError, ValueError, RuntimeError) as error:
+                result["issues"].append({"type": "owned_group_cleanup", "error_type": type(error).__name__})
+                cleanup_group_after_error(child, policy, result)
             try:
                 child.wait(timeout=policy.terminate_grace)
             except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    child.wait(timeout=policy.terminate_grace)
-                except subprocess.TimeoutExpired:
-                    result["issues"].append({"type": "owned_child_not_reaped"})
-        if child is not None:
+                result["issues"].append({"type": "owned_child_not_reaped"})
             result["child_exit_code"] = child.returncode
-            result["child_reaped"] = child.poll() is not None
+            result["child_reaped"] = child.returncode is not None
+        if observer is not None:
+            try:
+                observer.close()
+            except OSError as error:
+                result["issues"].append({"type": "exit_observer_close", "error_type": type(error).__name__})
         result["wall_seconds"] = time.monotonic() - started
         result["after_summary_seconds"] = time.monotonic() - summary if summary is not None else None
         raw_code = result["child_exit_code"]
