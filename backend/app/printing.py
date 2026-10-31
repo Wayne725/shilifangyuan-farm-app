@@ -8,13 +8,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings
-from .integrations.feie import FeieError
+from .integrations.feie import FeieError, configured_region
 from .models import Order, PaymentMethod, PrintJob, User
 
 
 def printer_fingerprint(settings: Settings) -> str:
     identity = "|".join((settings.feie_api_base_url, settings.feie_user.get_secret_value(), settings.feie_printer_sn.get_secret_value()))
     return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def job_region(job: PrintJob) -> str | None:
+    region = job.snapshot.get("printer_region", "jp")
+    return region if isinstance(region, str) and region in {"jp", "cn"} else None
+
+
+def job_matches_printer(job: PrintJob, settings: Settings) -> bool:
+    mode = "dry_run" if settings.printer_dry_run else "live"
+    region = configured_region(settings)
+    return (region is not None and job.mode == mode and job.printer_fingerprint == printer_fingerprint(settings)
+            and job_region(job) == region)
 
 
 def clean_text(value: object) -> str:
@@ -102,6 +114,7 @@ def enqueue_order_print(session: AsyncSession, order: Order, user: User, setting
     if not settings.printer_enabled:
         return None
     snapshot = order_print_snapshot(order, user.display_name)
+    snapshot["printer_region"] = configured_region(settings)
     job = PrintJob(order_id=order.id, event_key=f"order:{order.id}:initial", kind="order",
         mode="dry_run" if settings.printer_dry_run else "live", printer_fingerprint=printer_fingerprint(settings), snapshot=snapshot)
     session.add(job)
@@ -147,7 +160,7 @@ async def enqueue_amendment_print(session: AsyncSession, order: Order, before_sn
         source = max(sent or target_jobs, key=lambda job: (job.snapshot.get("revision", 1), job.created_at, job.id))
         snapshot = order_print_snapshot(order, source.snapshot["customer_name"])
         kind = "amendment" if sent else "order"
-        snapshot.update(kind=kind)
+        snapshot.update(kind=kind, printer_region=job_region(source))
         if sent:
             snapshot["quantity_changes"] = quantity_changes(source.snapshot, snapshot)
         for job in target_jobs:
@@ -177,12 +190,14 @@ async def enqueue_cancellation_print(session: AsyncSession, order: Order, settin
             key=lambda job: (job.snapshot.get("revision", 1), job.created_at, job.id))
         session.add(PrintJob(order_id=order.id, event_key=f"order:{order.id}:cancel:{original.mode}:{original.printer_fingerprint[:32]}", kind="cancellation",
             mode=original.mode, printer_fingerprint=original.printer_fingerprint,
-            snapshot={**latest.snapshot, "kind": "cancellation", "cancellation_reason": order.cancellation_reason, **payment_snapshot(order)}))
+            snapshot={**latest.snapshot, "printer_region": job_region(latest), "kind": "cancellation", "cancellation_reason": order.cancellation_reason, **payment_snapshot(order)}))
 
 
-def job_read(job: PrintJob) -> dict:
+def job_read(job: PrintJob, settings: Settings | None = None) -> dict:
     return {key: getattr(job, key) for key in (
         "id", "order_id", "kind", "mode", "status", "reprint_of_id", "attempts", "last_error",
         "last_result", "created_at", "updated_at", "submitted_at", "printed_at",
     )} | {"revision": job.snapshot.get("revision", 1), "order_number": job.snapshot["order_number"], "pickup_at": job.snapshot["pickup_at"],
-           "can_query": bool(job.vendor_order_id) and job.status in {"submitted", "unknown"}}
+           "printer_region": job_region(job),
+           "can_query": bool(job.vendor_order_id) and job.status in {"submitted", "unknown"}
+                        and (settings is None or job_matches_printer(job, settings))}
