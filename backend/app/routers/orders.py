@@ -17,6 +17,7 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
+from ..group_review import order_accepts_group_payment, order_has_uncertain_group_payment, order_matches_group_contract
 from ..platform_settings import require_accepting_orders
 from ..order_numbers import insert_order_with_unique_number, is_order_submission_collision, make_order_number
 from ..config import Settings, get_settings
@@ -100,6 +101,8 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
     )
     requests = order.__dict__.get("cancellation_requests", [])
     latest = max(requests, key=lambda request: (aware(request.requested_at), request.id), default=None)
+    group_contract_changed = bool(order.group_campaign_id and order_accepts_group_payment(order)
+        and not order_matches_group_contract(order, order.__dict__.get("group_campaign")))
     actions = order_available_actions(order, viewer_is_admin)
     if latest and latest.status == "pending":
         actions = [action for action in actions if action != "refund"]
@@ -114,6 +117,8 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         fulfillment_method=order.fulfillment_method,
         group_campaign_id=order.group_campaign_id,
         group_campaign_deadline=aware(order.group_campaign.deadline) if order.__dict__.get("group_campaign") else None,
+        group_contract_changed=group_contract_changed,
+        group_payment_uncertain=order_has_uncertain_group_payment(order, datetime.now(timezone.utc)),
         meal_event_id=order.meal_event_id,
         membership_type_snapshot=order.membership_type_snapshot,
         member_tax_exempt_snapshot=order.member_tax_exempt_snapshot,

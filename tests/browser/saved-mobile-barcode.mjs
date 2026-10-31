@@ -52,7 +52,7 @@ async function fixture(t, { saved = null, failCount = 0, failStatus = 503, holdF
     if (path === '/v1/shipping-rates') return route.fulfill({ json: [] });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'pickup', name: '合作社門市', address: '測試門市', is_active: true }] });
     if (path === '/v1/group-campaigns/barcode-group') return route.fulfill({ json: campaign });
-    if (path.endsWith('/quote')) return route.fulfill({ json: { amount_total: 300, membership_type: 'nonmember', quantity: 1, unit_price: 300, product_subtotal: 300, shipping_fee: 0, items: [{ product_id: product.id, product_name: product.name, quantity: 1, unit_price: 300, subtotal: 300, tax_type: 'tax_exempt' }] } });
+    if (path.endsWith('/quote')) return route.fulfill({ json: { ...(path.startsWith('/v1/group-campaigns/') ? { confirmation_fingerprint: 'a'.repeat(64) } : {}), amount_total: 300, membership_type: 'nonmember', quantity: 1, unit_price: 300, product_subtotal: 300, shipping_fee: 0, items: [{ product_id: product.id, product_name: product.name, quantity: 1, unit_price: 300, subtotal: 300, tax_type: 'tax_exempt' }] } });
     if (['/v1/orders', '/v1/group-campaigns/barcode-group/join'].includes(path) && request.method() === 'POST') {
       state.writes.push({ path, body: request.postDataJSON() });
       return route.fulfill({ status: 201, json: { id: 'barcode-order', order_number: 'SLF-BARCODE-TEST', payment_status: 'pending', amount_total: 300 } });

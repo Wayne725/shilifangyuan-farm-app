@@ -11,6 +11,9 @@ from .email_sender import (
     EMAIL_PATTERN,
     EmailMessage,
     EmailSendResult,
+    EmailDeliveryRejected,
+    EmailDeliveryUnknown,
+    email_transport_failure,
     JsonTransport,
 )
 
@@ -65,16 +68,17 @@ class MailerSendAdapter:
         return payload
 
     async def send(self, message: EmailMessage) -> EmailSendResult:
-        response = await self.transport(
-            self.settings.email_url,
-            self.build_payload(message),
-            {"Authorization": f"Bearer {self.settings.api_token}"},
-            self.settings.timeout_seconds,
-        )
+        payload = self.build_payload(message)
+        try:
+            response = await self.transport(self.settings.email_url, payload,
+                {"Authorization": f"Bearer {self.settings.api_token}"}, self.settings.timeout_seconds)
+        except Exception as exc:
+            raise email_transport_failure(exc, "mailersend") from exc
         if response.status_code != 202:
-            raise IntegrationResponseError(
-                f"MailerSend rejected email with HTTP {response.status_code}"
-            )
+            if 400 <= response.status_code < 500 and response.status_code not in {408, 409}:
+                raise EmailDeliveryRejected(f"MailerSend rejected email with HTTP {response.status_code}",
+                    provider="mailersend", retryable=response.status_code == 429)
+            raise EmailDeliveryUnknown(f"MailerSend returned HTTP {response.status_code}; email delivery is unknown", provider="mailersend")
         message_id = next(
             (
                 value
@@ -83,6 +87,17 @@ class MailerSendAdapter:
             ),
             None,
         )
+        if not message_id:
+            try:
+                body = response.json()
+                suppressed = isinstance(body, dict) and any(isinstance(warning, dict) and warning.get("type") == "ALL_SUPPRESSED"
+                    for warning in body.get("warnings", []))
+            except Exception:
+                suppressed = False
+            if suppressed:
+                raise EmailDeliveryRejected("MailerSend suppressed all recipients; no email was sent", provider="mailersend",
+                    allow_failover=False, retryable=False)
+            raise EmailDeliveryUnknown("MailerSend success response has no message id", provider="mailersend")
         return EmailSendResult(
             True,
             message_id,

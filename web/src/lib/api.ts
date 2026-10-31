@@ -18,10 +18,12 @@ if (typeof window !== "undefined") {
 
 export class ApiError extends Error {
   status: number;
+  code: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -117,7 +119,7 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
   } catch {
     // Response is not JSON.
   }
-  return new ApiError(response.status, message);
+  return new ApiError(response.status, message, response.headers.get("X-Error-Code"));
 }
 
 export async function restoreSession(): Promise<AuthResponse | null> {

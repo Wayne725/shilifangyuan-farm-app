@@ -37,7 +37,7 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
         if (path === '/v1/meal-events/line-meal') return route.fulfill({ json: event });
         if (path === '/v1/group-campaigns/line-group') return route.fulfill({ json: campaign });
       }
-      if (path.endsWith('/quote')) return route.fulfill({ json: { amount_total: 120, membership_type: 'nonmember', quantity: 1, unit_price: 120, product_subtotal: 120, shipping_fee: 0,
+      if (path.endsWith('/quote')) return route.fulfill({ json: { ...(path.startsWith('/v1/group-campaigns/') ? { confirmation_fingerprint: 'a'.repeat(64) } : {}), amount_total: 120, membership_type: 'nonmember', quantity: 1, unit_price: 120, product_subtotal: 120, shipping_fee: 0,
         items: [{ product_id: product.id, product_name: product.name, offering_id: 'line-dish', meal_name: '隔離便當', quantity: 1, base_price: 120, option_price: 0, unit_price: 120, subtotal: 120, selections: [], tax_type: 'taxable' }], pickup: { location: '合作社', starts_at: event.pickup_starts_at, ends_at: event.pickup_ends_at } } });
       if (request.method() === 'POST' && path === orderPath) {
         writes.push({ path, body: request.postDataJSON() });

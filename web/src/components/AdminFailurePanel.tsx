@@ -10,6 +10,8 @@ interface FailedJob {
   order_category?: IssueOrderCategory;
   id: string; event_type: string; attempts: number; error: string;
   retryable: boolean; retry_blocker: string;
+  delivery_unknown?: boolean; requires_delivery_confirmation?: boolean;
+  delivery_provider?: string | null; provider_message_id?: string | null;
   title?: string; description?: string; next_action?: string;
   order_id?: string | null; order_number?: string | null; created_at?: string;
 }
@@ -55,14 +57,17 @@ export function AdminFailurePanel() {
 
 function FailedJobRow({ job, onRetry }: { job: FailedJob; onRetry: (message: string) => void }) {
   const [reason, setReason] = useState("");
+  const [confirmDeliveryRisk, setConfirmDeliveryRisk] = useState(false);
   const client = useQueryClient();
   const retry = useMutation({
-    mutationFn: () => apiFetch<{ message: string }>(`/v1/admin/failed-jobs/${job.id}/retry`, { method: "POST", body: JSON.stringify({ reason }) }),
+    mutationFn: () => apiFetch<{ message: string }>(`/v1/admin/failed-jobs/${job.id}/retry`, { method: "POST", body: JSON.stringify({ reason,
+      ...(job.requires_delivery_confirmation ? { confirm_delivery_risk: confirmDeliveryRisk } : {}) }) }),
     onSuccess: (result) => { onRetry(result.message); return client.invalidateQueries({ queryKey: ["admin-failed-jobs"] }); },
   });
   const title = job.title || ({ send_email: "平台通知信", "invoice.issue_requested": "電子發票開立", "refund.requested": "退款處理" } as Record<string, string>)[job.event_type] || "系統背景工作";
   return <article className="failed-job">
     <header><h3>{title}</h3><span>已嘗試 {job.attempts} 次</span></header>
+    {job.delivery_unknown && <p className="status-chip" role="status">寄送結果未知</p>}
     {job.description && <p className="failed-job-description">{job.description}</p>}
     <dl>
       {job.order_category && <div><dt>訂單分類</dt><dd>{job.order_category === "system" ? "其他系統工作" : orderCategoryLabels[job.order_category]}</dd></div>}
@@ -70,13 +75,17 @@ function FailedJobRow({ job, onRetry }: { job: FailedJob; onRetry: (message: str
       {job.created_at && <div><dt>發生時間</dt><dd>{formatDateTime(job.created_at)}</dd></div>}
       <div><dt>問題編號</dt><dd>{job.id}</dd></div>
       <div><dt>失敗原因</dt><dd>{job.error}</dd></div>
+      {job.delivery_unknown && <><div><dt>郵件供應商</dt><dd>{({ resend: "Resend", mailersend: "MailerSend" } as Record<string, string>)[job.delivery_provider || ""] || "未確認"}</dd></div>
+        <div><dt>供應商編號</dt><dd>{job.provider_message_id || "未取得"}</dd></div></>}
       {!job.retryable && <div><dt>目前限制</dt><dd>{job.retry_blocker}</dd></div>}
       {job.next_action && <div><dt>處理方式</dt><dd>{job.next_action}</dd></div>}
     </dl>
     {job.order_number && <Link className="button button-quiet" to="/admin" search={{ section: "orders", q: job.order_number }}>查看訂單</Link>}
     {job.retryable && <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); retry.mutate(); }}>
       <label>處理原因<input required maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
-      <button type="submit" className="button button-quiet" disabled={!reason.trim() || retry.isPending}>{retry.isPending ? "排入中…" : "排入重試"}</button>
+      {job.requires_delivery_confirmation && <label className="check-field"><input type="checkbox" required checked={confirmDeliveryRisk}
+        onChange={(event) => setConfirmDeliveryRisk(event.target.checked)} />已查詢供應商確認未寄出，並了解重新排入仍可能重寄</label>}
+      <button type="submit" className="button button-quiet" disabled={!reason.trim() || retry.isPending || (job.requires_delivery_confirmation && !confirmDeliveryRisk)}>{retry.isPending ? "排入中…" : "排入重試"}</button>
     </form>}
     {retry.isError && <p className="form-error" role="alert">{retry.error.message}</p>}
   </article>;

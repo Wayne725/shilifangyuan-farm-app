@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -17,7 +19,7 @@ from .membership_admission_schemas import (
     AdmissionRoundRead, AdmissionRoundStart, AdmissionRoundUpdate,
     AdmissionVersionInput, AdmissionWithdraw,
 )
-from .membership_education_settings import read_membership_education_settings
+from .membership_education_settings import MembershipEducationSettingsRead, read_membership_education_settings
 from .membership_policy import (
     MembershipPolicyError, get_membership_quiz_feedback, grade_membership_quiz,
     membership_quiz_eligibility, quote_membership_shares,
@@ -98,9 +100,7 @@ def _audit(session, row, actor_id, action, *, reason=None, data=None):
         reason=reason, data={"round_number": row.round_number, "version": row.version, **(data or {})}))
 
 
-async def start_blocked_reason(session: AsyncSession, user_id: str) -> str | None:
-    membership = await session.scalar(select(Membership).where(Membership.user_id == user_id)
-        .execution_options(populate_existing=True))
+def _membership_blocked_reason(membership: Membership | None) -> str | None:
     if membership is not None:
         if membership.status in {MembershipStatus.ACTIVE, MembershipStatus.TRAINEE, MembershipStatus.PENDING_PAYMENT}:
             return "此帳號已有會籍或進行中的入社款項，請先處理原案件"
@@ -108,6 +108,15 @@ async def start_blocked_reason(session: AsyncSession, user_id: str) -> str | Non
             return "此帳號有退社歷史，請先由管理員核對"
         if membership.status == MembershipStatus.SUSPENDED and not membership.member_number:
             return "原會籍資格待核對，請先由管理員處理"
+    return None
+
+
+async def start_blocked_reason(session: AsyncSession, user_id: str) -> str | None:
+    membership = await session.scalar(select(Membership).where(Membership.user_id == user_id)
+        .execution_options(populate_existing=True))
+    blocked = _membership_blocked_reason(membership)
+    if blocked:
+        return blocked
     if await session.scalar(select(MembershipCharge.id).where(MembershipCharge.user_id == user_id).limit(1)):
         return "此帳號有歷史入社款項，請先由管理員核對，避免重複申請"
     return None
@@ -152,10 +161,29 @@ def _passing(row, attempts):
 async def read_round(session, row, settings) -> AdmissionRoundRead:
     attempts = await _attempts(session, row)
     policy = await read_membership_education_settings(session)
+    blocked = await start_blocked_reason(session, row.user_id)
+    submissions = list((await session.scalars(select(MembershipAdmissionSubmission).where(
+        MembershipAdmissionSubmission.round_id == row.id).order_by(MembershipAdmissionSubmission.revision_number))).all())
+    reviews = list((await session.scalars(select(MembershipAdmissionReview).where(
+        MembershipAdmissionReview.round_id == row.id).order_by(MembershipAdmissionReview.reviewed_at, MembershipAdmissionReview.id))).all())
+    return _render_round(row, settings, _RoundReadData(attempts, policy, blocked, submissions, reviews, _profile(row, settings)))
+
+
+@dataclass
+class _RoundReadData:
+    attempts: list[MembershipAdmissionQuizAttempt]
+    policy: MembershipEducationSettingsRead
+    blocked: str | None
+    submissions: list[MembershipAdmissionSubmission]
+    reviews: list[MembershipAdmissionReview]
+    profile: AdmissionProfile | None
+
+
+def _render_round(row, settings, data: _RoundReadData) -> AdmissionRoundRead:
+    attempts, policy, blocked = data.attempts, data.policy, data.blocked
     eligibility = membership_quiz_eligibility(policy=policy.retry_policy(), attempt_count=len(attempts),
         last_attempt_at=_aware(attempts[-1].submitted_at) if attempts else None,
         passed=_passing(row, attempts) is not None, now=datetime.now(timezone.utc))
-    blocked = await start_blocked_reason(session, row.user_id)
     editable = row.status in EDITABLE and blocked is None
     reason = blocked
     if not editable:
@@ -170,10 +198,6 @@ async def read_round(session, row, settings) -> AdmissionRoundRead:
         reason = "尚未到重考時間"
     elif not eligibility.allowed:
         reason = "本輪可作答次數已用完" if policy.configured else "重考規則尚未設定，首次交卷後暫不可重考"
-    submissions = list((await session.scalars(select(MembershipAdmissionSubmission).where(
-        MembershipAdmissionSubmission.round_id == row.id).order_by(MembershipAdmissionSubmission.revision_number))).all())
-    reviews = list((await session.scalars(select(MembershipAdmissionReview).where(
-        MembershipAdmissionReview.round_id == row.id).order_by(MembershipAdmissionReview.reviewed_at, MembershipAdmissionReview.id))).all())
     return AdmissionRoundRead(
         **{name: getattr(row, name) for name in (
             "id", "user_id", "round_number", "version", "flow_version", "status", "requested_share_count",
@@ -181,7 +205,7 @@ async def read_round(session, row, settings) -> AdmissionRoundRead:
             "quiz_version", "review_reason", "student_verified", "decision_reference")},
         **{name: _aware(getattr(row, name)) for name in (
             "consented_at", "material_completed_at", "submitted_at", "reviewed_at", "created_at", "updated_at")},
-        profile=_profile(row, settings),
+        profile=data.profile,
         discovery_other=_cipher(settings).decrypt_text(row.discovery_other_encrypted,
             associated_data=f"{round_aad(row)}:discovery") if row.discovery_other_encrypted else None,
         quiz_eligibility=AdmissionEligibilityRead(allowed=reason is None and eligibility.allowed,
@@ -191,10 +215,10 @@ async def read_round(session, row, settings) -> AdmissionRoundRead:
             "id", "attempt_number", "quiz_version", "score", "passed", "settings_version", "results")},
             "submitted_at": _aware(attempt.submitted_at)} for attempt in attempts],
         submissions=[{"id": item.id, "revision_number": item.revision_number,
-            "submitted_at": _aware(item.submitted_at)} for item in submissions],
+            "submitted_at": _aware(item.submitted_at)} for item in data.submissions],
         reviews=[{**{name: getattr(item, name) for name in (
             "id", "decision", "reason", "decision_reference", "student_verified")},
-            "reviewed_at": _aware(item.reviewed_at)} for item in reviews],
+            "reviewed_at": _aware(item.reviewed_at)} for item in data.reviews],
         can_edit=editable, can_submit=bool(editable and _consented(row) and _educated(row) and _passing(row, attempts)),
         can_withdraw=row.status in WITHDRAWABLE,
     )
@@ -450,25 +474,61 @@ async def review_round(session, round_id, admin, body: AdmissionReviewInput, set
     return await read_round(session, row, settings)
 
 
+async def _related_rounds(session, model, round_ids, *order):
+    grouped = defaultdict(list)
+    records = await session.scalars(select(model).where(model.round_id.in_(round_ids)).order_by(*order))
+    for record in records:
+        grouped[record.round_id].append(record)
+    return grouped
+
+
+async def _read_round_page(session, rows, settings, profiles):
+    if not rows:
+        return []
+    round_ids = [row.id for row in rows]
+    user_ids = {row.user_id for row in rows}
+    attempts = await _related_rounds(session, MembershipAdmissionQuizAttempt, round_ids, MembershipAdmissionQuizAttempt.attempt_number)
+    submissions = await _related_rounds(session, MembershipAdmissionSubmission, round_ids, MembershipAdmissionSubmission.revision_number)
+    reviews = await _related_rounds(session, MembershipAdmissionReview, round_ids, MembershipAdmissionReview.reviewed_at, MembershipAdmissionReview.id)
+    memberships = {membership.user_id: membership for membership in await session.scalars(
+        select(Membership).where(Membership.user_id.in_(user_ids)).execution_options(populate_existing=True))}
+    charge_users = set(await session.scalars(select(MembershipCharge.user_id).where(MembershipCharge.user_id.in_(user_ids)).distinct()))
+    policy = await read_membership_education_settings(session)
+    return [_render_round(row, settings, _RoundReadData(
+        attempts[row.id], policy,
+        _membership_blocked_reason(memberships.get(row.user_id)) or (
+            "此帳號有歷史入社款項，請先由管理員核對，避免重複申請" if row.user_id in charge_users else None),
+        submissions[row.id], reviews[row.id],
+        profiles[row.id] if row.id in profiles else _profile(row, settings),
+    )) for row in rows]
+
+
 async def list_rounds(session, settings, *, status, q, limit, offset):
     query = select(MembershipAdmissionRound).order_by(MembershipAdmissionRound.created_at.desc(), MembershipAdmissionRound.id)
     if status == "pending":
         query = query.where(MembershipAdmissionRound.status.in_({"submitted", "needs_supplement"}))
     elif status != "all":
         query = query.where(MembershipAdmissionRound.status == status)
+    profiles = {}
     if not q.strip():
         total = await session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
         rows = list((await session.scalars(query.limit(limit).offset(offset))).all())
     else:
         term = q.strip().casefold()
-        candidates = (await session.execute(query.add_columns(User.display_name, User.email).join(User,
-            User.id == MembershipAdmissionRound.user_id))).all()
-        matched = []
-        for row, display_name, email in candidates:
-            profile = _profile(row, settings)
-            values = [display_name, email, profile.legal_name if profile else None, profile.contact_email if profile else None]
-            if any(term in value.casefold() for value in values if value):
-                matched.append(row)
-        total, rows = len(matched), matched[offset:offset + limit]
-    return AdmissionListRead(items=[await read_round(session, row, settings) for row in rows],
+        candidates = await session.stream(query.add_columns(User.display_name, User.email).join(User,
+            User.id == MembershipAdmissionRound.user_id).execution_options(yield_per=100))
+        total, rows = 0, []
+        try:
+            async for row, display_name, email in candidates:
+                public_match = any(term in value.casefold() for value in (display_name, email) if value)
+                profile = None if public_match else _profile(row, settings)
+                if public_match or (profile and any(term in value.casefold() for value in (profile.legal_name, profile.contact_email))):
+                    if offset <= total < offset + limit:
+                        rows.append(row)
+                        if not public_match:
+                            profiles[row.id] = profile
+                    total += 1
+        finally:
+            await candidates.close()
+    return AdmissionListRead(items=await _read_round_page(session, rows, settings, profiles),
         total=total, limit=limit, offset=offset)

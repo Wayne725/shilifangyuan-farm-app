@@ -49,7 +49,11 @@ from .integrations.payment_service import (
 )
 from .integrations.pii_crypto import decrypt_auth_outbox_credential
 from .integrations.email_sender import (
+    EmailDeliveryRejected,
+    EmailDeliveryUnknown,
     EmailMessage,
+    EmailSendResult,
+    email_transport_failure,
     email_sender_from_settings,
 )
 from .models import (
@@ -941,6 +945,27 @@ async def _enqueue_campaign_refunds(
         await request_order_refund(session, order, actor, "共同購買未成立，自動退款")
 
 
+EMAIL_OUTBOX_TYPES = {"send_email", "auth.email_verification_requested", "auth.password_reset_requested"}
+
+
+def _email_delivery_state(event, state, *, receipt=None, provider=None):
+    previous = event.payload.get("email_delivery")
+    previous = previous if isinstance(previous, dict) else {}
+    delivery = {**previous, "state": state, "idempotency_key": f"outbox-{event.id}"}
+    if receipt is not None:
+        delivery.update(provider=receipt.provider, message_id=receipt.provider_message_id)
+    elif provider:
+        delivery["provider"] = provider
+    event.payload = {**event.payload, "email_delivery": delivery}
+
+
+def _mark_email_delivery_unknown(event, *, receipt=None, provider=None):
+    _email_delivery_state(event, "unknown", receipt=receipt, provider=provider)
+    event.status = OutboxStatus.FAILED
+    event.last_error = "Email delivery result unknown; provider confirmation required"
+    _redact_auth_credential(event)
+
+
 async def _process_outbox(
     session: AsyncSession,
     settings: Settings,
@@ -957,7 +982,10 @@ async def _process_outbox(
         )
     )
     for event in stale:
-        event.status = OutboxStatus.PENDING
+        if event.event_type in EMAIL_OUTBOX_TYPES:
+            _mark_email_delivery_unknown(event)
+        else:
+            event.status = OutboxStatus.PENDING
     await session.commit()
 
     event_ids = list(
@@ -984,14 +1012,30 @@ async def _process_outbox(
         )
         if event is None:
             continue
+        email_job = event.event_type in EMAIL_OUTBOX_TYPES
+        delivery = event.payload.get("email_delivery")
+        retry_proven_safe = isinstance(delivery, dict) and delivery.get("state") in {"rejected", "resend_authorized"}
+        if email_job and event.attempts > 0 and not retry_proven_safe:
+            _mark_email_delivery_unknown(event)
+            await session.commit()
+            failed += 1
+            continue
         event.status = OutboxStatus.PROCESSING
         event.attempts += 1
         event.available_at = now
+        if email_job:
+            event.payload = {**event.payload, "email_delivery": {"state": "sending", "started_at": now.isoformat(),
+                "idempotency_key": f"outbox-{event.id}"}}
         await session.commit()
+        receipt = None
         try:
-            await _dispatch_outbox_event(session, settings, event_id)
+            receipt = await _dispatch_outbox_event(session, settings, event_id)
             event = await session.get(OutboxEvent, event_id)
             if event is not None:
+                if email_job:
+                    if not isinstance(receipt, EmailSendResult) or not receipt.accepted:
+                        raise EmailDeliveryUnknown("Email response could not be confirmed")
+                    _email_delivery_state(event, "accepted", receipt=receipt)
                 event.status = OutboxStatus.COMPLETED
                 event.processed_at = datetime.now(timezone.utc)
                 event.last_error = None
@@ -1002,8 +1046,19 @@ async def _process_outbox(
             await session.rollback()
             event = await session.get(OutboxEvent, event_id)
             if event is not None:
+                if email_job and event.status == OutboxStatus.COMPLETED:
+                    completed += 1
+                    continue
                 event.last_error = str(exc)[:500]
-                if event.attempts >= 8:
+                if email_job and isinstance(exc, EmailDeliveryRejected):
+                    _email_delivery_state(event, "rejected", provider=exc.provider)
+                if email_job and (isinstance(exc, EmailDeliveryUnknown) or receipt is not None):
+                    _mark_email_delivery_unknown(event, receipt=receipt, provider=getattr(exc, "provider", None))
+                elif email_job and isinstance(exc, EmailDeliveryRejected) and not exc.retryable:
+                    _email_delivery_state(event, "rejected", provider=exc.provider)
+                    event.status = OutboxStatus.FAILED
+                    _redact_auth_credential(event)
+                elif event.attempts >= 8:
                     event.status = OutboxStatus.FAILED
                     _redact_auth_credential(event)
                     await _notify_refund_terminal_failure(session, event)
@@ -1109,7 +1164,7 @@ async def _dispatch_outbox_event(
     session: AsyncSession,
     settings: Settings,
     event_id: str,
-) -> None:
+) -> EmailSendResult | None:
     event = await session.get(OutboxEvent, event_id)
     if event is None:
         return
@@ -1131,9 +1186,9 @@ async def _dispatch_outbox_event(
         "auth.email_verification_requested",
         "auth.password_reset_requested",
     }:
-        await _process_auth_email_event(settings, event)
+        return await _process_auth_email_event(settings, event)
     elif event.event_type == "send_email":
-        await _process_email_event(settings, event)
+        return await _process_email_event(settings, event)
     else:
         await _process_domain_event(session, event)
 
@@ -1550,60 +1605,56 @@ async def _process_invoice_void_event(
         raise InvoiceApplicationError("發票作廢結果尚未確認，背景工作將繼續查詢，不會重送作廢")
 
 
-async def _process_email_event(
-    settings: Settings, event: OutboxEvent
-) -> None:
-    payload = event.payload
-    await email_sender_from_settings(settings).send(
-        EmailMessage(
-            to_email=str(payload["to_email"]),
-            subject=str(payload["subject"]),
+async def _send_prepared_email(settings: Settings, message: EmailMessage) -> EmailSendResult:
+    try:
+        message.validate()
+        sender = email_sender_from_settings(settings)
+    except Exception as exc:
+        raise EmailDeliveryRejected("Email request was not attempted", allow_failover=False) from exc
+    try:
+        result = await sender.send(message)
+    except (EmailDeliveryUnknown, EmailDeliveryRejected):
+        raise
+    except Exception as exc:
+        raise email_transport_failure(exc, "unknown") from exc
+    if not isinstance(result, EmailSendResult):
+        raise EmailDeliveryUnknown("Email provider response could not be confirmed")
+    if not result.accepted:
+        raise EmailDeliveryRejected("Email provider rejected the request", provider=result.provider)
+    return result
+
+
+async def _process_email_event(settings: Settings, event: OutboxEvent) -> EmailSendResult:
+    try:
+        payload = event.payload
+        message = EmailMessage(to_email=str(payload["to_email"]), subject=str(payload["subject"]),
             text_content=str(payload["text_content"]),
-            html_content=(
-                str(payload["html_content"])
-                if payload.get("html_content")
-                else None
-            ),
-            idempotency_key=f"outbox-{event.id}",
-        )
-    )
+            html_content=str(payload["html_content"]) if payload.get("html_content") else None,
+            idempotency_key=f"outbox-{event.id}")
+    except Exception as exc:
+        raise EmailDeliveryRejected("Email payload was invalid; request was not attempted", allow_failover=False, retryable=False) from exc
+    return await _send_prepared_email(settings, message)
 
 
-async def _process_auth_email_event(
-    settings: Settings,
-    event: OutboxEvent,
-) -> None:
-    payload = event.payload
-    encrypted = payload.get("credential_encrypted")
-    credential = (
-        decrypt_auth_outbox_credential(
-            settings,
-            event.event_type,
-            event.aggregate_id,
-            str(encrypted),
-        )
-        if encrypted
-        else None
-    )
-    if event.event_type == "auth.email_verification_requested":
-        token = credential or str(payload["verification_token"])
-        subject = "十里方圓 Email 驗證"
-        text = f"您的 Email 驗證碼是：{token}\n\n驗證碼將於 10 分鐘後失效。"
-    else:
-        token = credential or str(payload["reset_token"])
-        subject = "十里方圓密碼重設"
-        action_url = (
-            f"{settings.web_base_url.rstrip('/')}/reset-password?token={token}"
-        )
-        text = f"請使用以下連結重設密碼：{action_url}"
-    await email_sender_from_settings(settings).send(
-        EmailMessage(
-            to_email=str(payload["recipient"]),
-            subject=subject,
-            text_content=text,
-            idempotency_key=f"outbox-{event.id}",
-        )
-    )
+async def _process_auth_email_event(settings: Settings, event: OutboxEvent) -> EmailSendResult:
+    try:
+        payload = event.payload
+        encrypted = payload.get("credential_encrypted")
+        credential = decrypt_auth_outbox_credential(settings, event.event_type, event.aggregate_id, str(encrypted)) if encrypted else None
+        if event.event_type == "auth.email_verification_requested":
+            token = credential or str(payload["verification_token"])
+            subject = "十里方圓 Email 驗證"
+            text = f"您的 Email 驗證碼是：{token}\n\n驗證碼將於 10 分鐘後失效。"
+        else:
+            token = credential or str(payload["reset_token"])
+            subject = "十里方圓密碼重設"
+            action_url = f"{settings.web_base_url.rstrip('/')}/reset-password?token={token}"
+            text = f"請使用以下連結重設密碼：{action_url}"
+        message = EmailMessage(to_email=str(payload["recipient"]), subject=subject, text_content=text,
+            idempotency_key=f"outbox-{event.id}")
+    except Exception as exc:
+        raise EmailDeliveryRejected("Auth email could not be prepared; request was not attempted", allow_failover=False) from exc
+    return await _send_prepared_email(settings, message)
 
 
 async def _process_domain_event(
@@ -1760,7 +1811,7 @@ async def _process_domain_event(
                     dedupe_key="outbox:{}".format(event.id),
                 )
             )
-    await session.commit()
+    await session.flush()
 
 
 router = jobs_router

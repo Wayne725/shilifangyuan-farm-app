@@ -1,4 +1,7 @@
 import re
+import socket
+import ssl
+from urllib.error import URLError
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -67,6 +70,32 @@ class EmailSender(Protocol):
     async def send(self, message: EmailMessage) -> EmailSendResult: ...
 
 
+class EmailDeliveryUnknown(IntegrationError):
+    def __init__(self, message: str, *, provider: str = "unknown", message_id: str | None = None):
+        super().__init__(message)
+        self.provider = provider
+        self.message_id = message_id
+
+
+class EmailDeliveryRejected(IntegrationResponseError):
+    def __init__(self, message: str, *, provider: str = "unknown", allow_failover: bool = True, retryable: bool = True):
+        super().__init__(message)
+        self.provider = provider
+        self.allow_failover = allow_failover
+        self.retryable = retryable
+
+
+def email_transport_failure(error: Exception, provider: str) -> IntegrationError:
+    current: BaseException | None = error
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (socket.gaierror, ConnectionRefusedError, ssl.SSLCertVerificationError, IntegrationConfigurationError)):
+            return EmailDeliveryRejected(f"{provider} request was not sent", provider=provider)
+        current = current.reason if isinstance(current, URLError) and isinstance(current.reason, BaseException) else current.__cause__
+    return EmailDeliveryUnknown(f"{provider} email delivery result is unknown", provider=provider)
+
+
 class FailoverEmailSender:
     def __init__(self, senders: Sequence[EmailSender]) -> None:
         if not senders:
@@ -76,14 +105,33 @@ class FailoverEmailSender:
         self.senders = tuple(senders)
 
     async def send(self, message: EmailMessage) -> EmailSendResult:
+        message.validate()
         errors = []
+        retryable = False
         for sender in self.senders:
             try:
-                return await sender.send(message)
-            except IntegrationError as exc:
+                result = await sender.send(message)
+                if result.accepted:
+                    return result
+                errors.append(f"{result.provider} rejected email")
+            except EmailDeliveryUnknown:
+                raise
+            except EmailDeliveryRejected as exc:
+                if not exc.allow_failover:
+                    raise
+                retryable = retryable or exc.retryable
                 errors.append(str(exc))
-        raise IntegrationResponseError(
-            f"All email providers failed: {'; '.join(errors)}"
+            except IntegrationConfigurationError as exc:
+                retryable = True
+                errors.append(str(exc))
+            except Exception as exc:
+                failure = email_transport_failure(exc, "unknown")
+                if isinstance(failure, EmailDeliveryUnknown):
+                    raise failure from exc
+                retryable = True
+                errors.append(str(failure))
+        raise EmailDeliveryRejected(
+            f"All email providers rejected the request: {'; '.join(errors)}", retryable=retryable,
         )
 
 

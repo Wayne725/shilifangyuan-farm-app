@@ -1140,9 +1140,17 @@ class ProposalTargetType(str, enum.Enum):
     CUSTOM = "custom"
 
 
+OPEN_PROPOSAL_TARGET_PREDICATE = (
+    "target_type IN ('product','bundle') AND target_id IS NOT NULL "
+    "AND status IN ('pending_review','voting','conversion_pending')"
+)
+
+
 class VoteProposal(Base):
     __tablename__ = "vote_proposals"
     __table_args__ = (
+        Index("uq_vote_proposals_open_target", "target_type", "target_id", unique=True,
+              postgresql_where=text(OPEN_PROPOSAL_TARGET_PREDICATE), sqlite_where=text(OPEN_PROPOSAL_TARGET_PREDICATE)),
         CheckConstraint("threshold > 0", name="threshold_positive"),
         Index(
             "ix_vote_proposals_open_target",
@@ -1900,6 +1908,7 @@ class Order(Base):
     client_request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    group_contract_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     kitchen_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     order_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     order_kind: Mapped[OrderKind] = mapped_column(
@@ -2683,12 +2692,17 @@ class InvoiceAllowanceItem(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index("uq_notification_user_event_dedupe", "user_id", "event_type", "dedupe_hash", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     event_type: Mapped[str] = mapped_column(String(80), index=True)
+    dedupe_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    delivery_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     title: Mapped[str] = mapped_column(String(160))
     body: Mapped[str] = mapped_column(Text)
     data: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -2704,8 +2718,14 @@ class Notification(Base):
 
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("uq_outbox_notification_intent", "notification_id", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    notification_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("notifications.id", ondelete="SET NULL"), nullable=True
+    )
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     aggregate_type: Mapped[str] = mapped_column(String(80))
     aggregate_id: Mapped[str] = mapped_column(String(36), index=True)

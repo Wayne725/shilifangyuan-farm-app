@@ -318,13 +318,15 @@ export function OrdersPage() {
                 {selected.cancellation_request.review_reason && <p>審核原因：{selected.cancellation_request.review_reason}</p>}
               </section>}
               {actionError && <p className="form-error">{actionError.message}</p>}
+              {selected.group_payment_uncertain ? <p className="form-error" role="status">付款結果仍待核對，請勿再次下單或付款。</p> : selected.group_contract_changed && <p className="form-error" role="status">共同購買核心條件已更新，這筆訂單無法繼續付款，請重新確認。</p>}
               <div className="order-actions">
+                {selected.group_contract_changed && !selected.group_payment_uncertain && selected.group_campaign_id && <Link className="button button-system" to="/groups/$campaignId" params={{campaignId:selected.group_campaign_id}}>回共同購買重新確認</Link>}
                 {selectedPaymentIsConfirming && (
                   <small className="no-action">
                     正在向金流確認，請勿重複付款。
                   </small>
                 )}
-                {selected.shipment?.status === "selection_pending" && (
+                {!selected.group_contract_changed && !selected.group_payment_uncertain && selected.shipment?.status === "selection_pending" && (
                   <button
                     className="button button-system"
                     type="button"
@@ -335,7 +337,7 @@ export function OrdersPage() {
                     {reopenLogistics.isPending ? "準備物流頁…" : "繼續選擇物流"}
                   </button>
                 )}
-                {!groupPaymentClosed && !selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
+                {!selected.group_contract_changed && !selected.group_payment_uncertain && !groupPaymentClosed && !selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
                   <button
                     className="button button-primary"
                     type="button"

@@ -46,6 +46,11 @@ async function fixture(t,{path='/activities',role='customer',width=1280,member=f
    if(p.endsWith('/payment-settings')){assert.equal(body.expected_updated_at,state.activity.updated_at);Object.assign(state.activity,body,{updated_at:'2030-01-02T02:01:00Z'});return route.fulfill({json:state.activity});}
    if(p.endsWith('/cancellation-preview'))return route.fulfill({json:{activity_id:'activity',expected_updated_at:state.activity.updated_at,preview_token:'preview',registration_count:1,waitlist_count:2,paid_count:1,refund_amount:200}});
    if(p==='/v1/admin/activities/activity/cancel'){assert.equal(body.preview_token,'preview');assert.equal(body.approve_refunds,true);state.activity.status='cancelled';if(state.registration){state.registration.status='cancelled';state.registration.available_actions=[];}state.refunds=state.refunds.map(item=>({...item,status:'approved'}));return route.fulfill({json:state.activity});}
+   if(/^\/v1\/admin\/activities\/activity\/registrations\/registration\/(attended|no_show)$/.test(p)){
+    assert.equal(body.expected_status,state.registration.status);assert.ok(body.reason.trim());
+    state.registration.status=p.split('/').at(-1);state.registration.checked_in_at=state.registration.status==='attended'?'2030-01-02T02:00:00Z':null;
+    return route.fulfill({json:state.registration});
+   }
    if(p==='/v1/admin/activity-refund-requests/refund/review'){assert.equal(body.expected_amount,200);assert.equal(body.expected_version,1);state.refunds[0].status=body.decision==='approve'?'approved':'rejected';return route.fulfill({json:state.refunds[0]});}
    if(p==='/v1/activities')return route.fulfill({json:{...state.activity,...body,status:'pending_review'}});
   }
@@ -86,3 +91,23 @@ test('活動收款CSV沿用已套用查詢，不受尚未送出的草稿或頁�
 test('退款待審列入後台待處理數量，不誤顯示沒有待辦',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',refunds:[refund]});await visit();await page.getByText('其他及舊版待辦 1 件',{exact:true}).waitFor();assert.equal(await page.getByText('其他及舊版審核目前沒有待處理事項',{exact:true}).count(),0);await clean(page,state);});
 
 test('取消整場會同步更新已展開名單與退款待審，不留下出席操作',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',reg:{...registration,status:'registered'},refunds:[refund]});await visit();await page.getByRole('button',{name:'報名名單',exact:true}).click();const list=page.getByRole('region',{name:'隔離走讀活動報名名單'});await list.getByRole('button',{name:'已出席',exact:true}).waitFor();await page.getByRole('form',{name:'審核活動退款'}).waitFor();await page.getByRole('button',{name:'取消活動',exact:true}).click();await page.getByLabel('取消活動原因').fill('場地取消');await page.getByLabel('確認取消活動並核准以上退款').check();await page.getByRole('button',{name:'確認取消及退款'}).click();await list.getByText(/activity@example.test · 已取消/).waitFor();assert.equal(await list.getByRole('button',{name:'已出席',exact:true}).count(),0);await page.getByText('沒有符合的退款申請').waitFor();assert.equal(await page.getByRole('form',{name:'審核活動退款'}).count(),0);assert.ok(state.reads.filter(path=>path.endsWith('/registrations')).length>=2);await clean(page,state);});
+
+for(const width of [390,1440])test(`出席更正需原因，失敗保稿且不改繳款代次 ${width}`,async t=>{
+ const {page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width,
+  activityPatch:{status:'completed'},reg:{...registration,status:'no_show',charge:{...charge,payment_status:'paid',available_actions:[]},available_actions:[]}});
+ await visit();await page.getByRole('button',{name:'報名名單',exact:true}).click();
+ const list=page.getByRole('region',{name:'隔離走讀活動報名名單'});
+ await list.getByRole('button',{name:'更正出席',exact:true}).click();
+ const form=list.getByRole('form',{name:'隔離報名者出席更正'});
+ const confirm=form.getByRole('button',{name:'確認更正',exact:true});
+ assert.equal(await confirm.isDisabled(),true);assert.equal(state.writes.length,0);
+ await form.getByLabel('更正原因',{exact:true}).fill('補登現場簽到，已核對');
+ state.fail={path:'/v1/admin/activities/activity/registrations/registration/attended',status:503};
+ await confirm.click();await page.getByText('隔離操作失敗',{exact:true}).waitFor();
+ assert.equal(await form.getByLabel('更正原因',{exact:true}).inputValue(),'補登現場簽到，已核對');
+ assert.equal(state.registration.status,'no_show');
+ await confirm.click();await list.getByText(/activity@example.test · 已出席/).waitFor();
+ assert.equal(state.registration.revision,1);assert.equal(state.registration.charge.payment_status,'paid');
+ assert.equal(state.writes.length,2);assert.deepEqual(state.writes[1].body,{expected_status:'no_show',reason:'補登現場簽到，已核對'});
+ assert.equal(await form.count(),0);await clean(page,state);
+});

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -73,10 +75,13 @@ from ..schemas import (
     GroupJoinQuoteRequest,
     OrderRead,
 )
-from ..group_review import campaign_has_unsettled_payments, reconcile_campaign_state, review_blocked_reason, TERMINAL_DECISIONS
-from ..order_numbers import insert_order_with_unique_number, make_order_number
+from ..group_review import (campaign_has_unsettled_payments, group_contract_fingerprint,
+    order_matches_group_contract, reconcile_campaign_state, review_blocked_reason,
+    unsettled_attempt, TERMINAL_DECISIONS)
+from ..order_numbers import insert_order_with_unique_number, is_order_submission_collision, make_order_number
 from .orders import (
     order_read,
+    load_order,
     release_active_reservations,
     request_order_refund,
 )
@@ -175,14 +180,14 @@ async def target_order_snapshot(
 
 async def _committed_group_quantity(
     session: AsyncSession,
-    campaign_id: str,
+    campaign: GroupCampaign,
     user_id: str,
 ) -> int:
     existing_orders = list(
         await session.scalars(
             select(Order)
             .where(
-                Order.group_campaign_id == campaign_id,
+                Order.group_campaign_id == campaign.id,
                 Order.user_id == user_id,
                 Order.fulfillment_status != FulfillmentStatus.CANCELLED,
                 Order.payment_status.notin_(
@@ -195,12 +200,15 @@ async def _committed_group_quantity(
                     ]
                 ),
             )
-            .options(selectinload(Order.items))
+            .options(selectinload(Order.items), selectinload(Order.payment_attempts), selectinload(Order.reservations))
         )
     )
     return sum(
         item.quantity
         for order in existing_orders
+        if (order.payment_status == PaymentStatus.PAID or order_matches_group_contract(order, campaign)
+            or any(unsettled_attempt(attempt, order) for attempt in order.payment_attempts)
+            or any(reservation.status == ReservationStatus.ACTIVE for reservation in order.reservations))
         for item in order.items
     )
 
@@ -415,9 +423,13 @@ async def quote_group_join(
     campaign = await load_campaign(session, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
+    return await _group_join_quote(session, campaign, body, user)
+
+
+async def _group_join_quote(session, campaign, body, user, *, target_snapshot=None):
     committed_quantity = await _committed_group_quantity(
         session,
-        campaign.id,
+        campaign,
         user.id,
     )
     try:
@@ -465,19 +477,14 @@ async def quote_group_join(
             raise HTTPException(status_code=422, detail="找不到適用的物流費率")
         if product_subtotal < rate.free_shipping_threshold:
             shipping_fee = rate.fee
-    _, _, product_tax_type, _, _ = await target_order_snapshot(
-        session, campaign.target_type, campaign.target_id
-    )
+    _, _, product_tax_type, _, _ = target_snapshot or await target_order_snapshot(session, campaign.target_type, campaign.target_id)
     tax_type = sale_tax_type(
         product_tax_type, membership_type, body.invoice_buyer_type
     )
     member_tax_exempt = member_sale_is_tax_exempt(
         membership_type, body.invoice_buyer_type
     )
-    return GroupJoinQuoteRead(
-        membership_type=membership_type,
-        member_tax_exempt=member_tax_exempt,
-        tax_type=tax_type,
+    values = dict(membership_type=membership_type, member_tax_exempt=member_tax_exempt, tax_type=tax_type,
         tax_amount=(
             included_tax_amount(product_subtotal, tax_type)
             + included_tax_amount(
@@ -491,6 +498,15 @@ async def quote_group_join(
         shipping_fee=shipping_fee,
         amount_total=product_subtotal + shipping_fee,
     )
+    confirmation = {**values, "campaign_id": campaign.id,
+        "campaign_contract": group_contract_fingerprint(campaign),
+        "invoice_buyer_type": body.invoice_buyer_type,
+        "fulfillment_method": body.fulfillment_method,
+        "shipping_channel": body.shipping_channel,
+        "shipping_temperature": campaign.shipping_temperature if body.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS else None}
+    return GroupJoinQuoteRead(**values, confirmation_fingerprint=hashlib.sha256(json.dumps(
+        confirmation, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()).hexdigest())
 
 
 @groups_router.post(
@@ -505,6 +521,43 @@ async def join_campaign(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> OrderRead:
+    submitting_user_id = user.id
+    fingerprint = None
+    if body.client_request_id is not None:
+        normalized = body.model_dump(mode="json", exclude={"client_request_id"})
+        normalized["contact_email"] = str(body.contact_email).lower()
+        for field in ("invoice_buyer_tax_id", "invoice_buyer_name", "invoice_carrier_value"):
+            value = normalized[field]
+            normalized[field] = value.strip() if value else None
+        if normalized["invoice_carrier_value"]:
+            normalized["invoice_carrier_value"] = normalized["invoice_carrier_value"].upper()
+        if normalized["invoice_buyer_email"]:
+            normalized["invoice_buyer_email"] = normalized["invoice_buyer_email"].lower()
+        fingerprint = hashlib.sha256(json.dumps(
+            {"channel": "group", "campaign_id": campaign_id, "body": normalized},
+            sort_keys=True, ensure_ascii=False,
+        ).encode()).hexdigest()
+        if session.get_bind().dialect.name == "postgresql":
+            key = int.from_bytes(hashlib.sha256(f"group-checkout:{submitting_user_id}:{body.client_request_id}".encode()).digest()[:8], "big", signed=True)
+            await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+    async def existing_submission():
+        if body.client_request_id is None:
+            return None
+        existing = (await session.execute(select(Order.id, Order.order_kind, Order.sales_channel,
+            Order.group_campaign_id, Order.meal_event_id, Order.request_fingerprint).where(
+                Order.user_id == submitting_user_id, Order.client_request_id == str(body.client_request_id)))).first()
+        if existing is None:
+            return None
+        if (existing.order_kind != OrderKind.GROUP or existing.sales_channel != SalesChannel.GROUP
+            or existing.group_campaign_id != campaign_id or existing.meal_event_id is not None
+            or existing.request_fingerprint != fingerprint):
+            raise HTTPException(409, "此送單識別碼已使用，請重新確認訂單", headers={"X-Error-Code": "idempotency_conflict"})
+        return order_read(await load_order(session, existing.id, refresh=True), False)
+
+    replay = await existing_submission()
+    if replay is not None:
+        return replay
     require_sales_scope_allows(
         settings, sales_channel=SalesChannel.GROUP,
         fulfillment_method=body.fulfillment_method,
@@ -513,36 +566,15 @@ async def join_campaign(
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
-    committed_quantity = await _committed_group_quantity(
-        session,
-        campaign.id,
-        user.id,
-    )
-    try:
-        validate_group_join(
-            campaign,
-            body.quantity,
-            committed_quantity,
-            datetime.now(timezone.utc),
-        )
-    except DomainError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    name, unit, tax_type, product_id, bundle_id = await target_order_snapshot(
+    snapshot = await target_order_snapshot(
         session, campaign.target_type, campaign.target_id
     )
-    membership_type = membership_type_for_user(user)
-    tax_type = sale_tax_type(tax_type, membership_type, body.invoice_buyer_type)
-    unit_price = price_for_membership(
-        campaign.member_price,
-        campaign.nonmember_price,
-        membership_type,
-    )
-    if body.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS and (
-        not campaign.can_ship
-        or campaign.shipping_temperature is None
-        or body.shipping_channel not in (campaign.allowed_shipping_channels or [])
-    ):
-        raise HTTPException(status_code=409, detail="此共同購買不支援選擇的物流通路")
+    quote = await _group_join_quote(session, campaign, body, user, target_snapshot=snapshot)
+    if ((body.expected_total is not None and body.expected_total != quote.amount_total)
+        or (body.expected_quote_fingerprint is not None and body.expected_quote_fingerprint != quote.confirmation_fingerprint)):
+        raise HTTPException(409, "共同購買報價已更新，請重新確認後再送單", headers={"X-Error-Code": "quote_changed"})
+    name, unit, _, product_id, bundle_id = snapshot
+    membership_type, tax_type, unit_price = quote.membership_type, quote.tax_type, quote.unit_price
     pickup_location = None
     if body.pickup_location_id is not None:
         if body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP:
@@ -560,6 +592,9 @@ async def join_campaign(
             raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(
         order_number=make_order_number(),
+        client_request_id=str(body.client_request_id) if body.client_request_id is not None else None,
+        request_fingerprint=fingerprint,
+        group_contract_fingerprint=group_contract_fingerprint(campaign),
         order_kind=OrderKind.GROUP,
         invoice_provider_context=invoice_context_from_settings(settings),
         sales_channel=SalesChannel.GROUP,
@@ -619,8 +654,17 @@ async def join_campaign(
         ),
     )
     user.notification_email = order.contact_email
-    await insert_order_with_unique_number(session, order, make_order_number)
-    await session.commit()
+    try:
+        await insert_order_with_unique_number(session, order, make_order_number)
+        await session.commit()
+    except IntegrityError as exc:
+        if body.client_request_id is None or not is_order_submission_collision(exc, session.get_bind().dialect.name):
+            raise
+        await session.rollback()
+        replay = await existing_submission()
+        if replay is not None:
+            return replay
+        raise
     order = await session.scalar(
         select(Order)
         .where(Order.id == order.id)

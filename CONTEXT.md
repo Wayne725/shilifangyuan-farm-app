@@ -150,5 +150,5 @@ _避免：線上付款、已下單即已收款_
 _避免：退款、刪除交易_
 
 **雲端出單（Cloud Print）**：
-便當成立時與訂單同交易建立持久化列印工作，由獨立背景程序送往飛鵝亞太站。雲端接受只記 submitted，查詢確認才記 printed；Dry Run 記 simulated，結果不明記 unknown 且不自動重送。啟用及到貨驗收見 `docs/FEIE_PRINTING.md`；尚未實機測試。
+便當成立時與訂單同交易建立持久化列印工作，由獨立背景程序依工作保存的區域送往飛鵝中國站或亞太站。雲端接受只記 submitted，查詢確認才記 printed；Dry Run 記 simulated，結果不明記 unknown 且不自動重送。2026-10-31 中國站已成功送出一張無個資繁中實機測試單；網站訂單自動出單仍未啟用，條件見 `docs/FEIE_PRINTING.md`。
 _避免：API 成功即已出紙、逾時直接重印_

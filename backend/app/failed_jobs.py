@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import case, func, or_
+from sqlalchemy import and_, case, func, or_
 
-from .models import Order, OutboxEvent
+from .models import Order, OutboxEvent, OutboxStatus
 
 
 JOB_TITLES = {
@@ -36,9 +36,20 @@ ERROR_RULES = (
     (("http 500", "http 502", "http 503", "http 504", "status 500", "status 502", "status 503", "status 504", "service unavailable"), "外部服務暫時無法完成處理。"),
 )
 UNKNOWN_ERROR = "目前紀錄未提供可辨識的失敗原因，需進一步核對。"
+DELIVERY_UNKNOWN = "寄送結果未知，可能已受理，請先查詢供應商。"
+
+
+def email_delivery_unknown(event: OutboxEvent) -> bool:
+    delivery = event.payload.get("email_delivery") or {}
+    if event.event_type not in JOB_KINDS["email"]:
+        return False
+    state = delivery.get("state") if isinstance(delivery, dict) else None
+    return state == "unknown" or (event.status == OutboxStatus.FAILED and event.attempts > 0 and state != "rejected")
 
 
 def job_error_summary(event: OutboxEvent) -> str:
+    if email_delivery_unknown(event):
+        return DELIVERY_UNKNOWN
     error = (event.last_error or "").lower()
     return next((summary for words, summary in ERROR_RULES if any(word in error for word in words)), UNKNOWN_ERROR)
 
@@ -50,7 +61,11 @@ def job_title_expression():
 
 def job_error_expression():
     error = func.lower(func.coalesce(OutboxEvent.last_error, ""))
-    return case(*[(or_(*[error.contains(word, autoescape=True) for word in words]), summary) for words, summary in ERROR_RULES], else_=UNKNOWN_ERROR)
+    state = OutboxEvent.payload["email_delivery"]["state"].as_string()
+    return case((and_(OutboxEvent.event_type.in_(JOB_KINDS["email"]),
+        or_(state == "unknown", and_(OutboxEvent.status == OutboxStatus.FAILED, OutboxEvent.attempts > 0,
+            or_(state.is_(None), state != "rejected")))), DELIVERY_UNKNOWN),
+        *[(or_(*[error.contains(word, autoescape=True) for word in words]), summary) for words, summary in ERROR_RULES], else_=UNKNOWN_ERROR)
 
 
 def job_order_id_expression():

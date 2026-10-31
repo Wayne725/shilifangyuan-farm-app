@@ -4,7 +4,7 @@ from datetime import datetime, time, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +15,7 @@ from ..config import Settings, get_settings
 from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..order_categories import OrderCategory, order_category_condition
-from ..failed_jobs import JOB_KINDS, job_details, job_error_expression, job_error_summary, job_order_id_expression, job_title_expression
+from ..failed_jobs import JOB_KINDS, email_delivery_unknown, job_details, job_error_expression, job_error_summary, job_order_id_expression, job_title_expression
 from ..integrations.common import IntegrationError
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..models import (
@@ -58,6 +58,8 @@ operations_router = APIRouter(tags=["operations"])
 async def job_retry_blocker(session: AsyncSession, event: OutboxEvent) -> str:
     if event.status != OutboxStatus.FAILED:
         return "工作並非失敗狀態，不可重複排入"
+    if email_delivery_unknown(event) and event.event_type in {"auth.email_verification_requested", "auth.password_reset_requested"}:
+        return "驗證或密碼重設信的寄送結果未知，請由本人重新申請，不可直接重送舊憑證"
     if event.event_type == "invoice.issue_requested":
         order_id = str(event.payload.get("order_id") or event.aggregate_id)
         order = await session.get(Order, order_id)
@@ -114,18 +116,28 @@ async def list_failed_jobs(
     items = []
     for event, order in rows:
         blocker = await job_retry_blocker(session, event)
+        delivery = event.payload.get("email_delivery")
+        delivery = delivery if isinstance(delivery, dict) else {}
         items.append({"id": event.id, "event_type": event.event_type, "aggregate_id": event.aggregate_id,
                       "status": event.status.value, "attempts": event.attempts,
                       "error": job_error_summary(event), "retryable": not blocker, "retry_blocker": blocker,
+                      "delivery_unknown": email_delivery_unknown(event),
+                      "requires_delivery_confirmation": email_delivery_unknown(event) and not blocker,
+                      "delivery_provider": delivery.get("provider") if email_delivery_unknown(event) else None,
+                      "provider_message_id": delivery.get("message_id") if email_delivery_unknown(event) else None,
                       "order_category": "meal" if order and order.sales_channel.value == "meal_preorder" else "general" if order else "system",
                       **job_details(event, order)})
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
+class FailedJobRetryRequest(AdminActionReason):
+    confirm_delivery_risk: bool = Field(default=False, strict=True)
+
+
 @operations_router.post("/v1/admin/failed-jobs/{event_id}/retry")
 async def retry_failed_job(
     event_id: str,
-    body: AdminActionReason,
+    body: FailedJobRetryRequest,
     request: Request,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
@@ -138,9 +150,22 @@ async def retry_failed_job(
         raise HTTPException(404, "找不到工作")
     if blocker := await job_retry_blocker(session, event):
         raise HTTPException(409, blocker)
+    unknown = email_delivery_unknown(event)
+    if unknown and not body.confirm_delivery_risk:
+        raise HTTPException(409, "寄送結果未知，請先查詢供應商並明確確認重送風險")
+    previous_delivery = event.payload.get("email_delivery")
+    previous_delivery = previous_delivery if isinstance(previous_delivery, dict) else {}
+    if unknown and not previous_delivery:
+        previous_delivery = {"state": "unknown", "legacy_unverified": True}
     audit = AdminAudit(actor_id=admin.id, action="outbox.retry_requested", aggregate_type="outbox", aggregate_id=event.id,
-                       reason=body.reason, data={"event_type": event.event_type, "previous_attempts": event.attempts})
+                       reason=body.reason, data={"event_type": event.event_type, "previous_attempts": event.attempts,
+                           "confirm_delivery_risk": unknown and body.confirm_delivery_risk,
+                           "previous_delivery": {key: previous_delivery[key] for key in
+                               ("state", "provider", "message_id", "idempotency_key", "started_at", "legacy_unverified") if key in previous_delivery}})
     session.add(audit)
+    if unknown:
+        event.payload = {**event.payload, "email_delivery": {**previous_delivery, "state": "resend_authorized",
+            "confirmed_by": admin.id, "confirmed_at": datetime.now(timezone.utc).isoformat()}}
     event.status = OutboxStatus.PENDING
     event.available_at = datetime.now(timezone.utc)
     # Keep the same event/idempotency key and history; one further attempt per request.

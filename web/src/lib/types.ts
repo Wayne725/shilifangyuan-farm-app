@@ -166,6 +166,8 @@ export interface Order {
   fulfillment_method: FulfillmentMethod;
   group_campaign_id?: string | null;
   group_campaign_deadline?: string | null;
+  group_contract_changed?: boolean;
+  group_payment_uncertain?: boolean;
   meal_event_id?: string | null;
   membership_type_snapshot: string;
   member_tax_exempt_snapshot?: boolean;

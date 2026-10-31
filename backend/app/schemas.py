@@ -719,6 +719,9 @@ class OrderCreate(InvoicePreferenceInput):
 
 
 class GroupJoinRequest(InvoicePreferenceInput):
+    client_request_id: Optional[UUID] = None
+    expected_total: Optional[int] = Field(default=None, ge=0)
+    expected_quote_fingerprint: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     quantity: int = Field(ge=1, le=999)
     contact_email: EmailStr
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
@@ -762,6 +765,7 @@ class GroupJoinQuoteRequest(BaseModel):
 
 
 class GroupJoinQuoteRead(ApiModel):
+    confirmation_fingerprint: str
     membership_type: MembershipType
     member_tax_exempt: bool = False
     tax_type: TaxType
@@ -865,6 +869,8 @@ class OrderRead(ApiModel):
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
     group_campaign_id: Optional[str]
     group_campaign_deadline: Optional[datetime] = None
+    group_contract_changed: bool = False
+    group_payment_uncertain: bool = False
     meal_event_id: Optional[str] = None
     membership_type_snapshot: MembershipType
     member_tax_exempt_snapshot: bool = False

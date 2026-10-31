@@ -263,14 +263,27 @@ export type GroupCheckoutInput = Omit<CheckoutInput, "items"> & {
   quantity: number;
 };
 
+export interface GroupCommerceGateway extends Pick<CommerceGateway, "createLogisticsSelection" | "createPaymentAttempt"> {
+  joinCampaign(campaignId: string, body: Record<string, unknown>): Promise<Order>;
+}
+
+const httpGroupCommerceGateway: GroupCommerceGateway = {
+  joinCampaign: (campaignId, body) => apiFetch<Order>(`/v1/group-campaigns/${campaignId}/join`, { method: "POST", body: JSON.stringify(body) }),
+  createLogisticsSelection: httpCommerceGateway.createLogisticsSelection,
+  createPaymentAttempt: httpCommerceGateway.createPaymentAttempt,
+};
+
 export async function beginGroupCheckout(
   input: GroupCheckoutInput,
+  gateway: GroupCommerceGateway = httpGroupCommerceGateway,
+  canContinue?: () => boolean,
 ): Promise<CheckoutOutcome> {
-  const order = await apiFetch<Order>(
-    `/v1/group-campaigns/${input.campaignId}/join`,
-    {
-      method: "POST",
-      body: JSON.stringify({
+  const checkIdentity = () => { if (canContinue && !canContinue()) throw new Error("登入身分已變更，請確認目前帳號後重新操作。"); };
+  checkIdentity();
+  const order = await gateway.joinCampaign(input.campaignId, {
+        ...(input.clientRequestId ? { client_request_id: input.clientRequestId } : {}),
+        ...(input.expectedTotal !== undefined ? { expected_total: input.expectedTotal } : {}),
+        ...(input.expectedQuoteFingerprint ? { expected_quote_fingerprint: input.expectedQuoteFingerprint } : {}),
         quantity: input.quantity,
         contact_email: input.contactEmail,
         ...invoicePreferencePayload(input.invoicePreference),
@@ -281,12 +294,19 @@ export async function beginGroupCheckout(
         ...(input.fulfillment.kind === "pickup"
           ? { pickup_location_id: input.fulfillment.pickupLocationId }
           : { shipping_channel: input.fulfillment.channel }),
-      }),
-    },
-  );
+  });
+  checkIdentity();
+  if ("group_payment_uncertain" in order && order.group_payment_uncertain === true) {
+    return { kind: "resume", order, message: "付款結果仍待核對，請勿再次下單或付款" };
+  }
+  if (order.group_contract_changed || (order.revision ?? 1) > 1 || order.fulfillment_status === "cancelled"
+    || (order.payment_status && !["pending", "failed", "expired"].includes(order.payment_status))
+    || (input.fulfillment.kind === "pickup" && input.expectedTotal !== undefined && order.amount_total !== input.expectedTotal)) {
+    return { kind: "resume", order, message: "已恢復原共同購買訂單，請在訂單中心確認目前內容與處理狀態" };
+  }
   try {
     if (input.fulfillment.kind === "shipping") {
-      const selection = await httpCommerceGateway.createLogisticsSelection(
+      const selection = await gateway.createLogisticsSelection(
         order.id,
         {
           channel: input.fulfillment.channel,
@@ -296,11 +316,16 @@ export async function beginGroupCheckout(
           shipping_address: input.fulfillment.shippingAddress,
         },
       );
+      checkIdentity();
+      if (!selection.selection_url) throw new Error("物流選擇頁尚未建立");
       return { kind: "redirect", order, url: selection.selection_url, step: "logistics" };
     }
-    const payment = await httpCommerceGateway.createPaymentAttempt(order.id);
+    const payment = await gateway.createPaymentAttempt(order.id);
+    checkIdentity();
+    if (!payment.payment_url) throw new Error("付款頁尚未建立");
     return { kind: "redirect", order, url: payment.payment_url, step: "payment" };
   } catch (reason) {
+    checkIdentity();
     return {
       kind: "resume",
       order,
