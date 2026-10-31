@@ -8,18 +8,24 @@ on:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     env:
       RECONCILE_URL: ${{ secrets.RECONCILE_URL }}
       RECONCILE_SECRET: ${{ secrets.RECONCILE_SECRET }}
     steps:
-      - name: Skip until deployment secrets are configured
+      - name: Require deployment secrets
         if: ${{ env.RECONCILE_URL == '' || env.RECONCILE_SECRET == '' }}
-        run: echo "Reconciliation is inactive until Render deployment secrets are configured."
+        run: |
+          echo "Reconciliation requires RECONCILE_URL and RECONCILE_SECRET."
+          exit 1
 
       - name: Reconcile deadlines, payments, invoices, and notifications
         if: ${{ env.RECONCILE_URL != '' && env.RECONCILE_SECRET != '' }}
         run: |
           curl --fail-with-body \
+            --connect-timeout 10 \
+            --max-time 120 \
+            --retry-max-time 540 \
             --retry 3 \
             --retry-all-errors \
             --request POST \
