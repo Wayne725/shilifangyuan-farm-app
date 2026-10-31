@@ -112,3 +112,62 @@ jobs:
       - name: Fail if the committed manifest is stale
         run: git diff --exit-code -- web/src/lib/api.routes.json
       - run: node --test tests/web-api-routes.test.mjs
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      VITE_API_BASE_URL: ""
+      BROWSER_TEST_URL: http://127.0.0.1:4192
+      SESSION_EVIDENCE_DIR: browser-evidence/session
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Record browser runtime
+        run: |
+          set -euo pipefail
+          mkdir -p browser-evidence
+          node --version | tee browser-evidence/runtime.log
+          pnpm --version | tee -a browser-evidence/runtime.log
+      - name: Install locked dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee browser-evidence/install.log
+      - name: Install matching Chromium and system dependencies
+        run: |
+          set -euo pipefail
+          pnpm exec playwright --version | tee browser-evidence/playwright.log
+          pnpm exec playwright install --with-deps chromium 2>&1 | tee browser-evidence/browser-install.log
+      - name: Build isolated frontend
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee browser-evidence/build.log
+      - name: Run isolated browser smoke
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          node web/node_modules/vite/bin/vite.js preview web --host 127.0.0.1 --port 4192 --strictPort > browser-evidence/preview.log 2>&1 &
+          smoke_preview_pid=$!
+          cleanup() {
+            kill "$smoke_preview_pid" 2>/dev/null || true
+            wait "$smoke_preview_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:4192/ > /dev/null
+          kill -0 "$smoke_preview_pid"
+          node --test --test-concurrency=1 --test-timeout=45000 tests/browser/checkout-recovery.mjs tests/browser/session-consistency.mjs tests/browser/line-customer-checkout.mjs 2>&1 | tee browser-evidence/smoke.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-smoke-evidence
+          path: browser-evidence/
+          if-no-files-found: error
+          retention-days: 7

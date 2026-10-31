@@ -2,25 +2,49 @@
 
 測試檔：`tests/browser/payment-return.mjs`、`tests/browser/auth-navigation.mjs`、`tests/browser/membership.mjs`。只接受 localhost／127.0.0.1，攔截所有 `/v1/` 回傳假資料，阻擋其他外部網站；付款頁使用 `payment.example.test`，證件儲存使用攔截的 `storage.example.test`。不使用正式帳號、不執行真實付款、退款、開票或寄信。
 
-## 執行
+## 鎖定 runtime 與 CI 煙霧
 
-先在一個終端啟動專用前端：
-
-```sh
-pnpm --dir web dev --host 127.0.0.1 --port 4185 --strictPort
-```
-
-在另一個終端使用獨立暫存 runtime，避免將手機 App 或瀏覽器二進位加入專案：
+根目錄 exact devDependency 為 `playwright@1.62.1`，由 pnpm lock 鎖定完整依賴及 integrity。使用 `.nvmrc` 的 Node 與 `packageManager` 指定的 pnpm；不需外部 `NODE_PATH`，也不透過未鎖定的 `npx`／`pnpm dlx` 安裝工具。
 
 ```sh
-test_runtime="$(mktemp -d)"
-npm install --prefix "$test_runtime" playwright@1.62.1
-PLAYWRIGHT_BROWSERS_PATH="$test_runtime/browsers" node "$test_runtime/node_modules/playwright/cli.js" install chromium webkit
-NODE_PATH="$test_runtime/node_modules" PLAYWRIGHT_BROWSERS_PATH="$test_runtime/browsers" pnpm test:browser
-NODE_PATH="$test_runtime/node_modules" PLAYWRIGHT_BROWSERS_PATH="$test_runtime/browsers" BROWSER_ENGINE=webkit pnpm test:browser
+pnpm install --frozen-lockfile
+pnpm exec playwright install --with-deps chromium
+pnpm build
 ```
 
-Linux 可能還需安裝 Playwright 所需系統函式庫；本輪是在 macOS 執行。已有相容 runtime 時可直接設定 `NODE_PATH`；`BROWSER_EXECUTABLE` 可指定已安裝的 Chromium 執行檔。`BROWSER_TEST_URL` 可改為其他**本機**測試埠，不能指向正式站。
+鎖定 CLI 會取得對應 Chromium revision1234，而非沿用其他版本的本機 executable。Linux 的系統依賴由 `--with-deps` 安裝；CI 只 cache pnpm，不 cache browser binary。原 `frontend-quality` 仍執行全 root 鎖檔的 audit／SBOM、型別、Node測試與build，另保留 backend 及 api-contract jobs。
+
+新增獨立 `browser-smoke` job，完整串行執行以下三檔共28案，不使用 name filter：
+
+| 檔案 | 案數 | 驗證內容 |
+|---|---:|---|
+| `checkout-recovery.mjs` | 7 | 回應遺失、凍結原單、價格／指紋更新、storage、身分交接與正常付款 |
+| `session-consistency.mjs` | 9 | Email登入重試、401續期、503保登入、A→B隔離、晚到回應與logout |
+| `line-customer-checkout.mjs` | 12 | 390／1440寬、一般／便當／共同購買、LINE帳號通知Email新填／預存與付款 |
+
+job上限10分鐘，測試step上限6分鐘，每案45秒；只有本人啟動的loopback preview會在EXIT trap清除。安裝、瀏覽器、build、preview、測試log與session假資料紀錄，在成功或失敗後一律上傳 `browser-smoke-evidence`，保留7日；pipeline使用pipefail，失敗不能被tee掩蓋。job不取得正式帳號或供應商secret。
+
+## 本機執行同一組28案
+
+先在一個終端啟動已build的專用前端：
+
+```sh
+node web/node_modules/vite/bin/vite.js preview web --host 127.0.0.1 --port 4192 --strictPort
+```
+
+另一個終端執行：
+
+```sh
+BROWSER_TEST_URL=http://127.0.0.1:4192 SESSION_EVIDENCE_DIR=browser-evidence/session node --test --test-concurrency=1 --test-timeout=45000 tests/browser/checkout-recovery.mjs tests/browser/session-consistency.mjs tests/browser/line-customer-checkout.mjs
+```
+
+`BROWSER_TEST_URL` 只能指向本機；checkout恢復測試自行攔截獨立4239 origin的static/API，不會真的連線該埠。所有API與付款均為假資料，外站請求中止。結束時在第一個終端停止本人preview。
+
+## 其他隔離驗收
+
+`pnpm test:browser` 保留作擴充入口；各檔有自己的fixture、功能旗標與port要求，不代表全部已納入本次CI或皆可切換引擎。`payment-return.mjs`、`auth-navigation.mjs`、`membership.mjs` 等既有範圍列於下節。
+
+需要WebKit的個別檔案，可先用鎖定CLI安裝 `pnpm exec playwright install --with-deps webkit`，再依該檔支援設定 `BROWSER_ENGINE=webkit`。三份CI煙霧目前只承諾Chromium；session及LINE檔固定用Chromium。不要把外部 `BROWSER_EXECUTABLE` 或 `NODE_PATH` 帶入CI，避免以不匹配版本取代鎖檔工具。WebKit測試不等同原生Safari、iPhone或真實金流驗收。
 
 ## 覆蓋
 

@@ -17,5 +17,8 @@
     "test": "node --test tests/*.test.mjs tests/audits/*.test.mjs",
     "test:browser": "node --test tests/browser/*.mjs",
     "typecheck": "pnpm --dir web typecheck"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
   }
 }
