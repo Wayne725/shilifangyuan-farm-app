@@ -122,26 +122,66 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
   return new ApiError(response.status, message, response.headers.get("X-Error-Code"));
 }
 
+function nativeLockUnavailable(error: unknown): boolean {
+  return typeof DOMException !== "undefined" && error instanceof DOMException
+    && ["SecurityError", "NotSupportedError"].includes(error.name);
+}
+
+async function requestSessionRefresh(stillCurrent: () => boolean): Promise<Response | null> {
+  const send = () => stillCurrent() ? requestApi("/v1/auth/refresh", { method: "POST" }) : Promise.resolve(null);
+  let manager: LockManager | undefined;
+  try {
+    manager = typeof navigator === "undefined" ? undefined : navigator.locks;
+  } catch (error) {
+    if (nativeLockUnavailable(error)) return send();
+    throw error;
+  }
+  if (!manager || typeof manager.request !== "function") return send();
+  const controller = new AbortController();
+  let entered = false;
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waitingError = () => new ApiError(503, "登入狀態暫時無法更新，請重試連線。");
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { timedOut = true; controller.abort(); reject(waitingError()); }, 15_000);
+  });
+  try {
+    const request = manager.request("slf-auth-refresh-v1", { mode: "exclusive", signal: controller.signal }, () => {
+      entered = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (timedOut) throw waitingError();
+      return send();
+    });
+    return await Promise.race([request, timeout]);
+  } catch (error) {
+    if (!entered && timedOut) throw waitingError();
+    if (!entered && nativeLockUnavailable(error)) return send();
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function restoreSession(): Promise<AuthResponse | null> {
   if (refreshPromise) return refreshPromise;
   const startedAt = credentialRevision;
+  const startedIdentity = identityRevision;
+  const stillCurrent = () => startedAt === credentialRevision && startedIdentity === identityRevision;
   const restoring = (async () => {
     try {
-      const response = await requestApi("/v1/auth/refresh", {
-        method: "POST",
-      });
-      if (startedAt !== credentialRevision) return currentSession;
+      const response = await requestSessionRefresh(stillCurrent);
+      if (!response || !stillCurrent()) return currentSession;
       if (response.status === 401) {
         clearSession();
         return null;
       }
       if (!response.ok) throw await errorFromResponse(response);
       const session = (await response.json()) as AuthResponse;
-      if (startedAt !== credentialRevision) return currentSession;
+      if (!stillCurrent()) return currentSession;
       saveSession(session);
       return session;
     } catch (error) {
-      if (startedAt !== credentialRevision) return currentSession;
+      if (!stillCurrent()) return currentSession;
       throw error;
     } finally {
       if (startedAt === credentialRevision) refreshPromise = null;

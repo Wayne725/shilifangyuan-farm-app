@@ -522,6 +522,15 @@ class RefreshSession(Base):
     user: Mapped[User] = relationship(back_populates="refresh_sessions")
 
 
+class CredentialRateLimitBucket(Base):
+    __tablename__ = "credential_rate_limit_buckets"
+    __table_args__ = (Index("ix_credential_rate_limit_expiry_key", "expires_at", "key_hash"),)
+
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hits: Mapped[List[int]] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class MemberRosterEntry(Base):
     __tablename__ = "member_roster_entries"
     __table_args__ = (

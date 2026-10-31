@@ -31,9 +31,11 @@ pnpm build
 | `session-consistency.mjs` | 9 | Email登入重試、401續期、503保登入、A→B隔離、晚到回應與logout |
 | `line-customer-checkout.mjs` | 12 | 390／1440寬、一般／便當／共同購買、LINE帳號通知Email新填／預存與付款 |
 
-各job上限10分鐘，測試step上限6分鐘，每案45秒；只有本人啟動的loopback preview會在EXIT trap清除。安裝、瀏覽器、build、preview、測試log與session假資料紀錄，在成功或失敗後一律上傳 `browser-smoke-evidence-chromium`／`browser-smoke-evidence-webkit`，保留7日；pipeline使用pipefail，失敗不能被tee掩蓋。job不取得正式帳號或供應商secret。新矩陣的hosted結果須以本批推送後的實際run核實，不沿用舊28案綠燈。
+各job上限10分鐘，測試step上限6分鐘，每案45秒；只有本人啟動的loopback preview會在EXIT trap清除。安裝、瀏覽器、build、preview、測試log與session假資料紀錄，在成功或失敗後一律上傳 `browser-smoke-evidence-chromium`／`browser-smoke-evidence-webkit`，保留7日；pipeline使用pipefail，失敗不能被tee掩蓋。job不取得正式帳號或供應商secret。
 
-最新同一不可變build的本機清單結果為Chromium99／99（101.2秒）、WebKit77／78（57.7秒），沒有略過案例；另有Node147項及型別／build通過。WebKit一項付款離頁的原生AccessControl pageerror保留失敗，沒有放寬errors／unknown斷言。固定雙寬功能回歸220次另列，不相加冒充本組全綠。
+`1edb2de` 的[hosted run41203402262](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41203402262)取得嚴格Chromium99／99、WebKit78／78、零skip。該run的backend未正常退出而被job時限取消，不能把瀏覽器兩job通過寫成整輪CI全綠。後續client refresh修正需用其新commit的實際run另行核實。
+
+`1edb2de`同一不可變build的本機清單為Chromium99／99（101.2秒）、WebKit77／78（57.7秒），沒有略過案例；另有Node147項及型別／build通過。本機WebKit一項付款離頁的原生AccessControl pageerror保留失敗，沒有放寬errors／unknown斷言。固定雙寬功能回歸220次另列，不相加冒充本組全綠。
 
 先前版本曾有Chromium87／87、WebKit66／66；那是付款等待guard及retention UI補修前的快照，不能沿用為最新版結果。無app的同源真HTTP控制已在目前WebKit重現provisional後新發fetch被拒絕並冒同類pageerror，[上游維護者亦記錄這類分類機制](https://github.com/microsoft/playwright/issues/43120)；這不證明原app每次失敗皆同一原因，也不能以該訊息直接判定正式CORS設定有錯。完整log／事件及原紅保留於`outputs/remediation-completion/checkout-webkit-lifecycle-review.md`。
 

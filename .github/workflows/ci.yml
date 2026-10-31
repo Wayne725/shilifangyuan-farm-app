@@ -34,7 +34,7 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:18
@@ -84,10 +84,19 @@ jobs:
         run: alembic downgrade base
       - name: Verify migration re-upgrade
         run: alembic upgrade head
+      - name: Verify pytest exit diagnostics controls
+        run: python -m pytest audits/test_pytest_exit_diagnostics.py -q
       - name: Verify PostgreSQL payment and invoice concurrency
-        run: TEST_POSTGRES_URL="$DATABASE_URL" pytest pgtests -q --durations=10
+        run: TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/postgres -- pgtests -q --durations=10
       - name: Run pytest
-        run: TEST_POSTGRES_URL="$DATABASE_URL" pytest -q --durations=20
+        run: TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/full -- -q --durations=20
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-pytest-exit-evidence
+          path: backend/pytest-exit-evidence/
+          if-no-files-found: warn
+          retention-days: 7
 
   api-contract:
     runs-on: ubuntu-latest

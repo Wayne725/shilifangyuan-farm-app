@@ -1,9 +1,7 @@
-"""In-process rate limiting for the credential endpoints.
+"""Legacy process-local budgets and common rule/key definitions.
 
-Deliberately dependency-free and per-process: the Sandbox runs a single web
-service, and the goal is to blunt credential stuffing and reset-mail flooding,
-not to be a distributed quota system. Move this to Redis before running more
-than one API instance.
+The seven existing credential gates use credential_rate_limit's shared database
+store. Admin, payment and upload callers retain this synchronous local limiter.
 """
 
 from __future__ import annotations

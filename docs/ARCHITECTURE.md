@@ -44,6 +44,8 @@ MemberDirectoryEntry    社員自願公開資料
 
 `memberships.status` 是資格真相。`trainee` 與 `active` 都取得社員價；只有 `active` 可使用正式社員的活動、名錄與治理功能。`MemberRosterEntry` 本身不授權任何線上操作，只有名冊資料核對成功並連結至 `User` 後才建立 `active` 會籍。
 
+七個憑證入口共用資料庫滑動視窗，成功登入只重設本人帳號配額；其他端點仍維持原本限流，詳見 [憑證入口共用配額](CREDENTIAL_RATE_LIMITS.md)。前端保留每分頁 singleflight，支援 Web Locks 時再協調同 origin 跨分頁 refresh；後端單次 token 與重放 401 規則不變，詳見 [跨分頁登入續期](CLIENT_REFRESH_COORDINATION.md)。
+
 ## 銷售與履約
 
 ```text

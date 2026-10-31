@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 import pytest
 from sqlalchemy import select
-from app.models import LineOAuthState, MemberRosterEntry, Membership, User
+from app.models import CredentialRateLimitBucket, LineOAuthState, MemberRosterEntry, Membership, User
 from app.routers.membership import membership_router
 from app.routers.line_auth import line_auth_router
 from app.routers.auth import auth_router
@@ -30,6 +30,11 @@ async def test_line_member_requires_matching_roster_and_otp_before_qualification
         invalid_claim = {**claim, 'phone': '0987654321'} if contact_only else {**claim, 'legal_name': '錯誤'}
         invalid = await client.post('/v1/auth/line/start', json={'intent': 'member', 'data_consent_version': 'line-data-v1', 'member_claim': invalid_claim})
         assert invalid.status_code == 409
+        # The shared-session fixture must mirror a failed production request's rollback.
+        await database_session.rollback()
+        quota = (await database_session.scalars(select(CredentialRateLimitBucket))).one()
+        assert len(quota.hits) == 1
+        assert await database_session.scalar(select(LineOAuthState)) is None
         state, _ = await start_flow(client, intent='member', member_claim=claim, return_to=return_to)
         record = await database_session.scalar(select(LineOAuthState))
         assert 'member@example.com' not in record.member_claim_encrypted
