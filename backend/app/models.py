@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    func,
     text,
     true,
 )
@@ -1743,7 +1745,7 @@ class MealEvent(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(160))
-    allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))
     schedule_template_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("meal_schedule_templates.id", ondelete="RESTRICT"), nullable=True, index=True
@@ -2798,6 +2800,28 @@ class SystemSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class ReconciliationRun(Base):
+    __tablename__ = "reconciliation_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('running','succeeded','partial_failure','cancelled')", name="status_valid"),
+        CheckConstraint("source IN ('job','internal','request','periodic')", name="source_valid"),
+        CheckConstraint("(status = 'running' AND finished_at IS NULL) OR (status <> 'running' AND finished_at IS NOT NULL)", name="completion_consistent"),
+        CheckConstraint("finished_at IS NULL OR finished_at >= started_at", name="completion_after_start"),
+        Index("ix_reconciliation_runs_status_id", "status", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(20), default="running", server_default="running")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    progress_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_phase: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    deferred_reason: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    phases: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    counts: Mapped[Dict[str, int]] = mapped_column(JSON, default=dict)
 
 
 class FiscalYear(Base):

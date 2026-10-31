@@ -66,6 +66,8 @@
 
 **P3：MealEvent.allow_cash_payment的SQLite建庫路徑不一致。**模型 `server_default="false"` 產生字串literal `'false'`；raw INSERT省略欄位，SQLite存TEXT false，SQLAlchemy Boolean讀成True。Alembic0044庫相同省略寫入存整數0／讀False；正常ORM建立兩者皆False。原表／原模型對照結果已在migration JSON保留。未證實正常API錯開現場付款，故不是正式收款事故；建議以 `server_default=false()` 對齊語意，另做正式紅綠後再落產品。
 
+後續修復：此單一Boolean差異已完成正式紅→綠，模型改用`false()`；真metadata建表、略去欄位的raw INSERT及ORM回讀現在皆為整數0／False。測試為`backend/tests/test_sqlite_cash_default.py`，已包含於2,639項後端整合通過結果。沒有改現場付款規則或正式舊資料，也不把其餘default差異一併標為已修。
+
 其餘11個：MealScheduleTemplate.cutoff_days_before／advance_days／enabled／auto_publish；MemberProposal.proposal_type；MemberRosterEntry.share_capital_amount／share_count／is_active；Membership.share_capital_amount／share_count；Order.tax_amount。應先決定DDL契約，再讓metadata/create_all與migration對齊。較保守方向是模型明確宣告已部署且既有raw importer可能依賴的預設值，而非移除現有DB default；ORM目前有Python default，不表示裸SQL／bootstrap路徑一樣。這11個確認於新SQLite；PG正式庫未讀，不能說已核實正式PG drift。
 
 ## 舊 D01–D06 與本輪修復狀態

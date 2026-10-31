@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import case, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -93,6 +93,10 @@ from .models import (
     VoteProposal,
 )
 from .v2_domain import apply_member_proposal_clock
+from .reconciliation import ReconciliationMonitor, ReconciliationPartialFailure
+from .reconciliation import read_reconciliation_status
+from .reconciliation_schemas import ReconciliationStatusRead
+from .auth import require_admin
 
 
 # Uvicorn configures its own logger, not the root app logger.
@@ -121,6 +125,17 @@ _last_lazy_reconcile_at = 0.0
 _background_reconcile_task: Optional["asyncio.Task[None]"] = None
 
 
+@jobs_router.get("/v1/admin/reconciliation-status", response_model=ReconciliationStatusRead)
+async def reconciliation_status(
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ReconciliationStatusRead:
+    response.headers["Cache-Control"] = "no-store"
+    return await read_reconciliation_status(session, settings, payment_candidates=expired_payment_candidates, meal_candidates=meal_event_candidates)
+
+
 @jobs_router.post("/internal/reconcile")
 async def reconcile_endpoint(
     x_reconcile_secret: str = Header(default=""),
@@ -131,7 +146,10 @@ async def reconcile_endpoint(
         x_reconcile_secret, settings.internal_reconcile_secret
     ):
         raise HTTPException(status_code=401, detail="Reconcile secret 無效")
-    return (await reconcile_once(session, settings)).to_dict()
+    try:
+        return (await reconcile_once(session, settings, source="internal")).to_dict()
+    except ReconciliationPartialFailure:
+        raise HTTPException(status_code=503, detail="部分背景階段未完成，請至管理後台核對結算狀態") from None
 
 
 def _aware(value: datetime) -> datetime:
@@ -145,41 +163,67 @@ async def reconcile_once(
     settings: Optional[Settings] = None,
     limit: int = 100,
     now: Optional[datetime] = None,
+    *,
+    source: str = "job",
 ) -> ReconcileReport:
     active_settings = settings or get_settings()
     current = now or datetime.now(timezone.utc)
     report = ReconcileReport()
-    report.payment_attempts = await _reconcile_expired_payments(
-        session, active_settings, current, limit
-    )
     from .activity_payments import reconcile_charges
-    await reconcile_charges(session, current, limit)
-    await _reconcile_expired_cash_orders(session, current, limit)
-    report.proposals = await _reconcile_proposals(session, current, limit)
-    report.campaigns = await _reconcile_campaigns(
-        session, active_settings, current, limit
-    )
-    report.member_proposals = await _reconcile_member_proposals(
-        session,
-        current,
-        limit,
-    )
-    report.activities = await _reconcile_activities(
-        session,
-        current,
-        limit,
-    )
-    report.meal_events = await _reconcile_meal_events(
-        session,
-        current,
-        limit,
-    )
-    report.meal_events_created = len(await generate_scheduled_meal_events(session, current, limit=limit))
-    completed, failed = await _process_outbox(
-        session, active_settings, current, limit
-    )
-    report.outbox_completed = completed
-    report.outbox_failed = failed
+    stages = [
+        ("expired_payments", lambda: _reconcile_expired_payments(session, active_settings, current, limit)),
+        ("activity_charges", lambda: reconcile_charges(session, current, limit)),
+        ("cash_orders", lambda: _reconcile_expired_cash_orders(session, current, limit)),
+        ("proposals", lambda: _reconcile_proposals(session, current, limit)),
+        ("campaigns", lambda: _reconcile_campaigns(session, active_settings, current, limit)),
+        ("member_proposals", lambda: _reconcile_member_proposals(session, current, limit)),
+        ("activities", lambda: _reconcile_activities(session, current, limit)),
+        ("meal_events", lambda: _reconcile_meal_events(session, current, limit)),
+        ("meal_event_generation", lambda: generate_scheduled_meal_events(session, current, limit=limit)),
+        ("outbox", lambda: _process_outbox(session, active_settings, current, limit)),
+    ]
+    count_fields = {"expired_payments": "payment_attempts", "proposals": "proposals", "campaigns": "campaigns",
+        "member_proposals": "member_proposals", "activities": "activities", "meal_events": "meal_events"}
+    failures = {}
+    monitor = ReconciliationMonitor(session, report.to_dict(), stages[0][0], source)
+    try:
+        await monitor.start()
+    except Exception as exc:
+        failures["monitoring"] = type(exc).__name__
+        monitor.record_unavailable(type(exc).__name__)
+        logger.error("reconcile_monitor_start_failed error_type=%s", type(exc).__name__)
+    for index, (name, run) in enumerate(stages):
+        error_type = None
+        try:
+            result = await run()
+            await session.commit()
+        except asyncio.CancelledError:
+            try:
+                await session.rollback()
+                await monitor.advance(name, report.to_dict(), cancelled=True)
+            except Exception as exc:
+                logger.error("reconcile_cancel_monitor_failed error_type=%s", type(exc).__name__)
+            raise
+        except Exception as exc:
+            await session.rollback()
+            failures[name] = type(exc).__name__
+            error_type = type(exc).__name__
+            logger.error("reconcile_stage_failed phase=%s error_type=%s", name, type(exc).__name__)
+        if error_type is None and name in count_fields:
+            setattr(report, count_fields[name], result)
+        elif error_type is None and name == "meal_event_generation":
+            report.meal_events_created = len(result)
+        elif error_type is None and name == "outbox":
+            report.outbox_completed, report.outbox_failed = result
+        try:
+            await monitor.advance(name, report.to_dict(), error_type=error_type, failed=bool(failures),
+                next_phase=stages[index + 1][0] if index + 1 < len(stages) else None)
+        except Exception as exc:
+            failures["monitoring"] = type(exc).__name__
+            monitor.record_unavailable(type(exc).__name__)
+            logger.error("reconcile_monitor_failed error_type=%s", type(exc).__name__)
+    if failures:
+        raise ReconciliationPartialFailure(failures, report.to_dict())
     return report
 
 
@@ -196,6 +240,8 @@ async def lazy_reconcile(
     session: AsyncSession,
     settings: Optional[Settings] = None,
     minimum_interval_seconds: float = 60.0,
+    *,
+    source: str = "request",
 ) -> Optional[Dict[str, int]]:
     """Request-time fallback when the external scheduler or Render was asleep."""
     global _last_lazy_reconcile_at
@@ -206,8 +252,10 @@ async def lazy_reconcile(
         current_monotonic = time.monotonic()
         if current_monotonic - _last_lazy_reconcile_at < minimum_interval_seconds:
             return None
-        report = await reconcile_once(session, settings)
-        _last_lazy_reconcile_at = current_monotonic
+        try:
+            report = await reconcile_once(session, settings, source=source)
+        finally:
+            _last_lazy_reconcile_at = current_monotonic
         logger.info("reconcile_completed counts=%s", report.to_dict())
         return report.to_dict()
 
@@ -227,6 +275,8 @@ def should_reconcile_now(minimum_interval_seconds: float = 60.0) -> bool:
 def schedule_background_reconcile(
     settings: Optional[Settings] = None,
     minimum_interval_seconds: float = 60.0,
+    *,
+    source: str = "request",
 ) -> "asyncio.Task[None]":
     """Runs reconciliation off the request path.
 
@@ -252,6 +302,7 @@ def schedule_background_reconcile(
                                 session,
                                 settings,
                                 minimum_interval_seconds=0,
+                                source=source,
                             )
                         except Exception as exc:
                             await session.rollback()
@@ -274,6 +325,7 @@ def schedule_background_reconcile(
                         session,
                         settings,
                         minimum_interval_seconds=minimum_interval_seconds,
+                        source=source,
                     )
                 except Exception as exc:
                     await session.rollback()
@@ -300,6 +352,7 @@ async def periodic_reconciliation(settings: Settings):
             try:
                 await schedule_background_reconcile(
                     settings, minimum_interval_seconds=settings.reconciliation_interval_seconds,
+                    source="periodic",
                 )
             except Exception as exc:
                 logger.error("reconcile_scheduler_failed error_type=%s", type(exc).__name__)
@@ -378,58 +431,67 @@ def _verified_ecpay_unpaid(adapter, attempt: PaymentAttempt, payload: dict) -> b
             and verify_check_mac_value(payload, config.hash_key, config.hash_iv))
 
 
+def _payment_reconcile_due(now: datetime):
+    return or_(PaymentAttempt.next_reconcile_at.is_(None), PaymentAttempt.next_reconcile_at <= now)
+
+
+def expired_payment_candidates(settings: Settings, now: datetime):
+    raygate_late_payment_cutoff = now - timedelta(
+        hours=settings.raygate_payment_reconcile_hours
+    )
+    return (
+        select(PaymentAttempt.id)
+        .where(
+            _payment_reconcile_due(now),
+            PaymentAttempt.provider.in_({"raygate", "ecpay"}),
+            or_(
+                (PaymentAttempt.activity_charge_id.is_not(None)
+                 & PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED})
+                 & PaymentAttempt.unpaid_verified_at.is_(None) & (PaymentAttempt.expires_at <= now)),
+                exists(select(Order.id).where(
+                    Order.id == PaymentAttempt.order_id, Order.group_campaign_id.is_not(None),
+                    Order.cancelled_at.is_(None), Order.fulfillment_status != FulfillmentStatus.CANCELLED,
+                    Order.payment_status.notin_({PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}),
+                    PaymentAttempt.superseded_at.is_(None), PaymentAttempt.order_revision == Order.revision,
+                    PaymentAttempt.amount == Order.amount_total, PaymentAttempt.unpaid_verified_at.is_(None),
+                    PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+                    PaymentAttempt.expires_at <= now)),
+                (
+                    (PaymentAttempt.status == PaymentStatus.PENDING)
+                    & (
+                        (PaymentAttempt.provider == "raygate")
+                        | (PaymentAttempt.expires_at <= now)
+                    )
+                ),
+                (
+                    (PaymentAttempt.provider == "raygate")
+                    & (
+                        PaymentAttempt.status.in_(
+                            {
+                                PaymentStatus.EXPIRED,
+                                PaymentStatus.FAILED,
+                            }
+                        )
+                    )
+                    & (
+                        PaymentAttempt.expires_at
+                        >= raygate_late_payment_cutoff
+                    )
+                ),
+            )
+        )
+    )
+
+
 async def _reconcile_expired_payments(
     session: AsyncSession,
     settings: Settings,
     now: datetime,
     limit: int,
 ) -> int:
-    raygate_late_payment_cutoff = now - timedelta(
-        hours=settings.raygate_payment_reconcile_hours
-    )
-    due = or_(PaymentAttempt.next_reconcile_at.is_(None), PaymentAttempt.next_reconcile_at <= now)
     attempt_ids = list(
         await session.scalars(
-            select(PaymentAttempt.id)
-            .where(
-                due,
-                PaymentAttempt.provider.in_({"raygate", "ecpay"}),
-                or_(
-                    (PaymentAttempt.activity_charge_id.is_not(None)
-                     & PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED})
-                     & PaymentAttempt.unpaid_verified_at.is_(None) & (PaymentAttempt.expires_at <= now)),
-                    exists(select(Order.id).where(
-                        Order.id == PaymentAttempt.order_id, Order.group_campaign_id.is_not(None),
-                        Order.cancelled_at.is_(None), Order.fulfillment_status != FulfillmentStatus.CANCELLED,
-                        Order.payment_status.notin_({PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}),
-                        PaymentAttempt.superseded_at.is_(None), PaymentAttempt.order_revision == Order.revision,
-                        PaymentAttempt.amount == Order.amount_total, PaymentAttempt.unpaid_verified_at.is_(None),
-                        PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
-                        PaymentAttempt.expires_at <= now)),
-                    (
-                        (PaymentAttempt.status == PaymentStatus.PENDING)
-                        & (
-                            (PaymentAttempt.provider == "raygate")
-                            | (PaymentAttempt.expires_at <= now)
-                        )
-                    ),
-                    (
-                        (PaymentAttempt.provider == "raygate")
-                        & (
-                            PaymentAttempt.status.in_(
-                                {
-                                    PaymentStatus.EXPIRED,
-                                    PaymentStatus.FAILED,
-                                }
-                            )
-                        )
-                        & (
-                            PaymentAttempt.expires_at
-                            >= raygate_late_payment_cutoff
-                        )
-                    ),
-                )
-            )
+            expired_payment_candidates(settings, now)
             .order_by(
                 func.coalesce(PaymentAttempt.next_reconcile_at, PaymentAttempt.created_at),
                 case(
@@ -452,7 +514,7 @@ async def _reconcile_expired_payments(
             .where(
                 PaymentAttempt.id == attempt_id,
                 PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
-                due,
+                _payment_reconcile_due(now),
             )
             .values(next_reconcile_at=claim_time + timedelta(seconds=settings.reconciliation_interval_seconds))
             .execution_options(synchronize_session=False)
@@ -741,6 +803,32 @@ async def _reconcile_activities(
     return len(activities)
 
 
+def meal_event_candidates(now: datetime):
+    return (
+        select(MealEvent)
+        .where(
+            or_(
+                MealEvent.status.in_([
+                    MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSED,
+                ]) & (MealEvent.pickup_starts_at <= now),
+                (
+                    MealEvent.status == MealEventStatus.PUBLISHED
+                )
+                & (MealEvent.ordering_ends_at <= now),
+                (
+                    MealEvent.status.in_(
+                        [
+                            MealEventStatus.ORDERING_CLOSED,
+                            MealEventStatus.PICKUP_OPEN,
+                        ]
+                    )
+                )
+                & (MealEvent.pickup_ends_at <= now),
+            )
+        )
+    )
+
+
 async def _reconcile_meal_events(
     session: AsyncSession,
     now: datetime,
@@ -748,27 +836,7 @@ async def _reconcile_meal_events(
 ) -> int:
     events = list(
         await session.scalars(
-            select(MealEvent)
-            .where(
-                or_(
-                    MealEvent.status.in_([
-                        MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSED,
-                    ]) & (MealEvent.pickup_starts_at <= now),
-                    (
-                        MealEvent.status == MealEventStatus.PUBLISHED
-                    )
-                    & (MealEvent.ordering_ends_at <= now),
-                    (
-                        MealEvent.status.in_(
-                            [
-                                MealEventStatus.ORDERING_CLOSED,
-                                MealEventStatus.PICKUP_OPEN,
-                            ]
-                        )
-                    )
-                    & (MealEvent.pickup_ends_at <= now),
-                )
-            )
+            meal_event_candidates(now)
             .order_by(MealEvent.pickup_ends_at)
             .limit(limit)
             .with_for_update()

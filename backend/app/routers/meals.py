@@ -20,6 +20,7 @@ from ..auth import (
 )
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..order_history import OrderHistoryQuery, read_order_history
 from ..printing import enqueue_order_print, enqueue_cancellation_print
 from ..printer_worker import wake_printer
 from ..platform_settings import require_accepting_orders
@@ -255,26 +256,28 @@ _MEAL_FULFILLMENT_LABELS = {
 }
 
 
+async def _meal_ids_for_offerings(session: AsyncSession, offering_ids: set[str]) -> dict[str, str]:
+    if not offering_ids:
+        return {}
+    rows = await session.execute(select(MealEventOffering.id, MealEventOffering.meal_id).where(
+        MealEventOffering.id.in_(offering_ids)))
+    return dict(rows.all())
+
+
 async def _meal_order_read(
     session: AsyncSession,
     order: Order,
     viewer_is_admin: bool = False,
+    *,
+    offering_meal_ids: Optional[dict[str, str]] = None,
 ) -> MealOrderRead:
     offering_ids = {
         item.source_meal_offering_id
         for item in order.items
         if item.source_meal_offering_id is not None
     }
-    meal_ids: dict[str, str] = {}
-    if offering_ids:
-        offerings = await session.scalars(
-            select(MealEventOffering).where(
-                MealEventOffering.id.in_(offering_ids)
-            )
-        )
-        meal_ids = {
-            offering.id: offering.meal_id for offering in offerings
-        }
+    meal_ids = (offering_meal_ids if offering_meal_ids is not None
+        else await _meal_ids_for_offerings(session, offering_ids))
     fulfillment = order.fulfillment
     event = order.meal_event
     if event is None or fulfillment is None:
@@ -514,17 +517,15 @@ def _meal_order_query():
     response_model=list[MealOrderRead],
 )
 async def list_meal_orders(
+    filters: Annotated[OrderHistoryQuery, Query()],
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[MealOrderRead]:
-    orders = list(
-        await session.scalars(
-            _meal_order_query()
-            .where(Order.user_id == user.id)
-            .order_by(Order.created_at.desc())
-        )
-    )
-    return [await _meal_order_read(session, order) for order in orders]
+    orders = await read_order_history(session, user, filters, meal=True)
+    offering_ids = {item.source_meal_offering_id for order in orders for item in order.items
+        if item.source_meal_offering_id is not None}
+    meal_ids = await _meal_ids_for_offerings(session, offering_ids)
+    return [await _meal_order_read(session, order, offering_meal_ids=meal_ids) for order in orders]
 
 
 @meals_router.get("/v1/admin/meal-events/{event_id}/orders", response_model=list[MealOrderRead])

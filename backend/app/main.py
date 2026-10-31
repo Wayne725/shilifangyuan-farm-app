@@ -176,7 +176,9 @@ def create_app() -> FastAPI:
                 settings,
                 minimum_interval_seconds=0,
             )
-        elif request.url.path.startswith("/v1/") and should_reconcile_now():
+        elif (request.url.path.startswith("/v1/")
+              and request.url.path.rstrip("/") != "/v1/admin/reconciliation-status"
+              and should_reconcile_now()):
             schedule_background_reconcile(settings)
         return response
 

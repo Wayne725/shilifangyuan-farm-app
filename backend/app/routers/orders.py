@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Annotated, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from ..database import get_session
 from ..group_review import order_accepts_group_payment, order_has_uncertain_group_payment, order_matches_group_contract
 from ..platform_settings import require_accepting_orders
 from ..order_numbers import insert_order_with_unique_number, is_order_submission_collision, make_order_number
+from ..order_history import OrderHistoryQuery, read_order_history
 from ..config import Settings, get_settings
 from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled, meals_test_product_pairs
 from ..sales_scope import require_sales_scope_allows
@@ -458,26 +459,11 @@ async def create_order(
 
 @orders_router.get("", response_model=List[OrderRead])
 async def list_orders(
+    filters: Annotated[OrderHistoryQuery, Query()],
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> List[OrderRead]:
-    query = select(Order).options(
-        selectinload(Order.cancellation_requests),
-        selectinload(Order.amendments),
-        selectinload(Order.payment_attempts),
-        selectinload(Order.items).selectinload(OrderItem.selected_options),
-        selectinload(Order.group_campaign),
-        selectinload(Order.meal_event),
-        selectinload(Order.invoice),
-        selectinload(Order.fulfillment).selectinload(
-            OrderFulfillment.shipment
-        ),
-    )
-    if user.user_role != UserRole.ADMIN:
-        query = query.where(Order.user_id == user.id)
-    orders = list(
-        await session.scalars(query.order_by(Order.created_at.desc()))
-    )
+    orders = await read_order_history(session, user, filters)
     return [
         order_read(order, user.user_role == UserRole.ADMIN) for order in orders
     ]
@@ -488,9 +474,10 @@ async def get_order(
     order_id: str,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    own_only: bool = False,
 ) -> OrderRead:
     order = await load_order(session, order_id)
-    if order.user_id != user.id and user.user_role != UserRole.ADMIN:
+    if order.user_id != user.id and (own_only or user.user_role != UserRole.ADMIN):
         raise HTTPException(status_code=404, detail="找不到訂單")
     return order_read(order, user.user_role == UserRole.ADMIN)
 
