@@ -20,6 +20,8 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Audit frontend dependencies
+        run: pnpm audit --audit-level=low
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
