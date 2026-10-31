@@ -55,7 +55,7 @@
 .admin-navigation .admin-section-links { flex-wrap: nowrap; gap: 0 8px; overflow-x: auto; scrollbar-width: thin; }
 .admin-navigation .admin-section-links a { flex: 0 0 auto; font-size: 1rem; white-space: nowrap; }
 .admin-operation-nav.tab-list { justify-content: flex-start; gap: 4px 20px; margin-top: 0; padding-top: 4px; border-bottom: 0; overflow-x: auto; }
-.admin-operation-nav.tab-list a { flex: 0 0 auto; min-height: 48px; padding: 10px 0; font-size: 1rem; border-bottom: 0; white-space: nowrap; }
+.admin-operation-nav.tab-list a { flex: 0 0 auto; min-height: 48px; padding: 10px 0; font-size: 1.125rem; border-bottom: 0; white-space: nowrap; }
 .admin-operation-nav.tab-list a[data-state="active"] { color: var(--moss-dark); font-weight: 600; text-decoration: underline; text-underline-offset: 6px; }
 .admin-operation-page.content-section { padding-top: 0; }
 .admin-order-search { margin-top: 8px; }

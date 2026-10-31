@@ -33,6 +33,21 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
       if (request.method() === 'GET') {
         if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (path === '/v1/orders') return route.fulfill({ json: [] });
+        if (path === '/v1/orders/line-order' && writes.some(entry => entry.path === orderPath)) {
+          assert.equal(url.searchParams.get('own_only'), 'true');
+          return route.fulfill({ json: {
+          id: 'line-order', order_number: 'SLF-LINE-ISOLATED', sales_channel: channel === 'meal' ? 'meal_preorder' : channel === 'group' ? 'group' : 'regular',
+          fulfillment_method: channel === 'meal' ? 'event_pickup' : 'cooperative_pickup', payment_status: 'pending', amount_total: 120,
+          created_at: '2030-01-02T01:00:00Z', invoice_status: 'not_eligible', fulfillment_status: 'pending_confirmation', available_actions: [],
+          items: [{ id: 'line-order-item', product_name: product.name, quantity: 1, unit_price: 120, subtotal: 120, unit_label: '包', tax_type: 'taxable' }],
+          } });
+        }
+        if (path === '/v1/meal-orders/line-order' && channel === 'meal' && writes.some(entry => entry.path === orderPath)) return route.fulfill({ json: {
+          id: 'line-order', order_number: 'SLF-LINE-ISOLATED', sales_channel: 'meal_preorder', fulfillment_method: 'event_pickup',
+          meal_event_title: event.title, venue_name: event.location, pickup_start: event.pickup_starts_at, pickup_end: event.pickup_ends_at,
+          created_at: '2030-01-02T01:00:00Z', payment_status: 'pending', invoice_status: 'not_eligible', fulfillment_status: 'pending_confirmation',
+          amount_total: 120, available_actions: [], items: [{ offering_id: 'line-dish', meal_name: '隔離便當', quantity: 1, unit_price: 120, subtotal: 120, selections: [] }],
+        } });
         if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'pickup', name: '合作社', address: '測試取貨點', is_active: true }, { id: 'pickup-campus', name: '教育學院大樓', address: '另一測試取貨點', is_active: true }] });
         if (path === '/v1/meal-events/line-meal') return route.fulfill({ json: event });
         if (path === '/v1/group-campaigns/line-group') return route.fulfill({ json: campaign });

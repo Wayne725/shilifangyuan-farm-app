@@ -7,7 +7,7 @@ import test from 'node:test';
 const { chromium, webkit } = createRequire(import.meta.url)('playwright');
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const base = 'http://127.0.0.1:4241';
-const root = resolve(import.meta.dirname, '../../web/dist');
+const root = resolve(process.env.BROWSER_TEST_DIST || resolve(import.meta.dirname, '../../web/dist'));
 const confirmation = '已查詢供應商確認未寄出，並了解重新排入仍可能重寄';
 const reason = '已核對供應商紀錄，確認這封通知未寄出';
 const success = '已重新排入通知信工作';
@@ -35,6 +35,7 @@ async function fixture(t, width, { unknown = true, retryable = true, hasReceipt 
       assert.ok(file.startsWith(`${root}/`));
       return route.fulfill({ contentType: types[extname(file)] || 'application/octet-stream', body: await readFile(file) });
     }
+    if (path === '/v1/admin/reconciliation-status') return route.fulfill({ json: { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] } });
     if (path === '/v1/auth/refresh') {
       state.refreshes += 1;
       return route.fulfill(expired && state.refreshes > 1

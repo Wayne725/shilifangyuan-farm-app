@@ -31,7 +31,7 @@ async function fixture(t, { loseResponse = false, holdHandoff = false } = {}) {
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
-    if (path === '/isolated-recovery-payment') return route.fulfill({ contentType: 'text/html', body: '<h1>隔離付款頁</h1>' });
+    if (path === '/isolated-recovery-payment') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><h1>隔離付款頁</h1>' });
     if (holdHandoff && /OrdersPage-[^/]+\.js$/.test(path)) { handoffStarted(); await handoffGate; }
     if (path === '/v1/auth/logout') return route.fulfill({ status: 204, body: '' });
     if (!path.startsWith('/v1/')) {
@@ -63,6 +63,15 @@ async function fixture(t, { loseResponse = false, holdHandoff = false } = {}) {
       return route.fulfill({ status: 201, json: { id: 'recovery-payment', payment_url: `${base}/isolated-recovery-payment` } });
     }
     if (path === '/v1/orders' || path === '/v1/shipping-rates') return route.fulfill({ json: [] });
+    if (/^\/v1\/orders\/recovery-\d+$/.test(path) && request.method() === 'GET') {
+      assert.equal(url.searchParams.get('own_only'), 'true');
+      const order = [...state.orders.values()].find(item => item.id === path.split('/').at(-1));
+      return route.fulfill({ status: order ? 200 : 404, json: order ? { ...order, sales_channel: 'regular',
+        created_at: '2030-01-02T01:00:00Z', fulfillment_method: 'cooperative_pickup', fulfillment_status: 'pending_confirmation',
+        invoice_status: 'not_eligible', available_actions: [], items: [{ id: 'recovery-line', product_name: product.name,
+          quantity: 1, unit_price: order.amount_total, subtotal: order.amount_total, unit_label: '包', tax_type: 'tax_exempt' }],
+      } : { detail: '找不到本人訂單' } });
+    }
     state.unknown.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated route' } });
   });
@@ -76,13 +85,18 @@ async function fixture(t, { loseResponse = false, holdHandoff = false } = {}) {
   return { page, state, pay };
 }
 
+async function paymentPageReady(page) {
+  await page.waitForURL(`${base}/isolated-recovery-payment`);
+  await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
+}
+
 test('建單已接受但回應遺失，重整後重送仍只有一單並可付款', async t => {
   const { page, state, pay } = await fixture(t, { loseResponse: true });
   await pay().click();
   await page.getByText('目前無法連上後端服務，請稍後重試。', { exact: true }).waitFor();
   await page.reload();
   await pay().click();
-  await page.waitForURL(`${base}/isolated-recovery-payment`);
+  await paymentPageReady(page);
   assert.equal(state.orders.size, 1);
   assert.equal(state.creates.length, 2);
   assert.match(state.creates[0].client_request_id, /^[0-9a-f-]{36}$/);
@@ -102,7 +116,7 @@ test('價格變動先更新明細，必須再次點確認才建立新價訂單',
   assert.equal(state.creates.length, 1);
   assert.equal(state.payments.length, 0);
   await pay().click();
-  await page.waitForURL(`${base}/isolated-recovery-payment`);
+  await paymentPageReady(page);
   assert.equal(state.orders.size, 1);
   assert.equal(state.creates[1].expected_total, 120);
   assert.notEqual(state.creates[1].client_request_id, state.creates[0].client_request_id);
@@ -116,7 +130,7 @@ test('總額相同但品項單價或稅別已變，仍須重新確認', async t 
   assert.equal(state.orders.size, 0);
   assert.equal(state.creates[0].expected_quote_fingerprint, 'a'.repeat(64));
   await pay().click();
-  await page.waitForURL(`${base}/isolated-recovery-payment`);
+  await paymentPageReady(page);
   assert.equal(state.orders.size, 1);
   assert.equal(state.creates[1].expected_quote_fingerprint, 'b'.repeat(64));
   assert.notEqual(state.creates[1].client_request_id, state.creates[0].client_request_id);
@@ -129,7 +143,7 @@ test('未知建單結果後購物車另加商品，恢復舊單不清除後來�
   await page.evaluate(item => localStorage.setItem('slf_cart', JSON.stringify([{ product: item, quantity: 2 }])), product);
   await page.reload();
   await pay().click();
-  await page.waitForURL(`${base}/isolated-recovery-payment`);
+  await paymentPageReady(page);
   assert.equal(state.orders.size, 1);
   assert.equal(state.creates[1].items[0].quantity, 1);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 2);
@@ -142,7 +156,7 @@ test('重整後已關店仍可恢復先前接受的同一單', async t => {
   state.open = false;
   await page.reload();
   await pay().click();
-  await page.waitForURL(`${base}/isolated-recovery-payment`);
+  await paymentPageReady(page);
   assert.equal(state.orders.size, 1);
   assert.deepEqual(state.creates[1], state.creates[0]);
 });
@@ -166,7 +180,7 @@ test('瀏覽器暫時無法保存送單時先凍結明細，恢復權限後才�
   assert.equal(await page.getByRole('button', { name: '增加數量', exact: true }).count(), 0);
   await page.evaluate(() => { window.blockCheckoutStorage = false; });
   await pay().click();
-  await page.waitForURL(`${base}/isolated-recovery-payment`);
+  await paymentPageReady(page);
   assert.equal(state.orders.size, 1);
   assert.equal(state.creates.length, 1);
   assert.equal(state.creates[0].expected_total, 100);

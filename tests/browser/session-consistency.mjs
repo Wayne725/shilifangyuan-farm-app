@@ -85,6 +85,12 @@ async function fixture(t, { width = 1280, authenticated = true } = {}) {
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'session-pickup', name: '隔離取貨點', address: '隔離測試地址', is_active: true }] });
     if (path === '/v1/orders/quote') return route.fulfill({ json: { amount_total: 600, membership_type: 'member', member_tax_exempt: true, items: [{ product_id: product.id, product_name: product.name, quantity: 2, unit_price: 300, subtotal: 600, unit_label: '袋', tax_type: 'tax_exempt' }] } });
     if (path === '/v1/orders' && method === 'GET') return route.fulfill({ json: [order(owner)] });
+    if (/^\/v1\/orders\/session-order-[ab]$/.test(path) && method === 'GET') {
+      assert.equal(url.searchParams.get('own_only'), 'true');
+      return path === `/v1/orders/session-order-${owner}`
+        ? route.fulfill({ json: order(owner) })
+        : route.fulfill({ status: 404, json: { detail: '找不到本人訂單' } });
+    }
     if (path === '/v1/orders' && method === 'POST') { state.acceptedOrders.push({ owner, body: request.postDataJSON() }); return route.fulfill({ status: 201, json: order(owner) }); }
     if (/^\/v1\/orders\/session-order-[ab]\/payment-attempts$/.test(path)) { state.payments.push({ owner, path }); return route.fulfill({ status: 201, json: { id: 'session-attempt', status: 'pending', payment_url: `${base}/isolated-session-payment` } }); }
     state.unknown.push(key);

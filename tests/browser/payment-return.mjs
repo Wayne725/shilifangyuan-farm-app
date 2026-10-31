@@ -46,6 +46,7 @@ test(`${entry} 付款上一頁、下一頁與重整都接續原訂單，不重�
       }
       if (url.pathname.startsWith('/v1/')) {
         let json = [];
+        if (url.pathname === '/v1/admin/reconciliation-status') json = { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] };
         if (url.pathname === '/v1/auth/refresh') json = { access_token: 'isolated-token', user: { id: 'buyer', email: 'buyer@example.com', display_name: '測試買家', user_role: 'customer' } };
         if (url.pathname === '/v1/orders') {
           if (request.method() === 'POST') orderCreates++;
@@ -122,6 +123,7 @@ test("管理端分頁搜尋、重查及重送必填原因，不使用確認視�
       const url = new URL(request.url());
       if (url.pathname.startsWith('/v1/')) {
         let json = [];
+        if (url.pathname === '/v1/admin/reconciliation-status') json = { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] };
         if (url.pathname === '/v1/auth/refresh') json = { access_token: 'isolated-admin-token', user: { id: 'admin', email: 'admin@example.com', display_name: '測試管理員', user_role: 'admin' } };
         if (url.pathname === '/v1/admin/order-search') {
           searches.push(url.searchParams.toString());

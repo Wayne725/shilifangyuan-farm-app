@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { apiFetch, formatDateTime } from "../lib/api";
+import { formatDateTime } from "../lib/api";
+import { useAdminPanelAccess, type AdminPanelAccess } from "../lib/admin-panel-access";
 
 import { OrderCategoryFilter } from "./OrderCategoryFilter";
+import { AdminReconciliationStatus } from "./AdminReconciliationStatus";
 import { orderCategoryLabels, type IssueOrderCategory } from "../lib/order-category";
 
 interface FailedJob {
@@ -19,6 +21,7 @@ interface FailedJob {
 const jobKinds = { all: "全部問題", invoice: "電子發票", refund: "退款", email: "通知信", other: "其他系統工作" };
 
 export function AdminFailurePanel() {
+  const access = useAdminPanelAccess();
   const [input, setInput] = useState("");
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("all");
@@ -27,14 +30,22 @@ export function AdminFailurePanel() {
   const [notice, setNotice] = useState("");
   const query = useQuery({
     queryKey: ["admin-failed-jobs", search, kind, offset, orderCategory],
-    queryFn: () => apiFetch<{ items: FailedJob[]; total: number }>(`/v1/admin/failed-jobs?q=${encodeURIComponent(search)}&kind=${kind}&order_category=${orderCategory}&limit=10&offset=${offset}`),
-    refetchInterval: 30000,
+    queryFn: ({ signal }) => access.request<{ items: FailedJob[]; total: number }>(`/v1/admin/failed-jobs?q=${encodeURIComponent(search)}&kind=${kind}&order_category=${orderCategory}&limit=10&offset=${offset}`, { signal }),
+    enabled: !access.denied,
+    refetchInterval: access.denied ? false : 30000,
+    retry: (failureCount) => !access.isDenied() && failureCount < 1,
   });
   useEffect(() => {
     if (query.data && offset > 0 && offset >= query.data.total) setOffset(Math.max(0, Math.floor((query.data.total - 1) / 10) * 10));
   }, [offset, query.data]);
+  if (access.denied) return <section className="admin-failure-panel">
+    <h2>待處理問題</h2>
+    <p className="form-error" role="alert">管理權限已失效或已變更，請重新驗證後再操作。</p>
+    <button type="button" className="button button-system" onClick={() => window.location.reload()}>重新驗證管理權限</button>
+  </section>;
   return <section className="admin-failure-panel">
     <h2>待處理問題</h2>
+    <AdminReconciliationStatus access={access} />
     <OrderCategoryFilter value={orderCategory} includeSystem onChange={(value) => { setOrderCategory(value); setOffset(0); setNotice(""); }} />
     <form className="failed-job-search" onSubmit={(event) => { event.preventDefault(); setSearch(input.trim()); setOffset(0); setNotice(""); }}>
       <label>搜尋問題<input type="search" maxLength={120} placeholder="訂單編號、問題編號、類型或原因" value={input} onChange={(event) => setInput(event.target.value)} /></label>
@@ -45,7 +56,7 @@ export function AdminFailurePanel() {
     {notice && <p role="status">{notice}</p>}
     {query.isError && <p className="form-error" role="alert">{query.error.message}</p>}
     {query.isPending && <p role="status">讀取中…</p>}
-    {query.data?.items.map((job) => <FailedJobRow key={job.id} job={job} onRetry={setNotice} />)}
+    {query.data?.items.map((job) => <FailedJobRow key={job.id} job={job} onRetry={setNotice} access={access} />)}
     {query.data?.total === 0 && <p>{search || kind !== "all" ? "沒有符合條件的問題。" : "目前沒有待處理問題。"}</p>}
     {query.data && <nav className="admin-pagination" aria-label="問題清單分頁">
       <button type="button" className="button button-quiet" disabled={!offset || query.isFetching} onClick={() => setOffset(Math.max(0, offset - 10))}>上一頁</button>
@@ -55,14 +66,14 @@ export function AdminFailurePanel() {
   </section>;
 }
 
-function FailedJobRow({ job, onRetry }: { job: FailedJob; onRetry: (message: string) => void }) {
+function FailedJobRow({ job, onRetry, access }: { job: FailedJob; onRetry: (message: string) => void; access: AdminPanelAccess }) {
   const [reason, setReason] = useState("");
   const [confirmDeliveryRisk, setConfirmDeliveryRisk] = useState(false);
   const client = useQueryClient();
   const retry = useMutation({
-    mutationFn: () => apiFetch<{ message: string }>(`/v1/admin/failed-jobs/${job.id}/retry`, { method: "POST", body: JSON.stringify({ reason,
+    mutationFn: () => access.request<{ message: string }>(`/v1/admin/failed-jobs/${job.id}/retry`, { method: "POST", body: JSON.stringify({ reason,
       ...(job.requires_delivery_confirmation ? { confirm_delivery_risk: confirmDeliveryRisk } : {}) }) }),
-    onSuccess: (result) => { onRetry(result.message); return client.invalidateQueries({ queryKey: ["admin-failed-jobs"] }); },
+    onSuccess: (result) => { if (!access.isDenied()) { onRetry(result.message); return client.invalidateQueries({ queryKey: ["admin-failed-jobs"] }); } },
   });
   const title = job.title || ({ send_email: "平台通知信", "invoice.issue_requested": "電子發票開立", "refund.requested": "退款處理" } as Record<string, string>)[job.event_type] || "系統背景工作";
   return <article className="failed-job">

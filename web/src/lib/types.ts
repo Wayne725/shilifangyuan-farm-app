@@ -226,6 +226,8 @@ export interface PaymentAttemptStatus {
   order_id?: string | null;
   membership_charge_id?: string | null;
   activity_charge_id?: string | null;
+  order_revision?: number | null;
+  superseded?: boolean;
 }
 
 export interface PickupLocation {
