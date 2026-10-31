@@ -19,6 +19,7 @@ from ..auth import (
     verify_and_update_password,
 )
 from ..config import Settings, get_settings
+from ..credential_rate_limit import consume_credential_quota, reset_credential_quota
 from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationError
@@ -39,9 +40,8 @@ from ..rate_limit import (
     PASSWORD_RESET_RULE,
     REGISTER_RULE,
     VERIFICATION_RULE,
+    account_key,
     client_key,
-    enforce,
-    reset,
 )
 from ..models import (
     EmailVerificationToken,
@@ -239,7 +239,7 @@ async def register(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    enforce(client_key(request, "register"), REGISTER_RULE)
+    await consume_credential_quota(session, client_key(request, "register"), REGISTER_RULE, settings)
     email = body.email.lower()
     existing = await session.scalar(select(User.id).where(User.email == email))
     if existing is not None:
@@ -274,13 +274,13 @@ async def register_existing_member(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    enforce(
+    await consume_credential_quota(session,
         client_key(
             request,
             "register-existing-member",
             body.member_number,
         ),
-        REGISTER_RULE,
+        REGISTER_RULE, settings,
     )
     try:
         cipher = pii_cipher_from_settings(settings)
@@ -356,7 +356,7 @@ async def verify_email(
 ) -> dict[str, str]:
     email = normalize_email(str(body.email))
     verification_key = client_key(request, "verify-email", email)
-    enforce(verification_key, VERIFICATION_RULE)
+    quota_budget = await consume_credential_quota(session, verification_key, VERIFICATION_RULE, settings)
     now = datetime.now(timezone.utc)
     user = await session.scalar(
         select(User).where(User.email == email).with_for_update()
@@ -412,8 +412,9 @@ async def verify_email(
         .values(used_at=now)
     )
     user.email_verified_at = now
+    await session.flush()
+    await reset_credential_quota(session, verification_key, settings, budget=quota_budget)
     await session.commit()
-    reset(verification_key)
     return {"message": "Email 驗證完成"}
 
 
@@ -427,9 +428,9 @@ async def resend_verification(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    enforce(
+    await consume_credential_quota(session,
         client_key(request, "resend-verification", body.email),
-        VERIFICATION_RULE,
+        VERIFICATION_RULE, settings,
     )
     user = await session.scalar(
         select(User).where(User.email == body.email.lower())
@@ -463,9 +464,9 @@ async def forgot_password(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    enforce(
+    await consume_credential_quota(session,
         client_key(request, "forgot-password", body.email),
-        PASSWORD_RESET_RULE,
+        PASSWORD_RESET_RULE, settings,
     )
     user = await session.scalar(
         select(User).where(User.email == body.email.lower())
@@ -563,8 +564,8 @@ async def login(
 ) -> TokenResponse:
     # Keyed per account as well as per client, so one IP cannot spray an inbox
     # list and one victim account cannot be hammered from a pool of clients.
-    account_key = client_key(request, "login", body.email)
-    enforce(account_key, LOGIN_RULE)
+    login_keys = client_key(request, "login", body.email)
+    quota_budget = await consume_credential_quota(session, login_keys, LOGIN_RULE, settings)
     _validate_cookie_origin(request, settings)
     user = await session.scalar(
         select(User)
@@ -602,8 +603,9 @@ async def login(
     )
     pair, refresh_session = _new_token_pair_and_session(user, settings, remember_me=body.remember_me)
     session.add(refresh_session)
+    await session.flush()
+    await reset_credential_quota(session, account_key("login", user.email), settings, budget=quota_budget)
     await session.commit()
-    reset(account_key)
     return token_response(user, response, settings, pair, remember_me=body.remember_me)
 
 

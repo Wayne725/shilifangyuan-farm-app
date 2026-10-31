@@ -166,6 +166,8 @@ export interface Order {
   fulfillment_method: FulfillmentMethod;
   group_campaign_id?: string | null;
   group_campaign_deadline?: string | null;
+  group_contract_changed?: boolean;
+  group_payment_uncertain?: boolean;
   meal_event_id?: string | null;
   membership_type_snapshot: string;
   member_tax_exempt_snapshot?: boolean;
@@ -224,6 +226,8 @@ export interface PaymentAttemptStatus {
   order_id?: string | null;
   membership_charge_id?: string | null;
   activity_charge_id?: string | null;
+  order_revision?: number | null;
+  superseded?: boolean;
 }
 
 export interface PickupLocation {
@@ -842,6 +846,7 @@ export interface CartItem {
 }
 
 export interface OrderQuote {
+  confirmation_fingerprint?: string;
   membership_type: string;
   member_tax_exempt?: boolean;
   tax_amount?: number;

@@ -17,6 +17,7 @@ from app.integrations.common import (
     IntegrationResponseError,
 )
 from app.integrations.email_sender import (
+    EmailDeliveryRejected,
     EmailSendResult,
     FailoverEmailSender,
     email_sender_from_settings,
@@ -438,7 +439,7 @@ async def test_resend_adapter_accepts_email_through_public_api() -> None:
 async def test_email_sender_falls_back_when_primary_provider_rejects() -> None:
     class RejectingSender:
         async def send(self, message):
-            raise IntegrationResponseError("primary unavailable")
+            raise EmailDeliveryRejected("primary explicitly rejected with HTTP 422", retryable=False)
 
     class AcceptingSender:
         async def send(self, message):
@@ -471,7 +472,7 @@ async def test_configured_sender_prefers_resend_then_mailersend(
 
     async def reject_resend(self, message):
         calls.append("resend")
-        raise IntegrationResponseError("resend unavailable")
+        raise EmailDeliveryRejected("Resend explicitly rejected with HTTP 422", retryable=False)
 
     async def accept_mailersend(self, message):
         calls.append("mailersend")

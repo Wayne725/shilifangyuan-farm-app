@@ -1,0 +1,68 @@
+# 全面審查與修復追蹤
+
+更新日期：2026-11-01。程式檢查點`f4f0f4c`的[CI41216750956](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41216750956)五job全綠：23項Linux程序控制、2,785後端、167 PG、165 Node、Chromium99及WebKit78零skip，child與wrapper均真exit0、owned group無殘留。47條migration升／降／升、型別／build及292路由契約亦已驗。另以此乾淨版本完成PG0.1CPU／256MiB的前景／背景完整負載；前一`4be705a`的雙分頁整合、PG1CPU／512MiB完整負載及同提交CI另保留，不混稱同環境容量。`1edb2de`的220次功能回歸及本機WebKit77／78的一項離頁原生錯誤保留原紀錄。各組重複覆蓋不相加，不將舊build結果改標為新版實機驗收。整合基準：`434f35a`（保留`792bf2e`訂單壓測修正及`c5290c7`飛鵝區域修正）。本批修復尚未部署；測試通過不代表正式營運驗收完成。
+
+需求來源：[原始功能表](https://docs.google.com/spreadsheets/d/1h0DnXDZh5nOWOdZmIgwMbOe7YPBuARNOdjgEbErQgCE/edit?gid=1170845822#gid=1170845822)、使用者後續說明、`CONTEXT.md`、各功能規格及既有驗收。舊驗收文件保留當時快照，不能以其歷史失敗數判斷現在版本。
+
+## 已發現問題
+
+| ID | 驗收要求 | 目前狀態／下一步 |
+|---|---|---|
+| F01 | 登入、私人快取、晚到回應一致；保留購物車 | `a50ed81` 加本批首次還原載入競態、付款交接身分守衛已修；本機回歸通過，尚未部署 |
+| F02 | 非正式社員提案頁顯示資格結果，不無限載入 | 已修，Chromium／WebKit 資格與正常社員流程通過；尚未部署 |
+| F03 | 會籍服務 503 可重試，不當成無會籍 | 已修，六個社務頁的失敗／恢復通過；尚未部署 |
+| F04 | 平台設定背景重讀保稿；同時編輯防覆寫 | 已修，新 UI 必帶 version，PG 首次建列／既有列競態通過；舊無版本 API 保持相容，尚未部署 |
+| F05 | 提案建立／送審中斷可恢復，不重複建案 | 已修，含伺服器唯一鍵、0041 相容 migration、回應遺失／延遲登入還原／驗證失敗保稿；尚未部署 |
+| F06 | Storage 被封鎖時不白畫面，避免刪除其他草稿 | 已修，安全 memory fallback 與原 native cart 保全；送單識別無法持久化時先阻擋 POST，尚未部署 |
+| SEC01 | 私人／撤回提案的留言等子資源不外洩 | 已修，父／子資源同一可見性與權限回歸通過；尚未部署 |
+| SEC02 | 成功登入不清除整個 IP 的失敗配額 | 已修；本批再將七個既有憑證 gate 改為同 DB 配額，真 PG 雙程序合計精確10×401＋12×429，成功只清本人帳號、IP保留；2,724後端／165 PG／47遷移整合通過，尚未部署 |
+| SEC03 | 應用及 Uvicorn access log 不記錄物流能力憑證 | 已修，route template／未知路徑／query 遮蔽回歸通過；不涵蓋所有例外內容或上游 ingress，尚未部署 |
+| SEC04 | 供應商 CSV 防公式注入 | 已修，重用共用 CSV serializer，特殊文字與正常財務回歸通過；尚未部署 |
+| SEC05 | 後台已確認撤權後不保留私人問題／結算內容 | 已實作共用撤權狀態、停止輪詢／重試、阻擋晚到成功回應恢復內容；新增36與既有48項雙引擎回歸通過，503／409保稿及成功續期控制保留，尚未部署 |
+| D01 | 結餘期間不可重複或重疊確認 | `a50ed81` 已修，PG 併發通過；尚未部署 |
+| D02 | 積點帳戶原子初始化，共用一致實作 | 已實作共用 UPSERT／帳戶列鎖，含真 PG 併發、呼叫者 rollback；完整後端／PG 整合通過，尚未部署 |
+| D03 | 通知／Email 去重與交易提交中斷 | 本機通知＋Email 意圖原子去重；外部結果未知隔離、受控重送及舊工作保護已實作，100 項後端定向、10 項 PG、32 項雙引擎 UI 通過；不宣稱外部恰好寄一次，尚未部署 |
+| D04 | 同商品同時建立開放共同購買提案防重複 | 已實作目標列鎖＋0042 部分唯一約束，SQLite／PG 競態與舊資料 preflight 通過；完整後端／PG 整合通過，尚未部署 |
+| D05 | 入社審核查詢避免 N+1 及全量個資解密 | 已批次查詢，1000 筆／25 筆頁的空查詢由 152 降至 8 SELECT；雙資料庫完整回應比對通過。私密任意子字串搜尋仍需掃描解密，已改串流且不新增明文儲存；尚未部署 |
+| D06 | SQLite 測試實際啟用外鍵約束 | 應用 engine 與共用 fixture 已啟用 FK，修正 13 個無效 fixture，補願望連結 422 驗證；原始 migration engine 另行測試，不宣稱全部路徑已開啟；完整後端整合通過，尚未部署 |
+| DB01 | metadata與migration建庫預設值一致 | 已補原11欄同值server_default，另修legacy_confirmed_intake字串false；裸SQL／ORM／原生型別、明確True及API cutoff差異控制通過，納入2,785後端／167 PG。不改migration／歷史資料，也不ALTER既存metadata庫，尚未部署 |
+| OPS01 | 背景階段故障隔離、心跳與待辦可觀測 | `2d1fe3b`十階段交易隔離／持久輪次／admin聚合，加`d2f8c4e`僅新遙測30天門檻、100×最多5批／至少1h、owner lease及保護最新／running；四來源皆驅動，完整後端／PG／46遷移及監測雙引擎32案通過。500/h非任何流量下的硬TTL，尚未部署 |
+| OPS02 | 價格變動必須重新確認後才建單 | 已修一般商品 total＋完整商品 quote 指紋，包含同額異價／稅別／會籍變動；共同購買含運 quote 也加入相同確認；物流寫入仍保留原階段，尚未部署 |
+| OPS03 | 訂單回應遺失／重送只建立一單 | 一般商品已修並回歸；共同購買 join 的相同協定、跨通路衝突與凍結送單恢復也已修並通過整合。舊無 ID 呼叫不具去重保證，尚未部署 |
+| OPS04 | 共同購買目標更動後舊待付款單不可誤付 | 已重現並實作 0044 核心條件指紋、付款／晚到回呼／原單可用動作保護；PG 競態、完整後端、60 項恢復 UI 及未知付款優先保護通過；NULL 舊契約驗證範圍另列，尚未部署 |
+| OPS05 | 活動自動缺席後仍可受控更正出席 | 已實作原因＋舊狀態核對、追加稽核／積點補償，保留歷史 80 點及原收款代次；PG 雙管理員競態、完整後端與 35 項活動 UI 通過，尚未部署 |
+| OPS06 | 外部排程不得綠燈跳過；實際無流量仍前進 | 10/31 核對 default main 仍為舊版，run 41183187281 成功但 reconcile step skipped；發布線已改缺參數失敗，另有只改 main workflow 的[草稿PR26](https://github.com/Wayne725/shilifangyuan-farm-app/pull/26)。尚未合併／設定 secrets／驗真排程，不能以監測頁request來源替代無流量驅動證據 |
+| OPS07 | 前端已知依賴漏洞與 CI 掃描 | `bbb7304` 精確修補 3 個套件，已知漏洞掃描由 13 降至 0，Node／型別／build 與指定雙引擎回歸通過；SBOM 已產生，CI 固定掃描已加入，尚未部署 |
+| OPS08 | 後端依賴可重現安裝、鎖定及 SBOM | `679d659` 鎖定 62 套件及 SHA256，Mac／Linux ARM 乾淨安裝與 pip check／audit 0 通過；Linux x86 wheel 雜湊驗證通過，CI／Render hash 安裝與 SBOM 已加入，尚未部署 |
+| OPS09 | 付款返回提示以當前本人訂單為準 | 已修URL／任意message偽付款／保存結果；attempt須核對本人原單／revision／superseded，成功仍以Order入帳為準。另補查詢503仍禁付／改量、匹配failed／expired可續付，21案×雙寬雙引擎84次功能回歸通過，尚未部署 |
+| ARCH01 | 本人訂單歷史分頁、完整搜尋與有界更新 | 已實作25筆keyset頁、本人scope、跨全部歷史搜尋、單筆返回與多頁只更新選中單；一般／餐點完整回應、PG游標／權限及16案×雙寬雙引擎64次通過。餐點25筆查詢36→12 SELECT，尚未部署 |
+| CI01 | CI真正執行瀏覽器流程及確認程序退出 | `f4f0f4c`的[run41216750956](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41216750956)五job全綠，23項Linux控制、167 PG及2,785後端均實際執行，下載artifact確認child／wrapper0、無殘留／timeout。前批4be五job綠與6558因basetemp父目錄未建造成23個setup errors、PG/full被skip的原失敗均保留；f4先mkdir後通過，不改寫原紅 |
+| WK01 | WebKit付款離頁的原生AccessControl錯誤 | 本機兩次完整清單各一項pageerror紅，付款目標與交易斷言皆成功；同版hosted Linux WebKit78／78全綠。無app、真同源HTTP事件barrier已證目前本機engine在provisional後新fetch會拒絕且冒相同訊息；原app當次完整因果仍未確認，不忽略錯誤、不因此改產品。保留為引擎／實機驗收限制 |
+| AUTH01 | 跨分頁續期不互相誤登出 | 已實作同origin原生Web Lock＋15秒排隊上限；保留單頁singleflight、revision守衛、購物車及後端重放401。新client＋0047後端的真React雙分頁Chromium／WebKit整合通過；unsupported fallback仍未解其跨分頁競態，尚未部署 |
+| LOAD01 | 同秒大量訂單單號碰撞不導致 500 | `792bf2e` 已修，2357 後端／102 PG／106 Node CI 通過；尚未部署 |
+
+## 大量訂單、Safari、輕量化及整體驗收
+
+- 負載：`4be705a`真容器、兩API合計0.5 CPU／512MiB／swap0，完整前景與背景混合各800 closed＋510固定到達流程通過；業務HTTP分別4550／4556、各20次commit後斷線重送、零非預期5xx／timeout／pool timeout／OOM，訂單／庫存／退款守恆。API peak328.89／333.98MiB，兩run schema與八容器清理已獨立複驗。50並行一般流程p95約2.6–2.7秒，已有連線排隊；固定到達只各30秒，背景重疊在這三階段，不能稱正式站容量。方法與限制見[受限資源驗證](ORDER_LOAD_RESOURCES.md)。
+- 低PG對照：`f4f0f4c`另以PG0.1CPU／256MiB完成相同兩套完整profile，API仍合計0.5CPU／512MiB；4550／4556HTTP皆無非預期5xx／timeout／pool timeout／OOM，PG核心peak207.34／207.80MiB，API327.32／332.05MiB，背景每rate有11個待辦重疊sample。兩schema／八容器與118份來源hash各自核實；50並行一般p95為2.791／2.674秒。PG磁碟／受管參數及正式資料量未知，與舊批不同提交，不當正式容量保證。
+- Safari：原生 Safari 已證實付款返回可能還原先前別名網址的同版頁面；尚未重現使用者的舊版畫面。須保留付款／物流返回與登入購物車，不能直接關閉目前承載主站的 Render 服務。詳見 `LEGACY_SITE_RETIREMENT.md`。
+- 輕量化：舊 Expo 原始碼已從目前正式前端移除；本批已減少訂單初始傳輸／歷史輪詢及餐點列表N+1，保留舊API相容。依賴目錄、歷史會籍入口、共用資產及仍使用的外站不可按名稱刪除。
+- 功能表：逐項核對附註及後續說明；停止的需求不重新實作。新入社目前核准後繳費／核帳／發證的限制依 `MEMBERSHIP_ADMISSION_STATUS.md`，不擅自啟用收款或收集證件。
+- 外部驗收：真實 LINE、金流／發票／Email、實體印表機、Windows 會計工具、備份還原、權限與金鑰管理，必須有對應證據；模擬通過不能代替實際驗收。
+- 完成條件：每項有程式／測試／限制／部署證據，合併最新版功能後通過相關回歸及獨立檢查；任何待完成項目不因本批測試綠燈而視為結案。
+
+## 架構審查後續
+
+以下缺口也納入完成條件，不能只依上述第一批編號判定全案結案：ARCH01與CI01的完整發布驗證、跨分頁 refresh cookie 競態、多實例登入配額、背景工作與 API 的資源隔離及遙測保留。已實作及仍待驗收項依本表及可重現證據持續對齊。
+
+跨分頁真Cookie／router／React曾重現一頁成功、另一頁誤登出；修後兩頁以原生Web Lock依序取得200，第二頁真用首個回應輪替後的Cookie，舊Cookie重放仍401；排隊逾時零新fetch、503恢復、真登出及關頁釋鎖控制保留。新版client＋七gate共享配額的整合亦通過，詳見[續期協調](CLIENT_REFRESH_COORDINATION.md)。
+
+多worker真紅是兩native真router合計20次帳密判斷；修後同PG雙程序精確10次，兩key原子、成功reset／原auth同commit或rollback、鎖503可恢復及0047遷移已驗。真正部署worker數仍未核實；管理／付款／上傳等其餘限流維持原程序記憶體，不稱全站已共享，詳見[憑證入口配額](CREDENTIAL_RATE_LIMITS.md)。
+
+`4be705a`本機2,724案摘要hook後17.742秒取得真exit0；hosted同提交則35.890秒、下載artifact確認真exit0且stack在pytest GC清理。兩者都不能反推原`1edb2de`取消必定同因。後續又正式重現leader先退、同owned group後代忽略TERM持stdout的CI工具缺口；已用未reap PID錨點與有界group清理修復，23個正常／失敗／掛住／故障控制保留獨立sentinel與EOF斷言。本機末次2,785案真exit0，沒有對group送signal、無殘留。CI保留完整argv／PG環境，35分鐘job預算、5秒無locals stack／60秒未退出才判紅、pipefail log及always artifact；不關GC或強制成功退出。6558的setup失敗未執行到Linux控制，不當作observer邏輯紅。f4同提交Linux23控制已實跑；full及PG的waitid_wnowait退出artifact均child／wrapper0、reaped、無signal／live member／timeout，摘要後分別43.199／7.284秒才真退出，低於60秒判紅期限。
+
+正式發布另有必要條件：唯讀Render已確認API與Web都Live c529、手動指定commit且auto-deploy停用，PG18顯示0.1c-256mb及7天PITR策略；未查正式head／歷史資料、未做PG＋R2＋key整組還原。c529 API缺0041–0047 graph，不能把保留新表後一鍵回舊API當成已驗安全回復。這些條件、writer交接與外部排程尚未驗證，本批沒有操作Save／Deploy／Restore或讀取正式密鑰。
+
+本批詳細讀取／部署順序見[本人訂單歷史](ORDER_HISTORY.md)及[背景結算隔離與監測](RECONCILIATION_OPERATIONS.md)。SQLite以metadata建表時餐點現金預設值的真實布林差異亦已修復；這不代表其餘metadata／migration差異已全部修完。
+
+本批資料與營運驗證見 [資料交易修復](DATA_TRANSACTION_REMEDIATION.md)、[共同購買恢復](GROUP_CHECKOUT_RECOVERY.md)、[資料庫正規化與約束審查](DATABASE_INTEGRITY_REVIEW.md)。後者明列有意快照、父層冗餘及尚無合法 API 可達證據的 DB 強化項，不把本機掃描通過當成全庫嚴格 3NF 或全部漏洞已消失。

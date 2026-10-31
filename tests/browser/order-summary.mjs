@@ -63,6 +63,7 @@ async function fixture(t, { width = 882, role = 'admin', failing = false, orderR
   await context.route('**/*', (route) => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname, method = request.method();
     if (url.origin !== base) return route.abort();
+    if (path === '/v1/admin/reconciliation-status') return route.fulfill({ json: { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] } });
     if (path === '/v1/auth/refresh' && method === 'POST') {
       return route.fulfill({ status: role === 'guest' ? 401 : 200, json: role === 'guest' ? { detail: '隔離訪客' } : {
         access_token: 'isolated-summary-token', user: { id: `isolated-${role}`, display_name: '隔離驗收帳號', email: 'summary@example.test', user_role: role, membership_type: 'nonmember' },
@@ -285,6 +286,15 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '25');
   await categories.getByRole('button', { name: '便當訂單', exact: true }).press('Enter');
+  await categories.locator('button[aria-pressed="true"]').filter({ hasText: '便當訂單' }).waitFor();
+  await verify_summary(page, { order_count: 1, quantity: 4, product_count: 1 });
+  const refreshed = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === summary_path && url.searchParams.get('order_category') === 'meal'
+      && url.searchParams.get('offset') === '0' && response.status() === 200;
+  });
+  await summary.getByRole('button', { name: '更新', exact: true }).click();
+  await refreshed;
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '0');
   assert.equal(state.summaries.at(-1).query.order_category, 'meal');

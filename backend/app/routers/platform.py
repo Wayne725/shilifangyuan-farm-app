@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import Field
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_admin
@@ -15,6 +17,7 @@ platform_router = APIRouter(tags=["platform"])
 
 class PlatformUpdate(PlatformSettings):
     reason: str = Field(min_length=1, max_length=1000)
+    expected_version: int | None = Field(default=None, ge=0)
 
 
 @platform_router.get("/v1/platform")
@@ -28,9 +31,12 @@ async def read_platform(response: Response, session: AsyncSession = Depends(get_
 
 
 @platform_router.get("/v1/admin/platform")
-async def read_admin_platform(_admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)) -> dict:
-    current = await platform_settings(session)
-    return {**current.model_dump(), "meal_cutoff_time": "20:00", "timezone": "Asia/Taipei",
+async def read_admin_platform(response: Response, _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)) -> dict:
+    response.headers["Cache-Control"] = "private, no-store"
+    row = await session.scalar(select(SystemSetting).where(SystemSetting.key == PLATFORM_KEY).execution_options(populate_existing=True))
+    current = PlatformSettings.model_validate(row.value if row else {})
+    return {**current.model_dump(), "version": row.value.get("_version", 0) if row else 0,
+            "meal_cutoff_time": "20:00", "timezone": "Asia/Taipei",
             **sales_capabilities(settings),
             "invoice_provider": settings.invoice_provider, "payment_provider": settings.payment_provider,
             "printer_status": "browser_print_available", "automatic_print_connected": False}
@@ -38,16 +44,21 @@ async def read_admin_platform(_admin: User = Depends(require_admin), session: As
 
 @platform_router.put("/v1/admin/platform")
 async def update_platform(body: PlatformUpdate, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)) -> dict:
-    row = await session.scalar(select(SystemSetting).where(SystemSetting.key == PLATFORM_KEY).with_for_update())
-    previous = PlatformSettings.model_validate(row.value if row else {}).model_dump()
-    if row is None:
-        row = SystemSetting(key=PLATFORM_KEY)
-        session.add(row)
-    row.value = body.model_dump(exclude={"reason"})
+    insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    lock = insert(SystemSetting).values(key=PLATFORM_KEY, value={})
+    # Lock even the first update, when SELECT FOR UPDATE would find no row.
+    await session.execute(lock.on_conflict_do_update(index_elements=[SystemSetting.key], set_={"key": lock.excluded.key}))
+    row = await session.scalar(select(SystemSetting).where(SystemSetting.key == PLATFORM_KEY).with_for_update().execution_options(populate_existing=True))
+    version = row.value.get("_version", 0)
+    if body.expected_version is not None and body.expected_version != version:
+        raise HTTPException(status_code=409, detail="設定已由其他操作更新，請重新讀取後再儲存")
+    previous = PlatformSettings.model_validate(row.value).model_dump()
+    row.value = {**body.model_dump(exclude={"reason", "expected_version"}), "_version": version + 1}
     if "support_phone" not in body.model_fields_set:
         row.value = {**row.value, "support_phone": previous["support_phone"]}
     row.updated_by_id = admin.id
     session.add(AdminAudit(actor_id=admin.id, action="platform.settings_updated", aggregate_type="system_setting", aggregate_id=PLATFORM_KEY,
                            reason=body.reason, data={"previous": previous, "current": row.value}))
     await session.commit()
-    return {**row.value, **sales_capabilities(settings), "meal_cutoff_time": "20:00", "timezone": "Asia/Taipei"}
+    return {**PlatformSettings.model_validate(row.value).model_dump(), "version": version + 1,
+            **sales_capabilities(settings), "meal_cutoff_time": "20:00", "timezone": "Asia/Taipei"}

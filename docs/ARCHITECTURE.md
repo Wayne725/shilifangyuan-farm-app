@@ -44,6 +44,8 @@ MemberDirectoryEntry    社員自願公開資料
 
 `memberships.status` 是資格真相。`trainee` 與 `active` 都取得社員價；只有 `active` 可使用正式社員的活動、名錄與治理功能。`MemberRosterEntry` 本身不授權任何線上操作，只有名冊資料核對成功並連結至 `User` 後才建立 `active` 會籍。
 
+七個憑證入口共用資料庫滑動視窗，成功登入只重設本人帳號配額；其他端點仍維持原本限流，詳見 [憑證入口共用配額](CREDENTIAL_RATE_LIMITS.md)。前端保留每分頁 singleflight，支援 Web Locks 時再協調同 origin 跨分頁 refresh；後端單次 token 與重放 401 規則不變，詳見 [跨分頁登入續期](CLIENT_REFRESH_COORDINATION.md)。
+
 ## 銷售與履約
 
 ```text
@@ -76,7 +78,7 @@ fulfillment_method  cooperative_pickup | event_pickup | ecpay_logistics
 - 姓名、電話、地址以版本化 AES-256-GCM 儲存。
 - R2 Bucket 不公開，PUT 簽名 URL 5 分鐘、GET 2 分鐘；通過檔頭、大小與 SHA-256 驗證後才從 pending key 搬到 verified key。
 - Payment 與物流外部事件以 `ExternalEvent` 去重；雷門付款以回跳立即查單、前端短暫補查與背景 reconciliation 收斂狀態。
-- Email 先寫入 Outbox，驗證碼與重設憑證加密保存；Resend 失敗時可由 MailerSend 備援。
+- Email 先寫入 Outbox，驗證碼與重設憑證加密保存；只有可證明未接受的錯誤才可自動切換供應商。接受後回應遺失、過期執行中工作等未知結果先隔離，管理員確認重寄風險後才能重送，詳見 `docs/NOTIFICATION_DELIVERY.md`。
 - `POST /internal/reconcile` 處理逾期保留、付款查單、團購、活動、便當、provider 退款、發票與通知。
 - `RECONCILIATION_ENABLED` 預設關閉；啟用後 FastAPI lifespan 持續驅動相同工作，不依賴瀏覽器流量。這不是獨立 worker，仍與 API 共用運算資源；多實例容量與併發行為需另外驗收。
 - 付款補查以 `PaymentAttempt.next_reconcile_at` 持久化公平排序與間隔；Outbox 保留原有取件與重試機制。

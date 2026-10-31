@@ -1,4 +1,5 @@
 import { pickupTimeOptions } from "./meal-time";
+import { sessionStore } from "./browser-storage";
 import type { MealEvent, PickupLocation } from "./types";
 
 export interface MealDraft {
@@ -22,7 +23,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraft {
   try {
-    const value: unknown = JSON.parse((storage ?? window.sessionStorage).getItem(storageKey(eventId)) || "null");
+    const value: unknown = JSON.parse((storage ?? sessionStore).getItem(storageKey(eventId)) || "null");
     if (!isRecord(value)) return emptyMealDraft();
     const quantities = Object.fromEntries(
       Object.entries(isRecord(value.quantities) ? value.quantities : {})
@@ -52,7 +53,7 @@ export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraf
 
 export function writeMealDraft(eventId: string, draft: MealDraft, storage?: DraftStorage): void {
   try {
-    const target = storage ?? window.sessionStorage;
+    const target = storage ?? sessionStore;
     if (!draft.pickupAt && !draft.pickupLocationId && !draft.needsUtensils && !Object.values(draft.quantities).some((quantity) => quantity > 0)) {
       target.removeItem(storageKey(eventId));
       return;
@@ -68,7 +69,7 @@ export function writeMealDraft(eventId: string, draft: MealDraft, storage?: Draf
 
 export function clearMealDraft(eventId: string, storage?: DraftStorage): void {
   try {
-    (storage ?? window.sessionStorage).removeItem(storageKey(eventId));
+    (storage ?? sessionStore).removeItem(storageKey(eventId));
   } catch {
     // Clearing the in-memory selection remains available without browser storage.
   }

@@ -21,6 +21,7 @@ import {
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
+import { sessionStore } from "../lib/browser-storage";
 import { apiFetch, formatMoney } from "../lib/api";
 import { beginMealCheckout, invoicePreferencePayload } from "../lib/commerce";
 import { taxTypeLabel } from "../lib/invoice-tax";
@@ -174,13 +175,13 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       const fingerprint = mealSubmissionFingerprint(user.id, input);
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprint));
       const storageKey = `meal-submission:${Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("")}`;
-      const id = sessionStorage.getItem(storageKey) || crypto.randomUUID();
-      sessionStorage.setItem(storageKey, id);
+      const id = sessionStore.getItem(storageKey) || crypto.randomUUID();
+      if (!sessionStore.setItem(storageKey, id)) throw new Error("瀏覽器無法儲存送單識別，請允許網站儲存資料後重試");
       submission.current = {storageKey, id};
       return beginMealCheckout({...input, clientRequestId: submission.current.id});
     },
     onSuccess: (outcome) => {
-      if (submission.current) sessionStorage.removeItem(submission.current.storageKey);
+      if (submission.current) sessionStore.removeItem(submission.current.storageKey);
       clearMealDraft(eventId);
       setDraft(emptyMealDraft());
       setDraftAdjusted(false);

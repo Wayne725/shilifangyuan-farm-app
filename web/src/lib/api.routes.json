@@ -72,6 +72,7 @@
   "GET /v1/admin/printers/jobs/{job_id}",
   "GET /v1/admin/printers/status",
   "GET /v1/admin/promotions",
+  "GET /v1/admin/reconciliation-status",
   "GET /v1/admin/shipping-rates",
   "GET /v1/admin/supplier-orders.csv",
   "GET /v1/admin/suppliers",

@@ -91,13 +91,16 @@ test("註冊入口區分既有社員認領與非社員帳號", () => {
   assert.match(router, /search\.intent === "nonmember"/);
 });
 
-test("個人與公司發票共用 Email 會員載具並在三種結帳顯示確認資料", () => {
+test("個人與公司發票共用 Email 會員載具並在三種結帳顯示確認資料", async () => {
   assert.match(invoiceFields, /Email 會員載具/);
   assert.match(invoiceFields, /發票通知 Email/);
   assert.match(invoiceFields, /value\.carrierType === "cloud"\s*\? 64 : 80/);
   assert.doesNotMatch(invoiceFields, /<strong>不使用載具<\/strong>/);
   assert.match(commerce, /invoice_buyer_email:\s*preference\.buyerEmail/);
-  assert.equal((source.match(/<InvoicePreferenceSummary/g) || []).length, 3);
+  for (const page of ["CheckoutPage", "GroupCampaignPage", "MealEventPage"]) {
+    const checkout = await readFile(new URL(`../web/src/pages/${page}.tsx`, import.meta.url), "utf8");
+    assert.match(checkout, /<InvoicePreferenceSummary/);
+  }
 });
 
 test("付款返回頁會先恢復登入工作階段，再決定是否顯示登入入口", () => {

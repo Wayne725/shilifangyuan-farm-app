@@ -1,2 +1,6 @@
 packages:
   - "web"
+
+overrides:
+  "seroval@<1.6.11": "1.6.11"
+  "source-map-js@<1.2.2": "1.2.2"

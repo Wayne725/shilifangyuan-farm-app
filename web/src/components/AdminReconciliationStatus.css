@@ -1,0 +1,9 @@
+.admin-reconciliation-status { padding-block: 24px; margin-block: 16px 24px; border-block: 1px solid var(--line); overflow-wrap: anywhere; }
+.admin-reconciliation-status header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-reconciliation-status h3 { margin: 0; font-family: var(--serif); font-size: 1.375rem; font-weight: 500; }
+.reconciliation-retention h4 { margin: 24px 0 0; font-size: 1.125rem; font-weight: 500; }
+.admin-reconciliation-status dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; margin-block: 20px; }
+.admin-reconciliation-status dl > div { min-width: 0; }
+.admin-reconciliation-status dt { color: var(--ink-soft); }
+.admin-reconciliation-status dd { margin: 4px 0 0; }
+@media (max-width: 620px) { .admin-reconciliation-status dl { grid-template-columns: minmax(0, 1fr); } }

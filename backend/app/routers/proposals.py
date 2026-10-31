@@ -4,7 +4,9 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,6 +22,7 @@ from ..models import (
     GroupCampaign,
     Notification,
     OutboxEvent,
+    OPEN_PROPOSAL_TARGET_PREDICATE,
     Product,
     ProposalStatus,
     ProposalTargetType,
@@ -51,25 +54,17 @@ OPEN_PROPOSAL_STATUSES = {
 
 
 async def resolve_target(
-    session: AsyncSession, target_type: TargetType, target_id: str
+    session: AsyncSession, target_type: TargetType, target_id: str, *, lock: bool = False
 ) -> Tuple[str, Optional[str]]:
-    if target_type == TargetType.PRODUCT:
-        product = await session.scalar(
-            select(Product).where(
-                Product.id == target_id, Product.is_active.is_(True)
-            )
-        )
-        if product is None:
-            raise HTTPException(status_code=422, detail="選擇的商品不存在")
-        return product.name, product.image_url
-    bundle = await session.scalar(
-        select(GroupBundle).where(
-            GroupBundle.id == target_id, GroupBundle.is_active.is_(True)
-        )
-    )
-    if bundle is None:
-        raise HTTPException(status_code=422, detail="選擇的共同購買套組不存在")
-    return bundle.name, bundle.image_url
+    model = Product if target_type == TargetType.PRODUCT else GroupBundle
+    query = select(model).where(model.id == target_id, model.is_active.is_(True))
+    if lock:
+        query = query.with_for_update()
+    target = await session.scalar(query)
+    if target is None:
+        detail = "選擇的商品不存在" if model is Product else "選擇的共同購買套組不存在"
+        raise HTTPException(status_code=422, detail=detail)
+    return target.name, target.image_url
 
 
 def proposal_read(
@@ -117,6 +112,13 @@ async def get_proposal_with_votes(
     if lock:
         query = query.with_for_update()
     return await session.scalar(query)
+
+
+def _existing_target_read(proposal: VoteProposal, user: User) -> ProposalRead:
+    if (proposal.status == ProposalStatus.PENDING_REVIEW and proposal.proposer_id != user.id
+        and user.user_role != UserRole.ADMIN):
+        raise HTTPException(status_code=409, detail="此品項已有待審共同購買提案，請待審核完成")
+    return proposal_read(proposal, user)
 
 
 async def apply_clock_with_events(
@@ -242,7 +244,7 @@ async def create_proposal(
     if is_custom:
         target_name = body.request_name
     else:
-        target_name, _ = await resolve_target(session, body.target_type, body.target_id)
+        target_name, _ = await resolve_target(session, body.target_type, body.target_id, lock=True)
     duplicate = None if is_custom else await session.scalar(
         select(VoteProposal)
         .where(
@@ -251,25 +253,37 @@ async def create_proposal(
             VoteProposal.status.in_(OPEN_PROPOSAL_STATUSES),
         )
         .options(selectinload(VoteProposal.votes))
+        .order_by(VoteProposal.created_at, VoteProposal.id)
+        .with_for_update().execution_options(populate_existing=True)
     )
     if duplicate is not None:
         changed = await apply_clock_with_events(
             session, duplicate, datetime.now(timezone.utc)
         )
-        if changed:
-            await session.commit()
         if duplicate.status in OPEN_PROPOSAL_STATUSES:
-            return proposal_read(duplicate, user)
-    proposal = VoteProposal(
-        proposer_id=user.id,
-        target_type=body.target_type,
-        target_id=body.target_id,
-        target_name_snapshot=target_name,
-        request_details=body.request_details,
-        status=ProposalStatus.PENDING_REVIEW,
-    )
-    session.add(proposal)
-    await session.flush()
+            if changed:
+                await session.commit()
+            return _existing_target_read(duplicate, user)
+        if changed:
+            await session.flush()
+    insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    predicate = text(OPEN_PROPOSAL_TARGET_PREDICATE)
+    statement = insert(VoteProposal).values(
+        proposer_id=user.id, target_type=body.target_type, target_id=body.target_id,
+        target_name_snapshot=target_name, request_details=body.request_details, status=ProposalStatus.PENDING_REVIEW,
+    ).on_conflict_do_nothing(index_elements=[VoteProposal.target_type, VoteProposal.target_id], index_where=predicate).returning(VoteProposal.id)
+    proposal_id = await session.scalar(statement)
+    if proposal_id is None:
+        existing = await session.scalar(select(VoteProposal).where(
+            VoteProposal.target_type == body.target_type, VoteProposal.target_id == body.target_id,
+            VoteProposal.status.in_(OPEN_PROPOSAL_STATUSES),
+        ).options(selectinload(VoteProposal.votes)).order_by(VoteProposal.created_at, VoteProposal.id))
+        if existing is None:
+            raise HTTPException(status_code=409, detail="共同購買提案狀態已變更，請重新整理")
+        result = _existing_target_read(existing, user)
+        await session.commit()
+        return result
+    proposal = await get_proposal_with_votes(session, proposal_id)
     session.add(
         OutboxEvent(
             event_type="proposal.review_requested",

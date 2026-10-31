@@ -381,6 +381,10 @@ async def test_disabled_group_target_allows_reduction_but_not_increase(database_
     order.group_campaign = campaign
     order.order_kind = OrderKind.GROUP
     order.sales_channel = SalesChannel.GROUP
+    for item in order.items:
+        item.group_campaign_id = campaign.id
+        item.source_product_id = target.id if target_type == TargetType.PRODUCT else None
+        item.source_bundle_id = target.id if target_type == TargetType.BUNDLE else None
     await session.commit()
     async with api_test_context(session, [orders_router], settings=make_test_settings()) as client:
         assert (await submit(client, buyer, order, 3)).status_code == 409

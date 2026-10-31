@@ -5,25 +5,23 @@ import {
   NotePencil,
   UsersThree,
 } from "@phosphor-icons/react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
 import { SocialNav } from "../components/SocialNav";
+import { MembershipReadError } from "../components/MembershipReadError";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate } from "../lib/api";
 import { meetingAccessDenied, retryMeetingRead } from "../lib/meetings";
 import { proposalStatusLabel } from "../lib/labels";
-import type { Meeting, MembershipSummary, Proposal } from "../lib/types";
+import type { Meeting, Proposal } from "../lib/types";
+import { useMembership } from "../lib/social-access";
 
 export function SocialPage() {
   const { user, openLogin } = useAuth();
-  const membership = useQuery({
-    queryKey: ["membership-me", user?.id],
-    queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
-    enabled: Boolean(user),
-  });
-  const isMember = membership.data?.membership_type === "member";
+  const membership = useMembership(user);
+  const isMember = membership.isSuccess && membership.data.membership_type === "member";
   const canReadMeetings = isMember && membership.data?.membership?.status === "active";
   const [proposals, meetings] = useQueries({
     queries: [
@@ -65,7 +63,7 @@ export function SocialPage() {
         </section>
       ) : membership.isPending ? (
         <section className="content-section"><LoadingLines count={3} /></section>
-      ) : !isMember ? (
+      ) : membership.isError ? <section className="content-section"><MembershipReadError error={membership.error} onRetry={() => void membership.refetch()} /></section> : !isMember ? (
         <section className="social-access-card membership-access">
           <IdentificationCard size={38} weight="light" />
           <p className="eyebrow">MEMBERSHIP / 社員資格</p>

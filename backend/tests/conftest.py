@@ -4,14 +4,22 @@ from datetime import datetime, timezone
 
 import pytest
 import time_machine
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.database import Base
+from app.database import Base, create_engine
+from app.rate_limit import reset_all
+
+
+@pytest.fixture(autouse=True)
+def isolated_credential_limits():
+    reset_all()
+    yield
+    reset_all()
 
 
 @pytest.fixture
 async def database_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    engine = create_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)

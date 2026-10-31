@@ -112,7 +112,7 @@ async function fixture(t, initialOrder) {
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.goto(`${base}/meal-orders`);
-  await page.getByRole('heading', { name: '隔離便當場次', exact: true }).waitFor();
+  await page.locator('.order-detail-head .order-number').filter({ hasText: orderNumber }).waitFor();
   const qr = page.getByLabel(`訂單 ${orderNumber} 取餐 QR Code`, { exact: true });
   return { page, state, qr };
 }
@@ -231,7 +231,7 @@ test('便當付款返回保留查款輪詢，確認成功後選取原訂單而�
   state.refreshStatus = 'paid';
   await page.waitForURL(`${base}/meal-orders?order_id=${orderId}`);
   await visibleCredential(page, qr);
-  await page.getByRole('heading', { name: '隔離便當場次', exact: true }).waitFor();
+  await page.locator('.order-detail-head .order-number').filter({ hasText: orderNumber }).waitFor();
   assert.deepEqual(state.mutations, []);
   await verifyIsolation(page, state);
 });

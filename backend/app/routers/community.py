@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+import hashlib
+import json
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field
+from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +22,7 @@ from ..auth import (
     require_admin,
 )
 from ..database import get_session
+from ..point_accounts import point_account
 from ..models import (
     Activity,
     ActivityCharge,
@@ -71,6 +77,26 @@ from ..v2_domain import (
 community_router = APIRouter(tags=["community"])
 
 
+class ActivityAttendanceUpdate(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=1000)
+    expected_status: Optional[Literal["attended", "no_show"]] = None
+
+
+PRIVATE_PROPOSAL_STATUSES = {
+    MemberProposalStatus.DRAFT,
+    MemberProposalStatus.PENDING_REVIEW,
+    MemberProposalStatus.WITHDRAWN,
+}
+
+
+def _require_visible_proposal(proposal: Optional[MemberProposal], user_id: str) -> MemberProposal:
+    if proposal is None or (
+        proposal.status in PRIVATE_PROPOSAL_STATUSES and proposal.created_by_id != user_id
+    ):
+        raise HTTPException(status_code=404, detail="找不到社員提案")
+    return proposal
+
+
 async def _award_points_once(
     session: AsyncSession,
     user_id: str,
@@ -79,11 +105,7 @@ async def _award_points_once(
     reference_id: str,
     note: str,
 ) -> None:
-    account = await session.scalar(select(PointAccount).where(PointAccount.user_id == user_id))
-    if account is None:
-        account = PointAccount(user_id=user_id)
-        session.add(account)
-        await session.flush()
+    account = await point_account(session, user_id)
     existing = await session.scalar(
         select(PointTransaction.id).where(
             PointTransaction.account_id == account.id,
@@ -538,6 +560,7 @@ async def mark_activity_attendance(
     activity_id: str,
     registration_id: str,
     attendance_status: ActivityRegistrationStatus,
+    body: Optional[ActivityAttendanceUpdate] = None,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRegistrationRead:
@@ -546,33 +569,78 @@ async def mark_activity_attendance(
         ActivityRegistrationStatus.NO_SHOW,
     }:
         raise HTTPException(status_code=422, detail="無效的出席狀態")
-    await session.execute(select(Activity.id).where(Activity.id == activity_id).with_for_update())
+    activity = await session.scalar(select(Activity).where(Activity.id == activity_id).with_for_update())
+    if activity is None or activity.status not in {ActivityStatus.PUBLISHED, ActivityStatus.COMPLETED}:
+        raise HTTPException(status_code=409, detail="此活動目前無法標記出席")
     registration = await session.scalar(
         select(ActivityRegistration)
         .where(
             ActivityRegistration.id == registration_id,
             ActivityRegistration.activity_id == activity_id,
-            ActivityRegistration.status
-            == ActivityRegistrationStatus.REGISTERED,
+            ActivityRegistration.status.in_({ActivityRegistrationStatus.REGISTERED,
+                ActivityRegistrationStatus.ATTENDED, ActivityRegistrationStatus.NO_SHOW}),
         )
         .options(selectinload(ActivityRegistration.user).selectinload(User.membership))
         .with_for_update()
     )
     if registration is None:
         raise HTTPException(status_code=409, detail="此報名無法標記出席")
+    previous_status = registration.status
+    correction = previous_status != ActivityRegistrationStatus.REGISTERED
+    reason = body.reason.strip() if body and body.reason else None
+    if body and body.expected_status is not None and body.expected_status != previous_status.value:
+        raise HTTPException(status_code=409, detail="名單狀態已更新，請重新讀取後再更正")
+    if correction:
+        if body is None:
+            raise HTTPException(status_code=409, detail="更正出席需提供原因及目前狀態")
+        if not reason or body.expected_status is None:
+            raise HTTPException(status_code=422, detail="請填寫更正原因並確認目前出席狀態")
+        if previous_status == attendance_status:
+            raise HTTPException(status_code=409, detail="出席狀態未變更")
+    previous_check_in = registration.checked_in_at
+    points_delta = 0
+    account = None
+    if correction:
+        desired_points = 5 if attendance_status == ActivityRegistrationStatus.ATTENDED and membership_type_for_user(registration.user) == MembershipType.MEMBER else 0
+        account = await session.scalar(select(PointAccount).where(PointAccount.user_id == registration.user_id))
+        if account is not None or desired_points:
+            account = await point_account(session, registration.user_id)
+            corrections = select(AdminAudit.id).where(AdminAudit.aggregate_type == "activity_registration",
+                AdminAudit.aggregate_id == registration.id, AdminAudit.action == "activity.attendance_corrected")
+            credited, original_award = (await session.execute(select(
+                func.coalesce(func.sum(PointTransaction.amount), 0),
+                func.coalesce(func.max(case((PointTransaction.amount > 0, PointTransaction.amount), else_=0)), 0),
+            ).where(
+                PointTransaction.account_id == account.id,
+                or_(and_(PointTransaction.source_type == PointSourceType.ACTIVITY, PointTransaction.reference_id == activity_id),
+                    and_(PointTransaction.source_type == PointSourceType.ADMIN_ADJUSTMENT, PointTransaction.reference_id.in_(corrections))),
+            ))).one()
+            if attendance_status == ActivityRegistrationStatus.ATTENDED and original_award:
+                desired_points = int(original_award)
+            points_delta = desired_points - int(credited)
     registration.status = attendance_status
     if attendance_status == ActivityRegistrationStatus.ATTENDED:
         registration.checked_in_at = datetime.now(timezone.utc)
-        if membership_type_for_user(registration.user) == MembershipType.MEMBER:
+        if not correction and membership_type_for_user(registration.user) == MembershipType.MEMBER:
             await _award_points_once(session, registration.user_id, 5, PointSourceType.ACTIVITY, activity_id, "參與永續活動")
-    session.add(
-        AdminAudit(
+    else:
+        registration.checked_in_at = None
+    audit = AdminAudit(
             actor_id=admin.id,
-            action=f"activity.{attendance_status.value}",
+            action="activity.attendance_corrected" if correction else f"activity.{attendance_status.value}",
             aggregate_type="activity_registration",
             aggregate_id=registration.id,
+            reason=reason,
+            data={"activity_id": activity_id, "previous_status": previous_status.value,
+                "status": attendance_status.value, "points_delta": points_delta,
+                "previous_checked_in_at": previous_check_in.isoformat() if previous_check_in else None},
         )
-    )
+    session.add(audit)
+    if points_delta:
+        await session.flush()
+        session.add(PointTransaction(account_id=account.id, amount=points_delta,
+            source_type=PointSourceType.ADMIN_ADJUSTMENT, reference_id=audit.id,
+            note=f"活動出席更正：{reason}"[:240], created_by_id=admin.id))
     await session.commit()
     return ActivityRegistrationRead.model_validate(registration)
 
@@ -589,13 +657,7 @@ async def list_member_proposals(
         await session.scalars(
             select(MemberProposal)
             .where(
-                MemberProposal.status.notin_(
-                    {
-                        MemberProposalStatus.DRAFT,
-                        MemberProposalStatus.PENDING_REVIEW,
-                        MemberProposalStatus.WITHDRAWN,
-                    }
-                )
+                MemberProposal.status.notin_(PRIVATE_PROPOSAL_STATUSES)
                 | (MemberProposal.created_by_id == user.id)
             )
             .options(selectinload(MemberProposal.votes))
@@ -624,16 +686,7 @@ async def get_member_proposal(
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
     proposal = await _load_proposal(session, proposal_id)
-    if proposal is None or (
-        proposal.status
-        in {
-            MemberProposalStatus.DRAFT,
-            MemberProposalStatus.PENDING_REVIEW,
-            MemberProposalStatus.WITHDRAWN,
-        }
-        and proposal.created_by_id != user.id
-    ):
-        raise HTTPException(status_code=404, detail="找不到社員提案")
+    _require_visible_proposal(proposal, user.id)
     if apply_member_proposal_clock(proposal, proposal.votes):
         await session.commit()
     return _proposal_read(proposal, user.id)
@@ -649,6 +702,29 @@ async def create_member_proposal(
     user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
+    if body.client_request_id is not None:
+        content = body.model_dump(mode="json", exclude={"client_request_id"})
+        content["options"] = [{"label": item.label.strip()} for item in body.options]
+        fingerprint = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+        statement = insert(MemberProposal).values(
+            created_by_id=user.id, title=body.title, body=body.body,
+            proposal_type=body.proposal_type, status=MemberProposalStatus.DRAFT, minimum_voters=10,
+            client_request_id=str(body.client_request_id), request_fingerprint=fingerprint,
+        ).on_conflict_do_nothing(index_elements=[MemberProposal.created_by_id, MemberProposal.client_request_id]).returning(MemberProposal.id)
+        proposal_id = await session.scalar(statement)
+        if proposal_id is None:
+            existing = (await session.execute(select(MemberProposal.id, MemberProposal.request_fingerprint).where(
+                MemberProposal.created_by_id == user.id, MemberProposal.client_request_id == str(body.client_request_id),
+            ))).one()
+            if existing.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="此提案送單識別已使用，請恢復原提案")
+            return _proposal_read(await _load_proposal(session, existing.id), user.id)
+        session.add_all(ProposalOption(proposal_id=proposal_id, label=item.label.strip(), position=position) for position, item in enumerate(body.options))
+        await session.flush()
+        proposal = await _load_proposal(session, proposal_id)
+        await session.commit()
+        return _proposal_read(proposal, user.id)
     proposal = MemberProposal(
         created_by_id=user.id,
         created_by=user,
@@ -728,9 +804,10 @@ async def withdraw_member_proposal(
 )
 async def list_member_proposal_comments(
     proposal_id: str,
-    _user: User = Depends(require_active_member),
+    user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberProposalCommentRead]:
+    _require_visible_proposal(await session.get(MemberProposal, proposal_id), user.id)
     comments = (
         await session.execute(
             select(MemberProposalComment, User)
@@ -767,7 +844,8 @@ async def comment_on_member_proposal(
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalCommentRead:
     proposal = await _load_proposal(session, proposal_id)
-    if proposal is None or proposal.status not in {
+    _require_visible_proposal(proposal, user.id)
+    if proposal.status not in {
         MemberProposalStatus.DISCUSSION,
         MemberProposalStatus.VOTING,
     }:
@@ -800,8 +878,7 @@ async def vote_on_member_proposal(
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
     proposal = await _load_proposal(session, proposal_id, for_update=True)
-    if proposal is None:
-        raise HTTPException(status_code=404, detail="找不到社員提案")
+    _require_visible_proposal(proposal, user.id)
     apply_member_proposal_clock(proposal, proposal.votes)
     if (
         proposal.status != MemberProposalStatus.VOTING
@@ -845,16 +922,7 @@ async def list_named_member_proposal_votes(
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberProposalNamedVoteRead]:
     proposal = await session.get(MemberProposal, proposal_id)
-    if proposal is None or (
-        proposal.status
-        in {
-            MemberProposalStatus.DRAFT,
-            MemberProposalStatus.PENDING_REVIEW,
-            MemberProposalStatus.WITHDRAWN,
-        }
-        and proposal.created_by_id != user.id
-    ):
-        raise HTTPException(status_code=404, detail="找不到社員提案")
+    _require_visible_proposal(proposal, user.id)
     rows = (
         await session.execute(
             select(MemberProposalVote, User)

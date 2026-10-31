@@ -94,10 +94,10 @@
 ## 到貨後逐步驗收
 
 1. 已確認 **FP-V58-W** 在現場 Wi-Fi 可用，中國站同 SN 在線且一張繁中測試成功。後續採中國站；不再以搬到亞太站作為本次接線前提。
-2. 更換已曝光開發者 UKEY。到貨後依該型號手冊接電、放紙、設定店內 Wi-Fi。Wi-Fi 頻段／配網步驟以實際型號手冊為準。
+2. 10/31 本人已確認境外認證通過，新核 UKEY 未外露；沿用該新憑證，不要求重做認證或再次換發。設備接電、放紙及現場 Wi-Fi 已驗，後續配網仍依該型號手冊。
 3. 中國站設備綁定及在線核對已完成。**設備 KEY 與開發者 UKEY 不同**；本程式不自動綁定設備。保留亞太舊工作，不做清空、解綁或跨區補印。
-4. 使用 [2026-01-15 官方分流公告](https://help1.feieyun.com/docs/96C8PyrC) 的中國三路 URL，先完成雙區隔離程式發布，再切換 `FEIE_API_BASE_URL`。舊文件連結矛盾見 [API 查核](FEIE_API_RESEARCH.md)。
-5. 由使用者將中國帳號 USER／輪替後 UKEY／本機 SN 直接填到 Render 後端秘密環境，完成儲存，不貼到對話。確認常駐程序及待印隔離，再設 `FEIE_UKEY_ROTATED=true`、`FEIE_CN_ENDPOINT_VERIFIED=true`、`FEIE_AP_ENDPOINT_VERIFIED=false`、`PRINTER_ENABLED=true`、`PRINTER_DRY_RUN=false`。每次 HTTP 前會重新驗證門禁。
+4. 使用 [2026-01-15 官方分流公告](https://help1.feieyun.com/docs/96C8PyrC) 的中國三路 URL；雙區隔離程式已發布，設定仍須配對中國帳號。舊文件連結矛盾見 [API 查核](FEIE_API_RESEARCH.md)。
+5. 依11/1 00:07交接，本人已儲存秘密並以同一`c5290c7`重新部署套用；設定檢查ready、設備online，單張後端合成測試已接受且查詢printed。未建立Order／PrintJob，紙本確認及未來資料傳送同意仍待，自動worker仍關閉；不要求重填秘密或重送該張。完整網站實印前核對區域門禁 `FEIE_UKEY_ROTATED`、`FEIE_CN_ENDPOINT_VERIFIED`、`FEIE_AP_ENDPOINT_VERIFIED`、`PRINTER_ENABLED`、`PRINTER_DRY_RUN` 及待印隔離，再依受控驗收步驟啟用；每次 HTTP 前會重新驗證門禁。
 6. 在廚房按「查詢設備」，應顯示在線；關機後離線可能延遲約兩分鐘。使用明確測試帳號建立**一筆**現場付款便當，核對單號、長中文姓名、選項、備註、單價／總額、台灣日期時間、未付款，以及實際斷行。確認只有一張，狀態先 submitted 後 printed。
 7. 在後台標已付款後手動補印一次，填測試原因，確認紙上「補印」及「已付款」。核准取消測試訂單，確認獨立「取消通知」及停止製作字樣。
 8. 關閉設備 Wi-Fi 後建立一筆測試單，確認網站仍成功、工作保留、不重送；恢復 Wi-Fi 後確認該筆只出一張。再以本機 MockTransport 測試 API timeout／程序中斷，unknown 時先核對，不用正式設備反覆盲試。

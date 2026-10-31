@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    func,
     text,
     true,
 )
@@ -520,6 +522,15 @@ class RefreshSession(Base):
     user: Mapped[User] = relationship(back_populates="refresh_sessions")
 
 
+class CredentialRateLimitBucket(Base):
+    __tablename__ = "credential_rate_limit_buckets"
+    __table_args__ = (Index("ix_credential_rate_limit_expiry_key", "expires_at", "key_hash"),)
+
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    hits: Mapped[List[int]] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class MemberRosterEntry(Base):
     __tablename__ = "member_roster_entries"
     __table_args__ = (
@@ -541,13 +552,13 @@ class MemberRosterEntry(Base):
     share_certificate_number: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True
     )
-    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0)
-    share_count: Mapped[int] = mapped_column(Integer, default=0)
+    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    share_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     share_subscribed_on: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
     share_paid_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), index=True)
     claimed_user_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -756,8 +767,8 @@ class Membership(Base):
     share_certificate_number: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True
     )
-    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0)
-    share_count: Mapped[int] = mapped_column(Integer, default=0)
+    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    share_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     share_subscribed_on: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
@@ -1140,9 +1151,17 @@ class ProposalTargetType(str, enum.Enum):
     CUSTOM = "custom"
 
 
+OPEN_PROPOSAL_TARGET_PREDICATE = (
+    "target_type IN ('product','bundle') AND target_id IS NOT NULL "
+    "AND status IN ('pending_review','voting','conversion_pending')"
+)
+
+
 class VoteProposal(Base):
     __tablename__ = "vote_proposals"
     __table_args__ = (
+        Index("uq_vote_proposals_open_target", "target_type", "target_id", unique=True,
+              postgresql_where=text(OPEN_PROPOSAL_TARGET_PREDICATE), sqlite_where=text(OPEN_PROPOSAL_TARGET_PREDICATE)),
         CheckConstraint("threshold > 0", name="threshold_positive"),
         Index(
             "ix_vote_proposals_open_target",
@@ -1299,7 +1318,7 @@ class GroupCampaign(Base):
     confirmed_min_paid_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     confirmed_threshold_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     confirmation_exception_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    legacy_confirmed_intake: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    legacy_confirmed_intake: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     can_ship: Mapped[bool] = mapped_column(Boolean, default=False)
     shipping_temperature: Mapped[Optional[ShippingTemperature]] = mapped_column(
@@ -1487,6 +1506,7 @@ class ActivityRefundRequest(Base):
 class MemberProposal(Base):
     __tablename__ = "member_proposals"
     __table_args__ = (
+        Index("uq_member_proposal_creator_request", "created_by_id", "client_request_id", unique=True),
         CheckConstraint("minimum_voters > 0", name="minimum_voters_positive"),
         CheckConstraint(
             "discussion_ends_at IS NULL OR voting_ends_at IS NULL "
@@ -1501,9 +1521,12 @@ class MemberProposal(Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     body: Mapped[str] = mapped_column(Text)
+    client_request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     proposal_type: Mapped[MemberProposalType] = mapped_column(
         enum_type(MemberProposalType, "member_proposal_type"),
         default=MemberProposalType.RESOLUTION,
+        server_default="resolution",
         index=True,
     )
     status: Mapped[MemberProposalStatus] = mapped_column(
@@ -1732,7 +1755,7 @@ class MealEvent(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(160))
-    allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))
     schedule_template_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("meal_schedule_templates.id", ondelete="RESTRICT"), nullable=True, index=True
@@ -1793,11 +1816,11 @@ class MealScheduleTemplate(Base):
     pickup_start_time: Mapped[str] = mapped_column(String(5))
     pickup_end_time: Mapped[str] = mapped_column(String(5))
     cutoff_time: Mapped[str] = mapped_column(String(5))
-    cutoff_days_before: Mapped[int] = mapped_column(Integer, default=0)
-    advance_days: Mapped[int] = mapped_column(Integer, default=7)
+    cutoff_days_before: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    advance_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     weekdays: Mapped[list[int]] = mapped_column(JSON)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     offerings: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
     created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -1897,6 +1920,7 @@ class Order(Base):
     client_request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    group_contract_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     kitchen_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     order_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     order_kind: Mapped[OrderKind] = mapped_column(
@@ -1936,7 +1960,7 @@ class Order(Base):
     promotion_id: Mapped[Optional[str]] = mapped_column(ForeignKey("promotions.id", ondelete="RESTRICT"), nullable=True, index=True)
     promotion_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     amount_total: Mapped[int] = mapped_column(Integer)
-    tax_amount: Mapped[int] = mapped_column(Integer, default=0)
+    tax_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     contact_email: Mapped[str] = mapped_column(String(320))
     invoice_buyer_type: Mapped[InvoiceBuyerType] = mapped_column(
         enum_type(InvoiceBuyerType, "invoice_buyer_type"),
@@ -2680,12 +2704,17 @@ class InvoiceAllowanceItem(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index("uq_notification_user_event_dedupe", "user_id", "event_type", "dedupe_hash", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     event_type: Mapped[str] = mapped_column(String(80), index=True)
+    dedupe_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    delivery_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     title: Mapped[str] = mapped_column(String(160))
     body: Mapped[str] = mapped_column(Text)
     data: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -2701,8 +2730,14 @@ class Notification(Base):
 
 class OutboxEvent(Base):
     __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("uq_outbox_notification_intent", "notification_id", unique=True),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    notification_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("notifications.id", ondelete="SET NULL"), nullable=True
+    )
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     aggregate_type: Mapped[str] = mapped_column(String(80))
     aggregate_id: Mapped[str] = mapped_column(String(36), index=True)
@@ -2775,6 +2810,31 @@ class SystemSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class ReconciliationRun(Base):
+    __tablename__ = "reconciliation_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('running','succeeded','partial_failure','cancelled')", name="status_valid"),
+        CheckConstraint("source IN ('job','internal','request','periodic')", name="source_valid"),
+        CheckConstraint("(status = 'running' AND finished_at IS NULL) OR (status <> 'running' AND finished_at IS NOT NULL)", name="completion_consistent"),
+        CheckConstraint("finished_at IS NULL OR finished_at >= started_at", name="completion_after_start"),
+        Index("ix_reconciliation_runs_status_id", "status", "id"),
+        Index("ix_reconciliation_runs_finished_id", "finished_at", "id",
+            sqlite_where=text("finished_at IS NOT NULL AND status IN ('succeeded','partial_failure','cancelled')"),
+            postgresql_where=text("finished_at IS NOT NULL AND status IN ('succeeded','partial_failure','cancelled')")),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(20), default="running", server_default="running")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    progress_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_phase: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    deferred_reason: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    phases: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    counts: Mapped[Dict[str, int]] = mapped_column(JSON, default=dict)
 
 
 class FiscalYear(Base):

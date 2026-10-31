@@ -132,9 +132,12 @@ async def test_background_reconcile_is_single_flight(
         session,
         settings,
         minimum_interval_seconds=60.0,
+        *,
+        source="request",
     ):
         nonlocal calls
         calls += 1
+        assert source == "request"
         started.set()
         await release.wait()
 
