@@ -12,8 +12,12 @@ const product = { id: 'recovery-product', name: '回復測試白米', unit: '包
 const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
 
 async function fixture(t, { loseResponse = false, holdHandoff = false } = {}) {
+  const evidence = process.env.CHECKOUT_EVENT_EVIDENCE_DIR
+    ? (await import('./checkout-event-evidence.mjs')).createCheckoutEventEvidence({
+      directory: process.env.CHECKOUT_EVENT_EVIDENCE_DIR, testName: t.name, engine: process.env.BROWSER_ENGINE || 'chromium',
+    }) : null;
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
-  t.after(() => browser.close());
+  t.after(evidence ? () => evidence.close(() => browser.close()) : () => browser.close());
   const context = await browser.newContext({ viewport: { width: 390, height: 1000 }, serviceWorkers: 'block' });
   await context.addInitScript(item => {
     if (!sessionStorage.getItem('recovery-seeded')) {
@@ -78,10 +82,12 @@ async function fixture(t, { loseResponse = false, holdHandoff = false } = {}) {
   const page = await context.newPage();
   page.setDefaultTimeout(6000);
   page.on('pageerror', error => state.errors.push(error.message));
+  if (evidence) evidence.attach(page, () => state.errors);
   await page.goto(`${base}/checkout`);
   await page.locator('.summary-total dd').getByText('$100', { exact: true }).waitFor();
   const pay = () => page.getByRole('button', { name: /^(前往線上付款|重試原訂單)$/ });
-  t.after(() => { assert.deepEqual(state.errors, []); assert.deepEqual(state.unknown, []); });
+  const assertFixtureErrors = () => { assert.deepEqual(state.errors, []); assert.deepEqual(state.unknown, []); };
+  t.after(evidence ? () => evidence.assertAndSave(assertFixtureErrors) : assertFixtureErrors);
   return { page, state, pay };
 }
 
