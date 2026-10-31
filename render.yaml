@@ -114,7 +114,7 @@ services:
       - key: PRINTER_WORKER_ENABLED
         sync: false
       - key: FEIE_API_BASE_URL
-        value: https://api.jp.feieyun.com/Api/Open/
+        sync: false
       - key: FEIE_UKEY_ROTATED
         sync: false
       - key: FEIE_AP_ENDPOINT_VERIFIED
