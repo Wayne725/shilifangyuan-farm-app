@@ -47,13 +47,35 @@ async def test_configuration_reports_bad_endpoint_without_echoing_it(cash_contex
         assert response.status_code == 200
         assert not response.json()["live_config_ready"]
         assert response.json()["checks"]["endpoint_allowed"] is False
+        assert response.json()["configured_region"] is None
         assert "private-" not in response.text and "evil.test" not in response.text
 
 
-async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(cash_context, monkeypatch):
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_cn_configuration_reports_its_own_confirmation_without_network(cash_context, monkeypatch, confirmed):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("configuration must not connect to provider")
+
+    monkeypatch.setattr("app.routers.printers.FeieClient", forbidden)
+    settings = live_settings(feie_api_base_url="https://api.feieyun.cn/Api/Open/", feie_ap_endpoint_verified=False,
+                             feie_cn_endpoint_verified=confirmed)
+    async with api_test_context(cash_context.session, [printers_router], settings=settings) as client:
+        response = await client.get("/v1/admin/printers/configuration", headers=auth_headers(cash_context.admin))
+        assert response.status_code == 200
+        result = response.json()
+        assert result["configured_region"] == "cn"
+        assert result["checks"]["china_endpoint_confirmed"] is confirmed
+        assert "asia_pacific_endpoint_confirmed" not in result["checks"]
+        assert result["live_config_ready"] is confirmed
+        assert all(value not in response.text for value in ["test-user", "test-secret", "test-device"])
+
+
+@pytest.mark.parametrize("host,region", [("api.jp.feieyun.com", "jp"), ("api.feieyun.cn", "cn")])
+async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(cash_context, monkeypatch, host, region):
     c = cash_context
-    settings = live_settings()
-    for name in ("printer_enabled", "printer_dry_run", "feie_user", "feie_ukey", "feie_printer_sn", "feie_ukey_rotated", "feie_ap_endpoint_verified"):
+    settings = live_settings(feie_api_base_url=f"https://{host}/Api/Open/", feie_ap_endpoint_verified=region == "jp",
+                             feie_cn_endpoint_verified=region == "cn")
+    for name in ("printer_enabled", "printer_dry_run", "feie_user", "feie_ukey", "feie_printer_sn", "feie_ukey_rotated", "feie_ap_endpoint_verified", "feie_cn_endpoint_verified", "feie_api_base_url"):
         setattr(c.settings, name, getattr(settings, name))
     factory = async_sessionmaker(c.session.bind, expire_on_commit=False)
     cloud = {"printed": False, "contents": [], "calls": []}
@@ -65,18 +87,20 @@ async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(ca
 
     def provider(request):
         form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        assert str(request.url) == settings.feie_api_base_url
         assert form["sig"] == sha1(f"test-usertest-secret{form['stime']}".encode()).hexdigest()
         api = form["apiname"]
         cloud["calls"].append(api)
         if api == "Open_printMsg":
+            assert str(request.url) == f"https://{host}/Api/Open/printMsg"
             assert form["sn"] == "test-device" and form["times"] == "1"
             cloud["contents"].append(form["content"])
             return httpx.Response(200, json={"ret": 0, "data": f"mock-job-{len(cloud['contents'])}"})
         if api == "Open_queryOrderState":
+            assert str(request.url) == f"https://{host}/Api/Open/queryOrderState"
             assert form["orderid"].startswith("mock-job-")
             return httpx.Response(200, json={"ret": 0, "data": cloud["printed"]})
         assert api == "Open_queryPrinterStatus"
+        assert str(request.url) == f"https://{host}/Api/Open/queryPrinterStatus"
         return httpx.Response(200, json={"ret": 0, "data": "离线"})
 
     transport = httpx.MockTransport(provider)
@@ -99,6 +123,7 @@ async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(ca
         await process_print_job(c.settings, factory=factory, now=now)
         detail = await client.get(job_url, headers=headers)
         assert detail.json()["status"] == "submitted" and detail.json()["can_query"]
+        assert detail.json()["printer_region"] == region
         assert "付款狀態：未付款" in detail.json()["preview"]
         assert "飯少，不要辣" in cloud["contents"][0]
         await process_print_job(c.settings, factory=factory, now=now + timedelta(seconds=20))

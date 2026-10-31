@@ -1,14 +1,23 @@
-"""Feie Asia Pacific receipt API. Never log signed forms or vendor response bodies."""
+"""Feie regional receipt API. Never log signed forms or vendor response bodies."""
 from __future__ import annotations
 
 import hashlib
 import time
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
 
 from ..config import Settings
 from .tls import create_tls_context
+
+
+_API_PATHS = {
+    "Open_printMsg": "printMsg",
+    "Open_queryOrderState": "queryOrderState",
+    "Open_queryPrinterStatus": "queryPrinterStatus",
+}
+_REGION_HOSTS: dict[str, Literal["jp", "cn"]] = {"api.jp.feieyun.com": "jp", "api.feieyun.cn": "cn"}
 
 
 class FeieError(Exception):
@@ -19,23 +28,33 @@ class FeieError(Exception):
         self.uncertain = uncertain
 
 
-def validate_endpoint(url: str) -> None:
+def validate_endpoint(url: str) -> Literal["jp", "cn"]:
     try:
         parsed = urlsplit(url)
         port = parsed.port
     except ValueError:
-        raise FeieError("invalid_asia_pacific_endpoint") from None
-    if (parsed.scheme != "https" or parsed.hostname != "api.jp.feieyun.com"
+        raise FeieError("invalid_printer_endpoint") from None
+    region = _REGION_HOSTS.get(parsed.hostname)
+    if (parsed.scheme != "https" or region is None
             or port not in (None, 443) or parsed.path != "/Api/Open/"
             or parsed.username or parsed.password or parsed.query or parsed.fragment):
-        raise FeieError("invalid_asia_pacific_endpoint")
+        raise FeieError("invalid_printer_endpoint")
+    return region
+
+
+def configured_region(settings: Settings) -> Literal["jp", "cn"] | None:
+    try:
+        return validate_endpoint(settings.feie_api_base_url)
+    except FeieError:
+        return None
 
 
 def validate_live_config(settings: Settings) -> None:
     if not settings.printer_enabled or settings.printer_dry_run:
         raise FeieError("live_printing_disabled")
-    validate_endpoint(settings.feie_api_base_url)
-    if not (settings.feie_ukey_rotated and settings.feie_ap_endpoint_verified):
+    region = validate_endpoint(settings.feie_api_base_url)
+    region_verified = settings.feie_ap_endpoint_verified if region == "jp" else settings.feie_cn_endpoint_verified
+    if not (settings.feie_ukey_rotated and region_verified):
         raise FeieError("live_activation_not_confirmed")
     if not all(value.get_secret_value().strip() for value in (
         settings.feie_user, settings.feie_ukey, settings.feie_printer_sn,
@@ -48,20 +67,20 @@ def configuration_read(settings: Settings) -> dict:
         ("FEIE_USER", settings.feie_user), ("FEIE_UKEY", settings.feie_ukey),
         ("FEIE_PRINTER_SN", settings.feie_printer_sn),
     ) if not value.get_secret_value().strip()]
-    try:
-        validate_endpoint(settings.feie_api_base_url)
-        endpoint_allowed = True
-    except FeieError:
-        endpoint_allowed = False
+    region = configured_region(settings)
     checks = {
         "printer_enabled": settings.printer_enabled,
         "live_mode_selected": not settings.printer_dry_run,
         "credentials_configured": not missing,
-        "endpoint_allowed": endpoint_allowed,
+        "endpoint_allowed": region is not None,
         "ukey_rotation_confirmed": settings.feie_ukey_rotated,
-        "asia_pacific_endpoint_confirmed": settings.feie_ap_endpoint_verified,
     }
+    if region == "cn":
+        checks["china_endpoint_confirmed"] = settings.feie_cn_endpoint_verified
+    else:
+        checks["asia_pacific_endpoint_confirmed"] = settings.feie_ap_endpoint_verified
     return {"checks": checks, "missing_variables": missing,
+            "configured_region": region,
             "live_config_ready": all(checks.values()),
             "in_app_worker_enabled": settings.printer_worker_enabled}
 
@@ -73,6 +92,11 @@ class FeieClient:
         self.transport = transport
 
     async def _call(self, api: str, **parameters: str) -> dict:
+        path = _API_PATHS.get(api)
+        if path is None:
+            raise FeieError("unsupported_printer_api")
+        validate_live_config(self.settings)
+        request_url = f"{self.settings.feie_api_base_url}{path}"
         stime = str(int(time.time()))
         user = self.settings.feie_user.get_secret_value()
         signature = hashlib.sha1(
@@ -83,7 +107,7 @@ class FeieClient:
                 timeout=self.settings.printer_timeout_seconds,
                 follow_redirects=False, transport=self.transport, verify=create_tls_context(),
             ) as client:
-                response = await client.post(self.settings.feie_api_base_url, data={
+                response = await client.post(request_url, data={
                     "user": user, "stime": stime, "sig": signature,
                     "apiname": api, **parameters,
                 })

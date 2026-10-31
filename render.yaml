@@ -119,6 +119,8 @@ services:
         sync: false
       - key: FEIE_AP_ENDPOINT_VERIFIED
         sync: false
+      - key: FEIE_CN_ENDPOINT_VERIFIED
+        sync: false
 
   - type: web
     name: shilifangyuan-web

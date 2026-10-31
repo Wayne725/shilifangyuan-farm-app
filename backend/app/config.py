@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     feie_api_base_url: str = "https://api.jp.feieyun.com/Api/Open/"
     feie_ukey_rotated: bool = False
     feie_ap_endpoint_verified: bool = False
+    feie_cn_endpoint_verified: bool = False
     printer_timeout_seconds: float = Field(default=10, ge=1, le=30)
     printer_poll_seconds: float = Field(default=2, ge=0.1, le=60)
     printer_query_seconds: int = Field(default=15, ge=1, le=300)

@@ -12,7 +12,7 @@ from .config import Settings, get_settings
 from .database import SessionLocal
 from .integrations.feie import FeieClient, FeieError, validate_live_config
 from .models import Order, PrintJob
-from .printing import format_receipt, printer_fingerprint
+from .printing import format_receipt, job_matches_printer
 
 logger = logging.getLogger(__name__)
 _wake: asyncio.Event | None = None
@@ -55,7 +55,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
             await session.commit()
             return True
         mode = "dry_run" if settings.printer_dry_run else "live"
-        if job.mode != mode or job.printer_fingerprint != printer_fingerprint(settings):
+        if not job_matches_printer(job, settings):
             job.last_error = "printer_configuration_changed"
             job.next_attempt_at = now + timedelta(seconds=60)
             await session.commit()

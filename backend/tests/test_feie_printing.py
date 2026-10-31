@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.integrations.feie import FeieClient, FeieError
+from app.integrations.feie import FeieClient, FeieError, configuration_read
 from app.models import AdminAudit, Order, PrintJob
 from app.printer_worker import process_print_job
 from app.printing import enqueue_cancellation_print, format_receipt, printer_fingerprint, wrap_text
@@ -24,13 +24,84 @@ def live_settings(**overrides):
         "feie_ap_endpoint_verified": True, **overrides})
 
 
+@pytest.mark.parametrize("method,args,api,path,data,expected", [
+    ("submit", ["繁體中文測試<BR>"], "Open_printMsg", "printMsg", "vendor-job", "vendor-job"),
+    ("query", ["vendor-job"], "Open_queryOrderState", "queryOrderState", True, True),
+    ("printer_status", [], "Open_queryPrinterStatus", "queryPrinterStatus", "在线，工作状态正常", "online"),
+])
+@pytest.mark.parametrize("host,region_options", [
+    ("api.jp.feieyun.com", {}),
+    ("api.feieyun.cn", {"feie_ap_endpoint_verified": False, "feie_cn_endpoint_verified": True}),
+])
+async def test_feie_uses_dedicated_regional_routes(method, args, api, path, data, expected, host, region_options):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert str(request.url) == f"https://{host}/Api/Open/{path}"
+        form = parse_qs(request.content.decode())
+        assert form["apiname"] == [api]
+        assert form["sig"] == [sha1(f"test-usertest-secret{form['stime'][0]}".encode()).hexdigest()]
+        return httpx.Response(200, json={"ret": 0, "data": data})
+
+    client = FeieClient(live_settings(feie_api_base_url=f"https://{host}/Api/Open/", **region_options), transport=httpx.MockTransport(handler))
+    assert await getattr(client, method)(*args) == expected
+    assert len(calls) == 1
+
+
+def test_china_confirmation_defaults_to_disabled():
+    assert make_test_settings().feie_cn_endpoint_verified is False
+
+
+@pytest.mark.parametrize("host,ap_verified,cn_verified,region,check,ready", [
+    ("api.jp.feieyun.com", True, False, "jp", "asia_pacific_endpoint_confirmed", True),
+    ("api.jp.feieyun.com", False, True, "jp", "asia_pacific_endpoint_confirmed", False),
+    ("api.feieyun.cn", False, True, "cn", "china_endpoint_confirmed", True),
+    ("api.feieyun.cn", True, False, "cn", "china_endpoint_confirmed", False),
+])
+def test_configuration_requires_confirmation_of_the_selected_region(host, ap_verified, cn_verified, region, check, ready):
+    settings = live_settings(feie_api_base_url=f"https://{host}/Api/Open/", feie_ap_endpoint_verified=ap_verified,
+                             feie_cn_endpoint_verified=cn_verified)
+    result = configuration_read(settings)
+    assert result["configured_region"] == region
+    assert result["checks"][check] is ready
+    assert ("china_endpoint_confirmed" if region == "jp" else "asia_pacific_endpoint_confirmed") not in result["checks"]
+    assert result["live_config_ready"] is ready
+    if ready:
+        FeieClient(settings)
+    else:
+        with pytest.raises(FeieError, match="live_activation_not_confirmed"):
+            FeieClient(settings)
+
+
+async def test_changing_from_confirmed_jp_to_unconfirmed_cn_cannot_send():
+    def forbidden(request):
+        raise AssertionError("CN needs its own confirmation before any request")
+
+    settings = live_settings()
+    client = FeieClient(settings, transport=httpx.MockTransport(forbidden))
+    settings.feie_api_base_url = "https://api.feieyun.cn/Api/Open/"
+    with pytest.raises(FeieError, match="live_activation_not_confirmed"):
+        await client.submit("不能跨區沿用同意")
+
+
+@pytest.mark.parametrize("api", ["Open_printerDelList", "", "../printMsg", "Open_printMsg/../queryOrderState", "https://evil.test/printMsg"])
+async def test_feie_rejects_unsupported_method_before_network(api):
+    def forbidden(request):
+        raise AssertionError("unsupported method must not send a request")
+
+    client = FeieClient(live_settings(), transport=httpx.MockTransport(forbidden))
+    with pytest.raises(FeieError, match="unsupported_printer_api"):
+        await client._call(api)
+
+
 async def test_feie_form_signature_region_and_utf8(monkeypatch):
     monkeypatch.setattr("app.integrations.feie.time.time", lambda: 1234567890)
     requests = []
 
     async def handler(request):
         requests.append(request)
-        assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/"
+        assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/printMsg"
         form = parse_qs(request.content.decode())
         assert form["sig"] == [sha1(b"test-usertest-secret1234567890").hexdigest()]
         assert form["stime"] == ["1234567890"]
@@ -45,10 +116,37 @@ async def test_feie_form_signature_region_and_utf8(monkeypatch):
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize("url", ["http://api.jp.feieyun.com/Api/Open/", "https://api.de.feieyun.com/Api/Open/", "https://api.jp.feieyun.com/Api/Open/printMsg", "https://evil.test/Api/Open/", "https://api.jp.feieyun.com/Api/Open/?debug=1"])
-def test_only_asia_pacific_https_endpoint(url):
-    with pytest.raises(FeieError, match="invalid_asia_pacific_endpoint"):
+@pytest.mark.parametrize("url", [
+    "http://api.jp.feieyun.com/Api/Open/", "https://api.de.feieyun.com/Api/Open/", "https://api.jp.feieyun.com/Api/Open/printMsg",
+    "https://evil.test/Api/Open/", "https://api.jp.feieyun.com/Api/Open/?debug=1", "http://api.feieyun.cn/Api/Open/",
+    "https://api.feieyun.cn:444/Api/Open/", "https://api.feieyun.cn/Api/Open/printMsg", "https://admin.feieyun.com/index.php",
+    "https://user:secret@api.feieyun.cn/Api/Open/", "https://api.feieyun.cn/Api/Open/#fragment",
+])
+def test_only_allowed_regional_https_endpoint(url):
+    with pytest.raises(FeieError, match="invalid_printer_endpoint"):
         FeieClient(live_settings(feie_api_base_url=url))
+
+
+async def test_feie_revalidates_endpoint_before_sending():
+    def forbidden(request):
+        raise AssertionError("invalid endpoint must not send a request")
+
+    settings = live_settings()
+    client = FeieClient(settings, transport=httpx.MockTransport(forbidden))
+    settings.feie_api_base_url = "https://evil.test/Api/Open/"
+    with pytest.raises(FeieError, match="invalid_printer_endpoint"):
+        await client.submit("單")
+
+
+async def test_disabling_live_mode_after_client_creation_stops_http():
+    def forbidden(request):
+        raise AssertionError("dry run must never send HTTP")
+
+    settings = live_settings()
+    client = FeieClient(settings, transport=httpx.MockTransport(forbidden))
+    settings.printer_dry_run = True
+    with pytest.raises(FeieError, match="live_printing_disabled"):
+        await client.submit("單")
 
 
 @pytest.mark.parametrize("field,value", [("feie_ukey_rotated", False), ("feie_ap_endpoint_verified", False), ("feie_ukey", "")])
@@ -77,13 +175,19 @@ async def test_transport_failure_classification(failure, safe, uncertain):
     (httpx.Response(200, json={"ret": -3, "msg": "sensitive"}), False),
     (httpx.Response(200, json={"ret": -999, "msg": "sensitive"}), True),
 ])
-async def test_ambiguous_responses_never_resubmitted(response, uncertain):
+@pytest.mark.parametrize("host,region_options", [
+    ("api.jp.feieyun.com", {}),
+    ("api.feieyun.cn", {"feie_ap_endpoint_verified": False, "feie_cn_endpoint_verified": True}),
+])
+async def test_ambiguous_responses_never_resubmitted(response, uncertain, host, region_options):
     calls = []
     def handler(request):
         calls.append(request)
+        assert str(request.url) == f"https://{host}/Api/Open/printMsg"
         return response
     with pytest.raises(FeieError) as error:
-        await FeieClient(live_settings(), transport=httpx.MockTransport(handler)).submit("單")
+        settings = live_settings(feie_api_base_url=f"https://{host}/Api/Open/", **region_options)
+        await FeieClient(settings, transport=httpx.MockTransport(handler)).submit("單")
     assert error.value.uncertain is uncertain
     assert not error.value.safe_to_retry
     assert len(calls) == 1
@@ -92,6 +196,7 @@ async def test_ambiguous_responses_never_resubmitted(response, uncertain):
 
 async def test_query_false_is_unprinted_not_failed():
     def handler(request):
+        assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/queryOrderState"
         form = parse_qs(request.content.decode())
         assert form["apiname"] == ["Open_queryOrderState"]
         assert form["orderid"] == ["vendor-job"]

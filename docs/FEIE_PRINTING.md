@@ -1,6 +1,8 @@
-# 飛鵝亞太站雲端出單
+# 飛鵝雲端出單
 
-日期：2026-10-22。此文件涵蓋程式整合與到貨驗收；目前沒有綁定設備，也沒有實體列印驗證。
+初版日期：2026-10-22；更新：2026-10-31。已在中國站核對同一台 FP-V58-W 在線、正常、待印 0；送出一張無個資測試單，使用者確認「印出1張，繁體中文正常」。這證明中國站至實機可遠端列印，尚不代表網站訂單串接完成。亞太站仍離線、待印 4 筆，來源未確認，未清除或重送。正式網站出單仍未啟用。
+
+2026-10-31 三個方法專屬路徑修正已經 PR #23 部署至 API commit `6f39b471064255b6ed834d9d0fa103277a4b7b93`。後續中國／亞太雙區與工作隔離修改已完成本機 131 項相關測試，發布狀態另見需求及發布紀錄；正式開關及憑證未更改。配網教學及來源見 [到貨查核](FP_V58_W_ARRIVAL_SETUP.md)，區域實測見 [區域調查](FEIE_CLOUD_REGION_SETUP_RESEARCH.md)，API 契約見 [API 查核](FEIE_API_RESEARCH.md)。下方 2026-10-22 的測試與部署描述保留為當時紀錄。
 
 ## 現有架構與整合決策
 
@@ -17,7 +19,7 @@
 
 | 檔案 | 用途 |
 | --- | --- |
-| `backend/app/integrations/feie.py` | 亞太專用簽章、表單、送印、查單、設備狀態、逾時分類 |
+| `backend/app/integrations/feie.py` | 中國／亞太端點白名單、簽章、送印、查單、設備狀態、逾時分類 |
 | `backend/app/printing.py` | 不可變訂單快照、58mm 換行、取消通知、管理員讀取格式 |
 | `backend/app/printer_worker.py` | 背景喚醒／輪詢、資料庫 claim／租約、有限安全重試與查單 |
 | `backend/app/models.py`、`schemas.py` | PrintJob、便當備註及送單去重識別碼 |
@@ -41,6 +43,7 @@
 - 訂單以 `(user_id, client_request_id)` 唯一約束去重。同一 UUID、同一內容回傳原訂單；換內容卻沿用 UUID 回 409。舊客戶端不送 UUID 仍相容，但沒有此去重保護。前端以 SHA-256 摘要作 sessionStorage 鍵，不把姓名／信箱直接放進儲存鍵；已成功回應會清除識別碼。
 - 先持久化 sending 與租約才送 API。程序在送出後中斷時，租約到期改 unknown，不重新發送。多個程序以訂單鎖、工作鎖與條件更新 claim；worker 不在網路等待時持有資料庫交易。
 - 正式／模擬模式與設備身分各自保存在工作上，改設定不會把既有模擬單自動變成正式單，也不把舊單送去新設備。管理員可明確建立新補印工作。
+- 新工作快照保存 `printer_region`；舊工作缺此欄位只視為 JP，未知區域保持停送。fingerprint 計算不變，原本已包含 URL／USER／SN。worker 與查單比對模式、fingerprint、區域；跨區補印回 409。同區改設備或模擬轉正式的明確手動補印仍保留。
 - 送單成功不等待列印。列印錯誤留在 PrintJob，訂單及庫存保留不會因供應商故障回滾。
 
 核准單筆退單或取消整場時：尚未發送的原工作停止；若曾發送／可能有紙本，另存取消通知，含原單號及停止製作標示。原工作仍 sending 時先等其結果。取消通知本身也有狀態，結果不明時同樣需廚房人工處理，不能保證斷網期間即時出紙。
@@ -57,9 +60,10 @@
 | `PRINTER_DRY_RUN` | true：只產生模擬單，完全不送飛鵝 |
 | `PRINTER_WORKER_ENABLED` | true：隨 FastAPI 啟動處理程序；獨立 worker 時 web 可設 false |
 | `FEIE_USER`、`FEIE_UKEY`、`FEIE_PRINTER_SN` | 後端秘密設定；Dry Run 可留空 |
-| `FEIE_API_BASE_URL` | `https://api.jp.feieyun.com/Api/Open/`，僅允許亞太 HTTPS、不跟隨 redirect |
+| `FEIE_API_BASE_URL` | 預設 `https://api.jp.feieyun.com/Api/Open/`；中國站為 `https://api.feieyun.cn/Api/Open/`。只允許這兩個官方 HTTPS 前綴，附加固定三方法路徑、不轉址、不跨站重試 |
 | `FEIE_UKEY_ROTATED` | false；確實更換曝光 UKEY 後才設 true |
-| `FEIE_AP_ENDPOINT_VERIFIED` | false；向飛鵝確認亞太 HTTPS 主機後才設 true |
+| `FEIE_AP_ENDPOINT_VERIFIED` | false；只授權已確認的亞太帳號／設備，不授權中國站 |
+| `FEIE_CN_ENDPOINT_VERIFIED` | false；只授權已確認的中國帳號／設備，不授權亞太站 |
 | `PRINTER_TIMEOUT_SECONDS` | 10，每次 HTTP 上限 |
 | `PRINTER_POLL_SECONDS` | 2，掃描待處理工作；commit 後另有即時喚醒 |
 | `PRINTER_QUERY_SECONDS` | 15，雲端結果輪詢 |
@@ -77,7 +81,7 @@
 
 管理員 API 全部以現有登入憑證、`require_admin` 保護：
 
-- `GET /v1/admin/printers/configuration`：不連外的設定檢查。只回傳各檢查布林值、缺少的環境變數名稱與 `live_config_ready`，完全不回傳 USER／UKEY／SN 或原始設定 URL。即使沒有密鑰也能使用；ready 僅代表本機設定齊全，不代表帳密已經通過飛鵝驗證或設備已出紙。
+- `GET /v1/admin/printers/configuration`：不連外的設定檢查。只回傳各檢查布林值、缺少的環境變數名稱、`configured_region` 與 `live_config_ready`，完全不回傳 USER／UKEY／SN 或原始設定 URL。只檢查所選區域旗標；ready 僅代表本機設定齊全，不代表帳密已通過飛鵝驗證或設備已出紙。
 - `GET /v1/admin/printers/status`：設備狀態；Dry Run 不對外查詢。
 - `GET /v1/admin/printers/jobs?status=unknown&offset=0&limit=30`：工作紀錄與錯誤代號。
 - `GET /v1/admin/printers/jobs/{id}`：原快照排版預覽。
@@ -89,27 +93,31 @@
 
 ## 到貨後逐步驗收
 
-1. **購買前取得完整型號**，向賣家書面確認 Wi-Fi、58mm、繁體中文字庫、台灣網路可用、可綁 `developer.jp.feieyun.com` 個人開發者帳號並支援 Open API。NT$2,870 的描述不能單獨證明就是 FP-V58-W，也不能證明亞太韌體。
+1. 已確認 **FP-V58-W** 在現場 Wi-Fi 可用，中國站同 SN 在線且一張繁中測試成功。後續採中國站；不再以搬到亞太站作為本次接線前提。
 2. 更換已曝光開發者 UKEY。到貨後依該型號手冊接電、放紙、設定店內 Wi-Fi。Wi-Fi 頻段／配網步驟以實際型號手冊為準。
-3. 從機身／自檢頁取得 SN 與設備 KEY，在亞太開發者平台新增設備，確認 0 台變為正確 1 台。**設備 KEY 與開發者 UKEY 不同**；本程式不自動綁定設備。
-4. 請飛鵝確認亞太 HTTPS 入口。官方亞太文件目前可見 jp 網址與實際 de 超連結存在矛盾，詳見 [API 查核](FEIE_API_RESEARCH.md)。未確認前不要把正式開關打開，不改用中國或德國站湊合。
-5. 將輪替後 USER／UKEY／SN 填到 Render 後端秘密環境。確認常駐方案與資料庫遷移完成，再設兩個確認旗標 true、`PRINTER_ENABLED=true`、`PRINTER_DRY_RUN=false`。不要把真實值放進本文件。
+3. 中國站設備綁定及在線核對已完成。**設備 KEY 與開發者 UKEY 不同**；本程式不自動綁定設備。保留亞太舊工作，不做清空、解綁或跨區補印。
+4. 使用 [2026-01-15 官方分流公告](https://help1.feieyun.com/docs/96C8PyrC) 的中國三路 URL，先完成雙區隔離程式發布，再切換 `FEIE_API_BASE_URL`。舊文件連結矛盾見 [API 查核](FEIE_API_RESEARCH.md)。
+5. 由使用者將中國帳號 USER／輪替後 UKEY／本機 SN 直接填到 Render 後端秘密環境，完成儲存，不貼到對話。確認常駐程序及待印隔離，再設 `FEIE_UKEY_ROTATED=true`、`FEIE_CN_ENDPOINT_VERIFIED=true`、`FEIE_AP_ENDPOINT_VERIFIED=false`、`PRINTER_ENABLED=true`、`PRINTER_DRY_RUN=false`。每次 HTTP 前會重新驗證門禁。
 6. 在廚房按「查詢設備」，應顯示在線；關機後離線可能延遲約兩分鐘。使用明確測試帳號建立**一筆**現場付款便當，核對單號、長中文姓名、選項、備註、單價／總額、台灣日期時間、未付款，以及實際斷行。確認只有一張，狀態先 submitted 後 printed。
 7. 在後台標已付款後手動補印一次，填測試原因，確認紙上「補印」及「已付款」。核准取消測試訂單，確認獨立「取消通知」及停止製作字樣。
 8. 關閉設備 Wi-Fi 後建立一筆測試單，確認網站仍成功、工作保留、不重送；恢復 Wi-Fi 後確認該筆只出一張。再以本機 MockTransport 測試 API timeout／程序中斷，unknown 時先核對，不用正式設備反覆盲試。
-9. 完成實機記錄後才可宣稱硬體驗收通過。目前這些步驟均待設備、帳號設定及授權部署後執行。
+9. 中國站供應商後台至紙本的一次測試已通過；網站 API 狀態查詢、網站訂單及補印／取消等完整流程須另行記錄，未驗證部分不標完成。
 
 ## 規格來源
 
 使用 [飛鵝亞太站官方文件](https://feieyun.com/open/AsiaPacific-cn.html) 與官方 Python SDK 查核，詳見 [FEIE_API_RESEARCH.md](FEIE_API_RESEARCH.md)。簽章為 SHA1(USER + UKEY + UNIX 秒)，UTF-8 form POST，`apiname=Open_printMsg`／`Open_queryOrderState`／`Open_queryPrinterStatus`。沒有使用未確認的 callback 參數或未驗簽 webhook。
 
-## 本機驗證結果
+## 2026-10-22 本機驗證紀錄
 
 - 前次完整後端（加入設定檢查接口前）：1674 passed、4 skipped；跳過的是既有現場付款 PostgreSQL 併發測試，環境未提供 `TEST_POSTGRES_URL`，不代表已完成正式 PostgreSQL 壓測。
 - 最新飛鵝及遷移測試：54 passed；包含設定檢查權限／保密、完整接口串接、簽章／區域、MockTransport、逾時分類、模擬與正式隔離、工作重啟、雙 worker 防重複、訂單去重、取消通知及補印稽核。
 - 前端 Node：68 passed；相關隔離瀏覽器：27 passed，最後查詢按鈕能力檢查另 4 passed；390px／1280px 無水平溢出。
 - TypeScript、Vite 正式建置及 `git diff --check` 通過。
 - 沒有使用真實飛鵝憑證、呼叫真實列印或執行實機驗收。程式尚未提交、推送或部署。
+
+### 2026-10-31 路徑修正回歸
+
+新增 MockTransport 契約測試先出現 8 failed，修正後 8 passed；出單、完整 API 流程及遷移三檔合計 64 passed。保留原表單、簽章、UTF-8、轉址拒絕、Dry Run 零 HTTP、未知結果不重送、補印及取消通知規則；另確認未知方法及被改成其他主機的前綴均在傳送前拒絕。`git diff --check` 通過。這些是隔離測試，不能代替實際配網、雲端認證與紙本驗收。
 
 在 backend 目錄可重跑 `python -m pytest tests/test_feie_printing.py tests/test_feie_migration.py -q`。Mock 使用測試憑證及 httpx MockTransport，不需要設備；完整 Dry Run 操作見上方設定步驟。
 
@@ -119,4 +127,4 @@
 
 重跑命令（backend 目錄）：`python -m pytest tests/test_feie_api_flow.py tests/test_feie_printing.py tests/test_feie_migration.py -q`。
 
-後續只需把輪替後 USER、UKEY 及已綁定設備 SN 填入後端環境，確認亞太端點與常駐程序，再依上方到貨流程驗收；**不需將密鑰貼到聊天，也不需硬編碼後再改程式**。設備綁定仍在亞太開發者平台辦理，設備 KEY 不進入本系統。
+後續由使用者把中國帳號 USER、輪替後 UKEY 及已綁定設備 SN 填入後端環境，確認中國端點與常駐程序，再依上方流程驗收；**不需將密鑰貼到聊天，也不需硬編碼後再改程式**。設備 KEY 不進入本系統。
