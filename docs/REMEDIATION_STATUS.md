@@ -1,6 +1,6 @@
 # 全面審查與修復追蹤
 
-更新日期：2026-10-31。末次建庫default／CI程序清理整合：2,785後端零skip、167 PG通過；後端child與wrapper均真exit0、owned group無殘留，暫存schema已清理。47條migration升／降／升、165 Node、型別／build及292路由契約亦已驗。前一檢查點`4be705a`的真React雙分頁、受限完整負載及hosted五job全綠，包含2,724後端／165 PG／165 Node／Chromium99／WebKit78；末次小修仍須其新提交CI。`1edb2de`的220次功能回歸及本機WebKit77／78的一項離頁原生錯誤保留原紀錄。各組重複覆蓋不相加，不將舊build結果改標為新版實機驗收。整合基準：`434f35a`（保留`792bf2e`訂單壓測修正及`c5290c7`飛鵝區域修正）。本批尚未部署；測試通過不代表正式營運驗收完成。
+更新日期：2026-11-01。程式檢查點`f4f0f4c`的[CI41216750956](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41216750956)五job全綠：23項Linux程序控制、2,785後端、167 PG、165 Node、Chromium99及WebKit78零skip，child與wrapper均真exit0、owned group無殘留。47條migration升／降／升、型別／build及292路由契約亦已驗。另以此乾淨版本完成PG0.1CPU／256MiB的前景／背景完整負載；前一`4be705a`的雙分頁整合、PG1CPU／512MiB完整負載及同提交CI另保留，不混稱同環境容量。`1edb2de`的220次功能回歸及本機WebKit77／78的一項離頁原生錯誤保留原紀錄。各組重複覆蓋不相加，不將舊build結果改標為新版實機驗收。整合基準：`434f35a`（保留`792bf2e`訂單壓測修正及`c5290c7`飛鵝區域修正）。本批修復尚未部署；測試通過不代表正式營運驗收完成。
 
 需求來源：[原始功能表](https://docs.google.com/spreadsheets/d/1h0DnXDZh5nOWOdZmIgwMbOe7YPBuARNOdjgEbErQgCE/edit?gid=1170845822#gid=1170845822)、使用者後續說明、`CONTEXT.md`、各功能規格及既有驗收。舊驗收文件保留當時快照，不能以其歷史失敗數判斷現在版本。
 
@@ -36,7 +36,7 @@
 | OPS08 | 後端依賴可重現安裝、鎖定及 SBOM | `679d659` 鎖定 62 套件及 SHA256，Mac／Linux ARM 乾淨安裝與 pip check／audit 0 通過；Linux x86 wheel 雜湊驗證通過，CI／Render hash 安裝與 SBOM 已加入，尚未部署 |
 | OPS09 | 付款返回提示以當前本人訂單為準 | 已修URL／任意message偽付款／保存結果；attempt須核對本人原單／revision／superseded，成功仍以Order入帳為準。另補查詢503仍禁付／改量、匹配failed／expired可續付，21案×雙寬雙引擎84次功能回歸通過，尚未部署 |
 | ARCH01 | 本人訂單歷史分頁、完整搜尋與有界更新 | 已實作25筆keyset頁、本人scope、跨全部歷史搜尋、單筆返回與多頁只更新選中單；一般／餐點完整回應、PG游標／權限及16案×雙寬雙引擎64次通過。餐點25筆查詢36→12 SELECT，尚未部署 |
-| CI01 | CI真正執行瀏覽器流程及確認程序退出 | `4be705a`的[run41210097818](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41210097818)五job全綠。後續`6558d04`的[run41213492400](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41213492400)前端／契約／兩瀏覽器綠，但guard因basetemp父目錄未建而23個setup errors，PG/full被skip；已修先mkdir，fresh目錄同一CI指令23通過。原失敗保留，最新Linux／整包結果須按同SHA Checks與artifact核實 |
+| CI01 | CI真正執行瀏覽器流程及確認程序退出 | `f4f0f4c`的[run41216750956](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41216750956)五job全綠，23項Linux控制、167 PG及2,785後端均實際執行，下載artifact確認child／wrapper0、無殘留／timeout。前批4be五job綠與6558因basetemp父目錄未建造成23個setup errors、PG/full被skip的原失敗均保留；f4先mkdir後通過，不改寫原紅 |
 | WK01 | WebKit付款離頁的原生AccessControl錯誤 | 本機兩次完整清單各一項pageerror紅，付款目標與交易斷言皆成功；同版hosted Linux WebKit78／78全綠。無app、真同源HTTP事件barrier已證目前本機engine在provisional後新fetch會拒絕且冒相同訊息；原app當次完整因果仍未確認，不忽略錯誤、不因此改產品。保留為引擎／實機驗收限制 |
 | AUTH01 | 跨分頁續期不互相誤登出 | 已實作同origin原生Web Lock＋15秒排隊上限；保留單頁singleflight、revision守衛、購物車及後端重放401。新client＋0047後端的真React雙分頁Chromium／WebKit整合通過；unsupported fallback仍未解其跨分頁競態，尚未部署 |
 | LOAD01 | 同秒大量訂單單號碰撞不導致 500 | `792bf2e` 已修，2357 後端／102 PG／106 Node CI 通過；尚未部署 |
@@ -44,6 +44,7 @@
 ## 大量訂單、Safari、輕量化及整體驗收
 
 - 負載：`4be705a`真容器、兩API合計0.5 CPU／512MiB／swap0，完整前景與背景混合各800 closed＋510固定到達流程通過；業務HTTP分別4550／4556、各20次commit後斷線重送、零非預期5xx／timeout／pool timeout／OOM，訂單／庫存／退款守恆。API peak328.89／333.98MiB，兩run schema與八容器清理已獨立複驗。50並行一般流程p95約2.6–2.7秒，已有連線排隊；固定到達只各30秒，背景重疊在這三階段，不能稱正式站容量。方法與限制見[受限資源驗證](ORDER_LOAD_RESOURCES.md)。
+- 低PG對照：`f4f0f4c`另以PG0.1CPU／256MiB完成相同兩套完整profile，API仍合計0.5CPU／512MiB；4550／4556HTTP皆無非預期5xx／timeout／pool timeout／OOM，PG核心peak207.34／207.80MiB，API327.32／332.05MiB，背景每rate有11個待辦重疊sample。兩schema／八容器與118份來源hash各自核實；50並行一般p95為2.791／2.674秒。PG磁碟／受管參數及正式資料量未知，與舊批不同提交，不當正式容量保證。
 - Safari：原生 Safari 已證實付款返回可能還原先前別名網址的同版頁面；尚未重現使用者的舊版畫面。須保留付款／物流返回與登入購物車，不能直接關閉目前承載主站的 Render 服務。詳見 `LEGACY_SITE_RETIREMENT.md`。
 - 輕量化：舊 Expo 原始碼已從目前正式前端移除；本批已減少訂單初始傳輸／歷史輪詢及餐點列表N+1，保留舊API相容。依賴目錄、歷史會籍入口、共用資產及仍使用的外站不可按名稱刪除。
 - 功能表：逐項核對附註及後續說明；停止的需求不重新實作。新入社目前核准後繳費／核帳／發證的限制依 `MEMBERSHIP_ADMISSION_STATUS.md`，不擅自啟用收款或收集證件。
@@ -58,7 +59,7 @@
 
 多worker真紅是兩native真router合計20次帳密判斷；修後同PG雙程序精確10次，兩key原子、成功reset／原auth同commit或rollback、鎖503可恢復及0047遷移已驗。真正部署worker數仍未核實；管理／付款／上傳等其餘限流維持原程序記憶體，不稱全站已共享，詳見[憑證入口配額](CREDENTIAL_RATE_LIMITS.md)。
 
-`4be705a`本機2,724案摘要hook後17.742秒取得真exit0；hosted同提交則35.890秒、下載artifact確認真exit0且stack在pytest GC清理。兩者都不能反推原`1edb2de`取消必定同因。後續又正式重現leader先退、同owned group後代忽略TERM持stdout的CI工具缺口；已用未reap PID錨點與有界group清理修復，23個正常／失敗／掛住／故障控制保留獨立sentinel與EOF斷言。本機末次2,785案真exit0，沒有對group送signal、無殘留。CI保留完整argv／PG環境，35分鐘job預算、5秒無locals stack／60秒未退出才判紅、pipefail log及always artifact；不關GC或強制成功退出。6558的setup失敗未執行到Linux控制，不當作observer邏輯紅；修正後的Linux WNOWAIT及整包須以其同提交實際結果核實。
+`4be705a`本機2,724案摘要hook後17.742秒取得真exit0；hosted同提交則35.890秒、下載artifact確認真exit0且stack在pytest GC清理。兩者都不能反推原`1edb2de`取消必定同因。後續又正式重現leader先退、同owned group後代忽略TERM持stdout的CI工具缺口；已用未reap PID錨點與有界group清理修復，23個正常／失敗／掛住／故障控制保留獨立sentinel與EOF斷言。本機末次2,785案真exit0，沒有對group送signal、無殘留。CI保留完整argv／PG環境，35分鐘job預算、5秒無locals stack／60秒未退出才判紅、pipefail log及always artifact；不關GC或強制成功退出。6558的setup失敗未執行到Linux控制，不當作observer邏輯紅。f4同提交Linux23控制已實跑；full及PG的waitid_wnowait退出artifact均child／wrapper0、reaped、無signal／live member／timeout，摘要後分別43.199／7.284秒才真退出，低於60秒判紅期限。
 
 正式發布另有必要條件：唯讀Render已確認API與Web都Live c529、手動指定commit且auto-deploy停用，PG18顯示0.1c-256mb及7天PITR策略；未查正式head／歷史資料、未做PG＋R2＋key整組還原。c529 API缺0041–0047 graph，不能把保留新表後一鍵回舊API當成已驗安全回復。這些條件、writer交接與外部排程尚未驗證，本批沒有操作Save／Deploy／Restore或讀取正式密鑰。
 

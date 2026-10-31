@@ -21,7 +21,7 @@
 | 12 | 管理端設定日常選品與取貨地點 | 商品／取貨點管理、`test_catalog_pickup_sales_scope.py` | 正式 sales scope 不因測試而擅自開放 |
 | 13 | 每日各品項數量彙總 | `test_product_daily_sales_migration.py`、財務品項報表 | 退款／改量／時區跨日與真實帳務對照 |
 | 14 | 消費者不得自行完成退單 | API 直接拒絕顧客退單，改致電客服由管理員處理；`admin-order-cancellation.mjs` | 歷史申請仍保留；不能繞過授權退款 |
-| 15 | 出單機內容與列印 | `FEIE_PRINTING.md`、`FP_V58_W_ARRIVAL_SETUP.md`、`test_feie_region_isolation.py` | 已到貨且中國站供應商測試繁中出紙；雙區程式已發布。仍待本人 API 認證／憑證、網站訂單出紙及斷線補印驗收 |
+| 15 | 出單機內容與列印 | `FEIE_PRINTING.md`、`FP_V58_W_ARRIVAL_SETUP.md`、`test_feie_region_isolation.py` | 雙區程式與憑證已套用；11/1交接確認網站後端單張合成測試獲接受、只查詢回報printed，未建Order／PrintJob。仍待紙本／資料傳送同意、網站實單及斷線補印驗收，自動worker關閉 |
 | 16 | 共煮預定 | 已停止 | 不重新加入此功能 |
 | 17 | 訂單頁分便當與一般 | 同第 10 列 | 同需求的補充說明，保留分類而不建立重複系統 |
 | 18 | 使用者增減數量、刪除訂單 | `order-quantity-amendments.mjs`、`test_order_quantity_amendments.py` | 未付款可改量；取消／退款需客服及管理員處理，保留財務歷史，不硬刪交易或新增未要求的部分退款 |

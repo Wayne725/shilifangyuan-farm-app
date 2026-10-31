@@ -68,3 +68,24 @@ bootstrap／PG使用network=none，API／generator只加入自有PG的network na
 兩次schema均移除、剩餘load schema為零；八個已知自有容器full ID另行唯讀inspect確認全不存在，兩API children皆正常或受控TERM退出，既有共用PG仍運行。沒有global prune、停VM或清理未知schema。full工作deadline540秒、host wait600秒，setup與cleanup另有上限；未發生逾時。
 
 尚未涵蓋最新版便當完整負載、真第三方網路／故障、正式DB資料規模、索引query plan、備援、長時間記憶體穩態及正式流量。原生Safari舊畫面調查與登入相容性另見`LEGACY_SITE_RETIREMENT.md`、`CLIENT_REFRESH_COORDINATION.md`；不能用API壓測替代實機與正式驗收。
+
+## 11/1：0.1 CPU／256MiB資料庫補測
+
+10/31唯讀Render頁面確認正式PG18標示0.1c-256mb，因此另用乾淨`f4f0f4c0c98486632cbc994dfee4e4b5e56aca56`執行前景及背景完整profile。PG改為0.1 CPU／256MiB／swap0；兩API合計仍為0.5 CPU／512MiB，其餘工作量、連線池、期限與供應商stub不變。原driver／native來源hash相同，launcher僅改PG三個限額值、停機前核心診斷及手動清理目的區分；53項pure guards由實作與主審各自通過。
+
+| 指標 | 前景 | 背景混合 |
+|---|---:|---:|
+| 主要流程／業務HTTP | 800＋510／4,550 | 800＋510／4,556 |
+| 非預期5xx／逾時／pool timeout／OOM | 0／0／0／0 | 0／0／0／0 |
+| 訂單／付款保留／提交後斷線 | 1,462／1,336／20 | 1,462／1,336／20 |
+| API峰值 | 327.32MiB | 332.05MiB |
+| PG峰值 | 207.34MiB | 207.80MiB |
+| 一般50並行完整流程p95 | 2,791.357ms | 2,673.845ms |
+| 共同購買50並行完整流程p95 | 2,662.495ms | 2,286.312ms |
+| launcher生命週期 | 161.82秒 | 189.34秒 |
+
+PG停止前實讀cgroup，兩次均為CPU quota10000／period100000、memory.max268435456、memory.swap.max0，oom與oom_kill皆0；不只依Docker的OOMKilled旗標判斷。各API的50並行連線池峰值仍到10，前景一般流程取得連線p95為862.752／855.435ms，已有排隊。背景三個固定到達階段各有11個pending／processing重疊sample；合成款4,000＝保留2,000＋已完成退款2,000，前景則保留退款意圖。其他守恆、103個預期409與供應商ledger均同原驗證要求。
+
+兩次的全部流程ledger皆完成，800條closed實際並行峰值與雙API分流一致，兩批各118份匯出來源重新hash相符；兩個schema與八個精確容器ID已獨立確認清除，共用PG保留。執行run為`limited_69a60b8913d64207895488bb3791c205`／`limited_9c11be0d99c24613923dd707b05e6d2c`，來源在`outputs/container-load-candidate/checkpoint_pgshape_f4f0f4c`。摘要、主審守恆與清理證據為`outputs/remediation-completion/low-pg-shape-full-{foreground,background}-summary.json`、`low-pg-shape-full-root-invariant-review.json`及`low-pg-shape-full-independent-cleanup.json`。原4be驗證包保持不變。
+
+這是CPU／RAM形狀對照：PG仍使用隔離測試的data tmpfs512MiB及max_connections60，正式磁碟、資料量、受管參數與實際API程序數未核實。舊批4be與新批f4也不是同一提交，不能將延遲差異全歸因資源。兩批都不是正式容量或長時間穩態保證；本次沒有調整正式方案或部署設定。
