@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timezone
 from typing import Dict, List
 
@@ -16,6 +15,7 @@ from ..auth import (
 )
 from ..database import get_session
 from ..platform_settings import require_accepting_orders
+from ..order_numbers import insert_order_with_unique_number, make_order_number
 from ..config import Settings, get_settings
 from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled, meals_test_product_pairs
 from ..sales_scope import require_sales_scope_allows
@@ -86,11 +86,6 @@ from ..schemas import (
 
 
 orders_router = APIRouter(prefix="/v1/orders", tags=["orders"])
-
-
-def make_order_number() -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%y%m%d%H%M%S")
-    return f"SLF{timestamp}{secrets.token_hex(2).upper()}"
 
 
 def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
@@ -371,7 +366,7 @@ async def create_order(
     if controlled_product and not await is_meals_test_product_order(session, settings, order):
         require_sales_scope_allows(settings)
     user.notification_email = order.contact_email
-    session.add(order)
+    await insert_order_with_unique_number(session, order, make_order_number)
     await session.commit()
     order = await load_order(session, order.id)
     return order_read(order, False)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Tuple
 
@@ -75,6 +74,7 @@ from ..schemas import (
     OrderRead,
 )
 from ..group_review import campaign_has_unsettled_payments, reconcile_campaign_state, review_blocked_reason, TERMINAL_DECISIONS
+from ..order_numbers import insert_order_with_unique_number, make_order_number
 from .orders import (
     order_read,
     release_active_reservations,
@@ -83,11 +83,6 @@ from .orders import (
 
 
 groups_router = APIRouter(prefix="/v1/group-campaigns", tags=["groups"])
-
-
-def make_order_number() -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%y%m%d%H%M%S")
-    return f"SLF{timestamp}{secrets.token_hex(2).upper()}"
 
 
 def campaign_read(campaign: GroupCampaign) -> CampaignRead:
@@ -570,7 +565,7 @@ async def join_campaign(
         sales_channel=SalesChannel.GROUP,
         fulfillment_method=body.fulfillment_method,
         user_id=user.id,
-        group_campaign=campaign,
+        group_campaign_id=campaign.id,
         membership_type_snapshot=membership_type,
         member_tax_exempt_snapshot=member_sale_is_tax_exempt(
             membership_type, body.invoice_buyer_type
@@ -624,7 +619,7 @@ async def join_campaign(
         ),
     )
     user.notification_email = order.contact_email
-    session.add(order)
+    await insert_order_with_unique_number(session, order, make_order_number)
     await session.commit()
     order = await session.scalar(
         select(Order)
