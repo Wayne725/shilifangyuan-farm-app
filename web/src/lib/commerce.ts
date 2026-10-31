@@ -143,6 +143,9 @@ export function invoicePreferencePayload(
 
 export type CheckoutInput = {
   items: Array<{ product_id: string; quantity: number }>;
+  clientRequestId?: string;
+  expectedTotal?: number;
+  expectedQuoteFingerprint?: string;
   contactEmail: string;
   invoicePreference: InvoicePreference;
   fulfillment:
@@ -167,6 +170,9 @@ export async function beginCheckout(
 ): Promise<CheckoutOutcome> {
   const order = await gateway.createOrder({
     items: input.items,
+    ...(input.clientRequestId ? { client_request_id: input.clientRequestId } : {}),
+    ...(input.expectedTotal !== undefined ? { expected_total: input.expectedTotal } : {}),
+    ...(input.expectedQuoteFingerprint ? { expected_quote_fingerprint: input.expectedQuoteFingerprint } : {}),
     contact_email: input.contactEmail,
     ...invoicePreferencePayload(input.invoicePreference),
     fulfillment_method:
@@ -177,6 +183,13 @@ export async function beginCheckout(
       ? { pickup_location_id: input.fulfillment.pickupLocationId }
       : {}),
   });
+
+  if (input.expectedTotal !== undefined && (order.amount_total !== input.expectedTotal || (order.revision ?? 1) > 1)) {
+    return { kind: "resume", order, message: "此訂單內容已更新，請在訂單頁確認金額後付款" };
+  }
+  if (order.payment_status === "paid" || order.fulfillment_status === "cancelled") {
+    return { kind: "resume", order, message: "已恢復原訂單，請查看目前處理狀態" };
+  }
 
   try {
     if (input.fulfillment.kind === "shipping") {

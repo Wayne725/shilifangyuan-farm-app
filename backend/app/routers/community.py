@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -69,6 +73,19 @@ from ..v2_domain import (
 
 
 community_router = APIRouter(tags=["community"])
+PRIVATE_PROPOSAL_STATUSES = {
+    MemberProposalStatus.DRAFT,
+    MemberProposalStatus.PENDING_REVIEW,
+    MemberProposalStatus.WITHDRAWN,
+}
+
+
+def _require_visible_proposal(proposal: Optional[MemberProposal], user_id: str) -> MemberProposal:
+    if proposal is None or (
+        proposal.status in PRIVATE_PROPOSAL_STATUSES and proposal.created_by_id != user_id
+    ):
+        raise HTTPException(status_code=404, detail="找不到社員提案")
+    return proposal
 
 
 async def _award_points_once(
@@ -589,13 +606,7 @@ async def list_member_proposals(
         await session.scalars(
             select(MemberProposal)
             .where(
-                MemberProposal.status.notin_(
-                    {
-                        MemberProposalStatus.DRAFT,
-                        MemberProposalStatus.PENDING_REVIEW,
-                        MemberProposalStatus.WITHDRAWN,
-                    }
-                )
+                MemberProposal.status.notin_(PRIVATE_PROPOSAL_STATUSES)
                 | (MemberProposal.created_by_id == user.id)
             )
             .options(selectinload(MemberProposal.votes))
@@ -624,16 +635,7 @@ async def get_member_proposal(
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
     proposal = await _load_proposal(session, proposal_id)
-    if proposal is None or (
-        proposal.status
-        in {
-            MemberProposalStatus.DRAFT,
-            MemberProposalStatus.PENDING_REVIEW,
-            MemberProposalStatus.WITHDRAWN,
-        }
-        and proposal.created_by_id != user.id
-    ):
-        raise HTTPException(status_code=404, detail="找不到社員提案")
+    _require_visible_proposal(proposal, user.id)
     if apply_member_proposal_clock(proposal, proposal.votes):
         await session.commit()
     return _proposal_read(proposal, user.id)
@@ -649,6 +651,29 @@ async def create_member_proposal(
     user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
+    if body.client_request_id is not None:
+        content = body.model_dump(mode="json", exclude={"client_request_id"})
+        content["options"] = [{"label": item.label.strip()} for item in body.options]
+        fingerprint = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+        statement = insert(MemberProposal).values(
+            created_by_id=user.id, title=body.title, body=body.body,
+            proposal_type=body.proposal_type, status=MemberProposalStatus.DRAFT, minimum_voters=10,
+            client_request_id=str(body.client_request_id), request_fingerprint=fingerprint,
+        ).on_conflict_do_nothing(index_elements=[MemberProposal.created_by_id, MemberProposal.client_request_id]).returning(MemberProposal.id)
+        proposal_id = await session.scalar(statement)
+        if proposal_id is None:
+            existing = (await session.execute(select(MemberProposal.id, MemberProposal.request_fingerprint).where(
+                MemberProposal.created_by_id == user.id, MemberProposal.client_request_id == str(body.client_request_id),
+            ))).one()
+            if existing.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="此提案送單識別已使用，請恢復原提案")
+            return _proposal_read(await _load_proposal(session, existing.id), user.id)
+        session.add_all(ProposalOption(proposal_id=proposal_id, label=item.label.strip(), position=position) for position, item in enumerate(body.options))
+        await session.flush()
+        proposal = await _load_proposal(session, proposal_id)
+        await session.commit()
+        return _proposal_read(proposal, user.id)
     proposal = MemberProposal(
         created_by_id=user.id,
         created_by=user,
@@ -728,9 +753,10 @@ async def withdraw_member_proposal(
 )
 async def list_member_proposal_comments(
     proposal_id: str,
-    _user: User = Depends(require_active_member),
+    user: User = Depends(require_active_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberProposalCommentRead]:
+    _require_visible_proposal(await session.get(MemberProposal, proposal_id), user.id)
     comments = (
         await session.execute(
             select(MemberProposalComment, User)
@@ -767,7 +793,8 @@ async def comment_on_member_proposal(
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalCommentRead:
     proposal = await _load_proposal(session, proposal_id)
-    if proposal is None or proposal.status not in {
+    _require_visible_proposal(proposal, user.id)
+    if proposal.status not in {
         MemberProposalStatus.DISCUSSION,
         MemberProposalStatus.VOTING,
     }:
@@ -800,8 +827,7 @@ async def vote_on_member_proposal(
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
     proposal = await _load_proposal(session, proposal_id, for_update=True)
-    if proposal is None:
-        raise HTTPException(status_code=404, detail="找不到社員提案")
+    _require_visible_proposal(proposal, user.id)
     apply_member_proposal_clock(proposal, proposal.votes)
     if (
         proposal.status != MemberProposalStatus.VOTING
@@ -845,16 +871,7 @@ async def list_named_member_proposal_votes(
     session: AsyncSession = Depends(get_session),
 ) -> list[MemberProposalNamedVoteRead]:
     proposal = await session.get(MemberProposal, proposal_id)
-    if proposal is None or (
-        proposal.status
-        in {
-            MemberProposalStatus.DRAFT,
-            MemberProposalStatus.PENDING_REVIEW,
-            MemberProposalStatus.WITHDRAWN,
-        }
-        and proposal.created_by_id != user.id
-    ):
-        raise HTTPException(status_code=404, detail="找不到社員提案")
+    _require_visible_proposal(proposal, user.id)
     rows = (
         await session.execute(
             select(MemberProposalVote, User)

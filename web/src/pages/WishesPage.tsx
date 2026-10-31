@@ -4,10 +4,12 @@ import { type FormEvent, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { SocialNav } from "../components/SocialNav";
+import { MembershipReadError } from "../components/MembershipReadError";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
-import type { MembershipSummary, Wish } from "../lib/types";
+import type { Wish } from "../lib/types";
+import { useMembership } from "../lib/social-access";
 
 const emptyForm = { name: "", description: "", expected_price: "", reference_url: "" };
 
@@ -16,12 +18,8 @@ export function WishesPage() {
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
-  const membership = useQuery({
-    queryKey: ["membership-me", user?.id],
-    queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
-    enabled: Boolean(user),
-  });
-  const canAccess = membership.data?.membership_type === "member";
+  const membership = useMembership(user);
+  const canAccess = membership.isSuccess && membership.data.membership_type === "member";
   const wishes = useQuery({
     queryKey: ["wishes"],
     queryFn: () => apiFetch<Wish[]>("/v1/wishes"),
@@ -63,7 +61,7 @@ export function WishesPage() {
 
       {!user ? (
         <div className="social-access-card"><HandHeart size={38} weight="light" /><h2>登入後查看社員願望</h2><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></div>
-      ) : membership.isPending ? <LoadingLines count={3} /> : !canAccess ? (
+      ) : membership.isPending ? <LoadingLines count={3} /> : membership.isError ? <MembershipReadError error={membership.error} onRetry={() => void membership.refetch()} /> : !canAccess ? (
         <div className="social-access-card"><HandHeart size={38} weight="light" /><h2>此功能開放給正式社員</h2><Link className="button button-system" to="/membership">查看入社進度</Link></div>
       ) : (
         <>

@@ -9,26 +9,23 @@ import {
 
 import type { CartItem, Product } from "../lib/types";
 import { maxOrderItemQuantity, productQuantityLimit } from "../lib/cart-quantity";
+import { localStore, readStoredJson } from "../lib/browser-storage";
+import { cartMatchesSubmission } from "../lib/cart-snapshot";
 
 interface CommerceContextValue {
   cart: CartItem[];
   itemCount: number;
   addToCart: (product: Product, quantity?: number) => void;
   adjustQuantity: (productId: string, delta: number) => void;
-  clearCart: () => void;
+  clearCart: (expectedItems?: { product_id: string; quantity: number }[]) => void;
 }
 
 const storageKey = "slf_cart";
 const CommerceContext = createContext<CommerceContextValue | null>(null);
 
 function readCart(): CartItem[] {
-  const value = localStorage.getItem(storageKey);
-  if (!value) return [];
-  try {
-    return JSON.parse(value) as CartItem[];
-  } catch {
-    return [];
-  }
+  const value = readStoredJson<unknown>(localStore, storageKey, []);
+  return Array.isArray(value) ? value.filter((item): item is CartItem => Boolean(item?.product && typeof item.product.id === "string" && Number.isInteger(item.quantity) && item.quantity > 0)) : [];
 }
 
 export function CommerceProvider({ children }: { children: ReactNode }) {
@@ -36,7 +33,7 @@ export function CommerceProvider({ children }: { children: ReactNode }) {
   const currentCart = useRef(cart);
 
   const persist = (items: CartItem[]) => {
-    localStorage.setItem(storageKey, JSON.stringify(items));
+    localStore.setItem(storageKey, JSON.stringify(items));
     currentCart.current = items;
     setCart(items);
   };
@@ -80,7 +77,8 @@ export function CommerceProvider({ children }: { children: ReactNode }) {
             .filter((item) => item.quantity > 0),
         );
       },
-      clearCart() {
+      clearCart(expectedItems) {
+        if (expectedItems && !cartMatchesSubmission(currentCart.current, expectedItems)) return;
         persist([]);
       },
     }),

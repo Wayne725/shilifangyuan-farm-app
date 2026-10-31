@@ -45,6 +45,10 @@ _bucket_windows: Dict[str, float] = {}
 RateLimitKey = Union[str, RateLimitKeys]
 
 
+def account_key(scope: str, identifier: str) -> str:
+    return f"{scope}:account:{identifier.strip().lower()}"
+
+
 def client_key(
     request: Request,
     scope: str,
@@ -54,7 +58,7 @@ def client_key(
     values = [f"{scope}:ip:{client}"]
     normalized_identifier = identifier.strip().lower()
     if normalized_identifier:
-        values.append(f"{scope}:account:{normalized_identifier}")
+        values.append(account_key(scope, normalized_identifier))
     return RateLimitKeys(tuple(values))
 
 

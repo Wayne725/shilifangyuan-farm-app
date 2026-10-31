@@ -1,5 +1,6 @@
 import type { AuthResponse, User } from "./types";
 import { fetchWithTimeout, RequestTimeoutError } from "./http";
+import { localStore } from "./browser-storage";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 let accessToken: string | null = null;
@@ -10,9 +11,9 @@ let refreshPromise: Promise<AuthResponse | null> | null = null;
 const sessionListeners = new Set<(user: User | null, identityChanged: boolean) => void>();
 
 if (typeof window !== "undefined") {
-  localStorage.removeItem("slf_access_token");
-  localStorage.removeItem("slf_refresh_token");
-  localStorage.removeItem("slf_user");
+  localStore.removeItem("slf_access_token");
+  localStore.removeItem("slf_refresh_token");
+  localStore.removeItem("slf_user");
 }
 
 export class ApiError extends Error {
@@ -26,6 +27,16 @@ export class ApiError extends Error {
 
 export function getAccessToken(): string | null {
   return accessToken;
+}
+
+export function isCurrentSessionUser(userId: string): boolean {
+  return currentSession?.user.id === userId;
+}
+
+export function captureSessionIdentityGuard(): () => boolean {
+  const startedAt = identityRevision;
+  const userId = currentSession?.user.id;
+  return () => Boolean(userId) && identityRevision === startedAt && currentSession?.user.id === userId;
 }
 
 function identityKey(user?: User | null): string {

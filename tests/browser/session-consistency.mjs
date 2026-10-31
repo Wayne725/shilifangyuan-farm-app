@@ -200,7 +200,7 @@ test('refresh503不誤登出或清購物車，恢復後可重試正常建單付�
   assert.equal(state.acceptedOrders.length, 0); assert.equal(state.payments.length, 0);
   await assertCartPreserved(page);
   state.refreshMode = 'same';
-  await page.getByRole('button', { name: '前往線上付款', exact: true }).click();
+  await page.getByRole('button', { name: '重試原訂單', exact: true }).click();
   await page.waitForURL(`${base}/isolated-session-payment`);
   assert.equal(state.acceptedOrders.length, 1); assert.equal(state.payments.length, 1);
 });

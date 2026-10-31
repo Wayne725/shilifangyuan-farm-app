@@ -7,6 +7,14 @@ import time_machine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
+from app.rate_limit import reset_all
+
+
+@pytest.fixture(autouse=True)
+def isolated_credential_limits():
+    reset_all()
+    yield
+    reset_all()
 
 
 @pytest.fixture

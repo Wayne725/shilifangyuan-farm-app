@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import csv
-import io
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
@@ -19,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
+from ..csv_export import csv_response
 from ..domain import aware
 from ..models import (
     AdminAudit,
@@ -79,17 +77,6 @@ def _period(start: date, end: date) -> tuple[datetime, datetime]:
     return (
         datetime.combine(start, time.min, tzinfo=timezone.utc),
         datetime.combine(end, time.max, tzinfo=timezone.utc),
-    )
-
-
-def _csv_response(filename: str, rows: list[list[Any]]) -> StreamingResponse:
-    stream = io.StringIO()
-    writer = csv.writer(stream)
-    writer.writerows(rows)
-    return StreamingResponse(
-        iter(["\ufeff" + stream.getvalue()]),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -428,11 +415,11 @@ async def export_tax_ledger(
     ends_on: date,
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
-) -> StreamingResponse:
+) -> Response:
     rows = await _tax_rows(session, *_period(starts_on, ends_on))
-    return _csv_response(
+    return csv_response(
         f"tax-ledger-{starts_on}-{ends_on}.csv",
-        [["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"], *rows],
+        ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"], rows,
     )
 
 
@@ -870,7 +857,7 @@ async def supplier_orders_csv(
     note: str = "",
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
-) -> StreamingResponse:
+) -> Response:
     start, end = _period(starts_on, ends_on)
     rows = (
         await session.execute(
@@ -891,7 +878,8 @@ async def supplier_orders_csv(
             .order_by(OrderItem.product_name)
         )
     ).all()
-    return _csv_response(
+    return csv_response(
         f"supplier-order-{starts_on}-{ends_on}.csv",
-        [["商品", "數量", "單位", "溫層", "預計到貨日", "備註"], *[[name, int(quantity), unit, temperature.value if temperature else "未設定", expected_arrival_on, note] for name, quantity, unit, temperature in rows]],
+        ["商品", "數量", "單位", "溫層", "預計到貨日", "備註"],
+        [[name, int(quantity), unit, temperature.value if temperature else "未設定", expected_arrival_on, note] for name, quantity, unit, temperature in rows],
     )

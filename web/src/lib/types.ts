@@ -842,6 +842,7 @@ export interface CartItem {
 }
 
 export interface OrderQuote {
+  confirmation_fingerprint?: string;
   membership_type: string;
   member_tax_exempt?: boolean;
   tax_amount?: number;

@@ -39,6 +39,7 @@ from ..rate_limit import (
     PASSWORD_RESET_RULE,
     REGISTER_RULE,
     VERIFICATION_RULE,
+    account_key,
     client_key,
     enforce,
     reset,
@@ -563,8 +564,8 @@ async def login(
 ) -> TokenResponse:
     # Keyed per account as well as per client, so one IP cannot spray an inbox
     # list and one victim account cannot be hammered from a pool of clients.
-    account_key = client_key(request, "login", body.email)
-    enforce(account_key, LOGIN_RULE)
+    login_keys = client_key(request, "login", body.email)
+    enforce(login_keys, LOGIN_RULE)
     _validate_cookie_origin(request, settings)
     user = await session.scalar(
         select(User)
@@ -603,7 +604,7 @@ async def login(
     pair, refresh_session = _new_token_pair_and_session(user, settings, remember_me=body.remember_me)
     session.add(refresh_session)
     await session.commit()
-    reset(account_key)
+    reset(account_key("login", user.email))
     return token_response(user, response, settings, pair, remember_me=body.remember_me)
 
 

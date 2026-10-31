@@ -110,7 +110,7 @@ def test_preview_acceptance_allowlist_cannot_bypass_meal_scope():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint,kwargs", [
-    (orders.create_order, {"body": SimpleNamespace(fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP)}),
+    (orders.create_order, {"body": SimpleNamespace(fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP, client_request_id=None)}),
     (groups.join_campaign, {"campaign_id": "existing", "body": SimpleNamespace(fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP)}),
     (membership.create_document_upload_url, {"body": None, "request": None, "storage": Mock()}),
     (membership.confirm_document_upload, {"document_id": "existing", "body": None, "storage": Mock()}),

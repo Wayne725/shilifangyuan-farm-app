@@ -9,6 +9,9 @@ async function moduleUrl(path) {
   if (source.includes('from "./meal-time"')) {
     source = source.replace('from "./meal-time"', `from "${await moduleUrl("../web/src/lib/meal-time.ts")}"`);
   }
+  if (source.includes('from "./browser-storage"')) {
+    source = source.replace('from "./browser-storage"', `from "${await moduleUrl("../web/src/lib/browser-storage.ts")}"`);
+  }
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
   });

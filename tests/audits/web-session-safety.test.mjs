@@ -11,6 +11,9 @@ const session = (id, token = `${id}-token`) => ({
 });
 
 async function loadApi(fetcher) {
+  const storageSource = await readFile(new URL("../../web/src/lib/browser-storage.ts", import.meta.url), "utf8");
+  const storageExports = {};
+  vm.runInNewContext(ts.transpileModule(storageSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, { exports: storageExports });
   const source = await readFile(new URL("../../web/src/lib/api.ts", import.meta.url), "utf8");
   const compiled = ts.transpileModule(source.replace("import.meta.env.VITE_API_BASE_URL", '""'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -19,6 +22,7 @@ async function loadApi(fetcher) {
   vm.runInNewContext(compiled, {
     exports, Headers, FormData,
     require(name) {
+      if (name === "./browser-storage") return storageExports;
       assert.equal(name, "./http");
       return { fetchWithTimeout: fetcher, RequestTimeoutError: class extends Error {} };
     },

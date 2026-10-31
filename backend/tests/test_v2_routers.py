@@ -2814,20 +2814,20 @@ async def test_meal_options_validate_price_and_persist_snapshots(
 
 
 @pytest.mark.asyncio
-async def test_login_is_rate_limited_and_resets_on_success(v2_context) -> None:
-    """Blunts credential stuffing without locking out the real account owner."""
-    from app.rate_limit import LOGIN_RULE, reset_all
+@pytest.mark.parametrize("valid_password", [False, True])
+async def test_login_source_ip_quota_counts_failed_and_successful_requests(v2_context, valid_password) -> None:
+    from app.rate_limit import LOGIN_RULE
 
-    reset_all()
     client = v2_context["client"]
     applicant = v2_context["applicant"]
+    password = "applicant-pass-123" if valid_password else "not-the-password"
 
     for _ in range(LOGIN_RULE.max_attempts):
-        wrong = await client.post(
+        response = await client.post(
             "/v1/auth/login",
-            json={"email": applicant.email, "password": "not-the-password"},
+            json={"email": applicant.email, "password": password},
         )
-        assert wrong.status_code == 401
+        assert response.status_code == (200 if valid_password else 401)
 
     throttled = await client.post(
         "/v1/auth/login",
@@ -2835,20 +2835,3 @@ async def test_login_is_rate_limited_and_resets_on_success(v2_context) -> None:
     )
     assert throttled.status_code == 429
     assert throttled.headers["Retry-After"]
-
-    # A different account is unaffected by one account's failures.
-    reset_all()
-    correct = await client.post(
-        "/v1/auth/login",
-        json={"email": applicant.email, "password": "applicant-pass-123"},
-    )
-    assert correct.status_code == 200
-
-    # Signing in clears the bucket, so a fumbled password is not punished.
-    for _ in range(LOGIN_RULE.max_attempts):
-        again = await client.post(
-            "/v1/auth/login",
-            json={"email": applicant.email, "password": "applicant-pass-123"},
-        )
-        assert again.status_code == 200
-    reset_all()

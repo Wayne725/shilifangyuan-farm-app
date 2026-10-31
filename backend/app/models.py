@@ -1487,6 +1487,7 @@ class ActivityRefundRequest(Base):
 class MemberProposal(Base):
     __tablename__ = "member_proposals"
     __table_args__ = (
+        Index("uq_member_proposal_creator_request", "created_by_id", "client_request_id", unique=True),
         CheckConstraint("minimum_voters > 0", name="minimum_voters_positive"),
         CheckConstraint(
             "discussion_ends_at IS NULL OR voting_ends_at IS NULL "
@@ -1501,6 +1502,8 @@ class MemberProposal(Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     body: Mapped[str] = mapped_column(Text)
+    client_request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    request_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     proposal_type: Mapped[MemberProposalType] = mapped_column(
         enum_type(MemberProposalType, "member_proposal_type"),
         default=MemberProposalType.RESOLUTION,

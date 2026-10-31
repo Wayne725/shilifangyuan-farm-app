@@ -699,6 +699,7 @@ class OrderQuoteLine(ApiModel):
 
 
 class OrderQuoteRead(ApiModel):
+    confirmation_fingerprint: str
     membership_type: MembershipType
     member_tax_exempt: bool = False
     tax_amount: int = 0
@@ -707,6 +708,9 @@ class OrderQuoteRead(ApiModel):
 
 
 class OrderCreate(InvoicePreferenceInput):
+    client_request_id: Optional[UUID] = None
+    expected_total: Optional[int] = Field(default=None, ge=0)
+    expected_quote_fingerprint: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     payment_method: PaymentMethod = PaymentMethod.ONLINE
     items: List[OrderLineInput] = Field(min_length=1, max_length=100)
     contact_email: EmailStr
@@ -1324,6 +1328,7 @@ class ProposalOptionInput(BaseModel):
 
 
 class MemberProposalCreate(BaseModel):
+    client_request_id: Optional[UUID] = None
     title: str = Field(min_length=1, max_length=160)
     body: str = Field(min_length=1, max_length=20000)
     proposal_type: MemberProposalType = MemberProposalType.RESOLUTION

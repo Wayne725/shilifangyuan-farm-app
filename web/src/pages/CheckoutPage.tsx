@@ -24,7 +24,8 @@ import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
 import { useCommerce } from "../context/CommerceContext";
 import { maxOrderItemQuantity } from "../lib/cart-quantity";
 import { openOrderHandoff } from "../lib/checkout-navigation";
-import { apiFetch, formatMoney, replaceBrokenAsset, resolveAsset } from "../lib/api";
+import { ApiError, apiFetch, formatMoney, isCurrentSessionUser, replaceBrokenAsset, resolveAsset } from "../lib/api";
+import { checkoutWasRejected, clearCheckoutSubmission, prepareCheckoutSubmission, readCheckoutSubmission, type CheckoutSubmission } from "../lib/checkout-submission";
 import { taxTypeLabel } from "../lib/invoice-tax";
 import {
   beginCheckout,
@@ -61,6 +62,10 @@ export function CheckoutPage() {
   const [recipientPhone, setRecipientPhone] = useState("");
   const [shippingAddress, setShippingAddress] = useState("");
   const [invoicePreference, setInvoicePreference] = useInvoicePreference(notificationEmail);
+  const [pendingSubmission, setPendingSubmission] = useState<CheckoutSubmission | null>(null);
+  useEffect(() => {
+    setPendingSubmission(user ? readCheckoutSubmission(user.id) : null);
+  }, [user?.id]);
   const items = useMemo(
     () =>
       cart.map((item) => ({
@@ -110,38 +115,57 @@ export function CheckoutPage() {
   const createOrder = useMutation({
     mutationFn: async () => {
       if (!user) throw new Error("請先登入");
-      if (orderBlockReason) throw new Error(orderBlockReason);
-      await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
-      if (checkoutMethod === "shipping") {
-        if (!shippingChannel || !eligibility.temperature) {
+      let submission = readCheckoutSubmission(user.id);
+      if (!submission) {
+        if (orderBlockReason) throw new Error(orderBlockReason);
+        if (!quote.data || quote.isFetching || quote.isError) throw new Error("請重新取得訂單價格後再試");
+        if (checkoutMethod === "shipping" && (!shippingChannel || !eligibility.temperature)) {
           throw new Error("這筆商品目前無法使用配送");
         }
-        return beginCheckout({
+        if (checkoutMethod !== "shipping" && (!selectedPickupLocation || locations.isError)) throw new Error("請選擇可用的取貨地點");
+        await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
+      }
+      if (!isCurrentSessionUser(user.id)) throw new ApiError(409, "登入身分已變更，請確認目前帳號後重新操作。");
+      try {
+        submission = prepareCheckoutSubmission(user.id, submission?.input ?? {
           items,
+          expectedTotal: quote.data!.amount_total,
+          expectedQuoteFingerprint: quote.data!.confirmation_fingerprint,
           contactEmail: invoicePreference.buyerEmail.trim(),
           invoicePreference,
-          fulfillment: {
+          fulfillment: checkoutMethod === "shipping" ? {
             kind: "shipping",
-            channel: shippingChannel,
-            temperature: eligibility.temperature,
+            channel: shippingChannel!,
+            temperature: eligibility.temperature!,
             recipientName,
             recipientPhone,
             shippingAddress,
-          },
-        });
+          } : { kind: "pickup", pickupLocationId },
+        }, submission?.quote ?? quote.data!);
+      } catch (reason) {
+        setPendingSubmission(readCheckoutSubmission(user.id));
+        throw reason;
       }
-      if (!selectedPickupLocation || locations.isError) throw new Error("請選擇可用的取貨地點");
-      return beginCheckout({
-        items,
-        contactEmail: invoicePreference.buyerEmail.trim(),
-        invoicePreference,
-        fulfillment: { kind: "pickup", pickupLocationId },
-      });
+      setPendingSubmission(submission);
+      try {
+        const outcome = await beginCheckout({ ...submission.input, clientRequestId: submission.requestId });
+        if (!isCurrentSessionUser(user.id)) throw new ApiError(409, "登入身分已變更，請確認目前帳號後重新操作。");
+        return { outcome, submission, userId: user.id };
+      } catch (reason) {
+        if (checkoutWasRejected(reason)) {
+          clearCheckoutSubmission(user.id, submission.requestId);
+          setPendingSubmission(null);
+          if (reason instanceof Error && reason.message === "價格已變動，請重新確認訂單明細") await quote.refetch();
+        }
+        throw reason;
+      }
     },
-    onSuccess: async (outcome) => {
-      clearCart();
+    onSuccess: async ({ outcome, submission, userId }) => {
+      if (!isCurrentSessionUser(userId)) return;
+      clearCart(submission.input.items);
       if (outcome.kind === "redirect") {
-        await openOrderHandoff(outcome.url, outcome.order.id);
+        await openOrderHandoff(outcome.url, outcome.order.id, () => isCurrentSessionUser(userId));
+        clearCheckoutSubmission(userId, submission.requestId);
         return;
       }
       const params = new URLSearchParams({
@@ -150,6 +174,7 @@ export function CheckoutPage() {
         message: outcome.message,
       });
       window.location.assign(`/orders?${params.toString()}`);
+      clearCheckoutSubmission(userId, submission.requestId);
     },
   });
 
@@ -200,9 +225,22 @@ export function CheckoutPage() {
         <p className="eyebrow">CHECKOUT / 結帳</p>
         <h1>把今天的選擇，<br />安排進生活裡。</h1>
       </div>
-      {orderBlockReason && <p className="form-error" role="status">{orderBlockReason}</p>}
+      {orderBlockReason && !pendingSubmission && <p className="form-error" role="status">{orderBlockReason}</p>}
 
-      {cart.length === 0 ? (
+      {pendingSubmission ? (
+        <div className="order-summary checkout-recovery">
+          <h2>確認原訂單結果</h2>
+          <p role="status">上次送單尚未確認結果，請先恢復原訂單。</p>
+          <dl className="summary-lines">
+            {pendingSubmission.quote.items.map(item => <div key={item.product_id}><dt>{item.product_name} × {item.quantity}</dt><dd>{formatMoney(item.subtotal)}</dd></div>)}
+            <InvoicePreferenceSummary value={pendingSubmission.input.invoicePreference} />
+            <div className="summary-total"><dt>商品合計</dt><dd>{formatMoney(pendingSubmission.input.expectedTotal)}</dd></div>
+          </dl>
+          {createOrder.isError && <p className="form-error" role="alert">{createOrder.error.message}</p>}
+          <button className="button button-primary" type="button" disabled={createOrder.isPending} onClick={() => createOrder.mutate()}>{createOrder.isPending ? "確認訂單中…" : "重試原訂單"}</button>
+          <Link className="text-link" to="/orders" search={{}}>查看我的訂單</Link>
+        </div>
+      ) : cart.length === 0 ? (
         <DataState title="結帳清單還是空的" detail="回到生活消費，加入合作社正式上架的商品。" />
       ) : (
         <div className="checkout-grid">

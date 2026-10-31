@@ -69,8 +69,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => subscribeSession((nextUser, identityChanged) => {
     if (identityChanged) {
-      queryClient.clear();
-      if (currentUser.current) setSessionScope((value) => value + 1);
+      if (currentUser.current) {
+        queryClient.clear();
+        setSessionScope((value) => value + 1);
+      } else {
+        void queryClient.resetQueries();
+      }
     }
     currentUser.current = nextUser;
     setUser(nextUser);
