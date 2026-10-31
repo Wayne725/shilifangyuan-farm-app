@@ -36,7 +36,7 @@
 | OPS08 | 後端依賴可重現安裝、鎖定及 SBOM | `679d659` 鎖定 62 套件及 SHA256，Mac／Linux ARM 乾淨安裝與 pip check／audit 0 通過；Linux x86 wheel 雜湊驗證通過，CI／Render hash 安裝與 SBOM 已加入，尚未部署 |
 | OPS09 | 付款返回提示以當前本人訂單為準 | 已修URL／任意message偽付款／保存結果；attempt須核對本人原單／revision／superseded，成功仍以Order入帳為準。另補查詢503仍禁付／改量、匹配failed／expired可續付，21案×雙寬雙引擎84次功能回歸通過，尚未部署 |
 | ARCH01 | 本人訂單歷史分頁、完整搜尋與有界更新 | 已實作25筆keyset頁、本人scope、跨全部歷史搜尋、單筆返回與多頁只更新選中單；一般／餐點完整回應、PG游標／權限及16案×雙寬雙引擎64次通過。餐點25筆查詢36→12 SELECT，尚未部署 |
-| CI01 | CI真正執行瀏覽器流程及確認程序退出 | `4be705a`的[run41210097818](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41210097818)五job全綠，2,724後端／165 PG／165 Node及嚴格Chromium99／WebKit78零skip，artifact證真child/wrapper exit0。原`1edb2de`摘要後取消仍保留；後續owned group清理補強23控制及完整本機2,785通過，下一提交hosted尚待驗 |
+| CI01 | CI真正執行瀏覽器流程及確認程序退出 | `4be705a`的[run41210097818](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41210097818)五job全綠。後續`6558d04`的[run41213492400](https://github.com/Wayne725/shilifangyuan-farm-app/actions/runs/41213492400)前端／契約／兩瀏覽器綠，但guard因basetemp父目錄未建而23個setup errors，PG/full被skip；已修先mkdir，fresh目錄同一CI指令23通過。原失敗保留，最新Linux／整包結果須按同SHA Checks與artifact核實 |
 | WK01 | WebKit付款離頁的原生AccessControl錯誤 | 本機兩次完整清單各一項pageerror紅，付款目標與交易斷言皆成功；同版hosted Linux WebKit78／78全綠。無app、真同源HTTP事件barrier已證目前本機engine在provisional後新fetch會拒絕且冒相同訊息；原app當次完整因果仍未確認，不忽略錯誤、不因此改產品。保留為引擎／實機驗收限制 |
 | AUTH01 | 跨分頁續期不互相誤登出 | 已實作同origin原生Web Lock＋15秒排隊上限；保留單頁singleflight、revision守衛、購物車及後端重放401。新client＋0047後端的真React雙分頁Chromium／WebKit整合通過；unsupported fallback仍未解其跨分頁競態，尚未部署 |
 | LOAD01 | 同秒大量訂單單號碰撞不導致 500 | `792bf2e` 已修，2357 後端／102 PG／106 Node CI 通過；尚未部署 |
@@ -58,7 +58,9 @@
 
 多worker真紅是兩native真router合計20次帳密判斷；修後同PG雙程序精確10次，兩key原子、成功reset／原auth同commit或rollback、鎖503可恢復及0047遷移已驗。真正部署worker數仍未核實；管理／付款／上傳等其餘限流維持原程序記憶體，不稱全站已共享，詳見[憑證入口配額](CREDENTIAL_RATE_LIMITS.md)。
 
-`4be705a`本機2,724案摘要hook後17.742秒取得真exit0；hosted同提交則35.890秒、下載artifact確認真exit0且stack在pytest GC清理。兩者都不能反推原`1edb2de`取消必定同因。後續又正式重現leader先退、同owned group後代忽略TERM持stdout的CI工具缺口；已用未reap PID錨點與有界group清理修復，23個正常／失敗／掛住／故障控制保留獨立sentinel與EOF斷言。本機末次2,785案真exit0，沒有對group送signal、無殘留。CI保留完整argv／PG環境，35分鐘job預算、5秒無locals stack／60秒未退出才判紅、pipefail log及always artifact；不關GC或強制成功退出。末次提交的Linux WNOWAIT及完整hosted仍待驗。
+`4be705a`本機2,724案摘要hook後17.742秒取得真exit0；hosted同提交則35.890秒、下載artifact確認真exit0且stack在pytest GC清理。兩者都不能反推原`1edb2de`取消必定同因。後續又正式重現leader先退、同owned group後代忽略TERM持stdout的CI工具缺口；已用未reap PID錨點與有界group清理修復，23個正常／失敗／掛住／故障控制保留獨立sentinel與EOF斷言。本機末次2,785案真exit0，沒有對group送signal、無殘留。CI保留完整argv／PG環境，35分鐘job預算、5秒無locals stack／60秒未退出才判紅、pipefail log及always artifact；不關GC或強制成功退出。6558的setup失敗未執行到Linux控制，不當作observer邏輯紅；修正後的Linux WNOWAIT及整包須以其同提交實際結果核實。
+
+正式發布另有必要條件：唯讀Render已確認API與Web都Live c529、手動指定commit且auto-deploy停用，PG18顯示0.1c-256mb及7天PITR策略；未查正式head／歷史資料、未做PG＋R2＋key整組還原。c529 API缺0041–0047 graph，不能把保留新表後一鍵回舊API當成已驗安全回復。這些條件、writer交接與外部排程尚未驗證，本批沒有操作Save／Deploy／Restore或讀取正式密鑰。
 
 本批詳細讀取／部署順序見[本人訂單歷史](ORDER_HISTORY.md)及[背景結算隔離與監測](RECONCILIATION_OPERATIONS.md)。SQLite以metadata建表時餐點現金預設值的真實布林差異亦已修復；這不代表其餘metadata／migration差異已全部修完。
 

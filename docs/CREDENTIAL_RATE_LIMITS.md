@@ -39,4 +39,6 @@ private SQLite `:memory:`＋StaticPool 會讓不同 Session 共用物理 connect
 - 真 PG reset 持鎖使登入／驗證回 503 且不 Set-Cookie，User／token 異動回滾；解除後同合法憑證可成功。
 - 0047 已納入 SQLite／PG migration 測試與 release invariant；完整整合數及未完成項以 [修復追蹤](REMEDIATION_STATUS.md) 為準，不將定向測試冒稱正式站驗收。
 
-部署先完成 migration 再上新版 API。回退程式可保留新表；downgrade 只移除此配額表並重置計數。回退到舊程式也會恢復各程序分開計數的舊限制，不能視為相同安全效果。跨分頁 Cookie 恢復另見 [前端續期協調](CLIENT_REFRESH_COORDINATION.md)。
+部署先完成 migration 再上新版 API，Web 待 API 就緒才發布。不能只因新表可保留，就把舊 API artifact 視為安全回復：目前正式 c529 的 migration graph 只到0040，而 startup.prepare 仍會執行 Alembic upgrade；DB已到0047後，該 artifact 可能無法識別 revision。必須先驗證保有完整已用 graph 且相容新資料狀態的回復版本，或以前向修復處理；Web單獨回復、API／DB維持相容新版是另一條驗收路徑。
+
+單獨downgrade0047只移除此配額表並重置計數，不代表0041–0046可以任意降版；其歷史資料保護仍適用。舊程式也會恢復各程序分開計數的限制，不能視為相同安全效果。跨分頁 Cookie 恢復另見 [前端續期協調](CLIENT_REFRESH_COORDINATION.md)。

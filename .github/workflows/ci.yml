@@ -85,7 +85,10 @@ jobs:
       - name: Verify migration re-upgrade
         run: alembic upgrade head
       - name: Verify pytest exit diagnostics controls
-        run: python -m pytest audits/test_pytest_exit_diagnostics.py --basetemp pytest-exit-evidence/controls -q
+        run: |
+          set -euo pipefail
+          mkdir -p pytest-exit-evidence
+          python -m pytest audits/test_pytest_exit_diagnostics.py --basetemp pytest-exit-evidence/controls -q
       - name: Verify PostgreSQL payment and invoice concurrency
         run: |
           set -euo pipefail
