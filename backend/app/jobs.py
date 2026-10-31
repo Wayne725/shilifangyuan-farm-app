@@ -222,6 +222,8 @@ async def reconcile_once(
             failures["monitoring"] = type(exc).__name__
             monitor.record_unavailable(type(exc).__name__)
             logger.error("reconcile_monitor_failed error_type=%s", type(exc).__name__)
+    from .reconciliation_retention import maybe_prune_reconciliation_runs
+    await maybe_prune_reconciliation_runs(monitor.factory, active_settings, monitor.run_id)
     if failures:
         raise ReconciliationPartialFailure(failures, report.to_dict())
     return report

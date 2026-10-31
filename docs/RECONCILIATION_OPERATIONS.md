@@ -1,6 +1,6 @@
 # 背景結算的隔離、監測與驗證
 
-本文件對應0045_reconciliation_runs及OPS01。背景巡檢成功表示本輪階段沒有未處理例外，**不表示每筆付款、發票、郵件或列印已完成**；待辦／失敗／未知結果仍須分別查核。列印是獨立worker，不由此runner處理。
+本文件對應0045_reconciliation_runs、0046_reconciliation_retention及OPS01。背景巡檢成功表示本輪階段沒有未處理例外，**不表示每筆付款、發票、郵件或列印已完成**；待辦／失敗／未知結果仍須分別查核。列印是獨立worker，不由此runner處理。
 
 ## 階段與交易
 
@@ -43,10 +43,29 @@ Outbox分開顯示到期pending、未到重試時間、processing／10分鐘stal
 
 有監測歷史時0045降版拒絕刪表；回復舊程式可保留新表，不需為回復code而刪歷史。正式舊資料、金流、寄信與設備均未因本次本機回歸而驗收。
 
-目前程式尚未自動清理本表；不能把「建議30天」寫成已生效TTL。僅新遙測的30天／保護最近成功失敗與所有未結束輪次／低頻有界清理方案在[下一 profile 方案](../outputs/remediation-completion/ops01-telemetry-retention-plan.md)，已核准拆下一個 profile，須完成實作、測綠並啟用後才生效。交易、稽核、通知、付款與社員歷史不屬於該清理範圍。
+0046只新增完成時間／id的終態partial index，升降版均不刪資料。保留profile已另批實作；新版部署後，在任何internal／job／request／periodic輪次的全部商務交易結束後共同觸發，不依賴預設關閉的periodic。不是每個HTTP掃描；每個engine先做process monotonic gate，最短一小時才嘗試DB lease，跨worker亦以DB時間／私有控制列序列化。
+
+預設只刪本表finished_at早於30天的終態，排除最大id、最近succeeded／partial_failure／cancelled、傳入的目前輪次及所有running。每批最多100筆、每輪最多5批，各批獨立短session與commit；每批重驗owner／lease及保護條件，舊worker不能刪除或覆蓋新worker的清理狀態。候選與DELETE都有限制及索引，不讀phases／業務payload。清理只改本表與專用SystemSetting鍵`reconciliation_runs_retention`的lease／安全狀態，平台設定API不列出也不覆寫該鍵；交易、稽核、通知、付款與社員歷史全部不在刪除範圍。
+
+可選環境設定如下，未設定即採安全預設；與正式環境目前是否已部署或設值是不同事實：
+
+| 設定 | 預設 | 範圍 |
+|---|---:|---|
+| RECONCILIATION_RETENTION_ENABLED | true | 明確停用後會累積，後台顯示停用 |
+| RECONCILIATION_RETENTION_DAYS | 30 | 1–365天 |
+| RECONCILIATION_RETENTION_BATCH_SIZE | 100 | 1–100筆 |
+| RECONCILIATION_RETENTION_MAX_BATCHES | 5 | 1–5批 |
+| RECONCILIATION_RETENTION_INTERVAL_SECONDS | 3600 | 3600–86400秒 |
+| RECONCILIATION_RETENTION_LEASE_SECONDS | 300 | 30–1800秒 |
+
+清理錯誤只保存安全類別與已提交筆數，不能rollback已完成商務或改九int成功回應；CancelledError仍向上傳。中途失敗保留已提交小批，下一次DB時間允許後續作。API另提供最後開始／完成／成功、清理狀態、已刪數及索引LIMIT1取得的最舊可清時間；不回lease owner或資料payload。舊API沒有cleanup欄位時，原後台仍可用。清理失敗與商務巡檢成功是可同時存在的兩個狀態。
+
+30天是分批清理門檻，並非任何負載下都保證資料最長只留30天。500筆／小時未必追上任意worker數的寫入；後台保留最舊待清時間以觀察積壓。最新各終態及全部running有意保留，程序反覆在開始後崩潰時，running仍可能累積，需核對原因，不自動刪除未結束證據。完全沒有巡檢驅動或明確停用時也不會清理。正式部署前仍須完成這個profile的整合驗證，不能把本機測綠說成正式TTL已生效；見[保留驗證](../outputs/remediation-completion/retention-validation.md)。
 
 ## 本機驗證與成本
 
 正式紅、SQLite caller八格、partial503／cancel／安全摘要、PG多worker與caller未提交交易、SQLite／PG migration及兩瀏覽器證據集中於[驗證報告](../outputs/remediation-completion/ops01-validation.md)。不把各次重複回歸加總成新的完整suite數。
 
 相同商務helper、只替換f35基準runner的合成成本對照：每組三次中位數，本機PG空輪32.9→43.3ms、25筆假工作74.4→86.9ms；SELECT完全相同、固定多11 SQL。實體commit空輪8→22、25筆58→71，除11監測commit外亦包含真正拆開原相鄰讀交易的成本。每列phases/counts約802B；單worker每分鐘一輪約0.5M列／年，故需要前述保留profile。沒有真網路寄送，不把此數字延伸為正式PG容量、網路延遲或磁碟佔用保證。
+
+保留profile另有1504列合成樣本：SQLite／PG都只刪5×100筆，84張業務表前後相同；一次profile38 SQL／7commit，本機各約17.9／28.5ms，同process再次觸發0 SQL／0commit。這是每小時有資格才發生的額外成本，不是每個巡檢或HTTP的成本，也不是正式負載上限；完整EXPLAIN／SQL與限制見保留驗證。

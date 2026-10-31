@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+import time_machine
 from sqlalchemy import func, select
 
 from app.models import GroupCampaign, InventoryReservation, Order, OrderFulfillment, OrderItem, OrderKind, OutboxEvent, PaymentAttempt, Product, SalesChannel, TargetType
@@ -120,6 +121,7 @@ async def test_request_key_used_by_other_channel_cannot_return_or_overwrite_it(p
 
 
 @pytest.mark.asyncio
+@time_machine.travel(datetime(2030, 1, 2, 4, 0, tzinfo=timezone.utc), tick=True)
 async def test_unique_constraint_rejects_concurrent_other_channel_after_initial_lookup(postgres_sessions, monkeypatch):
     from app.models import Meal, MealEvent, MealEventOffering, MealEventStatus
     from app.routers.meals import meals_router

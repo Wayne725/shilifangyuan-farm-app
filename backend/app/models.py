@@ -2810,6 +2810,9 @@ class ReconciliationRun(Base):
         CheckConstraint("(status = 'running' AND finished_at IS NULL) OR (status <> 'running' AND finished_at IS NOT NULL)", name="completion_consistent"),
         CheckConstraint("finished_at IS NULL OR finished_at >= started_at", name="completion_after_start"),
         Index("ix_reconciliation_runs_status_id", "status", "id"),
+        Index("ix_reconciliation_runs_finished_id", "finished_at", "id",
+            sqlite_where=text("finished_at IS NOT NULL AND status IN ('succeeded','partial_failure','cancelled')"),
+            postgresql_where=text("finished_at IS NOT NULL AND status IN ('succeeded','partial_failure','cancelled')")),
     )
 
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)

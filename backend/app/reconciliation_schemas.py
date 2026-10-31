@@ -42,9 +42,30 @@ class ReconciliationBacklogRead(BaseModel):
         return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
 
 
+class ReconciliationRetentionRead(BaseModel):
+    enabled: bool
+    retention_days: int
+    batch_size: int
+    max_batches: int
+    interval_seconds: int
+    status: Literal["never_run", "running", "succeeded", "failed"]
+    last_started_at: datetime | None
+    last_finished_at: datetime | None
+    last_success_at: datetime | None
+    deleted_count: int = Field(ge=0)
+    error_type: str | None
+    oldest_eligible_at: datetime | None
+
+    @field_validator("last_started_at", "last_finished_at", "last_success_at", "oldest_eligible_at", mode="after")
+    @classmethod
+    def utc_timestamp(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
 class ReconciliationStatusRead(BaseModel):
     current: ReconciliationRunRead | None
     last_success: ReconciliationRunRead | None
     long_running: bool
     stale_after_seconds: int
     backlog: list[ReconciliationBacklogRead]
+    cleanup: ReconciliationRetentionRead

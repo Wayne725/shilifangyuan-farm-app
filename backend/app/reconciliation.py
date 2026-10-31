@@ -90,6 +90,7 @@ class ReconciliationMonitor:
 
 
 async def read_reconciliation_status(session, settings, *, payment_candidates=None, meal_candidates=None):
+    from .reconciliation_retention import read_retention_status
     current = await session.scalar(select(ReconciliationRun).order_by(ReconciliationRun.id.desc()).limit(1).execution_options(populate_existing=True))
     last_success = await session.scalar(select(ReconciliationRun).where(ReconciliationRun.status == "succeeded")
         .order_by(ReconciliationRun.id.desc()).limit(1).execution_options(populate_existing=True))
@@ -132,4 +133,4 @@ async def read_reconciliation_status(session, settings, *, payment_candidates=No
     return ReconciliationStatusRead(current=current_read,
         last_success=ReconciliationRunRead.model_validate(last_success) if last_success else None,
         long_running=bool(current_read and current_read.status == "running" and (now - current_read.progress_at).total_seconds() >= stale_after),
-        stale_after_seconds=stale_after, backlog=backlog)
+        stale_after_seconds=stale_after, backlog=backlog, cleanup=await read_retention_status(session, settings, now))
