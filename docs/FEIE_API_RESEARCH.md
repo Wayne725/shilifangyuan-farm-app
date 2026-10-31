@@ -1,12 +1,18 @@
 # 飛鵝亞太站 API 查核
 
-查核日期：2026-10-22。只讀官方文件與官方 SDK；沒有登入帳戶、使用真實憑證或呼叫列印 API，亦未驗證實機。
+初次查核：2026-10-22；更新：2026-10-31。只讀官方文件與官方 SDK；沒有登入飛鵝帳戶、使用真實憑證或呼叫列印 API，亦未驗證實機。
+
+## 2026-10-31 更正：改用各方法專屬路徑
+
+到貨查核發現官方另有 [2026-01-15 接口分流公告](https://help1.feieyun.com/docs/96C8PyrC)，明訂舊共用 URL 於 2026-08-01 完全下線，且列出亞太站對照表。舊規格頁仍列共用入口，先前只依該頁得出的路徑結論不完整，以下契約已按公告修正。公告只調整 URL，參數、簽章及回應協議不變；本次沒有連真實 API，不能宣稱已實測舊入口失效或新入口成功。
+
+`FEIE_API_BASE_URL` 保留為 `https://api.jp.feieyun.com/Api/Open/` 前綴；客戶端只按固定方法白名單附加 `printMsg`、`queryOrderState`、`queryPrinterStatus`。不得將環境變數改成單一方法的完整 URL，也不回退舊入口或跨區重送。詳細到貨查核見 [FP_V58_W_ARRIVAL_SETUP.md](FP_V58_W_ARRIVAL_SETUP.md)。
 
 ## 確認的介面
 
 | 項目 | 亞太站契約 |
 | --- | --- |
-| 請求目的路徑 | `/Api/Open/`；方法由表單 `apiname` 選擇，並非附加 `/printMsg` |
+| 請求目的路徑 | `/Api/Open/printMsg`、`/Api/Open/queryOrderState`、`/Api/Open/queryPrinterStatus`；表單仍帶對應 `apiname` |
 | 公共欄位 | `user`、UNIX 秒數字串 `stime`、`sig`、`apiname` |
 | 簽章 | `sha1((user + UKEY + stime).encode("utf-8")).hexdigest()`，小寫 40 碼 |
 | 傳輸 | HTTPS POST；`application/x-www-form-urlencoded`，不是 JSON；不啟用 debug |
@@ -15,13 +21,13 @@
 | 查結果 | `Open_queryOrderState`，`orderid` 使用供應商 ID；`data=true` 表示平台確認已印，`false` 僅代表尚未印 |
 | 查設備 | `Open_queryPrinterStatus`、`sn`；回傳離線、在線正常、在線異常等文字；離線判定可能落後約兩分鐘 |
 
-來源：[亞太站官方規格](https://feieyun.com/open/AsiaPacific-cn.html)，公共參數、列印訂單、訂單狀態、設備狀態章節。將 SHA1 輸入明確編為 UTF-8 是程式選擇，亦符合下述官方 Python 範例的實作；API 文件未另訂簽章輸入 charset。
+來源：路徑採 [官方分流公告](https://help1.feieyun.com/docs/96C8PyrC)；參數採 [亞太站官方規格](https://feieyun.com/open/AsiaPacific-cn.html) 公共參數、列印訂單、訂單狀態、設備狀態章節。將 SHA1 輸入明確編為 UTF-8 是程式選擇，亦符合下述官方 Python 範例的實作；API 文件未另訂簽章輸入 charset。
 
 ## 區域網址有文件矛盾
 
 文件的 HTTP 位址是 `http://api.jp.feieyun.com/Api/Open/`。同頁 HTTPS 連結的**可見文字**是 `https://api.jp.feieyun.com:443/Api/Open/`，但 2026-10-22 原始 HTML 的 **href 實際指向 `https://api.de.feieyun.com:443/Api/Open/`**。不可直接點連結、跟隨其德國區域主機或把其他站當作亞太站。
 
-建議客戶端只接受明確設定的 `https://api.jp.feieyun.com/Api/Open/`，關閉重新導向並驗證主機。這是依亞太頁面顯示名稱及既有 HTTP 主機所作的保守實作決定，**本次沒有向 API 送請求證實路由可用**；啟用真實列印前應向飛鵝確認亞太 HTTPS 主機及設備相容性。來源：[官方亞太頁](https://feieyun.com/open/AsiaPacific-cn.html)。
+2026-10-31 複核仍見此矛盾，但新版 [分流公告](https://help1.feieyun.com/docs/96C8PyrC) 已明列日本主機的三個新路徑。客戶端只接受 `https://api.jp.feieyun.com/Api/Open/` 前綴並附加白名單方法，關閉重新導向、驗證 TLS；啟用真實列印前仍須確認帳號及設備的亞太區相容性。**本次沒有向 API 送請求證實路由可用**。來源：[官方亞太頁](https://feieyun.com/open/AsiaPacific-cn.html)、上述公告。
 
 ## 編碼、58mm 與繁體中文
 

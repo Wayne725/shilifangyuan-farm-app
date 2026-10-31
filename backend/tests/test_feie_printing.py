@@ -24,13 +24,42 @@ def live_settings(**overrides):
         "feie_ap_endpoint_verified": True, **overrides})
 
 
+@pytest.mark.parametrize("method,args,api,path,data,expected", [
+    ("submit", ["繁體中文測試<BR>"], "Open_printMsg", "printMsg", "vendor-job", "vendor-job"),
+    ("query", ["vendor-job"], "Open_queryOrderState", "queryOrderState", True, True),
+    ("printer_status", [], "Open_queryPrinterStatus", "queryPrinterStatus", "在线，工作状态正常", "online"),
+])
+async def test_feie_uses_dedicated_asia_pacific_routes(method, args, api, path, data, expected):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert str(request.url) == f"https://api.jp.feieyun.com/Api/Open/{path}"
+        assert parse_qs(request.content.decode())["apiname"] == [api]
+        return httpx.Response(200, json={"ret": 0, "data": data})
+
+    client = FeieClient(live_settings(), transport=httpx.MockTransport(handler))
+    assert await getattr(client, method)(*args) == expected
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("api", ["Open_printerDelList", "", "../printMsg", "Open_printMsg/../queryOrderState", "https://evil.test/printMsg"])
+async def test_feie_rejects_unsupported_method_before_network(api):
+    def forbidden(request):
+        raise AssertionError("unsupported method must not send a request")
+
+    client = FeieClient(live_settings(), transport=httpx.MockTransport(forbidden))
+    with pytest.raises(FeieError, match="unsupported_printer_api"):
+        await client._call(api)
+
+
 async def test_feie_form_signature_region_and_utf8(monkeypatch):
     monkeypatch.setattr("app.integrations.feie.time.time", lambda: 1234567890)
     requests = []
 
     async def handler(request):
         requests.append(request)
-        assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/"
+        assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/printMsg"
         form = parse_qs(request.content.decode())
         assert form["sig"] == [sha1(b"test-usertest-secret1234567890").hexdigest()]
         assert form["stime"] == ["1234567890"]
@@ -49,6 +78,17 @@ async def test_feie_form_signature_region_and_utf8(monkeypatch):
 def test_only_asia_pacific_https_endpoint(url):
     with pytest.raises(FeieError, match="invalid_asia_pacific_endpoint"):
         FeieClient(live_settings(feie_api_base_url=url))
+
+
+async def test_feie_revalidates_endpoint_before_sending():
+    def forbidden(request):
+        raise AssertionError("invalid endpoint must not send a request")
+
+    settings = live_settings()
+    client = FeieClient(settings, transport=httpx.MockTransport(forbidden))
+    settings.feie_api_base_url = "https://evil.test/Api/Open/"
+    with pytest.raises(FeieError, match="invalid_asia_pacific_endpoint"):
+        await client.submit("單")
 
 
 @pytest.mark.parametrize("field,value", [("feie_ukey_rotated", False), ("feie_ap_endpoint_verified", False), ("feie_ukey", "")])
@@ -92,6 +132,7 @@ async def test_ambiguous_responses_never_resubmitted(response, uncertain):
 
 async def test_query_false_is_unprinted_not_failed():
     def handler(request):
+        assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/queryOrderState"
         form = parse_qs(request.content.decode())
         assert form["apiname"] == ["Open_queryOrderState"]
         assert form["orderid"] == ["vendor-job"]

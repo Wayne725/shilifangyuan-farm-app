@@ -65,18 +65,20 @@ async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(ca
 
     def provider(request):
         form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        assert str(request.url) == settings.feie_api_base_url
         assert form["sig"] == sha1(f"test-usertest-secret{form['stime']}".encode()).hexdigest()
         api = form["apiname"]
         cloud["calls"].append(api)
         if api == "Open_printMsg":
+            assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/printMsg"
             assert form["sn"] == "test-device" and form["times"] == "1"
             cloud["contents"].append(form["content"])
             return httpx.Response(200, json={"ret": 0, "data": f"mock-job-{len(cloud['contents'])}"})
         if api == "Open_queryOrderState":
+            assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/queryOrderState"
             assert form["orderid"].startswith("mock-job-")
             return httpx.Response(200, json={"ret": 0, "data": cloud["printed"]})
         assert api == "Open_queryPrinterStatus"
+        assert str(request.url) == "https://api.jp.feieyun.com/Api/Open/queryPrinterStatus"
         return httpx.Response(200, json={"ret": 0, "data": "离线"})
 
     transport = httpx.MockTransport(provider)

@@ -11,6 +11,13 @@ from ..config import Settings
 from .tls import create_tls_context
 
 
+_API_PATHS = {
+    "Open_printMsg": "printMsg",
+    "Open_queryOrderState": "queryOrderState",
+    "Open_queryPrinterStatus": "queryPrinterStatus",
+}
+
+
 class FeieError(Exception):
     def __init__(self, code: str, *, safe_to_retry: bool = False, uncertain: bool = False):
         super().__init__(code)
@@ -73,6 +80,11 @@ class FeieClient:
         self.transport = transport
 
     async def _call(self, api: str, **parameters: str) -> dict:
+        path = _API_PATHS.get(api)
+        if path is None:
+            raise FeieError("unsupported_printer_api")
+        validate_endpoint(self.settings.feie_api_base_url)
+        request_url = f"{self.settings.feie_api_base_url}{path}"
         stime = str(int(time.time()))
         user = self.settings.feie_user.get_secret_value()
         signature = hashlib.sha1(
@@ -83,7 +95,7 @@ class FeieClient:
                 timeout=self.settings.printer_timeout_seconds,
                 follow_redirects=False, transport=self.transport, verify=create_tls_context(),
             ) as client:
-                response = await client.post(self.settings.feie_api_base_url, data={
+                response = await client.post(request_url, data={
                     "user": user, "stime": stime, "sig": signature,
                     "apiname": api, **parameters,
                 })
