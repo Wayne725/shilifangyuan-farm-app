@@ -42,4 +42,12 @@
 
 每次後續退場應記錄：操作人、日期、來源與目標、資料保存位置、入口變更、關閉服務、驗收及可回復方式。若涉及正式交易入口，須確認舊連結與新入口皆正常、沒有跳錯帳號或重建訂單，並保留回復原設定的方式。
 
-本次沒有授權刪除其他工作樹、Downloads內容、歷史分支或外部服務。當前本機 `web/node_modules` 借用 `mobile-checkout-login` 工作樹的套件目錄；後續整理工作樹時應先解除這項本機依賴並驗證可重建，不能把該工作樹當舊Expo直接移除。
+本次沒有授權刪除其他工作樹、Downloads內容、歷史分支或外部服務。最初本機 `web/node_modules` 曾借用其他工作樹；依賴修補後已移到本次專用驗證 prefix，與該工作樹解耦。它仍是本機測試所需的暫存依賴，不能直接刪掉正在使用的 prefix；CI依鎖檔乾淨安裝，不靠這個本機目錄。
+
+## 續查：目前可精簡的實際範圍
+
+`4be705a`來源與對應163檔immutable build再次盤點：lock中沒有Expo／react-native，Web來源與此隔離build沒有硬寫舊Lovable／Render網址。166份tracked來源經TypeScript import與route glob展開，164份可由入口到達；其餘為API contract JSON及ambient型別，均有CI／編譯用途。91個輸出JS皆在靜態／動態import圖內，沒有可直接刪除的孤立chunk，也沒有位元相同的重複公開資產。不能據此推論正式環境變數、舊金流快照或使用者瀏覽歷史已全部排除。
+
+五張`docs/design/01-home.png`至`05-admin.png`舊概念圖共9,117,278 bytes可另行歸檔；它們原本就不進dist，移出只減少目前checkout空間，不會加快網站載入，也不會自動移除Git歷史blob。本次保留它們。會員legacy歷史、cart redirect、付款／物流／LINE callback、公開圖片與CSV範本、內容教材連結仍有實際依賴，不能按名稱刪除。
+
+完整來源／dist hash、import圖與依賴證據見`outputs/remediation-completion/legacy-web-lightweight-verification.md`。首頁初始3個JS＋1個CSS為511,700 bytes；所有lazy路由JS合計1,229,355 bytes，後者不能當成首頁一次下載量。既有本人歷史分頁、輪詢範圍與列表N+1修復的效益另見`ORDER_HISTORY.md`，不把文件圖片歸檔當成網站效能修復。

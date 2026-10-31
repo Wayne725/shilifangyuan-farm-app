@@ -552,13 +552,13 @@ class MemberRosterEntry(Base):
     share_certificate_number: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True
     )
-    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0)
-    share_count: Mapped[int] = mapped_column(Integer, default=0)
+    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    share_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     share_subscribed_on: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
     share_paid_on: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), index=True)
     claimed_user_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -767,8 +767,8 @@ class Membership(Base):
     share_certificate_number: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True
     )
-    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0)
-    share_count: Mapped[int] = mapped_column(Integer, default=0)
+    share_capital_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    share_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     share_subscribed_on: Mapped[Optional[date]] = mapped_column(
         Date, nullable=True
     )
@@ -1318,7 +1318,7 @@ class GroupCampaign(Base):
     confirmed_min_paid_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     confirmed_threshold_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     confirmation_exception_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    legacy_confirmed_intake: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    legacy_confirmed_intake: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     can_ship: Mapped[bool] = mapped_column(Boolean, default=False)
     shipping_temperature: Mapped[Optional[ShippingTemperature]] = mapped_column(
@@ -1526,6 +1526,7 @@ class MemberProposal(Base):
     proposal_type: Mapped[MemberProposalType] = mapped_column(
         enum_type(MemberProposalType, "member_proposal_type"),
         default=MemberProposalType.RESOLUTION,
+        server_default="resolution",
         index=True,
     )
     status: Mapped[MemberProposalStatus] = mapped_column(
@@ -1815,11 +1816,11 @@ class MealScheduleTemplate(Base):
     pickup_start_time: Mapped[str] = mapped_column(String(5))
     pickup_end_time: Mapped[str] = mapped_column(String(5))
     cutoff_time: Mapped[str] = mapped_column(String(5))
-    cutoff_days_before: Mapped[int] = mapped_column(Integer, default=0)
-    advance_days: Mapped[int] = mapped_column(Integer, default=7)
+    cutoff_days_before: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    advance_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     weekdays: Mapped[list[int]] = mapped_column(JSON)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     offerings: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
     created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -1959,7 +1960,7 @@ class Order(Base):
     promotion_id: Mapped[Optional[str]] = mapped_column(ForeignKey("promotions.id", ondelete="RESTRICT"), nullable=True, index=True)
     promotion_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     amount_total: Mapped[int] = mapped_column(Integer)
-    tax_amount: Mapped[int] = mapped_column(Integer, default=0)
+    tax_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     contact_email: Mapped[str] = mapped_column(String(320))
     invoice_buyer_type: Mapped[InvoiceBuyerType] = mapped_column(
         enum_type(InvoiceBuyerType, "invoice_buyer_type"),

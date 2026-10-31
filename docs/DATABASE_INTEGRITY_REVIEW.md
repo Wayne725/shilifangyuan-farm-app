@@ -94,3 +94,13 @@
 6. 需要效能索引時，再用合成／授權資料的真PG EXPLAIN驗證實際predicate與排序。單欄索引多不代表有效，也不盲目每個nullable FK再加索引；本輪不宣稱已做正式PG query plan／容量／長期RSS量測。
 
 重跑owned盤點／觀測：以安全app-venv執行本目錄三個 `database_normalization_*_probe.py`。三者均明確 `_env_file=None`，只離線metadata或自行建立／清理SQLite；沒有使用正式DB URL、容器或外部供應商。
+
+## 後續完成：建庫預設值一致性
+
+保留上方0044來源的歷史觀測；目前模型已補齊原11欄缺少的server_default：MealScheduleTemplate四欄、MemberRosterEntry三欄、Membership兩欄、MemberProposal.proposal_type及Order.tax_amount，值全部沿用既有migration。另正式重現GroupCampaign.legacy_confirmed_intake在metadata SQLite裸SQL省略時存TEXT `false`、ORM讀True，已將模型字串default改為SQLAlchemy `false()`，與0037的原生False一致。
+
+沒有改Python default、API、migration或歷史資料；排程API cutoff仍為1、DB／ORM原契約仍為0，原先明確True及歷史backfill保留。此修正只對齊未來metadata建庫，**不會ALTER既有metadata SQLite的default或清洗舊TEXT false值**。若要處理那類既有庫，須先唯讀盤點再另做受控修復。
+
+原12個紅與41個正控制保留；修後SQLite53項（74筆逐欄觀察）全過，合併名冊／會籍／提案／排程／訂單正常流程189項通過，PG metadata＋Alembic0047兩案亦有74筆觀察通過。裸SQL採text INSERT…SELECT真正省略受測欄，避免SQLAlchemy補Python default假綠；所有合成DB／schema已刪除。這批納入最終2,785後端及167 PG整合通過，47條migration沒有新增或改寫。
+
+上述default缺口不再列為未修；原raw SQL同父一致性、revision／counter範圍與enum防線仍需舊資料preflight及獨立遷移，沒有因本批通過而消失，也未確認新的合法API造錯路徑。活動收費／付款的歷史revision及Membership的現行application指標不能當成必須等於父表今日版本的冗餘來刪除或加錯複合FK。受限資源交易負載另見`ORDER_LOAD_RESOURCES.md`；它不替代正式DB query plan或舊資料驗收。
