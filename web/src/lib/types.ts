@@ -368,6 +368,7 @@ export interface MembershipDocument {
   size_bytes: number;
   checksum_sha256?: string | null;
   confirmed_at?: string | null;
+  is_demo_placeholder?: boolean;
   expires_at?: string | null;
   retention_expired?: boolean;
   deleted_at?: string | null;

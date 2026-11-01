@@ -17,6 +17,7 @@ from .integrations.pii_crypto import (
 )
 from .integrations.r2_storage import r2_document_storage_from_settings
 from .member_claims import roster_aad
+from .membership_demo_documents import DEMO_MEMBERSHIP_DOCUMENTS
 from .models import (
     Activity,
     ActivityRegistration,
@@ -725,6 +726,21 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
             consented_at=now - timedelta(days=3),
         )
 
+    def demo_documents(application_id: str, user_id: str, days_ago: int) -> list[MembershipDocument]:
+        return [
+            MembershipDocument(
+                document_type=MembershipDocumentType(spec.document_type),
+                status=MembershipDocumentStatus(spec.status),
+                object_key=spec.object_key,
+                content_type=spec.content_type,
+                size_bytes=spec.size_bytes,
+                checksum_sha256=spec.checksum_sha256,
+                confirmed_at=now - timedelta(days=days_ago),
+            )
+            for spec in DEMO_MEMBERSHIP_DOCUMENTS
+            if spec.application_id == application_id and spec.user_id == user_id
+        ]
+
     supplement_application = MembershipApplication(
         id="application-supplement",
         user_id=supplement_user.id,
@@ -733,26 +749,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         reviewed_by_id=users[0].id,
         reviewed_at=now - timedelta(days=2),
         review_reason="第二證件影像需重新上傳（僅使用測試素材）",
-        documents=[
-            MembershipDocument(
-                document_type=MembershipDocumentType.ID_FRONT,
-                status=MembershipDocumentStatus.CONFIRMED,
-                object_key="membership-documents/demo/supplement-front.jpg",
-                content_type="image/jpeg",
-                size_bytes=120000,
-                checksum_sha256="a" * 64,
-                confirmed_at=now - timedelta(days=3),
-            ),
-            MembershipDocument(
-                document_type=MembershipDocumentType.ID_BACK,
-                status=MembershipDocumentStatus.CONFIRMED,
-                object_key="membership-documents/demo/supplement-back.jpg",
-                content_type="image/jpeg",
-                size_bytes=118000,
-                checksum_sha256="b" * 64,
-                confirmed_at=now - timedelta(days=3),
-            ),
-        ],
+        documents=demo_documents("application-supplement", supplement_user.id, 3),
     )
     payment_application = MembershipApplication(
         id="application-payment",
@@ -761,28 +758,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
         submitted_at=now - timedelta(days=6),
         reviewed_by_id=users[0].id,
         reviewed_at=now - timedelta(days=5),
-        documents=[
-            MembershipDocument(
-                document_type=document_type,
-                status=MembershipDocumentStatus.CONFIRMED,
-                object_key=(
-                    "membership-documents/demo/"
-                    f"payment-{document_type.value}.jpg"
-                ),
-                content_type="image/jpeg",
-                size_bytes=125000,
-                checksum_sha256=f"{index}" * 64,
-                confirmed_at=now - timedelta(days=6),
-            )
-            for index, document_type in enumerate(
-                (
-                    MembershipDocumentType.ID_FRONT,
-                    MembershipDocumentType.ID_BACK,
-                    MembershipDocumentType.SECONDARY,
-                ),
-                start=1,
-            )
-        ],
+        documents=demo_documents("application-payment", payment_user.id, 6),
     )
     session.add_all(
         [

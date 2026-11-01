@@ -194,6 +194,7 @@ jobs:
             tests/browser/payment-return-truth.mjs
             tests/browser/reconciliation-status.mjs
             tests/browser/admin-issues-access.mjs
+            tests/browser/membership-document-placeholders.mjs
             tests/browser/kitchen-access.mjs
             tests/browser/cloud-print-flow.mjs
           )

@@ -1003,6 +1003,7 @@ class MembershipDocumentRead(ApiModel):
     size_bytes: int
     checksum_sha256: Optional[str]
     confirmed_at: Optional[datetime]
+    is_demo_placeholder: bool = False
     expires_at: Optional[datetime] = None
     retention_expired: bool = False
     deleted_at: Optional[datetime] = None
