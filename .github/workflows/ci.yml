@@ -201,6 +201,11 @@ jobs:
             browser_tests+=(tests/browser/session-consistency.mjs tests/browser/line-customer-checkout.mjs)
           fi
           node --test --test-concurrency=1 --test-timeout=45000 "${browser_tests[@]}" 2>&1 | tee browser-evidence/smoke.log
+          supplemental_tests=(tests/browser/payment-return.mjs tests/browser/meal-order-flow.mjs)
+          if [[ "$BROWSER_ENGINE" == chromium ]]; then
+            supplemental_tests+=(tests/browser/activity-payments.mjs)
+          fi
+          node --test --test-concurrency=1 --test-timeout=120000 "${supplemental_tests[@]}" 2>&1 | tee browser-evidence/supplemental.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
