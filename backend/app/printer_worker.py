@@ -12,7 +12,8 @@ from .config import Settings, get_settings
 from .database import SessionLocal
 from .integrations.feie import FeieClient, FeieError, validate_live_config
 from .models import Order, PrintJob
-from .printing import format_receipt, job_matches_printer
+from .printing import (format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
+                       receipt_time, render_receipt_snapshot, seal_receipt_content)
 
 logger = logging.getLogger(__name__)
 _wake: asyncio.Event | None = None
@@ -78,15 +79,32 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         if claimed.rowcount != 1:
             await session.rollback()
             return True
-        snapshot = {**job.snapshot, "reprint": bool(job.reprint_of_id), "dry_run": mode == "dry_run"}
         job_id, vendor_id, attempts = job.id, job.vendor_order_id, job.attempts + int(submitting)
+        content = job.content
+        if submitting:
+            try:
+                if content is None:
+                    snapshot = {key: value for key, value in job.snapshot.items() if key != "customer_phone"}
+                    snapshot.update(await payment_snapshot_from_session(session, order))
+                    if not snapshot.get("print_requested_at"):
+                        snapshot["print_requested_at"] = receipt_time(now)
+                    job.snapshot = snapshot
+                    rendered = render_receipt_snapshot(snapshot, job.order_id, settings)
+                    content = format_receipt({**rendered, "reprint": bool(job.reprint_of_id), "dry_run": mode == "dry_run"}, width=settings.printer_line_width)
+                    job.content = seal_receipt_content(content, snapshot, job.order_id, settings)
+                else:
+                    content = open_receipt_content(content, job.order_id, settings)
+            except FeieError as exc:
+                job.status, job.last_error, job.attempts = "failed", exc.code, attempts
+                job.lease_token = job.lease_until = None
+                await session.commit()
+                return True
         await session.commit()
     values = {"lease_token": None, "lease_until": None, "last_error": None, "updated_at": now,
               "next_attempt_at": now + timedelta(seconds=settings.printer_query_seconds)}
     try:
         if submitting:
-            content = format_receipt(snapshot, width=settings.printer_line_width)
-            values.update(content=content, attempts=attempts)
+            values["attempts"] = attempts
             if mode == "dry_run":
                 values.update(status="simulated", last_result={"dry_run": True})
             else:
