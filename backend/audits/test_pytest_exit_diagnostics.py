@@ -51,6 +51,35 @@ def test_cli_runs_original_pytest_arguments_and_waits_for_exit(tmp_path):
         "UNCONFIGURE_ENTER", "UNCONFIGURE_RETURN", "PYTEST_MAIN_RETURN", "PYTHON_ATEXIT"]
 
 
+@pytest.mark.parametrize("preexisting_handler", [False, True])
+def test_late_stack_request_after_handler_teardown_preserves_child_exit(tmp_path, preexisting_handler):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    case = tmp_path / "test_control.py"
+    case.write_text("def test_control(): pass\n")
+    runner = tmp_path / "late_stack.py"
+    registration = "faulthandler.register(signal.SIGUSR1, file=sys.stderr)\n" if preexisting_handler else ""
+    runner.write_text(
+        "import faulthandler, os, signal, sys\nfrom pathlib import Path\n"
+        f"sys.path.insert(0, {str(SCRIPT.parents[1])!r})\n"
+        "from scripts.pytest_exit_diagnostics import run_child\n"
+        f"directory = Path({str(evidence)!r})\n"
+        f"{registration}"
+        f"code = run_child(['-q', {str(case)!r}], directory)\n"
+        "os.kill(os.getpid(), signal.SIGUSR1)\n"
+        "assert (directory / 'tracebacks.log').stat().st_size > 0\n"
+        "assert faulthandler.unregister(signal.SIGUSR1)\n"
+        "os.kill(os.getpid(), signal.SIGUSR1)\n"
+        "raise SystemExit(code)\n"
+    )
+    result = subprocess.run([sys.executable, str(runner)], cwd=tmp_path,
+        env=control_environment(), capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = [json.loads(line)["event"]
+        for line in (evidence / "phases.jsonl").read_text().splitlines()]
+    assert events[-2:] == ["PYTEST_MAIN_RETURN", "PYTHON_ATEXIT"]
+
+
 def test_non_daemon_after_pytest_return_is_timed_out_and_reaped(tmp_path, isolated_control_environment):
     case = tmp_path / "test_control.py"
     case.write_text("import threading\ndef test_control():\n    threading.Thread(target=lambda: threading.Event().wait(1)).start()\n")
