@@ -12,15 +12,15 @@ const refund={id:'refund',activity_charge_id:'charge',payment_attempt_id:'attemp
 async function fixture(t,{path='/activities',role='customer',width=1280,member=false,membershipType=null,reg=null,activityPatch={},charges=null,refunds=[],timezone='Asia/Taipei'}={}) {
  const browser=await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE});t.after(()=>browser.close());
  const context=await browser.newContext({viewport:{width,height:950},timezoneId:timezone,serviceWorkers:'block',reducedMotion:'reduce'});
- const state={activity:{...structuredClone(activity),...activityPatch,my_registration:structuredClone(reg)},registration:structuredClone(reg),charges:structuredClone(charges||reg?.charge&&[reg.charge]||[]),refunds:structuredClone(refunds),writes:[],reads:[],readUrls:[],unknown:[],errors:[],fail:null,readFail:null};
+ const state={activity:{...structuredClone(activity),...activityPatch,my_registration:structuredClone(reg)},registration:structuredClone(reg),charges:structuredClone(charges||reg?.charge&&[reg.charge]||[]),refunds:structuredClone(refunds),writes:[],reads:[],anonymousPrivateReads:[],refreshes:0,readUrls:[],unknown:[],errors:[],fail:null,readFail:null};
  const user={id:'user',display_name:'隔離報名者',email:'activity@example.test',notification_email:'activity@example.test',membership_type:membershipType||(member?'member':'nonmember'),membership_status:member?'active':null,user_role:role};
  await context.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url()),p=url.pathname,method=request.method();
   if(url.origin!==base)return route.abort();
   if(p==='/payment-stub')return route.fulfill({contentType:'text/html; charset=utf-8',body:'<h1>隔離付款頁</h1>'});
   if(!p.startsWith('/v1/'))return method==='GET'?route.continue():route.abort();
-  if(p==='/v1/auth/refresh')return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'未登入'}:{access_token:'isolated',user}});
-  if(method==='GET'){state.reads.push(p);state.readUrls.push(url.toString());if(state.readFail?.path===p)return route.fulfill({status:state.readFail.status,json:{detail:'隔離權限失效'}});}
+  if(p==='/v1/auth/refresh'){state.refreshes+=1;return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'未登入'}:{access_token:'isolated',user}});}
+  if(method==='GET'){state.reads.push(p);state.readUrls.push(url.toString());if(['/v1/activity-registrations','/v1/activity-charges'].includes(p)&&!request.headers()['authorization'])state.anonymousPrivateReads.push(p);if(state.readFail?.path===p){const failure=state.readFail;if(failure.once)state.readFail=null;return route.fulfill({status:failure.status,json:{detail:'隔離權限失效'}});}}
   if(p==='/v1/platform')return route.fulfill({json:{orders_open:true}});
   if(p==='/v1/members/me')return route.fulfill({json:{membership_type:user.membership_type,membership:member?{status:'active'}:null}});
   if(p==='/v1/activities'&&method==='GET')return route.fulfill({json:[state.activity]});
@@ -58,7 +58,7 @@ async function fixture(t,{path='/activities',role='customer',width=1280,member=f
  });
  const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',error=>state.errors.push(error.message));await page.clock.install({time:new Date('2030-01-02T10:00:00+08:00')});
  const visit=async()=>{await page.goto(`${base}${path}`);if(path==='/admin/social'&&role==='admin')await page.getByLabel('審核範圍').selectOption('all');if(path==='/admin/finance'&&role==='admin')await page.getByRole('tab',{name:'活動收款',exact:true}).click();};
- return {page,state,visit};
+ return {page,state,visit,user};
 }
 async function clean(page,state){assert.deepEqual(state.unknown,[]);assert.deepEqual(state.errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);}
 async function screenshot(page,name){if(process.env.BROWSER_ARTIFACT_DIR){await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:`${process.env.BROWSER_ARTIFACT_DIR}/${name}.png`,fullPage:true});}}
@@ -72,6 +72,32 @@ for(const width of [390,1280])test(`付款返回查證已付及本人歷史 ${wi
 test('網址宣稱paid不採信，仍顯示資料庫待付款',async t=>{const{page,state,visit}=await fixture(t,{path:'/activities/registrations?activity_charge_id=charge&payment=paid',reg:registration});await visit();await page.getByRole('region',{name:'活動付款結果'}).getByText('待付款',{exact:true}).waitFor();assert.equal(state.writes.length,0);await clean(page,state);});
 test('晚到舊應收與取消活動仍可查閱，不顯示重新付款',async t=>{const old={...charge,payment_status:'late_paid_refund_required',available_actions:[],refund_requests:[refund]};const{page,state,visit}=await fixture(t,{path:'/activities/registrations',reg:{...registration,status:'cancelled',charge:null,available_actions:[]},charges:[old]});await visit();await page.getByText('歷次繳款紀錄（1 筆）').click();await page.getByText('晚到款待退款審核',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:/前往付款/}).count(),0);assert.equal(state.writes.length,0);await clean(page,state);});
 for(const status of [401,403])test(`本人歷史失權${status}不顯示快取姓名或金額`,async t=>{const{page,state,visit}=await fixture(t,{path:'/activities/registrations',reg:registration});await visit();await page.getByRole('heading',{name:activity.title}).waitFor();state.readFail={path:'/v1/activity-registrations',status};await page.clock.runFor(30100);if(status===401)await page.getByRole('button',{name:'登入查看活動報名',exact:true}).waitFor();else await page.getByText('活動報名權限已失效').waitFor();assert.equal(await page.getByText('ACT-001',{exact:true}).count(),0);assert.equal(await page.getByRole('heading',{name:activity.title,exact:true}).count(),0);const privateReads=()=>state.reads.filter(path=>['/v1/activity-registrations','/v1/activity-charges'].includes(path)).length;const reads=privateReads();await page.clock.runFor(60100);assert.equal(privateReads(),reads);await clean(page,state);});
+
+test('本人401失權後舊workspace不得以匿名私人GET重新續期',async t=>{
+ const{page,state,visit}=await fixture(t,{path:'/activities/registrations',reg:registration});
+ t.after(()=>assert.deepEqual(state.anonymousPrivateReads,[]));
+ await visit();await page.getByRole('heading',{name:activity.title,exact:true}).waitFor();
+ state.readFail={path:'/v1/activity-registrations',status:401};await page.clock.runFor(30100);
+ await page.getByRole('button',{name:'登入查看活動報名',exact:true}).waitFor();
+ assert.equal(await page.getByText('ACT-001',{exact:true}).count(),0);
+ const privateReads=()=>state.reads.filter(path=>['/v1/activity-registrations','/v1/activity-charges'].includes(path)).length;
+ const reads=privateReads(),refreshes=state.refreshes;await page.clock.runFor(60100);
+ assert.equal(privateReads(),reads);assert.equal(state.refreshes,refreshes);
+ assert.deepEqual(state.anonymousPrivateReads,[]);assert.equal(state.writes.length,0);await clean(page,state);
+});
+for(const membershipChanged of [false,true])test(`活動私人查詢401可正常續期${membershipChanged?'並重建同帳號新會籍workspace':''}`,async t=>{
+ const{page,state,visit,user}=await fixture(t,{path:'/activities/registrations',reg:registration});
+ await visit();await page.getByRole('heading',{name:activity.title,exact:true}).waitFor();
+ const initialRefreshes=state.refreshes;
+ if(membershipChanged){user.membership_type='trainee';user.membership_status='active';}
+ state.readFail={path:'/v1/activity-registrations',status:401,once:true};
+ const restored=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/activity-registrations'&&response.status()===200);
+ await page.clock.runFor(30100);await restored;
+ await page.getByRole('heading',{name:activity.title,exact:true}).waitFor();
+ await page.getByRole('button',{name:'前往付款 $200',exact:true}).waitFor();
+ assert.ok(state.refreshes>initialRefreshes);assert.equal(await page.getByRole('button',{name:'登入查看活動報名',exact:true}).count(),0);
+ assert.deepEqual(state.anonymousPrivateReads,[]);assert.equal(state.writes.length,0);await clean(page,state);
+});
 for(const role of ['guest','customer'])test(`${role}不能取得後台活動資料`,async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role});await visit();await page.getByRole('heading',{name:'社務管理只向管理者開放。'}).waitFor();assert.equal(state.reads.some(path=>path.startsWith('/v1/admin/')),false);await clean(page,state);});
 test('管理員改收費版本409保留草稿，需重讀核對',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin'});await visit();await page.getByRole('button',{name:'收費設定'}).click();await page.getByLabel('非社員價格').fill('250');state.fail={path:'/v1/admin/activities/activity/payment-settings',status:409,patch:{updated_at:'2030-01-02T00:00:00Z',non_member_price:300}};await page.getByRole('button',{name:'儲存收費設定'}).click();await page.getByRole('button',{name:'重新讀取活動設定'}).waitFor();assert.equal(await page.getByLabel('非社員價格').inputValue(),'250');await page.getByRole('button',{name:'重新讀取活動設定'}).click();await page.getByLabel('已核對最新設定，保留目前輸入').check();await page.getByRole('button',{name:'儲存收費設定'}).click();await page.waitForFunction(()=>!document.querySelector('[aria-label="活動收費設定"]'));assert.equal(state.writes[1].body.expected_updated_at,'2030-01-02T00:00:00Z');assert.equal(state.activity.non_member_price,250);await clean(page,state);});
 for(const width of [390,1280])test(`取消整場先顯示人數總額並明確核准 ${width}`,async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width,reg:{...registration,status:'registered'}});await visit();await page.getByRole('button',{name:'取消活動',exact:true}).click();await page.getByText('核准整筆退款 1 筆 · 合計 $200').waitFor();const confirm=page.getByRole('button',{name:'確認取消及退款'});assert.equal(await confirm.isDisabled(),true);await page.getByLabel('取消活動原因').fill('場地取消');await page.getByLabel('確認取消活動並核准以上退款').check();await screenshot(page,`activity-cancel-${width}`);await confirm.click();await page.getByText('已取消',{exact:true}).waitFor();assert.equal(state.writes.length,2);await clean(page,state);});

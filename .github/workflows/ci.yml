@@ -188,20 +188,77 @@ jobs:
           curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:4192/ > /dev/null
           kill -0 "$smoke_preview_pid"
           browser_tests=(
+            tests/browser/checkout-handoff.mjs
             tests/browser/checkout-recovery.mjs
             tests/browser/order-history.mjs
             tests/browser/payment-return-truth.mjs
             tests/browser/reconciliation-status.mjs
             tests/browser/admin-issues-access.mjs
+            tests/browser/membership-document-placeholders.mjs
+            tests/browser/kitchen-access.mjs
+            tests/browser/cloud-print-flow.mjs
           )
           if [[ "$BROWSER_ENGINE" == chromium ]]; then
             browser_tests+=(tests/browser/session-consistency.mjs tests/browser/line-customer-checkout.mjs)
           fi
           node --test --test-concurrency=1 --test-timeout=45000 "${browser_tests[@]}" 2>&1 | tee browser-evidence/smoke.log
+          supplemental_tests=(tests/browser/payment-return.mjs tests/browser/meal-order-flow.mjs)
+          if [[ "$BROWSER_ENGINE" == chromium ]]; then
+            supplemental_tests+=(tests/browser/activity-payments.mjs)
+          fi
+          node --test --test-concurrency=1 --test-timeout=120000 "${supplemental_tests[@]}" 2>&1 | tee browser-evidence/supplemental.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: browser-smoke-evidence-${{ matrix.browser }}
           path: browser-evidence/
+          if-no-files-found: error
+          retention-days: 7
+
+  webkit-failure-diagnostic:
+    needs: browser-smoke
+    if: ${{ !cancelled() && needs.browser-smoke.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      VITE_API_BASE_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: backend/.python-version
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Verify diagnostic controls
+        run: python -B -m unittest discover -s scripts/ci/tests -p 'test_run_wk01_native.py'
+      - name: Install locked frontend and WebKit
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps webkit
+      - name: Build isolated frontend
+        run: pnpm build
+      - name: Diagnose one original WebKit case
+        timeout-minutes: 2
+        run: python -B scripts/ci/run_wk01_native.py --evidence-dir browser-evidence/wk01-native
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webkit-failure-diagnostic
+          path: |
+            browser-evidence/wk01-native/summary.json
+            browser-evidence/wk01-native/timeline.json
+            browser-evidence/wk01-native/manifest.json
           if-no-files-found: error
           retention-days: 7

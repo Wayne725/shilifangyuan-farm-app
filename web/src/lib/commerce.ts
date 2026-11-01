@@ -251,10 +251,11 @@ export async function createMembershipPayment(chargeId: string): Promise<string>
 
 export async function refreshPaymentAttempt(
   attemptId: string,
+  signal?: AbortSignal,
 ): Promise<PaymentAttemptStatus> {
   return apiFetch<PaymentAttemptStatus>(
     `/v1/payment-attempts/${attemptId}/refresh`,
-    { method: "POST" },
+    { method: "POST", ...(signal ? { signal } : {}) },
   );
 }
 

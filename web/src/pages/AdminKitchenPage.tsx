@@ -8,7 +8,7 @@ import { AdminNav } from "../components/AdminNav";
 import { CloudPrintPanel } from "../components/CloudPrintPanel";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch } from "../lib/api";
+import { useAdminPanelAccess } from "../lib/admin-panel-access";
 import { financeDateTime, taipeiDate } from "../lib/meal-finance";
 import { shiftMealDate } from "../lib/meal-time";
 import type { KitchenList, KitchenOrder } from "../lib/meal-kitchen";
@@ -16,9 +16,11 @@ import "./AdminKitchenPage.css";
 
 const kitchenStates = { pending_confirmation: "待製作", preparing: "製作中", ready_for_pickup: "待取餐" };
 const pageSize = 50;
+const privateQueryKeys = [["meal-kitchen"], ["meal-kitchen-ticket"], ["admin-platform"], ["cloud-printer"], ["print-jobs"], ["print-job"]];
 
 export function AdminKitchenPage() {
   const { user, openLogin } = useAuth();
+  const access = useAdminPanelAccess(privateQueryKeys);
   const isAdmin = user?.user_role === "admin";
   const [serviceDate, setServiceDate] = useState(taipeiDate());
   const [mealPeriod, setMealPeriod] = useState("all");
@@ -34,32 +36,35 @@ export function AdminKitchenPage() {
   const audio = useRef<AudioContext | null>(null);
   const observed = useRef<{key: string; ids: Set<string>} | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
-  const soundSettings = useQuery({queryKey: ["admin-platform"], queryFn: () => apiFetch<{kitchen_sound: boolean}>("/v1/admin/platform"), enabled: isAdmin});
+  const retryRead = (count: number) => !access.isDenied() && count < 1;
+  const soundSettings = useQuery({queryKey: ["admin-platform"], queryFn: ({ signal }) => access.request<{kitchen_sound: boolean}>("/v1/admin/platform", { signal }), enabled: isAdmin && !access.denied, retry: retryRead});
   const parameters = new URLSearchParams({ service_date: serviceDate, meal_period: mealPeriod, search, fulfillment_status: fulfillmentStatus, offset: String(offset), limit: String(pageSize) });
-  const list = useQuery({ queryKey: ["meal-kitchen", serviceDate, mealPeriod, search, fulfillmentStatus, offset], queryFn: () => apiFetch<KitchenList>(`/v1/admin/meal-kitchen?${parameters}`), enabled: isAdmin && Boolean(serviceDate), refetchInterval: 15_000 });
+  const list = useQuery({ queryKey: ["meal-kitchen", serviceDate, mealPeriod, search, fulfillmentStatus, offset], queryFn: ({ signal }) => access.request<KitchenList>(`/v1/admin/meal-kitchen?${parameters}`, { signal }), enabled: isAdmin && !access.denied && Boolean(serviceDate), refetchInterval: access.denied ? false : 15_000, retry: retryRead });
   const update = useMutation({
-    mutationFn: ({ orderId, status }: { orderId: string; status: string }) => apiFetch<KitchenOrder>(`/v1/admin/meal-kitchen/orders/${orderId}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
-    onSuccess: () => Promise.all(["meal-kitchen", "meal-kitchen-ticket", "admin-meal-orders", "admin-meal-operations-summary", "admin-orders", "meal-orders"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))),
-    onError: () => void queryClient.invalidateQueries({ queryKey: ["meal-kitchen"] }),
+    mutationFn: ({ orderId, status }: { orderId: string; status: string }) => access.request<KitchenOrder>(`/v1/admin/meal-kitchen/orders/${orderId}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+    retry: false,
+    onSuccess: () => { if (!access.isDenied()) return Promise.all(["meal-kitchen", "meal-kitchen-ticket", "admin-meal-orders", "admin-meal-operations-summary", "admin-orders", "meal-orders"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))); },
+    onError: () => { if (!access.isDenied()) void queryClient.invalidateQueries({ queryKey: ["meal-kitchen"] }); },
   });
-  const ticket = useQuery({ queryKey: ["meal-kitchen-ticket", previewId], queryFn: () => apiFetch<KitchenOrder>(`/v1/admin/meal-kitchen/orders/${previewId}/ticket`), enabled: isAdmin && previewId !== null, refetchInterval: 15_000 });
+  const ticket = useQuery({ queryKey: ["meal-kitchen-ticket", previewId], queryFn: ({ signal }) => access.request<KitchenOrder>(`/v1/admin/meal-kitchen/orders/${previewId}/ticket`, { signal }), enabled: isAdmin && !access.denied && previewId !== null, refetchInterval: access.denied ? false : 15_000, retry: retryRead });
   const previewOrder = printSnapshot?.id === previewId ? printSnapshot : ticket.data;
   const print = useMutation({
-    mutationFn: (id: string) => apiFetch<KitchenOrder>(`/v1/admin/meal-kitchen/orders/${id}/ticket`),
-    onSuccess: (fresh) => { queryClient.setQueryData(["meal-kitchen-ticket", fresh.id], fresh); setPrintSnapshot(fresh); },
+    mutationFn: (id: string) => access.request<KitchenOrder>(`/v1/admin/meal-kitchen/orders/${id}/ticket`),
+    retry: false,
+    onSuccess: (fresh) => { if (!access.isDenied()) { queryClient.setQueryData(["meal-kitchen-ticket", fresh.id], fresh); setPrintSnapshot(fresh); } },
   });
   useEffect(() => {
-    if (printSnapshot && printSnapshot.id === previewId) {
+    if (!access.isDenied() && printSnapshot && printSnapshot.id === previewId) {
       window.print();
       setPrintRequested(true);
       setPrintSnapshot(null);
     }
-  }, [previewId, printSnapshot]);
+  }, [previewId, printSnapshot, access.isDenied]);
   useEffect(() => {
     if (list.data && offset > 0 && offset >= list.data.total) setOffset(Math.max(0, Math.floor((list.data.total - 1) / pageSize) * pageSize));
   }, [offset, list.data]);
   useEffect(() => {
-    if (!list.data) return;
+    if (access.isDenied() || !list.data) return;
     const key = `${serviceDate}:${mealPeriod}:${search}:${fulfillmentStatus}:${offset}`;
     const ids = new Set(list.data.items.map(order => order.id));
     if (soundEnabled && soundSettings.data?.kitchen_sound && audio.current?.state === "running" && observed.current?.key === key && [...ids].some(id => !observed.current?.ids.has(id))) {
@@ -68,22 +73,30 @@ export function AdminKitchenPage() {
       tone.start(); tone.stop(audio.current.currentTime + .3);
     }
     observed.current = {key, ids};
-  }, [list.data, serviceDate, mealPeriod, search, fulfillmentStatus, offset, soundEnabled, soundSettings.data]);
+  }, [list.data, serviceDate, mealPeriod, search, fulfillmentStatus, offset, soundEnabled, soundSettings.data, access.isDenied]);
+  useEffect(() => {
+    if (!access.denied) return;
+    setPreviewId(null); setPrintSnapshot(null); setPrintRequested(false); setSoundEnabled(false);
+    observed.current = null;
+    void audio.current?.close(); audio.current = null;
+  }, [access.denied]);
   useEffect(() => () => { void audio.current?.close(); }, []);
   async function enableSound() {
+    if (access.isDenied()) return;
     audio.current ||= new AudioContext();
     await audio.current.resume();
-    setSoundEnabled(audio.current.state === "running");
+    if (!access.isDenied()) setSoundEnabled(audio.current.state === "running");
   }
   const choosePreview = (order: KitchenOrder) => { setPreviewId(order.id); setReprint(false); setPrintRequested(false); setPrintSnapshot(null); print.reset(); };
   const closePreview = () => { setPreviewId(null); setPrintRequested(false); setPrintSnapshot(null); print.reset(); };
 
   if (!isAdmin) return <section className="admin-gate"><div className="admin-gate-mark"><Buildings size={38} weight="light" /></div><h1>廚房清單只向管理員開放。</h1>{!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理員登入</button> : <Link className="button button-quiet" to="/">返回首頁</Link>}</section>;
+  if (access.denied) return <section className="admin-gate"><h1>備餐與出單</h1><p role="alert">管理權限已失效或已變更，請重新驗證後再操作。</p><button className="button button-system" type="button" onClick={() => window.location.reload()}>重新驗證管理權限</button></section>;
 
   return <section className="admin-module-page meal-kitchen-page">
     <header className="workspace-heading"><div><p className="eyebrow">KITCHEN / 廚房</p><h1>備餐與出單</h1></div></header>
     <AdminNav />
-    <CloudPrintPanel />
+    <CloudPrintPanel access={access} />
     <form className="meal-kitchen-search" aria-label="備餐訂單查詢" onSubmit={event => {event.preventDefault(); setSearch(searchDraft.trim()); setOffset(0); closePreview();}}>
       <label className="field"><span>查詢便當訂單</span><input type="search" maxLength={100} placeholder="訂單編號、姓名、餐點、取餐地點" value={searchDraft} onChange={event => setSearchDraft(event.target.value)} /></label>
       <label className="field"><span>備餐狀態</span><select aria-label="備餐狀態" value={fulfillmentStatus} onChange={event => {setFulfillmentStatus(event.target.value); setOffset(0); closePreview();}}><option value="all">全部備餐狀態</option>{Object.entries(kitchenStates).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>

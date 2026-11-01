@@ -12,7 +12,9 @@ from ..database import get_session
 from ..integrations.feie import FeieClient, FeieError, configuration_read, configured_region, validate_live_config
 from ..models import AdminAudit, Order, OrderItem, PrintJob, User
 from ..printer_worker import wake_printer
-from ..printing import format_receipt, job_matches_printer, job_read, job_region, payment_snapshot, printer_fingerprint
+from ..printing import (format_receipt, fresh_receipt_snapshot, job_matches_printer, job_read, job_region,
+                        open_receipt_content, payment_snapshot_from_session, printer_fingerprint, receipt_preview,
+                        render_receipt_snapshot)
 
 printers_router = APIRouter(prefix="/v1/admin/printers", tags=["printers"])
 
@@ -64,10 +66,17 @@ async def print_job(job_id: str, _admin: User = Depends(require_admin), session:
     if job is None:
         raise HTTPException(404, "找不到列印工作")
     try:
-        preview = job.content or format_receipt({**job.snapshot, "reprint": bool(job.reprint_of_id), "dry_run": job.mode == "dry_run"}, width=settings.printer_line_width)
-    except FeieError:
+        if job.content is not None:
+            preview = open_receipt_content(job.content, job.order_id, settings)
+        else:
+            snapshot = render_receipt_snapshot(job.snapshot, job.order_id, settings)
+            preview = format_receipt({**snapshot, "reprint": bool(job.reprint_of_id), "dry_run": job.mode == "dry_run"}, width=settings.printer_line_width)
+    except FeieError as exc:
+        if exc.code != "receipt_too_long":
+            return {**job_read(job, settings), "preview": "加密收據或聯絡資料無法解密，請確認資料金鑰後再處理。",
+                    "preview_error": exc.code}
         preview = "內容超出單張 5000 bytes 上限，請依訂單人工處理。"
-    return {**job_read(job, settings), "preview": preview.replace("<BR>", "\n")}
+    return {**job_read(job, settings), "preview": receipt_preview(preview)}
 
 
 class ReprintRequest(BaseModel):
@@ -132,7 +141,8 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
     if source.kind in {"order", "amendment"} and source.snapshot.get("revision", 1) != order.revision:
         raise HTTPException(409, "訂單已更新，請選擇最新版出單工作補印")
     mode = "dry_run" if settings.printer_dry_run else "live"
-    snapshot = {**source.snapshot, "printer_region": region, **payment_snapshot(order)}
+    snapshot = {**await fresh_receipt_snapshot(session, source.snapshot, order), "printer_region": region,
+                **await payment_snapshot_from_session(session, order)}
     job = PrintJob(order_id=order_id, event_key=event_key, reprint_of_id=source.id, kind=source.kind,
         mode=mode, printer_fingerprint=printer_fingerprint(settings), snapshot=snapshot)
     session.add(job)

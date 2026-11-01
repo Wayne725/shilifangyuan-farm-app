@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 
 import * as Tabs from "@radix-ui/react-tabs";
 import { MealOrderHistory } from "../components/MealOrderHistory";
+import { OrderHandoffBoundary } from "../components/OrderHandoffBoundary";
 import { OrderSearch } from "../components/OrderSearch";
 import { useOrderHistory } from "../lib/use-order-history";
 import { attemptMatchesReturnedOrder, holdReturnedOrderActions, resolveOrderReturn } from "../lib/order-return-result";
@@ -54,6 +55,10 @@ const shipmentLabels: Record<string, string> = {
 };
 
 export function OrdersPage() {
+  return <OrderHandoffBoundary><OrderWorkspace /></OrderHandoffBoundary>;
+}
+
+function OrderWorkspace() {
   const { user, isAuthReady, openLogin } = useAuth();
   const search = useSearch({ from: "/orders" });
   const navigate = useNavigate();
@@ -66,7 +71,7 @@ export function OrdersPage() {
   const orders = useOrderHistory<Order>("general", user?.id, query, payment, selectedId, search.order_id, orderType === "regular");
   const paymentConfirmation = useQuery({
     queryKey: ["payment-attempt-refresh", search.attempt_id],
-    queryFn: () => refreshPaymentAttempt(search.attempt_id || ""),
+    queryFn: ({ signal }) => refreshPaymentAttempt(search.attempt_id || "", signal),
     enabled: Boolean(
       user && search.order_id && search.payment === "confirming" && search.attempt_id,
     ),
@@ -108,9 +113,9 @@ export function OrdersPage() {
   const returnedOrder = orders.returnedOrder;
   const returnedMeal = useQuery({
     queryKey: ["returned-meal-order", user?.id, search.order_id],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
-        return await apiFetch<MealOrder>(`/v1/meal-orders/${search.order_id}`);
+        return await apiFetch<MealOrder>(`/v1/meal-orders/${search.order_id}`, { signal });
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) return null;
         throw error;

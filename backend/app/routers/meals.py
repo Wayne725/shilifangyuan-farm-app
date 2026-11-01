@@ -944,7 +944,7 @@ async def create_meal_order(
             await reserve_cash_order(session, order)
         except PaymentApplicationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-    enqueue_order_print(session, order, user, settings)
+    await enqueue_order_print(session, order, user, settings)
     await session.commit()
     wake_printer()
     stored_order = await session.scalar(

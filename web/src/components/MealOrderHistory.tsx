@@ -29,7 +29,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
   const credentialAvailable = Boolean(selected?.payment_status === "paid" && !selected.cancelled_at && selected.pickup_code && !["picked_up", "no_show", "cancelled"].includes(selected.fulfillment_status));
   const credentialQuery = useQuery({
     queryKey: ["meal-pickup-credential", user?.id, selected?.id, selected?.payment_status, selected?.fulfillment_status],
-    queryFn: () => apiFetch<MealPickupCredential>(`/v1/meal-orders/${selected?.id}/pickup-credential`),
+    queryFn: ({ signal }) => apiFetch<MealPickupCredential>(`/v1/meal-orders/${selected?.id}/pickup-credential`, { signal }),
     enabled: Boolean(selected?.id && credentialAvailable),
     refetchInterval: credentialAvailable ? 5000 : false,
     retry: false,

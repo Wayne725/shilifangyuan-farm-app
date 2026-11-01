@@ -173,6 +173,9 @@ def run_child(arguments, directory):
 
     # Keep this descriptor alive through Python's thread shutdown and atexit.
     stacks = (directory / "tracebacks.log").open("w")
+    # faulthandler restores this disposition during teardown; a late dump must be harmless.
+    faulthandler.unregister(signal.SIGUSR1)
+    signal.signal(signal.SIGUSR1, signal.SIG_IGN)
     faulthandler.register(signal.SIGUSR1, file=stacks, all_threads=True, chain=False)
     def at_exit():
         try:

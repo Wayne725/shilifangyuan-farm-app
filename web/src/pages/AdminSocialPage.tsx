@@ -287,7 +287,11 @@ function MembershipReviewCard({ application, approvalBlockedReason, onDone }: { 
     return apiFetch(`/v1/admin/membership-applications/${application.id}/${decision}`, { method: "POST", body: JSON.stringify({ reason: reason || null }) });
   }, onSuccess: onDone });
   const openDocument = useMutation({
-    mutationFn: (documentId: string) => apiFetch<{ download_url: string }>(`/v1/admin/membership-applications/${application.id}/documents/${documentId}/download-url`),
+    mutationFn: (documentId: string) => {
+      const document = application.documents.find(item => item.id === documentId);
+      if (document?.is_demo_placeholder === true) throw new Error(documentRetentionLabel(document));
+      return apiFetch<{ download_url: string }>(`/v1/admin/membership-applications/${application.id}/documents/${documentId}/download-url`);
+    },
     onSuccess: ({ download_url }) => window.open(download_url, "_blank", "noopener,noreferrer"),
   });
   const reviewable = ["submitted", "needs_supplement"].includes(application.status);
