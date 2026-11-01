@@ -188,6 +188,7 @@ jobs:
           curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:4192/ > /dev/null
           kill -0 "$smoke_preview_pid"
           browser_tests=(
+            tests/browser/checkout-handoff.mjs
             tests/browser/checkout-recovery.mjs
             tests/browser/order-history.mjs
             tests/browser/payment-return-truth.mjs

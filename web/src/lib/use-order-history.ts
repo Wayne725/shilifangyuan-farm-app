@@ -19,7 +19,7 @@ export function useOrderHistory<T extends HistoryOrder>(kind: HistoryKind, userI
   const key = useMemo(() => [prefix, userId, "history", search, payment], [prefix, userId, search, payment]);
   const history = useInfiniteQuery({
     queryKey: key,
-    queryFn: ({ pageParam }) => apiFetch<T[]>(orderHistoryPath(kind, search, payment, pageParam)),
+    queryFn: ({ pageParam, signal }) => apiFetch<T[]>(orderHistoryPath(kind, search, payment, pageParam), { signal }),
     initialPageParam: null as HistoryCursor | null,
     getNextPageParam: (page: T[]) => nextHistoryCursor(page),
     enabled: Boolean(userId && active),
@@ -33,14 +33,14 @@ export function useOrderHistory<T extends HistoryOrder>(kind: HistoryKind, userI
   });
   const loaded = flattenHistoryPages(history.data?.pages || []);
   const returned = loaded.find(order => order.id === requestedId);
-  const readOrder = async (id: string) => {
-    try { return await apiFetch<T>(`/v1/${kind === "meal" ? "meal-orders" : "orders"}/${id}${kind === "general" ? "?own_only=true" : ""}`); }
+  const readOrder = async (id: string, signal: AbortSignal) => {
+    try { return await apiFetch<T>(`/v1/${kind === "meal" ? "meal-orders" : "orders"}/${id}${kind === "general" ? "?own_only=true" : ""}`, { signal }); }
     catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error; }
   };
   const canReadTarget = Boolean(userId && active && requestedId && history.data && !returned && !search && !payment);
   const target = useQuery({
     queryKey: [prefix, userId, "detail", requestedId],
-    queryFn: () => readOrder(requestedId!),
+    queryFn: ({ signal }) => readOrder(requestedId!, signal),
     enabled: canReadTarget,
     retry: retryHistory,
     refetchInterval: state => canReadTarget && requestedId === selectedId && state.state.data && orderNeedsRefresh(state.state.data) ? 5000 : false,
@@ -52,7 +52,7 @@ export function useOrderHistory<T extends HistoryOrder>(kind: HistoryKind, userI
   const multiPage = Boolean(history.data && (history.data.pages.length > 1 || history.data.pages[0]?.length > orderHistoryPageSize));
   const current = useQuery({
     queryKey: [prefix, userId, "detail", selected?.id],
-    queryFn: () => readOrder(selected!.id),
+    queryFn: ({ signal }) => readOrder(selected!.id, signal),
     enabled: Boolean(userId && active && multiPage && selected && selected.id !== (returned ? undefined : requestedId)),
     retry: retryHistory,
     staleTime: 0,
