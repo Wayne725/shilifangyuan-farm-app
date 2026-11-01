@@ -2,9 +2,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 import { ApiError, apiFetch } from "./api";
 
-const privateQueryKeys = [["admin-failed-jobs"], ["admin-reconciliation-status"]];
+const defaultPrivateQueryKeys = [["admin-failed-jobs"], ["admin-reconciliation-status"]];
 
-export function useAdminPanelAccess() {
+export function useAdminPanelAccess(privateQueryKeys: readonly (readonly unknown[])[] = defaultPrivateQueryKeys) {
   const client = useQueryClient();
   const deniedRef = useRef(false);
   const [denied, setDenied] = useState(false);
@@ -27,7 +27,7 @@ export function useAdminPanelAccess() {
       }
       throw error;
     }
-  }, [client]);
+  }, [client, privateQueryKeys]);
   return { denied, isDenied, request };
 }
 

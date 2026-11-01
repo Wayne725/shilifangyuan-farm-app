@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const { chromium, webkit } = createRequire(import.meta.url)('playwright');
+const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4193');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('Use isolated local fixtures only');
 const base = target.origin;
 const original = {id: 'job-1', order_id: 'order-1', order_number: 'SLF-PRINT-001', status: 'unknown', mode: 'live', kind: 'order', reprint_of_id: null, attempts: 1, can_query: true, last_error: 'transport_result_unknown', pickup_at: '2030-01-03 11:30', created_at: '2030-01-02T02:00:00Z'};
 
 async function fixture(t, width, dryRun = true, admin = true) {
-  const browser = await chromium.launch({headless: true, executablePath: process.env.BROWSER_EXECUTABLE});
+  const browser = await engine.launch({headless: true, ...(engine === chromium ? {executablePath: process.env.BROWSER_EXECUTABLE} : {})});
   t.after(() => browser.close());
   const context = await browser.newContext({viewport: {width, height: 900}, timezoneId: 'Asia/Taipei', serviceWorkers: 'block'});
   const state = {jobs: [structuredClone(original)], reads: [], writes: [], unknown: [], external: [], errors: [], reprintConflict: false};
@@ -136,25 +138,56 @@ test('列印與備餐各自查詢並清除，不執行出單或更改訂單', as
   assert.deepEqual(state.writes, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });
 
-for (const width of [390, 899, 1542]) {
-  test(`${width}px 列印與備餐下拉控制等高且桌面底部對齊`, async t => {
-    const {page} = await fixture(t, width);
+for (const width of [320, 390, 899, 1542]) {
+  test(`${width}px 列印搜尋與備餐控制同組對齊，設備工具獨立且可操作`, async t => {
+    const {page, state} = await fixture(t, width);
     await page.goto(`${base}/admin/kitchen`);
     await page.getByText('模擬模式', {exact: true}).waitFor();
     for (const large of [false, true]) {
-      await page.evaluate(value => { document.documentElement.dataset.textSize = value ? 'large' : 'standard'; }, large);
-      const select = await page.getByLabel('列印狀態', {exact: true}).boundingBox();
-      const button = await page.getByRole('button', {name: '查詢設備', exact: true}).boundingBox();
-      assert.ok(Math.abs(select.height - button.height) < 1, `高度 ${select.height}/${button.height}`);
-      if (width >= 1200) assert.ok(Math.abs(select.y + select.height - button.y - button.height) < 1, `下緣 ${select.y + select.height}/${button.y + button.height}`);
+      await page.locator('.reading-menu > summary').click();
+      await page.getByRole('group', {name: '文字大小'}).getByRole('button', {name: large ? '放大' : '標準', exact: true}).click();
+      await page.waitForFunction(value => document.documentElement.dataset.textSize === (value ? 'large' : 'standard'), large);
+      await page.evaluate(() => document.fonts.ready);
+      const form = page.getByRole('form', {name: '列印紀錄查詢', exact: true});
+      const tools = page.locator('.cloud-print-tools');
+      const search = await form.getByRole('searchbox').boundingBox();
+      const select = await form.getByLabel('列印狀態', {exact: true}).boundingBox();
+      const query = await form.getByRole('button', {name: '查詢', exact: true}).boundingBox();
+      const clear = await form.getByRole('button', {name: '清除', exact: true}).boundingBox();
+      const device = await tools.getByRole('button', {name: '查詢設備', exact: true}).boundingBox();
+      const help = await tools.getByRole('link', {name: '出單操作說明', exact: true}).boundingBox();
       const period = await page.getByRole('combobox', {name: '備餐時段', exact: true}).boundingBox();
       const date = await page.getByLabel('取餐日期', {exact: true}).boundingBox();
       const refresh = await page.getByRole('button', {name: '更新清單', exact: true}).boundingBox();
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+      if (process.env.CLOUD_PRINT_LAYOUT_EVIDENCE_DIR) {
+        const dir = process.env.CLOUD_PRINT_LAYOUT_EVIDENCE_DIR;
+        await mkdir(dir, {recursive: true});
+        const name = `${process.env.BROWSER_ENGINE || 'chromium'}-${width}-${large ? 'large' : 'standard'}`;
+        await writeFile(`${dir}/${name}.json`, JSON.stringify({width, large, search, select, query, clear, device, help, date, period, refresh, overflow}, null, 2));
+        await page.screenshot({path: `${dir}/${name}.png`, fullPage: true});
+      }
+      assert.ok(Math.abs(search.height - select.height) < 1, `搜尋／狀態高度 ${search.height}/${select.height}`);
+      assert.ok(Math.abs(query.height - clear.height) < 1, `查詢／清除高度 ${query.height}/${clear.height}`);
+      for (const [name, box] of Object.entries({search, select, query, clear, device, help})) assert.ok(box.height >= 48, `${name}操作高度 ${box.height}`);
+      assert.equal(await form.getByRole('button', {name: '查詢設備', exact: true}).count(), 0);
+      assert.ok(query.y >= Math.max(search.y + search.height, select.y + select.height), '查詢／清除位於查詢欄位之後');
+      assert.ok(device.y >= query.y + query.height && help.y >= query.y + query.height, '設備／說明與搜尋操作分組');
+      const overlapWidth = Math.min(device.x + device.width, help.x + help.width) - Math.max(device.x, help.x);
+      const overlapHeight = Math.min(device.y + device.height, help.y + help.height) - Math.max(device.y, help.y);
+      assert.ok(overlapWidth <= 0 || overlapHeight <= 0, '設備與說明操作不得重疊');
+      if (width <= 600) {
+        assert.ok(select.y >= search.y + search.height, '手機搜尋與狀態為單欄順序');
+        assert.ok(Math.abs(search.x - select.x) < 1 && Math.abs(search.width - select.width) < 1, '手機欄位同寬對齊');
+      } else {
+        assert.ok(Math.abs(search.y + search.height - select.y - select.height) < 1, '桌面搜尋與狀態底部對齊');
+      }
       assert.ok(Math.abs(period.height - date.height) < 1);
       assert.ok(Math.abs(period.height - refresh.height) < 1);
       if (width >= 1200) assert.ok(Math.abs(period.y + period.height - refresh.y - refresh.height) < 1);
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      assert.ok(overflow <= 1, `頁面水平溢出 ${overflow}`);
     }
+    assert.deepEqual(state.writes, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
   });
 }
 

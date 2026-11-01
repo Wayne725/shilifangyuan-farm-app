@@ -4,7 +4,7 @@
 .cloud-print-body { padding: 0 20px 20px; }
 .cloud-print-filters { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: end; margin: 16px 0; }
 .cloud-print-filters .field { min-width: 0; margin: 0; }
-.cloud-print-filters :is(input, select, .button) { min-height: 3.5rem; margin: 0; font-size: 1.125rem; line-height: 1.4; }
+.cloud-print-panel .cloud-print-filters :is(input, select, .button) { height: 3.5rem; min-height: 3.5rem; margin: 0; font-size: 1.125rem; line-height: 1.4; }
 .cloud-print-filters :is(input, select) { width: 100%; min-width: 0; }
 .cloud-print-filter-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 .cloud-print-filter-actions .button { padding-inline: 16px; }
