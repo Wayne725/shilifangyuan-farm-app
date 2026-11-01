@@ -26,6 +26,9 @@ async function fixture(t, width) {
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
   const state = { monitorReads: 0, jobReads: 0, refreshes: 0, monitorCode: 200, jobCode: 200, refreshCode: 200, retryCodes: [], monitorCodes: [], posts: [], errors: [], unknown: [], holdMonitor: false, holdJobs: false, holdRetry: false, pendingMonitor: [], pendingJobs: [], pendingRetry: [] };
+  let markMonitorHeld, markJobsHeld;
+  const monitorHeldIngress = new Promise(resolve => { markMonitorHeld = resolve; });
+  const jobsHeldIngress = new Promise(resolve => { markJobsHeld = resolve; });
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
@@ -45,7 +48,10 @@ async function fixture(t, width) {
       const monitor = path.endsWith('reconciliation-status');
       if (monitor) state.monitorReads += 1; else state.jobReads += 1;
       const code = monitor ? (state.monitorCodes.shift() ?? state.monitorCode) : state.jobCode;
-      if (monitor ? state.holdMonitor : state.holdJobs) await new Promise(resolve => (monitor ? state.pendingMonitor : state.pendingJobs).push(resolve));
+      if (monitor ? state.holdMonitor : state.holdJobs) await new Promise(resolve => {
+        (monitor ? state.pendingMonitor : state.pendingJobs).push(resolve);
+        (monitor ? markMonitorHeld : markJobsHeld)();
+      });
       try {
         return await route.fulfill(code === 200 ? { json: monitor ? status : jobs } : { status: code, json: { detail: code === 403 ? '管理權限已撤銷' : code === 401 ? '登入已失效' : '隔離暫時無法更新' } });
       } catch (error) {
@@ -89,7 +95,21 @@ async function fixture(t, width) {
     await page.clock.runFor(61000);
     assert.deepEqual([state.monitorReads, state.jobReads, state.posts.length], before, '撤權後不得繼續私有輪詢或重試');
   }
-  return { page, state, monitor, prepareRetry, assertPrivateHidden, assertPollingStopped };
+  async function releaseMonitorAndObserve(request) {
+    state.pendingMonitor.splice(0).forEach(resolve => resolve());
+    state.holdMonitor = false;
+    const response = await request.response();
+    if (response) {
+      assert.equal(response.status(), 200);
+      const error = await response.finished();
+      if (!error) return '舊 monitor GET 完成 200';
+      assert.match(String(error), /abort|cancel/i);
+      return '舊 monitor GET 收到 200 headers 後取消';
+    }
+    assert.match(request.failure()?.errorText || '', /abort|cancel/i);
+    return '舊 monitor GET 已取消，未收到 200 response';
+  }
+  return { page, state, monitor, monitorHeldIngress, jobsHeldIngress, releaseMonitorAndObserve, prepareRetry, assertPrivateHidden, assertPollingStopped };
 }
 
 for (const width of [390, 1440]) {
@@ -110,17 +130,69 @@ for (const width of [390, 1440]) {
     assert.equal(f.state.posts.length, 0);
   });
 
-  test(`${width}px confirmed403 failed-jobs GET不被晚到monitor200復活`, async t => {
+  test(`${width}px confirmed403 failed-jobs GET後取消或忽略既有monitor回應且不復活`, async t => {
     const f = await fixture(t, width);
-    f.state.holdMonitor = true;
-    await f.monitor.getByRole('button', { name: '更新結算狀態', exact: true }).click();
-    await f.page.waitForFunction(() => document.querySelector('.admin-reconciliation-status button')?.disabled);
+    f.state.holdJobs = true;
     f.state.jobCode = 403;
-    await f.page.clock.runFor(32500);
-    await f.page.getByRole('alert').first().waitFor();
+    const jobsRequestPromise = f.page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).pathname === '/v1/admin/failed-jobs');
+    await f.page.clock.runFor(31000);
+    const jobsRequest = await jobsRequestPromise;
+    await f.jobsHeldIngress;
+    assert.equal(f.state.pendingJobs.length, 1);
+    await f.page.waitForFunction(() => document.querySelector('.admin-reconciliation-status button')?.disabled === false);
+    f.state.holdMonitor = true;
+    const monitorRequestPromise = f.page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).pathname === '/v1/admin/reconciliation-status');
+    const monitorStartedAt = await f.page.evaluate(() => Date.now());
+    await f.monitor.getByRole('button', { name: '更新結算狀態', exact: true }).click();
+    const monitorRequest = await monitorRequestPromise;
+    await f.monitorHeldIngress;
+    assert.equal(f.state.pendingMonitor.length, 1);
+    const response403 = jobsRequest.response();
+    f.state.pendingJobs.splice(0).forEach(resolve => resolve());
+    f.state.holdJobs = false;
+    const denied = await response403;
+    assert.equal(denied?.status(), 403);
+    assert.equal(denied.url(), jobsRequest.url());
+    assert.equal(denied.request().method(), 'GET');
+    await f.page.getByRole('button', { name: '重新驗證管理權限', exact: true }).waitFor();
     await f.assertPrivateHidden();
-    f.state.pendingMonitor.splice(0).forEach(resolve => resolve());
-    f.state.holdMonitor = false;
+    assert.ok(await f.page.evaluate(() => Date.now()) - monitorStartedAt < 12000, '監控請求不得先跨過 HTTP timeout');
+    t.diagnostic(await f.releaseMonitorAndObserve(monitorRequest));
+    await f.page.clock.runFor(100);
+    await f.assertPrivateHidden();
+    await f.assertPollingStopped();
+  });
+
+  test(`${width}px 逾時提示不等於confirmed403，確認撤權前保留草稿`, async t => {
+    const f = await fixture(t, width);
+    await f.prepareRetry();
+    f.state.holdMonitor = true;
+    const monitorRequestPromise = f.page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).pathname === '/v1/admin/reconciliation-status');
+    await f.monitor.getByRole('button', { name: '更新結算狀態', exact: true }).click();
+    const monitorRequest = await monitorRequestPromise;
+    await f.monitorHeldIngress;
+    f.state.holdJobs = true;
+    f.state.jobCode = 403;
+    const jobsRequestPromise = f.page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).pathname === '/v1/admin/failed-jobs');
+    await f.page.clock.runFor(32500);
+    const jobsRequest = await jobsRequestPromise;
+    await f.jobsHeldIngress;
+    await f.page.getByRole('alert').getByText('後端服務回應逾時，可能正在重新啟動，請稍後重試。', { exact: true }).waitFor();
+    assert.equal(await f.page.getByRole('heading', { name: privateTitle, exact: true }).count(), 1);
+    assert.equal(await f.page.getByLabel('處理原因', { exact: true }).inputValue(), '已核對隔離供應商，保留草稿');
+    assert.equal(await f.page.getByLabel(riskLabel, { exact: true }).isChecked(), true);
+    assert.equal(await f.page.getByRole('button', { name: '重新驗證管理權限', exact: true }).count(), 0);
+    assert.equal(f.state.pendingJobs.length, 1);
+    const response403 = jobsRequest.response();
+    f.state.pendingJobs.splice(0).forEach(resolve => resolve());
+    f.state.holdJobs = false;
+    const denied = await response403;
+    assert.equal(denied?.status(), 403);
+    assert.equal(denied.url(), jobsRequest.url());
+    assert.equal(denied.request().method(), 'GET');
+    await f.page.getByRole('button', { name: '重新驗證管理權限', exact: true }).waitFor();
+    await f.assertPrivateHidden();
+    t.diagnostic(await f.releaseMonitorAndObserve(monitorRequest));
     await f.page.clock.runFor(100);
     await f.assertPrivateHidden();
     await f.assertPollingStopped();
