@@ -11,6 +11,14 @@ const root = resolve(process.env.BROWSER_DIST_ROOT || resolve(import.meta.dirnam
 const product = { id: 'recovery-product', name: '回復測試白米', unit: '包', member_price: 100, nonmember_price: 100, stock_quantity: 50, is_active: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'tax_exempt' };
 const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
 
+async function stopPendingChromiumNavigation(page) {
+  if (engine !== chromium) return;
+  // Use the browser stop action before inspecting controls in the outgoing document.
+  const session = await page.context().newCDPSession(page);
+  try { await session.send('Page.stopLoading'); }
+  finally { await session.detach(); }
+}
+
 async function fixture(t, { payable = false, providerDelay = 1800, shipping = false } = {}) {
   const evidence = process.env.CHECKOUT_EVENT_EVIDENCE_DIR
     ? (await import('./checkout-event-evidence.mjs')).createCheckoutEventEvidence({ directory: process.env.CHECKOUT_EVENT_EVIDENCE_DIR, testName: t.name, engine: process.env.BROWSER_ENGINE || 'chromium' }) : null;
@@ -174,6 +182,7 @@ test('付款頁沒有完成導航時，可直接返回原單，不永久停止�
   const { page, state, pay, base, providerReady } = await fixture(t, { payable: true, providerDelay: 6000 });
   await pay().click({ noWaitAfter: true });
   await providerReady;
+  await stopPendingChromiumNavigation(page);
   const back = page.getByRole('link', { name: '返回訂單', exact: true });
   assert.equal(await back.getAttribute('href'), '/orders?order_id=recovery-1');
   assert.deepEqual(state.reads, []);
@@ -197,6 +206,7 @@ for (const shipping of [false, true]) {
     await page.locator('.order-index').getByRole('button', { name: /SLF-RECOVERY-2/ }).click();
     await page.getByRole('button', { name: shipping ? '繼續選擇物流' : '前往線上付款', exact: true }).click({ noWaitAfter: true });
     await providerReady;
+    await stopPendingChromiumNavigation(page);
     const back = page.getByRole('link', { name: '返回訂單', exact: true });
     assert.equal(await back.getAttribute('href'), '/orders?order_id=recovery-2');
     assert.equal(await back.isVisible(), true);
