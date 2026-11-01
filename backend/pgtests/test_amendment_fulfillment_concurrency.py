@@ -89,7 +89,7 @@ async def test_print_claim_and_quantity_change_preserve_latest_receipt(postgres_
     async with postgres_sessions() as session:
         order = await session.scalar(select(Order).where(Order.id == order_id).options(
             selectinload(Order.items).selectinload(OrderItem.selected_options), selectinload(Order.fulfillment)))
-        job = enqueue_order_print(session, order, buyer, settings)
+        job = await enqueue_order_print(session, order, buyer, settings)
         body = amendment_body(order.items[0].id, quantity=2, total=200)
         await session.commit()
         original_id = job.id
