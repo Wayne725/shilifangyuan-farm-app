@@ -219,6 +219,20 @@ async def test_summary_stale_pending_page_is_not_sent(summary_print_context):
     assert fake.submissions == 0
 
 
+async def test_summary_changed_printer_fails_unsent_page_without_blocking_new_preview(summary_print_context):
+    c = summary_print_context
+    await paid_order(c)
+    await create_batch(c)
+    c.settings.printer_dry_run = False
+    fake = FakeFeie()
+    assert await process_print_job(c.settings, factory=c.factory, client=fake)
+    job = (await jobs(c))[0]
+    assert job.status == "failed" and job.last_error == "printer_configuration_changed"
+    assert job.attempts == 0 and not fake.submissions
+    assert not await process_print_job(c.settings, factory=c.factory, client=fake,
+        now=datetime.now(timezone.utc) + timedelta(hours=1))
+
+
 async def test_summary_that_grows_beyond_source_limit_fails_instead_of_blocking_queue(summary_print_context, monkeypatch):
     c = summary_print_context
     await paid_order(c)

@@ -73,6 +73,8 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
             return True
         mode = "dry_run" if settings.printer_dry_run else "live"
         if not job_matches_printer(job, settings):
+            if job.kind == "summary" and job.status == "pending":
+                job.status = "failed"
             job.last_error = "printer_configuration_changed"
             job.next_attempt_at = now + timedelta(seconds=60)
             await session.commit()

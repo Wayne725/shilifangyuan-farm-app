@@ -16,6 +16,7 @@ const canStartAnother = (batch: Batch) => batch.pages.every((page) => !["pending
 const errorLabels: Record<string, string> = {
   summary_changed_before_send: "訂單資料已變更，這張未送印；請核對已印頁數後重新查詢。",
   admin_has_not_seen_paper: "管理員尚未收到紙本，結果待確認。",
+  printer_configuration_changed: "出單設備或模式已變更，請重新預覽後列印。",
 };
 
 function readAttempt(key: string): Attempt | null {
