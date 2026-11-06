@@ -38,7 +38,7 @@ export function LineConsentPage() {
     {loginEntry && <LineLoginButton intent="nonmember" rememberMe={search.remember_me !== false} returnTo={returnTo} consentLink={false} consentText="我已閱讀並同意十里方圓依上述用途使用及保存 LINE 登入資料。" />}
     <div className="line-consent-alternatives">
       <a className="text-link" href={loginUrl}>使用 Email 登入</a>
-      <Link className="text-link" to="/member-lookup" search={{ return_to: returnTo, remember_me: search.remember_me !== false }}>不確定是否是社員？</Link>
+      <Link className="text-link" to="/register" search={{ intent: "existing_member", return_to: returnTo, remember_me: search.remember_me !== false }}>不確定是否是社員？</Link>
     </div>
   </section>;
 }
