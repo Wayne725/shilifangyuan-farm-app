@@ -66,9 +66,9 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
     add("十里方圓 合作社", "C")
     add(titles.get(snapshot.get("kind", "order"), "便當訂餐單"), "CB")
     if snapshot.get("kind") == "reference":
-        add("＊＊ 請勿製作 ＊＊", "CB")
+        add("請勿製作", "CB")
     if snapshot.get("manual"):
-        add("＊＊ 管理員補印 ＊＊", "CB")
+        add("管理員補印", "CB")
     if snapshot.get("revision"):
         add(f"訂單版本：{snapshot['revision']}")
     if snapshot.get("kind") == "amendment":
