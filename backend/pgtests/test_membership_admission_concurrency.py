@@ -14,6 +14,7 @@ from app.routers.membership_admission import membership_admission_router
 from app.routers.admin_users import admin_users_router
 from pgtests.test_transaction_concurrency import postgres_sessions
 from tests.support import api_test_context, auth_headers
+from tests.test_admin_users import roster
 from tests.test_membership_admission import (
     ADMIN_URL, URL, admission_settings, profile_body, quiz_body, ready, submitted,
 )
@@ -129,11 +130,15 @@ async def test_review_competition_does_not_duplicate_or_activate(admission_pg, c
 @pytest.mark.asyncio
 async def test_new_admission_and_legacy_offline_grant_cannot_both_succeed(admission_pg):
     factory, headers = admission_pg
+    async with factory() as session:
+        entry = roster("ISOLATED-PG-001", settings=admission_settings())
+        session.add(entry)
+        await session.commit()
     results = await race(
         call(factory, "POST", f"{URL}/rounds", headers["owner_headers"], {"idempotency_key": str(uuid4())}),
         call(factory, "POST", f"/v1/admin/users/{headers['owner_id']}/offline-membership", headers["admin_headers"], {
             "confirmed_offline": True, "confirmed_on": datetime.now(timezone.utc).date().isoformat(),
-            "reason": "隔離測試既有線下資料與新版申請互斥", "member_number": "ISOLATED-PG-001",
+            "reason": "隔離測試既有線下資料與新版申請互斥", "phone": "0912345678", "roster_entry_id": entry.id,
         }),
     )
     assert sorted(response.status_code for response in results) == [200, 409], [response.text for response in results]

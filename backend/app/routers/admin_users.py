@@ -2,20 +2,20 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..admin_membership_phone import MembershipPhoneCheck, verify_offline_roster_phone
 from ..auth import membership_type_for_user, require_admin
+from ..config import Settings, get_settings
 from ..database import get_session
-from ..identity_numbers import next_identity_number
 from ..meal_schedules import TAIPEI
-from ..member_claims import normalize_member_number
-from ..membership_admission_guards import require_legacy_admission_allowed
+from ..membership_admission_guards import LEGACY_ADMISSION_BLOCKED, has_admission_round, require_legacy_admission_allowed
 from ..models import (
-    AdminAudit, MemberRosterEntry, Membership, MembershipApplication,
+    AdminAudit, Membership, MembershipApplication,
     MembershipApplicationStatus, MembershipCharge, MembershipChargeStatus,
     MembershipStatus, MembershipType, PaymentAttempt, PaymentStatus, User,
 )
@@ -24,11 +24,11 @@ from ..models import (
 admin_users_router = APIRouter(prefix="/v1/admin/users", tags=["admin-users"])
 
 
-class OfflineMembershipConfirmation(BaseModel):
+class OfflineMembershipConfirmation(MembershipPhoneCheck):
     confirmed_offline: bool
     confirmed_on: date
     reason: str = Field(min_length=2, max_length=1000)
-    member_number: str | None = Field(default=None, max_length=32)
+    roster_entry_id: str = Field(min_length=1, max_length=36)
 
     @field_validator("reason")
     @classmethod
@@ -37,11 +37,6 @@ class OfflineMembershipConfirmation(BaseModel):
         if len(value) < 2:
             raise ValueError("請填寫線下核對說明")
         return value
-
-    @field_validator("member_number", mode="before")
-    @classmethod
-    def normalized_number(cls, value):
-        return normalize_member_number(value) if isinstance(value, str) else value
 
 
 def _user_item(user: User) -> dict:
@@ -81,12 +76,40 @@ async def list_registered_users(
     return {"items": [_user_item(user) for user in users], "total": total or 0, "limit": limit, "offset": offset}
 
 
+@admin_users_router.post("/{user_id}/membership-phone-check")
+async def check_membership_phone(
+    user_id: str,
+    body: MembershipPhoneCheck,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="找不到使用者")
+    if not user.is_active:
+        raise HTTPException(status_code=409, detail="停用帳號不能授予會籍")
+    if await has_admission_round(session, user_id):
+        raise HTTPException(status_code=409, detail=LEGACY_ADMISSION_BLOCKED)
+    membership = await session.scalar(select(Membership).where(Membership.user_id == user_id))
+    if membership and membership.status in {MembershipStatus.RESIGNED, MembershipStatus.TERMINATED}:
+        raise HTTPException(status_code=409, detail="已退出／終止會籍需先核對歷史股金與退還紀錄，不能直接重新入社")
+    entry, legal_name = await verify_offline_roster_phone(
+        session, settings, user_id=user_id, phone=body.phone,
+        current_number=membership.member_number if membership else None,
+        now=datetime.now(timezone.utc),
+    )
+    return {"roster_entry_id": entry.id, "member_number": entry.member_number,
+            "legal_name": legal_name, "phone_masked": f"{'*' * (len(body.phone) - 4)}{body.phone[-4:]}"}
+
+
 @admin_users_router.post("/{user_id}/offline-membership")
 async def confirm_offline_membership(
     user_id: str,
     body: OfflineMembershipConfirmation,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     now = datetime.now(timezone.utc)
     if not body.confirmed_offline or body.confirmed_on > now.astimezone(TAIPEI).date():
@@ -97,23 +120,16 @@ async def confirm_offline_membership(
     if not user.is_active:
         raise HTTPException(status_code=409, detail="停用帳號不能授予會籍")
     await require_legacy_admission_allowed(session, user_id)
-    requested_number = body.member_number or None
     charge_ids = list(await session.scalars(select(MembershipCharge.id).where(MembershipCharge.user_id == user_id)))
     attempts = list(await session.scalars(select(PaymentAttempt).where(PaymentAttempt.membership_charge_id.in_(charge_ids)).order_by(PaymentAttempt.id).execution_options(populate_existing=True).with_for_update())) if charge_ids else []
     current_number = await session.scalar(select(Membership.member_number).where(Membership.user_id == user_id))
-    number = current_number or requested_number
-    roster_conditions = [MemberRosterEntry.claimed_user_id == user_id, MemberRosterEntry.pending_claim_user_id == user_id]
-    if number:
-        roster_conditions.append(MemberRosterEntry.member_number == number)
-    entries = list(await session.scalars(select(MemberRosterEntry).where(or_(*roster_conditions)).order_by(MemberRosterEntry.id).execution_options(populate_existing=True).with_for_update()))
-    if len(entries) > 1 or (entries and number and entries[0].member_number != number):
-        raise HTTPException(status_code=409, detail="此帳號已有其他社員名冊連結，請先核對並沿用原社員編號")
-    entry = entries[0] if entries else None
+    entry, _legal_name = await verify_offline_roster_phone(
+        session, settings, user_id=user_id, phone=body.phone, current_number=current_number,
+        now=now, expected_entry_id=body.roster_entry_id, lock=True,
+    )
     application = await session.scalar(select(MembershipApplication).where(MembershipApplication.user_id == user_id).execution_options(populate_existing=True).with_for_update())
     membership = await session.scalar(select(Membership).where(Membership.user_id == user_id).execution_options(populate_existing=True).with_for_update())
     charges = list(await session.scalars(select(MembershipCharge).where(MembershipCharge.user_id == user_id).order_by(MembershipCharge.id).execution_options(populate_existing=True).with_for_update()))
-    if membership and membership.member_number and requested_number and requested_number != membership.member_number:
-        raise HTTPException(status_code=409, detail="已有社員編號，請沿用原編號")
     if membership and membership.status == MembershipStatus.ACTIVE:
         user.membership = membership
         return _user_item(user)
@@ -125,26 +141,13 @@ async def confirm_offline_membership(
     if any(attempt.status in {PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.LATE_PAID_REFUND_REQUIRED} for attempt in attempts):
         raise HTTPException(status_code=409, detail="入社款項仍需核對，請先完成既有收退款處理")
 
-    number = (membership.member_number if membership else None) or requested_number
-    if entry:
-        if not entry.is_active or entry.claimed_user_id not in {None, user_id}:
-            raise HTTPException(status_code=409, detail="此社員名冊已停用或屬於其他帳號")
-        pending_until = entry.pending_claim_expires_at
-        if entry.pending_claim_user_id not in {None, user_id} and (pending_until is None or pending_until.replace(tzinfo=pending_until.tzinfo or timezone.utc) > now):
-            raise HTTPException(status_code=409, detail="此社員名冊正由其他帳號認領")
-        number = entry.member_number
-    if number:
-        conflict = await session.scalar(select(Membership.id).where(Membership.member_number == number, Membership.user_id != user_id))
-        if conflict:
-            raise HTTPException(status_code=409, detail="此社員編號已屬於其他帳號")
-    else:
-        number = await next_identity_number(session, Membership.member_number, "SLF", now, reserved_columns=(MemberRosterEntry.member_number,))
+    number = entry.member_number
 
     previous_status = membership.status.value if membership else None
     if membership is None:
         membership = Membership(user=user, application_id=application.id if application else None)
         session.add(membership)
-    if entry and (membership.share_capital_amount or membership.share_count) and (membership.share_capital_amount != entry.share_capital_amount or membership.share_count != entry.share_count):
+    if (membership.share_capital_amount or membership.share_count) and (membership.share_capital_amount != entry.share_capital_amount or membership.share_count != entry.share_count):
         raise HTTPException(status_code=409, detail="會籍與名冊股籍資料不一致，請先核對股籍")
     membership.member_number = number
     membership.status = MembershipStatus.ACTIVE
@@ -152,16 +155,15 @@ async def confirm_offline_membership(
     membership.suspended_at = None
     membership.ended_at = None
     membership.status_reason = body.reason
-    if entry:
-        membership.share_certificate_number = entry.share_certificate_number
-        membership.share_capital_amount = entry.share_capital_amount
-        membership.share_count = entry.share_count
-        membership.share_subscribed_on = entry.share_subscribed_on
-        membership.share_paid_on = entry.share_paid_on
-        entry.claimed_user_id = user_id
-        entry.claimed_at = entry.claimed_at or now
-        entry.pending_claim_user_id = None
-        entry.pending_claim_expires_at = None
+    membership.share_certificate_number = entry.share_certificate_number
+    membership.share_capital_amount = entry.share_capital_amount
+    membership.share_count = entry.share_count
+    membership.share_subscribed_on = entry.share_subscribed_on
+    membership.share_paid_on = entry.share_paid_on
+    entry.claimed_user_id = user_id
+    entry.claimed_at = entry.claimed_at or now
+    entry.pending_claim_user_id = None
+    entry.pending_claim_expires_at = None
     for charge in charges:
         if charge.status == MembershipChargeStatus.PENDING:
             charge.status = MembershipChargeStatus.WAIVED
@@ -179,7 +181,7 @@ async def confirm_offline_membership(
     user.pending_member_claim = False
     try:
         await session.flush()
-        session.add(AdminAudit(actor_id=admin.id, action="membership.offline_confirmed", aggregate_type="membership", aggregate_id=membership.id, reason=body.reason, data={"user_id": user_id, "member_number": number, "previous_status": previous_status, "confirmed_on": body.confirmed_on.isoformat(), "source": "offline", "closed_pending_charge_ids": [charge.id for charge in charges if charge.status == MembershipChargeStatus.WAIVED]}))
+        session.add(AdminAudit(actor_id=admin.id, action="membership.offline_confirmed", aggregate_type="membership", aggregate_id=membership.id, reason=body.reason, data={"user_id": user_id, "member_number": number, "roster_entry_id": entry.id, "phone_verified": True, "previous_status": previous_status, "confirmed_on": body.confirmed_on.isoformat(), "source": "offline", "closed_pending_charge_ids": [charge.id for charge in charges if charge.status == MembershipChargeStatus.WAIVED]}))
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
