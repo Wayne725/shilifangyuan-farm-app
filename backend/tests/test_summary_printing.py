@@ -12,9 +12,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.integrations.feie import FeieError
 from app.models import AdminAudit, FulfillmentState, OrderItemOption, PaymentStatus, PrintJob
-from app.order_summary import OrderSummaryFilters
+from app.order_summary import OrderSummaryFilters, build_print_summary
 from app.printer_worker import process_print_job
-from app.printing import open_receipt_content, receipt_preview
+from app.printing import open_receipt_content, receipt_preview, seal_receipt_content
 from app.routers.order_summary import order_summary_router
 from app.routers.printers import printers_router
 from app.summary_printing import format_summary_pages, summary_fingerprint
@@ -81,7 +81,8 @@ def report(product_count=1):
 
 def test_summary_pages_preserve_all_items_and_escape_printer_commands():
     data = report(120)
-    pages = format_summary_pages(data, generated_at="2030-01-02 12:00:00", request_id=str(uuid4()))
+    request_id = str(uuid4())
+    pages = format_summary_pages(data, generated_at="2030-01-02 12:00:00", request_id=request_id)
     assert len(pages) > 1
     assert all(len(page.encode("utf-8")) <= 5000 for page in pages)
     printable = "".join(receipt_preview(page).replace("\n", "") for page in pages)
@@ -90,6 +91,31 @@ def test_summary_pages_preserve_all_items_and_escape_printer_commands():
     assert "＜CUT＞" in printable and "＜BR＞" in printable
     assert "<CUT>" not in "".join(pages) and "\x1b" not in "".join(pages)
     assert all("彙總" in receipt_preview(page) for page in pages)
+    assert "未取消" not in printable and request_id not in printable
+    assert "主食：紫米飯－茂谷汽水" in printable
+
+
+def test_summary_compact_options_preserve_each_combination_and_option_name():
+    data = report()
+    data["products"][0].update(name="嫩煮雞胸", quantity=10, variants=[
+        {"quantity": 5, "options": ["飲品加購：茂谷汽水", "主食選擇：紫米飯"]},
+        {"quantity": 2, "options": ["主食：紫米飯"]},
+        {"quantity": 1, "options": ["飲品：果汁：無糖", "加購：溏心蛋", "主食：麵包"]},
+        {"quantity": 1, "options": ["配菜：玉米", "加購：玉米"]},
+        {"quantity": 1, "options": []},
+    ])
+    data["summary"]["quantity"] = 10
+    data["notes"] = []
+    printable = "".join(receipt_preview(page).replace("\n", "") for page in format_summary_pages(
+        data, generated_at="2030-01-02 12:00:00", request_id=str(uuid4()),
+    ))
+    assert "10 份 × 嫩煮雞胸" in printable
+    assert "5 份 × 主食：紫米飯－茂谷汽水" in printable
+    assert "2 份 × 主食：紫米飯" in printable
+    assert "1 份 × 主食：麵包－果汁：無糖－溏心蛋" in printable
+    assert "1 份 × 玉米－玉米" in printable
+    assert "1 份 × 無選項" in printable
+    assert all(label not in printable for label in ["主食選擇", "飲品", "加購", "配菜"])
 
 
 def test_summary_too_many_pages_is_explicit_and_never_truncated():
@@ -161,6 +187,50 @@ async def test_summary_empty_disabled_and_changed_preview_are_rejected(summary_p
     stale = await c.client.post(f"{BASE}/print-jobs", headers=auth_headers(c.admin), json=body)
     assert stale.status_code == 409
     assert await c.session.scalar(select(func.count()).select_from(PrintJob)) == 0
+
+
+async def test_summary_old_layout_preview_requires_refresh(summary_print_context):
+    c = summary_print_context
+    await paid_order(c)
+    old_fingerprint = summary_fingerprint(
+        await build_print_summary(c.session, OrderSummaryFilters(**PARAMS)), c.settings, format_version=1,
+    )
+    response = await c.client.post(f"{BASE}/print-jobs", headers=auth_headers(c.admin), json={
+        "filters": PARAMS, "request_id": str(uuid4()), "fingerprint": old_fingerprint,
+    })
+    assert response.status_code == 409
+    assert await c.session.scalar(select(func.count()).select_from(PrintJob)) == 0
+    await create_batch(c)
+    assert all(job.snapshot["format_version"] == 2 for job in await jobs(c))
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_summary_existing_pending_batch_preserves_frozen_layout(summary_print_context, cancelled):
+    c = summary_print_context
+    order = await paid_order(c)
+    await create_batch(c)
+    original_report = await build_print_summary(c.session, OrderSummaryFilters(**PARAMS))
+    original_receipts = []
+    for job in await c.session.scalars(select(PrintJob).where(PrintJob.kind == "summary")):
+        job.content = seal_receipt_content(
+            "訂單彙總<BR>已付款・未取消<BR>彙總：舊批次<BR>主食：紫米飯／飲品：茂谷汽水",
+            {}, f"summary:{job.id}", c.settings, force=True,
+        )
+        original_receipts.append(job.content)
+        snapshot = {**job.snapshot, "fingerprint": summary_fingerprint(original_report, c.settings, format_version=1)}
+        snapshot.pop("format_version")
+        job.snapshot = snapshot
+    if cancelled:
+        order.cancelled_at = NOW
+    await c.session.commit()
+    fake = FakeFeie()
+    assert await process_print_job(c.settings, factory=c.factory, client=fake)
+    printed = await jobs(c)
+    assert all(job.status == ("failed" if cancelled else "simulated") for job in printed)
+    if cancelled:
+        assert all(job.last_error == "summary_changed_before_send" for job in printed)
+    assert [job.content for job in printed] == original_receipts
+    assert fake.submissions == 0
 
 
 async def test_summary_request_replay_is_frozen_and_searchable_after_reopening(summary_print_context):
