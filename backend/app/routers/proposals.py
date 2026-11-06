@@ -189,7 +189,7 @@ async def list_proposals(
     if filters:
         query = query.where(or_(*filters))
     proposals = list(
-        await session.scalars(query.order_by(VoteProposal.created_at.desc()))
+        await session.scalars(query.order_by(VoteProposal.created_at.desc(), VoteProposal.id.desc()))
     )
     changed = False
     now = datetime.now(timezone.utc)

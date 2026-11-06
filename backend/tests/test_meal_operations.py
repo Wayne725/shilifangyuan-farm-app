@@ -10,6 +10,7 @@ from app.models import (
     Refund, RefundStatus, SalesChannel, TaxType,
 )
 from app.routers.meals import meals_router
+from app.routers.orders import orders_router
 from tests.support import api_test_context, auth_headers, make_test_settings
 from tests.test_meal_cancellation_review import seed_cancellation_order
 
@@ -78,7 +79,7 @@ async def operations_context(database_session, monkeypatch):
 
     monkeypatch.setattr(operations, "datetime", FixedDateTime)
     c = await seed_search_orders(database_session)
-    async with api_test_context(database_session, [meals_router], settings=make_test_settings()) as client:
+    async with api_test_context(database_session, [meals_router, orders_router], settings=make_test_settings()) as client:
         c.client = client
         yield c
 
@@ -95,17 +96,72 @@ def ids(result):
 
 
 @pytest.mark.asyncio
-async def test_all_events_search_sorts_by_pickup_and_paginates_without_regular_orders(operations_context):
+async def test_all_events_search_sorts_by_newest_creation_and_paginates_without_regular_orders(operations_context):
     c = operations_context
+    for index, label in enumerate(["future", "similar", "literal", "ready", "legacy", "first"]):
+        c.orders[label].created_at = NOW + timedelta(seconds=index)
+    await c.session.commit()
     all_orders = await search(c)
     assert all_orders["total"] == 6
     assert c.orders["ordinary"].id not in ids(all_orders)
-    assert [item["order"]["id"] for item in all_orders["items"]] == [c.orders[label].id for label in ["legacy", "first", "ready", "literal", "similar", "future"]]
+    assert [item["order"]["id"] for item in all_orders["items"]] == [c.orders[label].id for label in ["first", "legacy", "ready", "literal", "similar", "future"]]
     first = await search(c, limit=2)
     second = await search(c, limit=2, offset=2)
     assert first["total"] == second["total"] == 6
     assert ids(first).isdisjoint(ids(second))
     assert all_orders["items"][0]["customer_name"] == "王小明"
+
+
+@pytest.mark.asyncio
+async def test_same_created_time_search_pages_use_stable_order_id(operations_context):
+    c = operations_context
+    for order in c.orders.values():
+        order.created_at = NOW
+    await c.session.commit()
+    expected = sorted((order.id for label, order in c.orders.items() if label != "ordinary"), reverse=True)
+    pages = [await search(c, limit=2, offset=offset) for offset in [0, 2, 4]]
+    assert [item["order"]["id"] for page in pages for item in page["items"]] == expected
+    assert [item["order"]["id"] for item in (await search(c, limit=2))["items"]] == expected[:2]
+
+
+@pytest.mark.parametrize("scope", ["own_orders", "own_meals", "event_meals"])
+@pytest.mark.asyncio
+async def test_order_lists_keep_newest_records_and_stable_ties(operations_context, scope):
+    c = operations_context
+    for order in c.orders.values():
+        order.created_at = NOW
+        order.contact_email = order.contact_email.replace("example.test", "example.com")
+    c.orders["first"].created_at = NOW + timedelta(minutes=1)
+    await c.session.commit()
+    if scope == "event_meals":
+        path, user = f"/v1/admin/meal-events/{c.event.id}/orders", c.admin
+        candidates = [order for order in c.orders.values() if order.meal_event_id == c.event.id and order.sales_channel == SalesChannel.MEAL_PREORDER]
+    else:
+        path, user = ("/v1/orders" if scope == "own_orders" else "/v1/meal-orders"), c.buyer
+        candidates = [order for order in c.orders.values() if order.user_id == c.buyer.id and (scope == "own_orders" or order.sales_channel == SalesChannel.MEAL_PREORDER)]
+    response = await c.client.get(path, headers=auth_headers(user))
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    actual = [item["id"] for item in rows]
+    expected = [c.order.id] + sorted((order.id for order in candidates if order != c.order), reverse=True)
+    assert actual == expected
+
+
+@pytest.mark.asyncio
+async def test_admin_events_use_creation_time_and_stable_id_instead_of_pickup_date(operations_context):
+    c = operations_context
+    future = c.orders["future"].meal_event
+    c.event.created_at = NOW + timedelta(seconds=1)
+    future.created_at = NOW
+    await c.session.commit()
+    path = "/v1/admin/meal-events"
+    response = await c.client.get(path, headers=auth_headers(c.admin))
+    assert response.status_code == 200, response.text
+    assert [event["id"] for event in response.json()] == [c.event.id, future.id]
+    c.event.created_at = NOW
+    await c.session.commit()
+    response = await c.client.get(path, headers=auth_headers(c.admin))
+    assert [event["id"] for event in response.json()] == sorted([c.event.id, future.id], reverse=True)
 
 
 @pytest.mark.asyncio

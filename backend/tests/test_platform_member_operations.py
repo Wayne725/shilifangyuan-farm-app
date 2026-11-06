@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
-from app.models import AdminAudit, Membership, MembershipOfflineReceipt, MembershipStatus, Notification, Order, PaymentAttempt, Refund
+from app.models import AdminAudit, MemberRosterEntry, Membership, MembershipOfflineReceipt, MembershipStatus, Notification, Order, PaymentAttempt, Refund
 from app.routers.member_reports import member_reports_router
 from app.routers.platform import platform_router
 from tests.support import auth_headers
@@ -56,6 +56,40 @@ async def test_register_export_deduplicates_claimed_member_and_preserves_suspens
     await c['session'].commit()
     assert (await client.get('/v1/admin/member-register', headers=headers)).json()['total'] == 0
     assert (await client.get('/v1/admin/member-register?status=all', headers=headers)).json()['total'] == 1
+
+
+@pytest.mark.asyncio
+async def test_register_newest_before_pagination_while_export_keeps_member_numbers(shares_context):
+    c = shares_context
+    include(c['client'], member_reports_router)
+    client, session, headers = c['client'], c['session'], c['admin_headers']
+    membership = await session.get(Membership, await claim_roster(c))
+    now = datetime.now(timezone.utc)
+    membership.created_at = now - timedelta(days=1)
+    new_ids = []
+    for number in ('SHARES-002', 'SHARES-003'):
+        result = await client.post('/v1/admin/member-roster', headers=headers, json={
+            'member_number': number, 'legal_name': '查詢測試', 'email': f'{number}@example.com',
+            'phone': '0912345678', 'share_count': 0, 'share_capital_amount': 0,
+        })
+        assert result.status_code == 201, result.text
+        new_ids.append(result.json()['id'])
+        (await session.get(MemberRosterEntry, new_ids[-1])).created_at = now
+    await session.commit()
+    items = []
+    for offset in range(3):
+        response = await client.get('/v1/admin/member-register', headers=headers,
+                                    params={'q': 'SHARES', 'limit': 1, 'offset': offset})
+        assert response.status_code == 200, response.text
+        assert response.json()['total'] == 3
+        items.extend(response.json()['items'])
+    assert [row['id'] for row in items] == sorted(new_ids, reverse=True) + [membership.id]
+    assert all('_created_at' not in row for row in items)
+    filtered = await client.get('/v1/admin/member-register', headers=headers, params={'q': 'SHARES-001'})
+    assert [row['id'] for row in filtered.json()['items']] == [membership.id]
+    exported = await client.get('/v1/admin/member-register.csv', headers=headers)
+    csv_rows = list(csv.reader(io.StringIO(exported.text.lstrip('\ufeff'))))
+    assert [row[0] for row in csv_rows[1:]] == ['SHARES-001', 'SHARES-002', 'SHARES-003']
 
 
 @pytest.mark.asyncio

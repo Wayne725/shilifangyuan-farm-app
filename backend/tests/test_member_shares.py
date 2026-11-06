@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
@@ -46,6 +46,27 @@ async def claim_roster(context):
     }, headers=context["owner_headers"])
     assert result.status_code == 200, result.text
     return result.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_new_roster_entries_precede_older_members_without_changing_access(shares_context):
+    ctx = shares_context
+    client, session = ctx["client"], ctx["session"]
+    old_entry = await session.get(MemberRosterEntry, ctx["roster"]["id"])
+    old_entry.created_at = datetime.now(timezone.utc) - timedelta(days=30)
+    await session.commit()
+    created = await client.post("/v1/admin/member-roster", json={
+        "member_number": "ZZZ-NEW", "legal_name": "新匯入社員", "email": "new-roster@example.com", "phone": "0912345670",
+    }, headers=ctx["admin_headers"])
+    assert created.status_code == 201, created.text
+    old_entry.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    response = await client.get("/v1/admin/member-roster", headers=ctx["admin_headers"])
+    assert response.status_code == 200
+    assert [row["id"] for row in response.json()] == [created.json()["id"], old_entry.id]
+    assert response.json()[1]["share_certificate_number"] == "LEGACY-SHARES-001"
+    assert (await client.get("/v1/admin/member-roster", headers=ctx["owner_headers"])).status_code == 403
 
 
 @pytest.mark.asyncio

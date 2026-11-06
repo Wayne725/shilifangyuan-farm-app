@@ -73,7 +73,7 @@ def charge_row(charge):
             'refund_amount': refunds[item.id].amount if item.id in refunds else None,
             'refund_completed_at': aware(refunds[item.id].completed_at) if item.id in refunds and refunds[item.id].completed_at else None,
             'refund_review_status': requests[item.id].status if item.id in requests else None,
-        } for item in sorted(charge.payment_attempts, key=lambda item: (aware(item.created_at), item.id))],
+        } for item in sorted(charge.payment_attempts, key=lambda item: (aware(item.created_at), item.id), reverse=True)],
     }
 
 

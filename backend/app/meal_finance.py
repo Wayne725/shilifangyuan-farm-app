@@ -104,7 +104,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
             period_receipts[order_id] += amount
     details = []
     for order in orders:
-        refunds = sorted(order.refunds, key=lambda row: (aware(row.created_at), row.id))
+        refunds = sorted(order.refunds, key=lambda row: (aware(row.created_at), row.id), reverse=True)
         period_refunds = sum(row.amount for row in refunds if row.status == RefundStatus.COMPLETED and _money_in_period(row.completed_at, start, end))
         latest_request = max(order.cancellation_requests, key=lambda row: (aware(row.requested_at), row.id), default=None)
         fulfillment = order.fulfillment
@@ -117,7 +117,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
                           "amount": attempt.amount, "status": attempt.status.value,
                           "received_at": aware(attempt.paid_at) if attempt.paid_at else None,
                           "obsolete_revision": attempt.superseded_at is not None or attempt.order_revision != order.revision or attempt.amount != order.amount_total}
-                         for attempt in sorted(order.payment_attempts, key=lambda row: (aware(row.created_at), row.id))
+                         for attempt in sorted(order.payment_attempts, key=lambda row: (aware(row.created_at), row.id), reverse=True)
                          if attempt.paid_at or attempt.status in {PaymentStatus.PAID, PaymentStatus.REFUND_PENDING,
                              PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}],
             "created_at": aware(order.created_at), "paid_at": aware(order.paid_at) if order.paid_at else None, "order_amount": order.amount_total,
@@ -166,7 +166,7 @@ async def meal_sales_report(session: AsyncSession, filters: MealSalesFilters):
         row["net"] = row["received"] - row["refunded"]
     def group_periods(mode):
         grouped = {}
-        for day, values in sorted(daily.items()):
+        for day, values in sorted(daily.items(), reverse=True):
             day_date = date.fromisoformat(day)
             key = day[:7] if mode == "month" else (day_date - timedelta(days=day_date.weekday())).isoformat()
             row = grouped.setdefault(key, {"period": key, "received": 0, "refunded": 0, "net": 0, "receipt_count": 0, "refund_count": 0})
@@ -190,7 +190,7 @@ async def meal_sales_report(session: AsyncSession, filters: MealSalesFilters):
                     "receipt_count": sum(row["receipt_count"] for row in daily.values()),
                     "refund_count": sum(row["refund_count"] for row in daily.values()),
                     "pending_refund_amount": pending_refunds, "paid_meal_quantity": sum(int(row[2]) for row in products)},
-        "daily": list(sorted(daily.values(), key=lambda row: row["period"])), "weekly": group_periods("week"), "monthly": group_periods("month"),
+        "daily": sorted(daily.values(), key=lambda row: row["period"], reverse=True), "weekly": group_periods("week"), "monthly": group_periods("month"),
         "products": [{"name": name, "unit": unit, "quantity": int(quantity), "sales_amount": int(amount), "order_count": int(count)}
                      for name, unit, quantity, amount, count in products],
         "orders": details,

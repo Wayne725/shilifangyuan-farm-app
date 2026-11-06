@@ -30,7 +30,7 @@ async def list_notifications(
     if unread_only:
         statement = statement.where(Notification.read_at.is_(None))
     result = await session.scalars(
-        statement.order_by(Notification.created_at.desc()).limit(limit)
+        statement.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit)
     )
     return list(result)
 

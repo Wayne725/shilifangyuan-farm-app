@@ -98,6 +98,24 @@ async def test_activity_filters_dates_escape_and_csv_do_not_duplicate_charge_tot
 
 
 @pytest.mark.asyncio
+async def test_activity_transactions_put_latest_first_without_changing_balances(activity_finance_context):
+    c = activity_finance_context
+    c.attempts[0].created_at = c.now
+    c.attempts[1].created_at = c.now + timedelta(minutes=1)
+    await c.session.commit()
+    path = '/v1/admin/finance/activity-charges?q=ACT-TEST-0'
+    result = (await c.client.get(path, headers=auth_headers(c.admin))).json()
+    assert [item['merchant_trade_no'] for item in result['items'][0]['transactions']] == ['ACT-LATE-1', 'ACT-PAY-1']
+    assert result['summary']['amount_received'] == 600
+    assert result['summary']['refund_pending_review'] == 300
+    assert result['summary']['amount_net'] == 600
+    c.attempts[1].created_at = c.now
+    await c.session.commit()
+    tied = (await c.client.get(path, headers=auth_headers(c.admin))).json()
+    assert [item['id'] for item in tied['items'][0]['transactions']] == sorted([item.id for item in c.attempts[:2]], reverse=True)
+
+
+@pytest.mark.asyncio
 async def test_activity_finance_admin_only(activity_finance_context):
     c = activity_finance_context
     for headers, expected in [({}, 401), (auth_headers(c.buyer), 403)]:

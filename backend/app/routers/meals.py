@@ -313,7 +313,7 @@ async def _meal_order_read(
         id=order.id,
         revision=order.revision,
         amendment_blocked_reason=order_amendment_blocked_reason(order),
-        amendments=order.__dict__.get("amendments", []),
+        amendments=sorted(order.__dict__.get("amendments", []), key=lambda item: item.revision, reverse=True),
         order_number=order.order_number,
         sales_channel=order.sales_channel,
         fulfillment_method=order.fulfillment_method,
@@ -521,7 +521,7 @@ async def list_meal_orders(
         await session.scalars(
             _meal_order_query()
             .where(Order.user_id == user.id)
-            .order_by(Order.created_at.desc())
+            .order_by(Order.created_at.desc(), Order.id.desc())
         )
     )
     return [await _meal_order_read(session, order) for order in orders]
@@ -536,7 +536,7 @@ async def admin_list_meal_event_orders(
     if await session.get(MealEvent, event_id) is None:
         raise HTTPException(status_code=404, detail="找不到便當場次")
     orders = list(await session.scalars(
-        _meal_order_query().where(Order.meal_event_id == event_id).order_by(Order.created_at)
+        _meal_order_query().where(Order.meal_event_id == event_id).order_by(Order.created_at.desc(), Order.id.desc())
     ))
     return [await _meal_order_read(session, order, True) for order in orders]
 
@@ -1351,7 +1351,7 @@ async def admin_list_meal_events(
                     MealOptionGroup.options
                 )
             )
-            .order_by(MealEvent.created_at.desc())
+            .order_by(MealEvent.created_at.desc(), MealEvent.id.desc())
         )
     ).all()
     ordered_event_ids = set(await session.scalars(

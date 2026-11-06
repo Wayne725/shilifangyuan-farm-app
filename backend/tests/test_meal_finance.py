@@ -97,6 +97,31 @@ async def test_refund_in_later_period_is_counted_on_completion_not_original_sale
 
 
 @pytest.mark.asyncio
+async def test_period_tables_and_transaction_histories_show_newest_without_changing_totals(finance_context):
+    c = finance_context
+    for index, attempt in enumerate(c.attempts):
+        attempt.created_at = FIRST + timedelta(minutes=index)
+    pending = await c.session.scalar(select(Refund).where(Refund.order_id == c.order.id, Refund.status == RefundStatus.PENDING))
+    pending.created_at = FIRST + timedelta(days=1)
+    c.session.add(PaymentAttempt(order=c.order, merchant_trade_no="REPORT-LATER", amount=320,
+        status=PaymentStatus.PAID, created_at=FIRST + timedelta(days=31),
+        paid_at=FIRST + timedelta(days=31), expires_at=FIRST + timedelta(days=32)))
+    await c.session.commit()
+    result = await report(c, ends_on="2030-02-02")
+    assert [row["period"] for row in result["daily"]] == ["2030-02-02", "2030-01-02"]
+    assert [row["period"] for row in result["weekly"]] == ["2030-01-28", "2029-12-31"]
+    assert [row["period"] for row in result["monthly"]] == ["2030-02", "2030-01"]
+    for periods in [result["daily"], result["weekly"], result["monthly"]]:
+        assert sum(row["received"] for row in periods) == result["summary"]["received"] == 960
+        assert sum(row["refunded"] for row in periods) == result["summary"]["refunded"] == 320
+        assert sum(row["net"] for row in periods) == result["summary"]["net"] == 640
+    order = next(row for row in result["orders"]["items"] if row["id"] == c.order.id)
+    assert [row["merchant_trade_no"] for row in order["receipts"]] == ["REPORT-LATER", "REPORT-1", "REPORT-0"]
+    assert [row["reason"] for row in order["refunds"]] == ["待供應商退款", "重複付款"]
+    assert order["period_received"] == 960 and order["period_refunded"] == 320
+
+
+@pytest.mark.asyncio
 async def test_midnight_boundaries_and_legacy_cash_receipts_are_not_double_counted(finance_context):
     c = finance_context
     c.attempts[1].paid_at = FIRST - timedelta(microseconds=1)
