@@ -24,6 +24,13 @@
 }
 @media (min-width: 1321px) and (max-width: 1439px) {
   html[data-text-size="large"] .site-header .brand span { display: none; }
+  .has-admin-nav .brand span,
+  .has-admin-nav :is(.account-button, .cart-link, .orders-link) span { display: none; }
+  .has-admin-nav .desktop-nav a { padding-inline: 8px; gap: 5px; }
+}
+@media (min-width: 901px) and (max-width: 1023px) {
+  .has-admin-nav .desktop-nav { gap: 2px; }
+  .has-admin-nav .desktop-nav a { padding-inline: 6px; gap: 4px; }
 }
 @media (max-width: 900px) {
   .site-frame > .site-header { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
