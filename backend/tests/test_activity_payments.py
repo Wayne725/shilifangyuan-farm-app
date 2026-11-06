@@ -241,7 +241,23 @@ async def test_charge_owner_history_and_payment_return_routing(database_session)
     c=await make_activity(database_session)
     first=await registration(c)
     attempt=await pending_attempt(c,first.charge.id)
-    async with api_test_context(database_session,[router,payments_router],settings=payment_settings()) as client:
+    waiter=await registration(c,c.second)
+    nearer_activity=Activity(created_by_id=c.admin.id,title="新報名的較近活動",description="",location="合作社",capacity=1,
+        starts_at=c.now+timedelta(days=3),ends_at=c.now+timedelta(days=3,hours=1),registration_deadline=c.now+timedelta(days=1),
+        member_price=100,non_member_price=300,payment_window_hours=24,status=ActivityStatus.PUBLISHED,registrations=[])
+    database_session.add(nearer_activity)
+    await database_session.commit()
+    latest=await service.register(database_session,nearer_activity.id,c.buyer,ActivityRegistrationCreate(contact_name=c.buyer.display_name,contact_email=c.buyer.email))
+    first_row=await database_session.get(ActivityRegistration,first.id)
+    latest_row=await database_session.get(ActivityRegistration,latest.id)
+    first_row.registered_at=c.now-timedelta(days=1)
+    latest_row.registered_at=c.now
+    old_charge=await database_session.get(ActivityCharge,first.charge.id)
+    latest_charge=await database_session.get(ActivityCharge,latest.charge.id)
+    old_charge.created_at=first_row.registered_at
+    latest_charge.created_at=latest_row.registered_at
+    await database_session.commit()
+    async with api_test_context(database_session,[router,community_router,payments_router],settings=payment_settings()) as client:
         for path in (f"/v1/activity-charges/{first.charge.id}",f"/v1/payment-attempts/{attempt.id}"):
             assert (await client.get(path,headers=auth_headers(c.second))).status_code==404
             assert (await client.get(path)).status_code==401
@@ -251,7 +267,13 @@ async def test_charge_owner_history_and_payment_return_routing(database_session)
         c.activity.status=ActivityStatus.COMPLETED
         await database_session.commit()
         history=(await client.get("/v1/activity-registrations",headers=auth_headers(c.buyer))).json()
-        assert history[0]["charge"]["id"]==first.charge.id
+        assert [row["id"] for row in history]==[latest.id,first.id]
+        assert history[1]["charge"]["id"]==first.charge.id
+        charges=(await client.get("/v1/activity-charges",headers=auth_headers(c.buyer))).json()
+        assert [row["id"] for row in charges]==[latest.charge.id,first.charge.id]
+        queue=(await client.get(f"/v1/admin/activities/{c.activity.id}/registrations",headers=auth_headers(c.admin))).json()
+        assert [row["id"] for row in queue]==[first.id,waiter.id]
+        assert queue[1]["status"]=="waitlisted"
     from app.routers.payments import _payment_result_location
     location=_payment_result_location(make_test_settings(),"paid",order_id=None,membership_charge_id=None,activity_charge_id=first.charge.id,attempt_id=attempt.id)
     assert "/activities/registrations?" in location and first.charge.id in location

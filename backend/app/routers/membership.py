@@ -986,7 +986,7 @@ async def list_my_membership_charges(
         await session.scalars(
             select(MembershipCharge)
             .where(MembershipCharge.user_id == user.id)
-            .order_by(MembershipCharge.created_at)
+            .order_by(MembershipCharge.created_at.desc(), MembershipCharge.id.desc())
         )
     ).all()
     return [MembershipChargeRead.model_validate(charge) for charge in charges]
@@ -1143,7 +1143,7 @@ async def list_membership_applications(
     applications = (
         await session.scalars(
             select(MembershipApplication).order_by(
-                MembershipApplication.created_at.desc()
+                MembershipApplication.created_at.desc(), MembershipApplication.id.desc()
             )
         )
     ).all()
@@ -1445,7 +1445,7 @@ async def list_member_roster(
     entries = (
         await session.scalars(
             select(MemberRosterEntry).order_by(
-                MemberRosterEntry.member_number
+                MemberRosterEntry.created_at.desc(), MemberRosterEntry.id.desc()
             )
         )
     ).all()
@@ -1640,7 +1640,7 @@ async def list_memberships(
 ) -> list[MembershipRead]:
     memberships = (
         await session.scalars(
-            select(Membership).order_by(Membership.created_at.desc())
+            select(Membership).order_by(Membership.created_at.desc(), Membership.id.desc())
         )
     ).all()
     return [MembershipRead.model_validate(item) for item in memberships]

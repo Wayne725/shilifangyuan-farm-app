@@ -45,7 +45,7 @@ def _range(starts_on, ends_on):
     return start, end
 
 
-async def _member_rows(session, settings):
+async def _member_rows(session, settings, *, newest_first=False):
     cipher = _cipher(settings)
     roster = list(await session.scalars(select(MemberRosterEntry).order_by(MemberRosterEntry.member_number)))
     by_number = {row.member_number: row for row in roster}
@@ -65,7 +65,8 @@ async def _member_rows(session, settings):
                "phone": decrypt(profile.phone_encrypted, aad) if profile else decrypt(entry.phone_encrypted, roster_aad(entry.id)) if entry else "",
                "share_certificate_number": membership.share_certificate_number, "share_count": membership.share_count,
                "share_capital_amount": membership.share_capital_amount, "share_subscribed_on": membership.share_subscribed_on,
-               "share_paid_on": membership.share_paid_on, "activated_at": membership.activated_at}
+               "share_paid_on": membership.share_paid_on, "activated_at": membership.activated_at,
+               "_created_at": membership.created_at}
         for name in ("birth_date", "gender", "place_of_origin", "occupation", "address", "registered_address", "correspondence_address", "landline_phone", "line_id", "emergency_contact"):
             row[name] = decrypt(getattr(profile, f"{name}_encrypted"), aad) if profile else ""
         rows.append(row)
@@ -78,8 +79,15 @@ async def _member_rows(session, settings):
             "email": decrypt(entry.email_encrypted, aad), "phone": decrypt(entry.phone_encrypted, aad),
             "share_certificate_number": entry.share_certificate_number, "share_count": entry.share_count,
             "share_capital_amount": entry.share_capital_amount, "share_subscribed_on": entry.share_subscribed_on,
-            "share_paid_on": entry.share_paid_on, "activated_at": entry.claimed_at})
-    return sorted(rows, key=lambda row: (row["member_number"], row["id"]))
+            "share_paid_on": entry.share_paid_on, "activated_at": entry.claimed_at,
+            "_created_at": entry.created_at})
+    if newest_first:
+        rows.sort(key=lambda row: (aware(row["_created_at"]), row["id"], row["source"]), reverse=True)
+    else:
+        rows.sort(key=lambda row: (row["member_number"], row["id"]))
+    for row in rows:
+        row.pop("_created_at")
+    return rows
 
 
 def _filter_members(rows, status, q):
@@ -92,7 +100,7 @@ def _filter_members(rows, status, q):
 async def list_member_register(q: str = Query(default="", max_length=120), status: Literal["active", "all"] = "active",
     limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
-    rows = _filter_members(await _member_rows(session, settings), status, q)
+    rows = _filter_members(await _member_rows(session, settings, newest_first=True), status, q)
     return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset}
 
 
@@ -141,7 +149,7 @@ async def _filtered_payments(session, settings, q, kind, starts_on, ends_on):
     return sorted([row for row in rows if (kind == "all" or row["kind"] == kind) and
         (not term or any(term in str(row.get(key) or "").lower() for key in ("member_number", "name", "email", "receipt_number", "reference"))) and
         (not start or row["paid_at"] and aware(row["paid_at"]) >= start) and (not end or row["paid_at"] and aware(row["paid_at"]) < end)],
-        key=lambda row: aware(row["paid_at"] or row["recorded_at"]), reverse=True)
+        key=lambda row: (aware(row["paid_at"] or row["recorded_at"]), row["id"], row["source"]), reverse=True)
 
 
 @member_reports_router.get("/membership-payments")

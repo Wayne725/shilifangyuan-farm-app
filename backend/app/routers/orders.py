@@ -109,7 +109,7 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         id=order.id,
         revision=order.revision,
         amendment_blocked_reason=order_amendment_blocked_reason(order),
-        amendments=order.__dict__.get("amendments", []),
+        amendments=sorted(order.__dict__.get("amendments", []), key=lambda item: item.revision, reverse=True),
         order_number=order.order_number,
         order_kind=order.order_kind,
         sales_channel=order.sales_channel,
@@ -397,7 +397,7 @@ async def list_orders(
     if user.user_role != UserRole.ADMIN:
         query = query.where(Order.user_id == user.id)
     orders = list(
-        await session.scalars(query.order_by(Order.created_at.desc()))
+        await session.scalars(query.order_by(Order.created_at.desc(), Order.id.desc()))
     )
     return [
         order_read(order, user.user_role == UserRole.ADMIN) for order in orders

@@ -95,7 +95,7 @@ async def search_meal_orders(session: AsyncSession, filters: MealOrderSearchFilt
         selectinload(Order.invoice), selectinload(Order.cancellation_requests),
         selectinload(Order.amendments), selectinload(Order.payment_attempts),
         selectinload(Order.items).selectinload(OrderItem.selected_options),
-    ).order_by(_pickup_at(), Order.id).offset(filters.offset).limit(filters.limit)))
+    ).order_by(Order.created_at.desc(), Order.id.desc()).offset(filters.offset).limit(filters.limit)))
     return orders, total or 0
 
 

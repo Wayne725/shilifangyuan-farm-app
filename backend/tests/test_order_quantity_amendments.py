@@ -68,6 +68,23 @@ async def test_regular_quote_confirm_snapshot_idempotency_and_ownership(database
         assert product.stock_quantity == 3
 
 
+async def test_order_response_shows_latest_amendment_without_reordering_model_history(database_session):
+    session = database_session
+    buyer, product, order = await make_regular_order(session)
+    async with api_test_context(session, [orders_router], settings=make_test_settings()) as client:
+        first = await submit(client, buyer, order, 3, total=300)
+        assert first.status_code == 200, first.text
+        second = await submit(client, buyer, order, 1, total=100)
+        assert second.status_code == 200, second.text
+        assert [item["revision"] for item in second.json()["amendments"]] == [3, 2]
+        detail = await client.get(f"/v1/orders/{order.id}", headers=auth_headers(buyer))
+        assert detail.status_code == 200, detail.text
+        assert [item["revision"] for item in detail.json()["amendments"]] == [3, 2]
+    await session.refresh(order, ["amendments"])
+    assert [item.revision for item in order.amendments] == [2, 3]
+    assert order.amount_total == 100 and product.stock_quantity == 3
+
+
 async def test_online_existing_attempt_releases_once_and_new_attempt_uses_revision(database_session):
     session = database_session
     buyer, product, order = await make_regular_order(session)
@@ -175,6 +192,21 @@ async def test_cash_amendment_adjusts_reservation_without_extending_expiry(cash_
     paid = await action(c, order.id, amount=240)
     assert paid.status_code == 200, paid.text
     assert c.event.offerings[0].reserved_quantity == 0 and c.event.offerings[0].paid_quantity == 2
+
+
+async def test_meal_detail_shows_latest_amendment_first(cash_context):
+    c = cash_context
+    created = await create_cash(c)
+    order = await c.session.get(Order, created.json()["id"])
+    for quantity in [2, 1]:
+        result = await submit(c.client, c.buyer, order, quantity, total=quantity * 120)
+        assert result.status_code == 200, result.text
+    detail = await c.client.get(f"/v1/meal-orders/{order.id}", headers=auth_headers(c.buyer))
+    assert detail.status_code == 200, detail.text
+    assert [item["revision"] for item in detail.json()["amendments"]] == [3, 2]
+    assert detail.json()["amount_total"] == 120
+    await c.session.refresh(order, ["amendments"])
+    assert [item.revision for item in order.amendments] == [2, 3]
 
 
 async def test_meal_deadline_and_99_limit(cash_context):

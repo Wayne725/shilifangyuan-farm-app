@@ -43,7 +43,7 @@ def output(row, uses=0):
 @promotions_router.get('')
 async def list_rules(_admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     result = []
-    for row in await session.scalars(select(Promotion).order_by(Promotion.created_at.desc())):
+    for row in await session.scalars(select(Promotion).order_by(Promotion.created_at.desc(), Promotion.id.desc())):
         uses = await session.scalar(select(func.count(Order.id)).where(Order.promotion_id == row.id))
         result.append(output(row, uses))
     return result

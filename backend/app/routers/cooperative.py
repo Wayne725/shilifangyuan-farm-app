@@ -478,7 +478,7 @@ async def my_points(
         await session.scalars(
             select(PointTransaction)
             .where(PointTransaction.account_id == account.id)
-            .order_by(PointTransaction.created_at.desc())
+            .order_by(PointTransaction.created_at.desc(), PointTransaction.id.desc())
         )
     ).all()
     sources = await _point_source_orders(session, user.id, transactions)
@@ -538,7 +538,7 @@ async def my_badges(
     await session.commit()
     rows = (
         await session.execute(
-            select(MemberBadge, BadgeDefinition).join(BadgeDefinition, BadgeDefinition.id == MemberBadge.badge_id).where(MemberBadge.user_id == user.id).order_by(MemberBadge.granted_at)
+            select(MemberBadge, BadgeDefinition).join(BadgeDefinition, BadgeDefinition.id == MemberBadge.badge_id).where(MemberBadge.user_id == user.id).order_by(MemberBadge.granted_at.desc(), MemberBadge.id.desc())
         )
     ).all()
     return [{
@@ -594,7 +594,7 @@ async def list_wishes(
 ) -> list[dict[str, Any]]:
     rows = (
         await session.execute(
-            select(Wish, func.count(WishSupport.id)).outerjoin(WishSupport).group_by(Wish.id).order_by(Wish.created_at.desc())
+            select(Wish, func.count(WishSupport.id)).outerjoin(WishSupport).group_by(Wish.id).order_by(Wish.created_at.desc(), Wish.id.desc())
         )
     ).all()
     mine = set((await session.scalars(select(WishSupport.wish_id).where(WishSupport.user_id == user.id))).all())

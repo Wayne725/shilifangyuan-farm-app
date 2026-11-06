@@ -22,15 +22,20 @@ router = APIRouter(tags=["activity-payments"])
 
 @router.get("/v1/activity-registrations", response_model=list[ActivityRegistrationRead])
 async def my_registrations(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
-    activities = list(await session.scalars(select(Activity).where(Activity.id.in_(select(ActivityRegistration.activity_id).where(ActivityRegistration.user_id == user.id)))
-        .options(*service.activity_options()).order_by(Activity.starts_at.desc())))
+    activities = list(await session.scalars(
+        select(Activity)
+        .join(ActivityRegistration, ActivityRegistration.activity_id == Activity.id)
+        .where(ActivityRegistration.user_id == user.id)
+        .options(*service.activity_options())
+        .order_by(ActivityRegistration.registered_at.desc(), ActivityRegistration.id.desc())
+    ))
     return [service.registration_read(item, activity) for activity in activities for item in activity.registrations if item.user_id == user.id]
 
 
 @router.get("/v1/activity-charges", response_model=list[ActivityChargeRead])
 async def my_charges(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     charges = list(await session.scalars(select(ActivityCharge).where(ActivityCharge.user_id == user.id).options(
-        selectinload(ActivityCharge.registration), selectinload(ActivityCharge.activity), selectinload(ActivityCharge.refund_requests), selectinload(ActivityCharge.payment_attempts)).order_by(ActivityCharge.created_at.desc())))
+        selectinload(ActivityCharge.registration), selectinload(ActivityCharge.activity), selectinload(ActivityCharge.refund_requests), selectinload(ActivityCharge.payment_attempts)).order_by(ActivityCharge.created_at.desc(), ActivityCharge.id.desc())))
     return [service.charge_read(item, item.registration, item.activity) for item in charges]
 
 
@@ -77,7 +82,7 @@ async def update_payment_settings(activity_id: str, body: ActivityPaymentSetting
 
 @router.get("/v1/admin/activity-refund-requests", response_model=list[ActivityRefundRequestRead])
 async def refund_requests(activity_id: str | None = None, status: str | None = None, _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    query = select(ActivityRefundRequest).join(ActivityCharge).order_by(ActivityRefundRequest.created_at.desc())
+    query = select(ActivityRefundRequest).join(ActivityCharge).order_by(ActivityRefundRequest.created_at.desc(), ActivityRefundRequest.id.desc())
     if activity_id:
         query = query.where(ActivityCharge.activity_id == activity_id)
     if status:

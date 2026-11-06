@@ -336,7 +336,7 @@ async def admin_list_activities(
         await session.scalars(
             select(Activity)
             .options(*activity_service.activity_options())
-            .order_by(Activity.created_at.desc())
+            .order_by(Activity.created_at.desc(), Activity.id.desc())
         )
     ).all()
     return [_activity_read(activity, admin) for activity in activities]
@@ -601,7 +601,7 @@ async def list_member_proposals(
             .options(selectinload(MemberProposal.votes))
             .options(selectinload(MemberProposal.options))
             .options(selectinload(MemberProposal.created_by))
-            .order_by(MemberProposal.created_at.desc())
+            .order_by(MemberProposal.created_at.desc(), MemberProposal.id.desc())
         )
     ).all()
     changed = False
@@ -893,7 +893,7 @@ async def admin_list_member_proposals(
                 selectinload(MemberProposal.options),
                 selectinload(MemberProposal.created_by),
             )
-            .order_by(MemberProposal.created_at.desc())
+            .order_by(MemberProposal.created_at.desc(), MemberProposal.id.desc())
         )
     ).all()
     return [_proposal_read(proposal, admin.id) for proposal in proposals]

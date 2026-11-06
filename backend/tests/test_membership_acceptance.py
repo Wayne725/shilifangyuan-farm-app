@@ -1,9 +1,9 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 
-from app.models import MemberProfile, MembershipChargeKind, MembershipFeeSchedule, MembershipDocument
+from app.models import MemberProfile, MembershipCharge, MembershipChargeKind, MembershipChargeStatus, MembershipFeeSchedule, MembershipDocument
 from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.routers.membership import get_document_storage
 from tests.membership_support import seed_legacy_document
@@ -111,6 +111,16 @@ async def test_document_free_submission_defers_fees_until_admin_approval(v2_cont
     assert {(charge["charge_kind"], charge["amount"], charge["status"]) for charge in charges} == {
         ("admission_fee", 500, "pending"), ("share_capital", 1000, "pending"),
     }
+    admission = await session.get(MembershipCharge, next(charge["id"] for charge in charges if charge["charge_kind"] == "admission_fee"))
+    shares = await session.get(MembershipCharge, next(charge["id"] for charge in charges if charge["charge_kind"] == "share_capital"))
+    shares.created_at = datetime.now(timezone.utc)
+    admission.created_at = shares.created_at - timedelta(days=1)
+    admission.status = MembershipChargeStatus.PAID
+    await session.commit()
+    history = await client.get("/v1/membership/charges", headers=headers)
+    assert [charge["id"] for charge in history.json()] == [shares.id, admission.id]
+    assert [charge["status"] for charge in history.json()] == ["pending", "paid"]
+    assert (await client.get("/v1/membership/charges", headers=auth_headers(v2_context["customer_b"]))).json() == []
 
 
 async def test_member_profile_hides_share_holdings_but_admin_retains_records(v2_context):

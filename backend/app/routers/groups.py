@@ -224,7 +224,7 @@ async def list_campaigns(
     session: AsyncSession = Depends(get_session),
 ) -> List[CampaignRead]:
     campaigns = await session.scalars(
-        select(GroupCampaign).order_by(GroupCampaign.created_at.desc())
+        select(GroupCampaign).order_by(GroupCampaign.created_at.desc(), GroupCampaign.id.desc())
     )
     return [campaign_read(campaign) for campaign in campaigns]
 
