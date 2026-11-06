@@ -16,7 +16,7 @@ from ..models import AdminAudit, PrintJob, User
 from ..order_summary import OrderSummaryFilters, build_print_summary, read_order_summary
 from ..printer_worker import wake_printer
 from ..printing import printer_fingerprint, receipt_preview, seal_receipt_content
-from ..summary_printing import (format_summary_pages, normalized_print_filters, read_summary_jobs,
+from ..summary_printing import (SUMMARY_FORMAT_VERSION, format_summary_pages, normalized_print_filters, read_summary_jobs,
                                summary_batch_read, summary_fingerprint, summary_generated_at)
 
 
@@ -101,6 +101,7 @@ async def create_summary_print_jobs(
             event_key=f"summary:{request_id}:{page:02}", mode=mode,
             printer_fingerprint=printer_fingerprint(settings), content=sealed,
             snapshot={"kind": "summary", "request_id": request_id, "page": page, "page_count": len(pages),
+                      "format_version": SUMMARY_FORMAT_VERSION,
                       "filters": report["filters"], "summary": report["summary"], "fingerprint": fingerprint,
                       "source_versions": report["source_versions"],
                       "printer_region": configured_region(settings)}))

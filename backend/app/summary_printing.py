@@ -16,22 +16,36 @@ from .printing import printer_fingerprint, receipt_time, wrap_text
 
 
 MAX_SUMMARY_PAGES = 50
+SUMMARY_FORMAT_VERSION = 2
 
 
 def normalized_print_filters(filters: OrderSummaryFilters) -> dict:
     return filters.model_copy(update={"status": "paid"}).model_dump(mode="json", exclude={"limit", "offset"})
 
 
-def summary_fingerprint(report: dict, settings: Settings) -> str:
+def summary_fingerprint(report: dict, settings: Settings, *, format_version: int = SUMMARY_FORMAT_VERSION) -> str:
     payload = {"report": report, "printer": printer_fingerprint(settings),
                "region": configured_region(settings), "width": settings.printer_line_width,
                "mode": "dry_run" if settings.printer_dry_run else "live"}
+    if format_version >= 2:
+        payload["format_version"] = format_version
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _lines(value: object, width: int, tag: str | None = None) -> list[str]:
     return [f"<{tag}>{line}</{tag}>" if tag else line
             for line in wrap_text(value, width // 2 if tag in {"CB", "B", "W"} else width)]
+
+
+def _variant_label(options: list[str]) -> str:
+    staples, extras = [], []
+    for option in options:
+        group, separator, name = option.partition("：")
+        if separator and "主食" in group:
+            staples.append(f"主食：{name}")
+        else:
+            extras.append(name if separator else option)
+    return "－".join([*staples, *extras]) or "無選項"
 
 
 def format_summary_pages(report: dict, generated_at: str, request_id: str, *, width: int = 32,
@@ -44,7 +58,7 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
         result = [*_lines("十里方圓 合作社", width, "C"), *_lines("訂單彙總", width, "CB")]
         if dry_run:
             result += _lines("＊＊ 模擬列印 ＊＊", width, "BOLD")
-        result += [*_lines(category, width, "BOLD"), *_lines("已付款・未取消", width, "BOLD"),
+        result += [*_lines(category, width, "BOLD"), *_lines("已付款", width, "BOLD"),
                    *_lines(f"{date_basis}（台灣）", width),
                    *_lines(f"{filters['starts_on']} 至 {filters['ends_on']}", width)]
         if filters.get("sales_channel") in {"regular", "group"}:
@@ -52,7 +66,7 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
         for key, label in [("search", "品項查詢"), ("category", "品類")]:
             if filters.get(key):
                 result += _lines(f"{label}：{filters[key]}", width)
-        result += [*_lines(f"統計：{generated_at}", width), *_lines(f"彙總：{request_id}", width),
+        result += [*_lines(f"統計：{generated_at}", width),
                    *_lines(f"第 {page}/{total} 張", width, "C"),
                    *_lines(f"全單 {totals['order_count']} 筆訂單", width),
                    *_lines(f"{totals['product_count']} 種品項・總數量 {totals['quantity']}", width), "-" * width]
@@ -96,7 +110,7 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
     for product in report["products"]:
         details: list[str] = []
         for variant in product["variants"]:
-            options = "／".join(variant["options"]) or "無選項"
+            options = _variant_label(variant["options"])
             details += _lines(f"  {variant['quantity']} {product['unit']} × {options}", width)
         section(f"{product['quantity']} {product['unit']} × {product['name']}", details)
     for note in report.get("notes", []):
@@ -116,13 +130,16 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
 
 
 async def summary_job_is_current(session: AsyncSession, job: PrintJob, settings: Settings) -> bool:
+    format_version = job.snapshot.get("format_version", 1)
+    if format_version not in (1, SUMMARY_FORMAT_VERSION):
+        return False
     try:
         report = await build_print_summary(session, OrderSummaryFilters.model_validate(job.snapshot["filters"]))
     except HTTPException as exc:
         if exc.status_code != 422:
             raise
         return False
-    return summary_fingerprint(report, settings) == job.snapshot["fingerprint"]
+    return summary_fingerprint(report, settings, format_version=format_version) == job.snapshot["fingerprint"]
 
 
 async def read_summary_jobs(session: AsyncSession, request_id: str) -> list[PrintJob]:
