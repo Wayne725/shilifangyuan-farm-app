@@ -7,7 +7,7 @@ const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4185');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname) || target.pathname !== '/') throw new Error('Only isolated local checkout is allowed');
 const base = target.origin;
 const product = { id: 'barcode-product', name: '載具測試白米', unit: '包', member_price: 300, nonmember_price: 300, stock_quantity: 20, is_active: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'tax_exempt' };
-const campaign = { id: 'barcode-group', title: '載具測試共同購買', description: '', member_price: 300, nonmember_price: 300, target_type: 'product', target_id: product.id, status: 'open', intake_status: 'open', deadline: '2030-01-04T00:00:00Z', estimated_pickup_start: '2030-01-05T00:00:00Z', estimated_pickup_end: '2030-01-06T00:00:00Z', paid_quantity: 0, min_paid_quantity: 1, supply_cap: 50, per_user_cap: 10, available_quantity: 50, allowed_shipping_channels: [], can_ship: false };
+const campaign = { id: 'barcode-group', title: '載具測試共同購買', description: '', member_price: 300, nonmember_price: 300, target_type: 'product', target_id: product.id, status: 'open', intake_status: 'open', decision_status: 'recruiting', deadline: '2030-01-04T00:00:00Z', estimated_pickup_start: '2030-01-05T00:00:00Z', estimated_pickup_end: '2030-01-06T00:00:00Z', paid_quantity: 0, min_paid_quantity: 1, supply_cap: 50, per_user_cap: 10, available_quantity: 50, allowed_shipping_channels: [], can_ship: false };
 const buyer = (id, saved_mobile_barcode = null) => ({ id, email: `${id}@example.test`, display_name: id, user_role: 'customer', membership_type: 'nonmember', saved_mobile_barcode });
 
 async function fixture(t, { saved = null, failCount = 0, failStatus = 503, holdFirst = false, width = 390 } = {}) {
@@ -209,10 +209,15 @@ test('舊分頁過期後 refresh 到另一帳號，保存仍綁原帳號且拒�
   await barcodeInput().fill('/NEW1234');
   await storageOption(page).check();
   await pay.click();
-  await page.getByText('登入帳號已變更，請重新整理後再試', { exact: true }).waitFor();
-  assert.deepEqual(state.owners, ['buyer-a', 'buyer-a']);
+  await page.waitForFunction(() => document.querySelector('a[aria-label="會員中心：buyer-b"]'));
+  await barcodeInput().waitFor();
+  assert.deepEqual(state.owners, ['buyer-a']);
   assert.equal(state.user.id, 'buyer-b');
   assert.equal(state.user.saved_mobile_barcode, '/BBB1234');
+  assert.equal(await barcodeInput().inputValue(), '/BBB1234');
+  assert.equal(await page.getByRole('textbox', { name: '發票通知 Email', exact: true }).inputValue(), 'buyer-b@example.test');
+  assert.equal(await storageOption(page).isChecked(), false);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), [{ product, quantity: 1 }]);
   assert.deepEqual(state.writes, []);
 });
 

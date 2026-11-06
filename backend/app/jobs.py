@@ -657,7 +657,10 @@ async def _reconcile_member_proposals(
                     & (MemberProposal.voting_ends_at <= now),
                 )
             )
-            .options(selectinload(MemberProposal.votes))
+            .options(
+                selectinload(MemberProposal.votes),
+                selectinload(MemberProposal.options),
+            )
             .order_by(MemberProposal.created_at)
             .limit(limit)
             .with_for_update()
