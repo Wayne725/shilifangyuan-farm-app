@@ -84,11 +84,11 @@ async def test_all_payment_states_use_safe_manual_document(manual_context, payme
     data = await preview(c)
     assert data["kind"] == kind and data["can_print"] is True
     assert data["payment_status"] == payment.value
-    assert "管理員補印" in data["preview"]
+    assert "管理員補印" in data["preview"].splitlines()
     if payment == PaymentStatus.LATE_PAID_REFUND_REQUIRED:
         assert "逾期付款待退款" in data["preview"]
     if kind == "reference":
-        assert "訂單紀錄單" in data["preview"] and "請勿製作" in data["preview"]
+        assert "訂單紀錄單" in data["preview"] and "請勿製作" in data["preview"].splitlines()
         assert "876543" not in data["preview"] and "取餐碼" not in data["preview"]
     result, _ = await submit(c, data)
     assert result.status_code == 201, result.text
@@ -100,6 +100,9 @@ async def test_all_payment_states_use_safe_manual_document(manual_context, payme
     assert job.status == "simulated" and job.content.startswith("receipt-content:v1:")
     content = open_receipt_content(job.content, c.order_id, c.settings)
     assert "付款狀態" in content and "履約狀態" in content and c.buyer.email in content
+    assert "<CB>管理員補印</CB>" in content
+    if kind == "reference":
+        assert "<CB>請勿製作</CB>" in content
 
 
 @pytest.mark.parametrize("fulfillment", [FulfillmentState.PICKED_UP, FulfillmentState.DELIVERED, FulfillmentState.NO_SHOW])
