@@ -166,14 +166,6 @@
 .line-consent-page .line-membership-intent button.is-selected { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
 .line-consent-alternatives { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.5rem; margin-top: 1.5rem; }
 .line-consent-alternatives > a { display: inline-flex; align-items: center; min-height: 44px; }
-.member-lookup-page { width: min(calc(100% - 2rem), 38rem); }
-.member-lookup-form, .member-lookup-result { margin-top: 2rem; }
-.member-lookup-form { display: grid; gap: 1.25rem; }
-.member-lookup-form input, .member-lookup-form .button { width: 100%; min-width: 0; min-height: 3.25rem; font-size: 1.125rem; }
-.member-lookup-form .form-error { margin: 0; }
-.member-lookup-result .line-consent-actions { margin-top: 1.5rem; }
-.member-lookup-result .line-consent-actions > :is(a, button) { min-height: 44px; }
-.member-lookup-result button.text-link { background: transparent; font: inherit; cursor: pointer; }
 .line-existing-login { margin-bottom: 1.5rem; background: transparent; font: inherit; cursor: pointer; }
 
 .registration-methods { display: grid; gap: 18px; margin-block: 28px; }
@@ -186,3 +178,5 @@
 .registration-flow .auth-page-intro > div { margin-block: auto; padding-block: 2rem; }
 .registration-back { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; margin-bottom: 1.5rem; padding: 0; border: 0; border-bottom: 1px solid var(--line-strong); color: var(--ink-soft); background: transparent; font: inherit; cursor: pointer; }
 .registration-back:focus-visible { outline: 3px solid var(--moss-dark); outline-offset: 4px; }
+
+.registration-existing-entry { width: 100%; margin-block: 0 1.5rem; min-height: 48px; white-space: normal; }
