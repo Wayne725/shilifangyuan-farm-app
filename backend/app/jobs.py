@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from .config import Settings, get_settings
+from .member_lookup import MEMBER_LOOKUP_EVENT, prepare_member_lookup_email
 from .database import SessionLocal, get_session
 from .domain import apply_proposal_clock
 from .group_review import current_order_attempt, reconcile_campaign_state, remind_campaign_review, valid_notification_email, publish_campaign_notification_once
@@ -1090,6 +1091,7 @@ async def _notify_invoice_void_terminal_failure(
 
 def _redact_auth_credential(event: OutboxEvent) -> None:
     if event.event_type not in {
+        MEMBER_LOOKUP_EVENT,
         "auth.email_verification_requested",
         "auth.password_reset_requested",
     }:
@@ -1098,6 +1100,8 @@ def _redact_auth_credential(event: OutboxEvent) -> None:
     payload.pop("verification_token", None)
     payload.pop("reset_token", None)
     payload.pop("credential_encrypted", None)
+    if event.event_type == MEMBER_LOOKUP_EVENT:
+        payload.pop("result_encrypted", None)
     payload["credential_redacted"] = True
     event.payload = payload
 
@@ -1129,6 +1133,9 @@ async def _dispatch_outbox_event(
         "auth.password_reset_requested",
     }:
         await _process_auth_email_event(settings, event)
+    elif event.event_type == MEMBER_LOOKUP_EVENT:
+        message = await prepare_member_lookup_email(session, settings, event)
+        await email_sender_from_settings(settings).send(message)
     elif event.event_type == "send_email":
         await _process_email_event(settings, event)
     else:

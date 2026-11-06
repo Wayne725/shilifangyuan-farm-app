@@ -6,6 +6,7 @@ from .models import Order, OutboxEvent
 
 
 JOB_TITLES = {
+    "auth.member_lookup_requested": "社員資格查詢結果",
     "invoice.issue_requested": "電子發票開立",
     "invoice.issue": "電子發票開立",
     "issue_invoice": "電子發票開立",
@@ -27,7 +28,7 @@ EMAIL_TITLES = {
 JOB_KINDS = {
     "invoice": {"invoice.issue_requested", "invoice.issue", "issue_invoice", "invoice.adjustment_required"},
     "refund": {"refund.requested", "sandbox_refund"},
-    "email": {"send_email", "auth.email_verification_requested", "auth.password_reset_requested"},
+    "email": {"send_email", "auth.email_verification_requested", "auth.password_reset_requested", "auth.member_lookup_requested"},
 }
 ERROR_RULES = (
     (("timeout", "timed out", "逾時"), "外部服務回應逾時，尚未確認處理結果。"),

@@ -164,7 +164,16 @@
 .account-login-page .line-login-link { min-height: 2.75rem; padding: .5rem 1rem; font-size: 1rem; }
 .line-consent-page .line-membership-intent { margin-block: 1.5rem; }
 .line-consent-page .line-membership-intent button.is-selected { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
-.line-consent-email { margin-top: 1.5rem; }
+.line-consent-alternatives { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1.5rem; margin-top: 1.5rem; }
+.line-consent-alternatives > a { display: inline-flex; align-items: center; min-height: 44px; }
+.member-lookup-page { width: min(calc(100% - 2rem), 38rem); }
+.member-lookup-form, .member-lookup-result { margin-top: 2rem; }
+.member-lookup-form { display: grid; gap: 1.25rem; }
+.member-lookup-form input, .member-lookup-form .button { width: 100%; min-width: 0; min-height: 3.25rem; font-size: 1.125rem; }
+.member-lookup-form .form-error { margin: 0; }
+.member-lookup-result .line-consent-actions { margin-top: 1.5rem; }
+.member-lookup-result .line-consent-actions > :is(a, button) { min-height: 44px; }
+.member-lookup-result button.text-link { background: transparent; font: inherit; cursor: pointer; }
 .line-existing-login { margin-bottom: 1.5rem; background: transparent; font: inherit; cursor: pointer; }
 
 .registration-methods { display: grid; gap: 18px; margin-block: 28px; }

@@ -4,7 +4,7 @@ export function loginReturnTo(value: unknown): string {
   const target = new URL(value, "https://return.invalid");
   if (target.origin !== "https://return.invalid") return "/shop";
   if (["/login", "/line-consent", "/auth/line/callback"].includes(target.pathname)) return "/account";
-  if (["/register", "/verify-email", "/forgot-password", "/reset-password"].includes(target.pathname)) return "/";
+  if (["/register", "/verify-email", "/forgot-password", "/reset-password", "/member-lookup"].includes(target.pathname)) return "/";
   return `${target.pathname}${target.search}${target.hash}`;
 }
 
@@ -17,7 +17,7 @@ export function verificationReturnTo(value: unknown): string {
     const target = new URL(value, "https://return.invalid");
     const path = decodeURIComponent(target.pathname).replace(/\/+$/, "").toLowerCase();
     if (target.origin !== "https://return.invalid"
-      || ["/login", "/line-consent", "/auth/line/callback", "/register", "/verify-email", "/forgot-password", "/reset-password"].includes(path)) return "/shop";
+      || ["/login", "/line-consent", "/auth/line/callback", "/register", "/verify-email", "/forgot-password", "/reset-password", "/member-lookup"].includes(path)) return "/shop";
     return `${target.pathname}${target.search}${target.hash}`;
   } catch {
     return "/shop";

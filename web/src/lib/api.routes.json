@@ -222,6 +222,7 @@
   "POST /v1/auth/line/start",
   "POST /v1/auth/login",
   "POST /v1/auth/logout",
+  "POST /v1/auth/member-lookup",
   "POST /v1/auth/refresh",
   "POST /v1/auth/register",
   "POST /v1/auth/register-existing-member",

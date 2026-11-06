@@ -36,6 +36,9 @@ export function LineConsentPage() {
       <p>LINE 授權只提供畫面列出的 LINE 資料，不會因此自動取得社員資格。取消 LINE 授權也不會自動刪除網站已建立的帳號或訂單資料。</p>
     </section>
     {loginEntry && <LineLoginButton intent="nonmember" rememberMe={search.remember_me !== false} returnTo={returnTo} consentLink={false} consentText="我已閱讀並同意十里方圓依上述用途使用及保存 LINE 登入資料。" />}
-    <a className="text-link line-consent-email" href={loginUrl}>使用 Email 登入</a>
+    <div className="line-consent-alternatives">
+      <a className="text-link" href={loginUrl}>使用 Email 登入</a>
+      <Link className="text-link" to="/member-lookup" search={{ return_to: returnTo, remember_me: search.remember_me !== false }}>不確定是否是社員？</Link>
+    </div>
   </section>;
 }
