@@ -12,7 +12,7 @@ from .config import Settings, get_settings
 from .database import SessionLocal
 from .integrations.feie import FeieClient, FeieError, validate_live_config
 from .models import FulfillmentStatus, Order, PaymentStatus, PrintJob
-from .manual_order_printing import current_manual_snapshot, load_manual_print_order, manual_print_kind
+from .manual_order_printing import current_manual_snapshot, load_manual_print_order, manual_print_kind, manual_print_status_error
 from .printing import (confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
                        receipt_time, render_receipt_snapshot, seal_receipt_content)
 from .summary_printing import summary_job_is_current
@@ -39,6 +39,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
             PrintJob.next_attempt_at <= now,
             or_(and_(PrintJob.status == "pending", or_(
                 PrintJob.kind.in_({"cancellation", "summary", "reference"}),
+                PrintJob.reprint_of_id.is_not(None),
                 and_(PrintJob.kind == "order", PrintJob.snapshot["manual"].as_boolean().is_(True)),
                 Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
                 Order.payment_status.in_([PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED]),
@@ -53,8 +54,12 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id).with_for_update())
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
             return True
-        if job.kind == "reference" or (job.kind == "order" and job.snapshot.get("manual")):
+        if job.kind == "reference" or job.snapshot.get("manual") or job.reprint_of_id:
             order = await load_manual_print_order(session, job.order_id)
+            if job.status == "pending" and (blocked := manual_print_status_error(order)):
+                job.status, job.last_error = "failed", blocked
+                await session.commit()
+                return True
         if job.kind in {"cancellation", "amendment"} and job.status == "pending":
             sending = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == job.order_id, PrintJob.id != job.id, PrintJob.kind.in_({"order", "amendment"}), PrintJob.status == "sending").limit(1))
             if sending:

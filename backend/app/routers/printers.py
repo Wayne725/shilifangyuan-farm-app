@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from ..auth import require_admin
 from ..config import Settings, get_settings
@@ -13,9 +14,9 @@ from ..database import get_session
 from ..integrations.feie import FeieClient, FeieError, configuration_read, configured_region, validate_live_config
 from ..models import AdminAudit, Order, OrderItem, PrintJob, User
 from ..manual_order_printing import (current_fulfillment_status, current_manual_snapshot, load_manual_print_order,
-                                    manual_print_blocked_reason, order_print_jobs, order_print_preview_token)
+                                    manual_print_blocked_reason, manual_print_order_blocked_reason, order_print_jobs, order_print_preview_token)
 from ..printer_worker import wake_printer
-from ..printing import (confirmed_print_payment, format_receipt, fresh_receipt_snapshot, job_matches_printer, job_read, job_region,
+from ..printing import (format_receipt, fresh_receipt_snapshot, job_matches_printer, job_read, job_region,
                         open_receipt_content, payment_snapshot_from_session, printer_fingerprint, receipt_preview,
                         render_receipt_snapshot)
 
@@ -74,7 +75,8 @@ async def print_job(job_id: str, _admin: User = Depends(require_admin), session:
     if job is None:
         raise HTTPException(404, "找不到列印工作")
     _require_order_job(job)
-    order = await session.get(Order, job.order_id)
+    order = await session.scalar(select(Order).where(Order.id == job.order_id).options(selectinload(Order.fulfillment)))
+    blocked = manual_print_order_blocked_reason(order)
     try:
         if job.content is not None:
             preview = open_receipt_content(job.content, job.order_id, settings)
@@ -84,9 +86,9 @@ async def print_job(job_id: str, _admin: User = Depends(require_admin), session:
     except FeieError as exc:
         if exc.code != "receipt_too_long":
             return {**job_read(job, settings, order), "preview": "加密收據或聯絡資料無法解密，請確認資料金鑰後再處理。",
-                    "preview_error": exc.code}
+                    "preview_error": exc.code, "reprint_blocked_reason": blocked}
         preview = "內容超出單張 5000 bytes 上限，請依訂單人工處理。"
-    return {**job_read(job, settings, order), "preview": receipt_preview(preview)}
+    return {**job_read(job, settings, order), "preview": receipt_preview(preview), "reprint_blocked_reason": blocked}
 
 
 class ReprintRequest(BaseModel):
@@ -139,7 +141,8 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
     if source_info.kind == "summary":
         raise HTTPException(409, "這是訂單彙總單，請回訂單彙整查看此批列印狀態")
     order_id = source_info.order_id
-    order = await session.scalar(select(Order).where(Order.id == order_id).execution_options(populate_existing=True).with_for_update())
+    order = await session.scalar(select(Order).where(Order.id == order_id).options(selectinload(Order.fulfillment))
+        .execution_options(populate_existing=True).with_for_update())
     source = await session.scalar(select(PrintJob).where(PrintJob.id == job_id).with_for_update())
     if source.kind == "reference" or source.snapshot.get("manual"):
         raise HTTPException(409, "請回到訂單頁重新預覽目前狀態後列印")
@@ -156,10 +159,8 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
         raise HTTPException(409, "工作仍待發送或正在發送，請先確認結果")
     if source.status in {"submitted", "unknown"} and not body.acknowledge_duplicate:
         raise HTTPException(409, "原單可能已列印；請先查詢並確認可重複列印")
-    if order.cancelled_at and source.kind in {"order", "amendment"}:
-        raise HTTPException(409, "訂單已取消，僅能補印取消通知")
-    if source.kind in {"order", "amendment"} and not confirmed_print_payment(order):
-        raise HTTPException(409, "訂單尚未確認付款成功，不能補印製作單")
+    if blocked := manual_print_order_blocked_reason(order):
+        raise HTTPException(409, blocked)
     if source.kind in {"order", "amendment"} and source.snapshot.get("revision", 1) != order.revision:
         raise HTTPException(409, "訂單已更新，請選擇最新版出單工作補印")
     in_progress = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == order_id,
