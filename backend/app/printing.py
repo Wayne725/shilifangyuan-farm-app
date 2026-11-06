@@ -231,7 +231,7 @@ def receipt_contact(snapshot: dict, contact_email: str) -> dict:
 
 async def fresh_receipt_snapshot(session: AsyncSession, snapshot: dict, order: Order) -> dict:
     result = {key: value for key, value in snapshot.items()
-              if key not in {"print_requested_at", "customer_phone", "customer_phone_encrypted", "customer_email", "customer_email_encrypted", "manual"}}
+              if key not in {"print_requested_at", "customer_phone", "customer_phone_encrypted", "customer_email", "customer_email_encrypted", "manual", "fulfillment_status_label"}}
     result.update(receipt_contact(snapshot, order.contact_email))
     result.setdefault("ordered_at", receipt_time(order.created_at))
     if "pickup_code" not in result:

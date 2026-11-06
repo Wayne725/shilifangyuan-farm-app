@@ -247,6 +247,7 @@ async def test_cancellation_after_manual_production_keeps_stop_notice_and_reason
     assert cancellation.status == "simulated"
     assert "取消通知" in content and "請停止製作" in content and "顧客臨時取消" in content
     assert "訂單紀錄單" not in content and "管理員補印" not in content
+    assert "履約狀態：製作中" not in content
 
 
 @pytest.mark.parametrize("payment", [PaymentStatus.PENDING, PaymentStatus.PAID])
