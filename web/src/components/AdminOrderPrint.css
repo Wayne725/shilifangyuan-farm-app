@@ -1,0 +1,17 @@
+.admin-order-print { margin-block: 16px; }
+.admin-order-print-overlay { position: fixed; inset: 0; z-index: 150; background: rgb(24 35 28 / 48%); }
+.admin-order-print-dialog { position: fixed; top: 50%; left: 50%; z-index: 151; width: min(580px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 32px; overflow-y: auto; transform: translate(-50%, -50%); border: 1px solid var(--line); background: var(--paper-light); color: var(--ink); overflow-wrap: anywhere; }
+.admin-order-print-dialog h2 { margin: 0 40px 16px 0; font-size: 1.5rem; }
+.admin-order-print-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; line-height: 1.6; padding: 20px; border: 1px solid var(--line); background: white; }
+.admin-order-print-dialog .field { margin-block: 20px; }
+.admin-order-print-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.admin-order-print-check { display: flex; gap: 10px; align-items: flex-start; margin-block: 16px; }
+.admin-order-print-check input { flex-shrink: 0; margin-top: 5px; }
+.admin-order-print-result { display: grid; gap: 10px; margin-block: 20px; }
+.admin-order-print-another { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 8px; }
+.admin-order-print-close { position: absolute; top: 16px; right: 16px; }
+@media (max-width: 600px) {
+  .admin-order-print-dialog { padding: 24px 20px; }
+  .admin-order-print-dialog .button { width: 100%; white-space: normal; }
+  .admin-order-print-dialog pre { padding: 12px; font-size: 0.875rem; }
+}

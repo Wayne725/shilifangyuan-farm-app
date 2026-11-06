@@ -1859,7 +1859,7 @@ class PrintJob(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending','sending','submitted','printed','failed','unknown','simulated')", name="valid_status"),
         CheckConstraint("mode IN ('dry_run','live')", name="valid_mode"),
-        CheckConstraint("kind IN ('order','cancellation','amendment','summary')", name="valid_kind"),
+        CheckConstraint("kind IN ('order','cancellation','amendment','summary','reference')", name="valid_kind"),
         CheckConstraint("(kind = 'summary' AND order_id IS NULL) OR (kind <> 'summary' AND order_id IS NOT NULL)", name="valid_order_reference"),
         Index("ix_print_jobs_due", "status", "next_attempt_at"),
     )

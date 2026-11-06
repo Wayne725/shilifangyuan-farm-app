@@ -36,6 +36,7 @@ async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 
     if (path === '/v1/auth/refresh') return route.fulfill({ status: role === 'guest' ? 401 : 200, json: role === 'guest' ? { detail: '隔離訪客' } : { access_token: 'isolated', user: { id: 'isolated-user', email: 'isolated@example.test', display_name: '隔離驗收帳號', user_role: role, membership_type: 'nonmember' } } });
     if (method === 'GET') state.reads.push(path);
     if (path === '/v1/platform') return route.fulfill(state.phoneFailure ? { status: 503, json: { detail: '隔離平台讀取失敗' } } : { json: state.settings });
+    if (path === '/v1/admin/membership-education/settings') return route.fulfill({ json: { configured: false, version: 0, retry_limit: 0, retry_interval_minutes: 0, updated_at: null, updated_by_id: null } });
     if (path === '/v1/admin/platform') {
       if (method === 'PUT') { const body = request.postDataJSON(); state.writes.push({ path, body }); state.settings = { ...state.settings, ...body }; }
       return route.fulfill({ json: state.settings });
@@ -57,6 +58,10 @@ async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 
       state.writes.push({ path, body: request.postDataJSON() });
       state.order = { ...state.order, payment_status: 'refunded', available_actions: [] };
       return route.fulfill({ json: state.order });
+    }
+    if ([`/v1/admin/orders/${state.order.id}/invoice/query`, `/v1/admin/orders/${state.order.id}/payment/query`].includes(path)) {
+      state.writes.push({ path, body: request.postDataJSON() });
+      return route.fulfill({ json: { message: '隔離查詢已完成', status: path.endsWith('/invoice/query') ? state.order.invoice_status : state.order.payment_status } });
     }
     state.unknown.push(`${method} ${path}`);
     return route.fulfill({ status: 404, json: { detail: '未定義的隔離 API' } });
@@ -179,6 +184,33 @@ for (const path of ['/admin', '/admin/meals']) {
     assert.equal(state.writes[1].path, '/v1/orders/meal-order/admin/cash-refund');
     assert.equal(state.order.payment_status, 'refunded');
     assert.match(await page.locator('.admin-cancel-order').innerText(), /付款狀態：已退款/);
+    await assertClean(page, state);
+  });
+}
+
+for (const [label, override, expectedLink] of [
+  ['已付款有效訂單', { payment_status: 'paid' }, true],
+  ['待付款有效訂單', { payment_status: 'pending' }, true],
+  ['已退款訂單', { payment_status: 'refunded' }, false],
+  ['已取消履約訂單', { fulfillment_status: 'cancelled' }, false],
+  ['已有取消時間的訂單', { cancelled_at: '2030-01-02T02:00:00Z' }, false],
+]) {
+  test(`後台便當 ${label} 正確顯示取餐退單入口並保留發票付款查詢`, async t => {
+    const { page, state } = await fixture(t, { width: 390, channel: 'meal_preorder' });
+    Object.assign(state.order, override, { payment_method: 'online', invoice_status: 'voided', available_actions: [] });
+    await page.goto(`${base}/admin?section=orders`);
+    await page.getByText(state.order.order_number, { exact: true }).waitFor();
+    const link = page.getByRole('link', { name: '便當取餐與退單', exact: true });
+    assert.equal(await link.count(), expectedLink ? 1 : 0);
+    if (expectedLink) assert.match(await link.getAttribute('href'), /\/admin\/meals\?.*q=ISOLATED-MEAL/);
+    for (const [summary, action, kind] of [['查詢發票', '查詢作廢狀態', 'invoice'], ['查詢付款', '查詢退款狀態', 'payment']]) {
+      const control = page.locator('details.admin-extra-actions').filter({ has: page.locator('summary', { hasText: summary }) });
+      await control.locator('summary').first().click();
+      await control.getByRole('button', { name: action, exact: true }).click();
+      await control.getByText('隔離查詢已完成', { exact: true }).waitFor();
+      assert.equal(state.writes.at(-1).path, `/v1/admin/orders/meal-order/${kind}/query`);
+    }
+    assert.equal(state.writes.length, 2, '只查詢發票與付款，不更改訂單');
     await assertClean(page, state);
   });
 }

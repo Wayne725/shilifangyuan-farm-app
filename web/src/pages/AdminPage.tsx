@@ -18,6 +18,7 @@ import { AdminOrderCancellationReview } from "../components/AdminOrderCancellati
 import { AdminFailurePanel } from "../components/AdminFailurePanel";
 import { AdminInvoiceAdjustment } from "../components/AdminInvoiceAdjustment";
 import { AdminCancelOrder } from "../components/AdminCancelOrder";
+import { AdminOrderPrint } from "../components/AdminOrderPrint";
 import { AdminStatusQuery } from "../components/AdminStatusQuery";
 import { OrderStatusBadge } from "../components/OrderStatusBadge";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
@@ -153,6 +154,7 @@ export function AdminPage() {
             onShipment={(status) => advanceShipment.mutate({ orderId: order.id, status })}
           />
           <OrderQuantityAmendment order={order} disabled={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending} />
+          <AdminOrderPrint order={order} />
           <AdminCancelOrder order={order} />
           <AdminOrderCancellationReview order={order} />
           <AdminInvoiceAdjustment order={order} />
@@ -233,7 +235,8 @@ function AdminOrderAction({
 }) {
   const invoiceControl = <AdminStatusQuery orderId={order.id} kind="invoice" disabled={busy} />;
   if (order.sales_channel === "meal_preorder") {
-    return <div className="operation-actions"><Link className="button button-quiet" to="/admin/meals" search={{ tab: "orders", q: order.order_number }}>便當取餐與退單</Link>{invoiceControl}</div>;
+    const canManageMeal = order.payment_status !== "refunded" && order.fulfillment_status !== "cancelled" && !order.cancelled_at;
+    return <div className="operation-actions">{canManageMeal && <Link className="button button-quiet" to="/admin/meals" search={{ tab: "orders", q: order.order_number }}>便當取餐與退單</Link>}{invoiceControl}</div>;
   }
   if (order.payment_status !== "paid") {
     return (
