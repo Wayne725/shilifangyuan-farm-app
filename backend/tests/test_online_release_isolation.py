@@ -91,7 +91,9 @@ def test_online_product_exception_rejects_skus_longer_than_eighty_characters():
 def test_core_release_keeps_one_linear_migration_head():
     backend = Path(__file__).resolve().parents[1]
     migrations = ScriptDirectory(str(backend / "alembic"))
-    assert migrations.get_heads() == ["0040_membership_admission"]
+    assert migrations.get_heads() == ["0041_order_summary_printing"]
+    assert migrations.get_revision("0041_order_summary_printing").down_revision == "0040_membership_admission"
+    assert migrations.get_revision("0040_membership_admission").down_revision == "0039_product_daily_sales"
     assert migrations.get_revision("0039_product_daily_sales").down_revision == "0038_activity_payments"
     assert migrations.get_revision("0038_activity_payments").down_revision == "0037_group_review_window"
     assert migrations.get_revision("0037_group_review_window").down_revision == "0036_meeting_categories"

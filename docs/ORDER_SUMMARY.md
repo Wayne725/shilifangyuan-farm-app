@@ -1,12 +1,12 @@
 # 訂單彙整
 
-管理員由「訂單營運 → 訂單彙整」進入 `/admin?section=summary`，依下單日期查詢便當、共同購買及日常選品的訂單量、品類與品項數量。資料由後端全量彙總，不從訂單列表的目前頁面推算。
+管理員由「訂單營運 → 訂單彙整」進入 `/admin?section=summary`，依取餐／下單日期查詢便當、共同購買及日常選品的訂單量、品類與品項數量。資料由後端全量彙總，不從訂單列表的目前頁面推算。
 
 ## 查詢條件
 
 - 訂單分類使用「便當訂單／一般訂單」兩個按鈕，沿用訂單中心的底線頁籤樣式，預設便當。切換立即查詢，保留已套用的日期、付款狀態及品名，重設銷售類型、品類與商品分頁；重按目前分類不清除條件。一般分類包含日常選品及共同購買。
 - 便當分類不再顯示重複的「銷售類型」。只有一種可用品類且未選用品類條件時，不顯示品類篩選；多品類及仍有已選值時保留，避免隱藏的篩選無法清除。
-- 日期依 `Order.created_at`，使用台灣時區。起日 00:00 包含，迄日次日 00:00 不包含，轉 UTC 查詢。預設本月，另有今天／本週捷徑。
+- 便當畫面預設依取餐日期，按鈕可切換下單日期；一般訂單固定依下單日期。API 新參數 `date_basis=order|pickup`，省略仍以 `order` 保持舊呼叫相容；`pickup` 僅限便當分類。取餐日期使用 `OrderFulfillment.pickup_at`，舊單退回 `pickup_starts_at`，兩者皆缺時不以建立日期代替。下單日期使用 `Order.created_at`，使用台灣時區。起日 00:00 包含，迄日次日 00:00 不包含，轉 UTC 查詢。預設本月，另有今天／本週捷徑。
 - 銷售類型使用 `sales_channel`：全部、`meal_preorder` 便當、`regular` 日常選品、`group` 共同購買。
 - 狀態預設 `active` 有效訂單：付款為 `pending` 或 `paid`，且未取消。現場付款尚未收款的正常訂單也包含。
 - `paid`、`pending` 是有效訂單中的已付款／待付款；`inactive` 為其餘取消、失效或進入退款狀態的訂單；`all` 為全部。
@@ -27,8 +27,29 @@
 
 `GET /v1/admin/order-summary` 僅管理員可讀，不修改訂單、金流或庫存，不回傳買家個資。
 
-參數：`starts_on`、`ends_on`、`sales_channel`、`status`、`search`、`category`、`limit`（預設 25，上限 100）、`offset`。
+參數：`starts_on`、`ends_on`、`date_basis`、`order_category`、`sales_channel`、`status`、`search`、`category`、`limit`（預設 25，上限 100）、`offset`。
 
 回應含查詢條件、`summary`、`categories`、`channels`、`category_options` 與分頁 `products`。摘要及分類涵蓋全部符合結果，不受商品分頁影響；`category_options` 套用其他條件但不套品類本身，方便切換。商品按數量由高至低及穩定識別排序。
 
 畫面補充解釋集中在 `/help` 的「如何查詢便當與商品的訂單量及品類？」及「訂單匯總的訂單數、數量與品類如何計算？」。
+
+
+## 已付款彙總列印（2026-11-06）
+
+- 「列印彙總單」使用已套用的查詢條件，忽略商品分頁；只納入 `PAID`、`paid_at` 非空且未取消的有效訂單，不改畫面原本的狀態篩選。
+- 後端產生預覽及紙張數，管理員核對後才送印。主食／加購按完整組合加總，整單備註獨立列出並標示訂單編號與本次查詢品項，不誤認為單道菜的要求。
+- 每頁最多 5000 UTF-8 bytes、每次最多 50 張；超過 5000 筆訂單明細／30000 個選項會要求縮小範圍，不截斷。
+- 沿用持久化 PrintJob、設備區域隔離、送印租約與未知結果不自動重送。0041 migration 新增 summary 類型及空 order_id，資料庫約束仍要求其他列印工作有訂單。
+- 同一 request_id 重試只回傳原批次；前端在送出前保存識別碼，回應遺失或重整可查回原批次。批次、每頁狀態與最近十筆紀錄都可查看。
+- 預覽至建立工作及每頁送出前均核對內容摘要與訂單版本；取消、收款更正或篩選內容變化會停止未送頁面。已在途或已送出的頁面無法撤回，須核對紙本。
+- 人工紙本核對須有原因且留下稽核；未收到不代表雲端沒有排隊。結果不明要另印時須明確接受可能重複列印。
+- 不額外列姓名、電話或 Email 欄位；自由輸入的整單備註可能含聯絡資料，因此列印內容沿用後端加密保存，不把備註放稽核摘要或瀏覽器暫存。
+
+API（皆限管理員）：
+
+- `GET /v1/admin/order-summary/print-preview`：同查詢條件，回傳 fingerprint、summary、pages、page_count、filters、mode。
+- `POST /v1/admin/order-summary/print-jobs`：filters、request_id UUID、fingerprint；建立整批頁面與稽核。
+- `GET /v1/admin/order-summary/print-jobs`：最近批次；`GET .../{request_id}` 查該批次。
+- `POST .../{request_id}/pages/{job_id}/resolve`：printed 與 reason，人工核對紙本。
+
+此功能不建立商品訂單、不修改付款／庫存、不取代單筆便當付款後自動出單。完整測試與部署狀態另見發布紀錄。

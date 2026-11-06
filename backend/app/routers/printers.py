@@ -19,6 +19,11 @@ from ..printing import (confirmed_print_payment, format_receipt, fresh_receipt_s
 printers_router = APIRouter(prefix="/v1/admin/printers", tags=["printers"])
 
 
+def _require_order_job(job: PrintJob) -> None:
+    if job.kind == "summary":
+        raise HTTPException(409, "這是訂單彙總單，請回訂單彙整查看此批列印狀態")
+
+
 @printers_router.get("/configuration")
 async def printer_configuration(_admin: User = Depends(require_admin), settings: Settings = Depends(get_settings)):
     return configuration_read(settings)
@@ -65,6 +70,7 @@ async def print_job(job_id: str, _admin: User = Depends(require_admin), session:
     job = await session.get(PrintJob, job_id)
     if job is None:
         raise HTTPException(404, "找不到列印工作")
+    _require_order_job(job)
     order = await session.get(Order, job.order_id)
     try:
         if job.content is not None:
@@ -96,6 +102,7 @@ async def resolve_job(job_id: str, body: ResolveRequest, admin: User = Depends(r
     job = await session.scalar(select(PrintJob).where(PrintJob.id == job_id).with_for_update())
     if job is None:
         raise HTTPException(404, "找不到列印工作")
+    _require_order_job(job)
     if job.mode != "live" or job.status not in {"submitted", "unknown"}:
         raise HTTPException(409, "僅能人工核對正式模式中結果待確認的工作")
     job.status = "printed" if body.printed else "unknown"
@@ -119,9 +126,12 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
             validate_live_config(settings)
         except FeieError as exc:
             raise HTTPException(409, exc.code) from None
-    order_id = await session.scalar(select(PrintJob.order_id).where(PrintJob.id == job_id))
-    if order_id is None:
+    source_info = (await session.execute(select(PrintJob.order_id, PrintJob.kind).where(PrintJob.id == job_id))).first()
+    if source_info is None:
         raise HTTPException(404, "找不到列印工作")
+    if source_info.kind == "summary":
+        raise HTTPException(409, "這是訂單彙總單，請回訂單彙整查看此批列印狀態")
+    order_id = source_info.order_id
     order = await session.scalar(select(Order).where(Order.id == order_id).execution_options(populate_existing=True).with_for_update())
     source = await session.scalar(select(PrintJob).where(PrintJob.id == job_id).with_for_update())
     region = configured_region(settings)
@@ -162,6 +172,7 @@ async def query_job(job_id: str, _admin: User = Depends(require_admin), session:
     job = await session.scalar(select(PrintJob).where(PrintJob.id == job_id).with_for_update())
     if job is None:
         raise HTTPException(404, "找不到列印工作")
+    _require_order_job(job)
     if job.status not in {"submitted", "unknown"} or not job.vendor_order_id:
         raise HTTPException(409, "此工作沒有可查詢的雲端工作編號；請核對紙本結果")
     if not job_matches_printer(job, settings):

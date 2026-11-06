@@ -1859,13 +1859,14 @@ class PrintJob(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending','sending','submitted','printed','failed','unknown','simulated')", name="valid_status"),
         CheckConstraint("mode IN ('dry_run','live')", name="valid_mode"),
-        CheckConstraint("kind IN ('order','cancellation','amendment')", name="valid_kind"),
+        CheckConstraint("kind IN ('order','cancellation','amendment','summary')", name="valid_kind"),
+        CheckConstraint("(kind = 'summary' AND order_id IS NULL) OR (kind <> 'summary' AND order_id IS NOT NULL)", name="valid_order_reference"),
         Index("ix_print_jobs_due", "status", "next_attempt_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     event_key: Mapped[str] = mapped_column(String(120), unique=True)
-    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), nullable=True, index=True)
     reprint_of_id: Mapped[Optional[str]] = mapped_column(ForeignKey("print_jobs.id", ondelete="RESTRICT"), nullable=True)
     kind: Mapped[str] = mapped_column(String(16))
     mode: Mapped[str] = mapped_column(String(8))

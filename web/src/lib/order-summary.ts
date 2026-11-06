@@ -21,6 +21,7 @@ export const orderSummaryStatusLabels = {
 export interface OrderSummaryFilters {
   startsOn: string;
   endsOn: string;
+  dateBasis: "order" | "pickup";
   salesChannel: OrderSummarySalesChannel | "all";
   orderCategory: OrderCategory;
   status: OrderSummaryStatus;
@@ -41,6 +42,7 @@ export interface OrderSummaryProduct {
 export interface OrderSummaryReport {
   starts_on: string;
   ends_on: string;
+  date_basis: "order" | "pickup";
   sales_channel: OrderSummarySalesChannel | "all";
   order_category: OrderCategory;
   status: OrderSummaryStatus;
@@ -62,5 +64,18 @@ export interface OrderSummaryReport {
     total: number;
     limit: number;
     offset: number;
+  };
+}
+
+export function orderSummaryParameters(filters: OrderSummaryFilters) {
+  return {
+    starts_on: filters.startsOn,
+    ends_on: filters.endsOn,
+    date_basis: filters.dateBasis,
+    sales_channel: filters.salesChannel,
+    order_category: filters.orderCategory,
+    status: filters.status,
+    category: filters.category,
+    search: filters.search,
   };
 }

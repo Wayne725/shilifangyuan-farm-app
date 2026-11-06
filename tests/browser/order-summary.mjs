@@ -20,17 +20,18 @@ const rows = [
     name: `隔離白米選品 ${String(index + 1).padStart(2, '0')}`, unit: '袋', quantity: 2,
   })),
   { key: 'pending-rice', order_id: 'cash-pending', created_on: '2030-01-02', sales_channel: 'regular', state: 'pending', category: category_name, name: '隔離白米現場付款', unit: '袋', quantity: 7 },
-  { key: 'meal', order_id: 'meal-order', created_on: '2030-01-02', sales_channel: 'meal_preorder', state: 'paid', category: '便當', name: '隔離香菇便當', unit: '份', quantity: 4 },
+  { key: 'meal', order_id: 'meal-order', created_on: '2030-01-02', pickup_on: '2030-01-02', sales_channel: 'meal_preorder', state: 'paid', category: '便當', name: '隔離香菇便當', unit: '份', quantity: 4 },
   { key: 'bundle', order_id: 'bundle-order', created_on: '2030-01-02', sales_channel: 'group', state: 'inactive', category: '共同購買組合', name: '隔離白米組合', unit: '組', quantity: 3 },
   { key: 'old-rice', order_id: 'old-order', created_on: '2029-12-31', sales_channel: 'regular', state: 'paid', category: category_name, name: '隔離白米前期品項', unit: '袋', quantity: 99 },
 ];
 
-function summarize(query) {
+function summarize(query, source = rows) {
   const filters = {
     starts_on: query.starts_on, ends_on: query.ends_on, sales_channel: query.sales_channel || 'all',
-    order_category: query.order_category || 'all', status: query.status || 'active', search: query.search || '', category: query.category || '',
+    date_basis: query.date_basis || 'order', order_category: query.order_category || 'all', status: query.status || 'active', search: query.search || '', category: query.category || '',
   };
-  const matching = rows.filter((row) => row.created_on >= filters.starts_on && row.created_on <= filters.ends_on
+  const matching = source.filter((row) => (filters.date_basis === 'pickup' ? row.pickup_on : row.created_on) >= filters.starts_on
+    && (filters.date_basis === 'pickup' ? row.pickup_on : row.created_on) <= filters.ends_on
     && (filters.sales_channel === 'all' || row.sales_channel === filters.sales_channel)
     && (filters.order_category === 'all' || (filters.order_category === 'meal' ? row.sales_channel === 'meal_preorder' : row.sales_channel !== 'meal_preorder'))
     && (filters.status === 'all' || (filters.status === 'active' ? row.state !== 'inactive' : row.state === filters.status))
@@ -55,7 +56,7 @@ function summarize(query) {
   };
 }
 
-async function fixture(t, { width = 882, role = 'admin', failing = false, orderRows = [] } = {}) {
+async function fixture(t, { width = 882, role = 'admin', failing = false, orderRows = [], summaryRows = rows } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
@@ -72,7 +73,7 @@ async function fixture(t, { width = 882, role = 'admin', failing = false, orderR
     if (!path.startsWith('/v1/')) return route.continue();
     state.reads.push(path);
     if (path === summary_path) {
-      const query = Object.fromEntries(url.searchParams), report = summarize(query);
+      const query = Object.fromEntries(url.searchParams), report = summarize(query, summaryRows);
       state.summaries.push({ query, report, failed: state.failing });
       return route.fulfill(state.failing ? { status: 503, json: { detail: '隔離匯總服務暫時不可用' } } : { json: report });
     }
@@ -142,6 +143,7 @@ for (const width of [882, 390]) {
     assert.equal(state.summaries[0].query.sales_channel, 'all');
     assert.equal(state.summaries[0].query.status, 'active');
     assert.equal(state.summaries[0].query.order_category, 'meal');
+    assert.equal(state.summaries[0].query.date_basis, 'pickup');
     await verify_summary(page, state.summaries.at(-1).report.summary);
 
     const summary = page.getByRole('region', { name: '訂單品項彙整', exact: true });
@@ -158,7 +160,7 @@ for (const width of [882, 390]) {
     await summary.getByRole('button', { name: '查詢', exact: true }).click();
     await page.getByRole('status').getByText('共 27 種品項', { exact: true }).waitFor();
     await wait_for_summary(page);
-    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', sales_channel: 'regular', order_category: 'general', status: 'paid', category: '', search: '隔離白米', limit: '25', offset: '0' };
+    const expected_query = { starts_on: '2030-01-01', ends_on: '2030-01-03', date_basis: 'order', sales_channel: 'regular', order_category: 'general', status: 'paid', category: '', search: '隔離白米', limit: '25', offset: '0' };
     assert.deepEqual(state.summaries.at(-1).query, expected_query);
     const expected_summary = { order_count: 9, quantity: 54, product_count: 27 };
     await verify_summary(page, expected_summary);
@@ -286,8 +288,12 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   assert.equal(state.summaries.at(-1).query.offset, '25');
   await categories.getByRole('button', { name: '便當訂單', exact: true }).press('Enter');
   await wait_for_summary(page);
+  await pagination.getByText('第 1／1 頁 · 共 1 種', { exact: true }).waitFor();
+  await summary.getByRole('button', { name: '更新', exact: true }).click();
+  await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.offset, '0');
   assert.equal(state.summaries.at(-1).query.order_category, 'meal');
+  assert.equal(state.summaries.at(-1).query.date_basis, 'pickup');
   assert.equal(await summary.getByRole('combobox', { name: '銷售類型', exact: true }).count(), 0);
   assert.equal(await summary.getByRole('combobox', { name: '品類', exact: true }).count(), 0);
   await verify_summary(page, { order_count: 1, quantity: 4, product_count: 1 });
@@ -296,6 +302,37 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   await wait_for_summary(page);
   await verify_summary(page, { order_count: 0, quantity: 0, product_count: 0 });
   assert.equal(state.summaries.at(-1).query.order_category, 'meal');
+  await verify_read_only(page, state);
+});
+
+test('便當預設依取餐日期，切換下單日期重查；一般訂單不沿用取餐條件', { timeout: 30000 }, async (t) => {
+  const meal = rows.find((row) => row.key === 'meal');
+  const { page, state } = await fixture(t, { width: 390, summaryRows: [
+    { ...meal, key: 'pickup-today', order_id: 'pickup-today', created_on: '2029-12-31', pickup_on: '2030-01-02', quantity: 4 },
+    { ...meal, key: 'ordered-today', order_id: 'ordered-today', created_on: '2030-01-02', pickup_on: '2030-01-03', quantity: 9 },
+  ] });
+  await page.goto(`${base}/admin?section=summary`);
+  await wait_for_summary(page);
+  const summary = page.getByRole('region', { name: '訂單品項彙整', exact: true });
+  const dateBasis = summary.getByRole('group', { name: '統計日期依據', exact: true });
+  assert.equal(state.summaries.at(-1).query.date_basis, 'pickup');
+  assert.equal(await dateBasis.getByRole('button', { name: '依取餐日期', exact: true }).getAttribute('aria-pressed'), 'true');
+  await verify_summary(page, { order_count: 1, quantity: 4, product_count: 1 });
+  assert.equal(await summary.getByLabel('取餐日期起（台灣）', { exact: true }).count(), 1);
+  assert.equal(await summary.getByLabel('下單日期起（台灣）', { exact: true }).count(), 0);
+  await dateBasis.getByRole('button', { name: '依下單日期', exact: true }).click();
+  await wait_for_summary(page);
+  assert.equal(state.summaries.at(-1).query.date_basis, 'order');
+  assert.equal(state.summaries.at(-1).query.offset, '0');
+  await verify_summary(page, { order_count: 1, quantity: 9, product_count: 1 });
+  assert.equal(await summary.getByLabel('下單日期起（台灣）', { exact: true }).count(), 1);
+  await dateBasis.getByRole('button', { name: '依取餐日期', exact: true }).click();
+  await wait_for_summary(page);
+  await summary.getByRole('button', { name: '一般訂單', exact: true }).click();
+  await wait_for_summary(page);
+  assert.equal(state.summaries.at(-1).query.date_basis, 'order');
+  assert.equal(await dateBasis.count(), 0);
+  assert.equal(await summary.getByLabel('取餐日期起（台灣）', { exact: true }).count(), 0);
   await verify_read_only(page, state);
 });
 
