@@ -2,6 +2,7 @@ from .activity_payments import router as activity_payments_router
 from .activity_finance import router as activity_finance_router
 from .photos import photos_router
 from .auth import auth_router
+from .member_lookup import member_lookup_router
 from .line_auth import line_auth_router
 from .admin_users import admin_users_router
 from .catalog import catalog_router
@@ -40,6 +41,7 @@ ALL_ROUTERS = [
     member_reports_router,
     meal_cancellation_reports_router,
     auth_router,
+    member_lookup_router,
     line_auth_router,
     admin_users_router,
     catalog_router,

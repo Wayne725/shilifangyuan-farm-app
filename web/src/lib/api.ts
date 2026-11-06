@@ -113,6 +113,7 @@ export async function apiFetch<T>(
     "/v1/auth/refresh",
     "/v1/auth/register",
     "/v1/auth/register-existing-member",
+    "/v1/auth/member-lookup",
     "/v1/auth/verify-email",
     "/v1/auth/resend-verification",
     "/v1/auth/forgot-password",
