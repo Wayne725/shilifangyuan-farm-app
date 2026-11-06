@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import case, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -50,7 +50,11 @@ from .integrations.payment_service import (
 )
 from .integrations.pii_crypto import decrypt_auth_outbox_credential
 from .integrations.email_sender import (
+    EmailDeliveryRejected,
+    EmailDeliveryUnknown,
     EmailMessage,
+    EmailSendResult,
+    email_transport_failure,
     email_sender_from_settings,
 )
 from .models import (
@@ -90,6 +94,10 @@ from .models import (
     VoteProposal,
 )
 from .v2_domain import apply_member_proposal_clock
+from .reconciliation import ReconciliationMonitor, ReconciliationPartialFailure
+from .reconciliation import read_reconciliation_status
+from .reconciliation_schemas import ReconciliationStatusRead
+from .auth import require_admin
 
 
 # Uvicorn configures its own logger, not the root app logger.
@@ -118,6 +126,17 @@ _last_lazy_reconcile_at = 0.0
 _background_reconcile_task: Optional["asyncio.Task[None]"] = None
 
 
+@jobs_router.get("/v1/admin/reconciliation-status", response_model=ReconciliationStatusRead)
+async def reconciliation_status(
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ReconciliationStatusRead:
+    response.headers["Cache-Control"] = "no-store"
+    return await read_reconciliation_status(session, settings, payment_candidates=expired_payment_candidates, meal_candidates=meal_event_candidates)
+
+
 @jobs_router.post("/internal/reconcile")
 async def reconcile_endpoint(
     x_reconcile_secret: str = Header(default=""),
@@ -128,7 +147,10 @@ async def reconcile_endpoint(
         x_reconcile_secret, settings.internal_reconcile_secret
     ):
         raise HTTPException(status_code=401, detail="Reconcile secret 無效")
-    return (await reconcile_once(session, settings)).to_dict()
+    try:
+        return (await reconcile_once(session, settings, source="internal")).to_dict()
+    except ReconciliationPartialFailure:
+        raise HTTPException(status_code=503, detail="部分背景階段未完成，請至管理後台核對結算狀態") from None
 
 
 def _aware(value: datetime) -> datetime:
@@ -142,41 +164,71 @@ async def reconcile_once(
     settings: Optional[Settings] = None,
     limit: int = 100,
     now: Optional[datetime] = None,
+    *,
+    source: str = "job",
 ) -> ReconcileReport:
     active_settings = settings or get_settings()
     current = now or datetime.now(timezone.utc)
     report = ReconcileReport()
-    report.payment_attempts = await _reconcile_expired_payments(
-        session, active_settings, current, limit
-    )
     from .activity_payments import reconcile_charges
-    await reconcile_charges(session, current, limit)
-    await _reconcile_expired_cash_orders(session, current, limit)
-    report.proposals = await _reconcile_proposals(session, current, limit)
-    report.campaigns = await _reconcile_campaigns(
-        session, active_settings, current, limit
-    )
-    report.member_proposals = await _reconcile_member_proposals(
-        session,
-        current,
-        limit,
-    )
-    report.activities = await _reconcile_activities(
-        session,
-        current,
-        limit,
-    )
-    report.meal_events = await _reconcile_meal_events(
-        session,
-        current,
-        limit,
-    )
-    report.meal_events_created = len(await generate_scheduled_meal_events(session, current, limit=limit))
-    completed, failed = await _process_outbox(
-        session, active_settings, current, limit
-    )
-    report.outbox_completed = completed
-    report.outbox_failed = failed
+    stages = [
+        ("expired_payments", lambda: _reconcile_expired_payments(session, active_settings, current, limit)),
+        ("activity_charges", lambda: reconcile_charges(session, current, limit)),
+        ("cash_orders", lambda: _reconcile_expired_cash_orders(session, current, limit)),
+        ("proposals", lambda: _reconcile_proposals(session, current, limit)),
+        ("campaigns", lambda: _reconcile_campaigns(session, active_settings, current, limit)),
+        ("member_proposals", lambda: _reconcile_member_proposals(session, current, limit)),
+        ("activities", lambda: _reconcile_activities(session, current, limit)),
+        ("meal_events", lambda: _reconcile_meal_events(session, current, limit)),
+        ("meal_event_generation", lambda: generate_scheduled_meal_events(session, current, limit=limit)),
+        ("outbox", lambda: _process_outbox(session, active_settings, current, limit)),
+    ]
+    count_fields = {"expired_payments": "payment_attempts", "proposals": "proposals", "campaigns": "campaigns",
+        "member_proposals": "member_proposals", "activities": "activities", "meal_events": "meal_events"}
+    failures = {}
+    monitor = ReconciliationMonitor(session, report.to_dict(), stages[0][0], source)
+    try:
+        await monitor.start()
+    except Exception as exc:
+        failures["monitoring"] = type(exc).__name__
+        monitor.record_unavailable(type(exc).__name__)
+        logger.error("reconcile_monitor_start_failed error_type=%s", type(exc).__name__)
+    for index, (name, run) in enumerate(stages):
+        error_type = None
+        try:
+            result = await run()
+            await session.commit()
+        except asyncio.CancelledError:
+            try:
+                await session.rollback()
+                await monitor.advance(name, report.to_dict(), cancelled=True)
+            except Exception as exc:
+                logger.error("reconcile_cancel_monitor_failed error_type=%s", type(exc).__name__)
+            raise
+        except Exception as exc:
+            await session.rollback()
+            failures[name] = type(exc).__name__
+            error_type = type(exc).__name__
+            logger.error("reconcile_stage_failed phase=%s error_type=%s", name, type(exc).__name__)
+        if error_type is None and name in count_fields:
+            setattr(report, count_fields[name], result)
+        elif error_type is None and name == "meal_event_generation":
+            report.meal_events_created = len(result)
+        elif error_type is None and name == "outbox":
+            report.outbox_completed, report.outbox_failed = result
+        try:
+            await monitor.advance(name, report.to_dict(), error_type=error_type, failed=bool(failures),
+                next_phase=stages[index + 1][0] if index + 1 < len(stages) else None)
+        except Exception as exc:
+            failures["monitoring"] = type(exc).__name__
+            monitor.record_unavailable(type(exc).__name__)
+            logger.error("reconcile_monitor_failed error_type=%s", type(exc).__name__)
+    from .reconciliation_retention import maybe_prune_reconciliation_runs
+    await maybe_prune_reconciliation_runs(monitor.factory, active_settings, monitor.run_id)
+    from .credential_rate_limit import maybe_prune_credential_quotas
+    await maybe_prune_credential_quotas(monitor.factory)
+    if failures:
+        raise ReconciliationPartialFailure(failures, report.to_dict())
     return report
 
 
@@ -193,6 +245,8 @@ async def lazy_reconcile(
     session: AsyncSession,
     settings: Optional[Settings] = None,
     minimum_interval_seconds: float = 60.0,
+    *,
+    source: str = "request",
 ) -> Optional[Dict[str, int]]:
     """Request-time fallback when the external scheduler or Render was asleep."""
     global _last_lazy_reconcile_at
@@ -203,8 +257,10 @@ async def lazy_reconcile(
         current_monotonic = time.monotonic()
         if current_monotonic - _last_lazy_reconcile_at < minimum_interval_seconds:
             return None
-        report = await reconcile_once(session, settings)
-        _last_lazy_reconcile_at = current_monotonic
+        try:
+            report = await reconcile_once(session, settings, source=source)
+        finally:
+            _last_lazy_reconcile_at = current_monotonic
         logger.info("reconcile_completed counts=%s", report.to_dict())
         return report.to_dict()
 
@@ -224,6 +280,8 @@ def should_reconcile_now(minimum_interval_seconds: float = 60.0) -> bool:
 def schedule_background_reconcile(
     settings: Optional[Settings] = None,
     minimum_interval_seconds: float = 60.0,
+    *,
+    source: str = "request",
 ) -> "asyncio.Task[None]":
     """Runs reconciliation off the request path.
 
@@ -249,6 +307,7 @@ def schedule_background_reconcile(
                                 session,
                                 settings,
                                 minimum_interval_seconds=0,
+                                source=source,
                             )
                         except Exception as exc:
                             await session.rollback()
@@ -271,6 +330,7 @@ def schedule_background_reconcile(
                         session,
                         settings,
                         minimum_interval_seconds=minimum_interval_seconds,
+                        source=source,
                     )
                 except Exception as exc:
                     await session.rollback()
@@ -297,6 +357,7 @@ async def periodic_reconciliation(settings: Settings):
             try:
                 await schedule_background_reconcile(
                     settings, minimum_interval_seconds=settings.reconciliation_interval_seconds,
+                    source="periodic",
                 )
             except Exception as exc:
                 logger.error("reconcile_scheduler_failed error_type=%s", type(exc).__name__)
@@ -375,58 +436,67 @@ def _verified_ecpay_unpaid(adapter, attempt: PaymentAttempt, payload: dict) -> b
             and verify_check_mac_value(payload, config.hash_key, config.hash_iv))
 
 
+def _payment_reconcile_due(now: datetime):
+    return or_(PaymentAttempt.next_reconcile_at.is_(None), PaymentAttempt.next_reconcile_at <= now)
+
+
+def expired_payment_candidates(settings: Settings, now: datetime):
+    raygate_late_payment_cutoff = now - timedelta(
+        hours=settings.raygate_payment_reconcile_hours
+    )
+    return (
+        select(PaymentAttempt.id)
+        .where(
+            _payment_reconcile_due(now),
+            PaymentAttempt.provider.in_({"raygate", "ecpay"}),
+            or_(
+                (PaymentAttempt.activity_charge_id.is_not(None)
+                 & PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED})
+                 & PaymentAttempt.unpaid_verified_at.is_(None) & (PaymentAttempt.expires_at <= now)),
+                exists(select(Order.id).where(
+                    Order.id == PaymentAttempt.order_id, Order.group_campaign_id.is_not(None),
+                    Order.cancelled_at.is_(None), Order.fulfillment_status != FulfillmentStatus.CANCELLED,
+                    Order.payment_status.notin_({PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}),
+                    PaymentAttempt.superseded_at.is_(None), PaymentAttempt.order_revision == Order.revision,
+                    PaymentAttempt.amount == Order.amount_total, PaymentAttempt.unpaid_verified_at.is_(None),
+                    PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+                    PaymentAttempt.expires_at <= now)),
+                (
+                    (PaymentAttempt.status == PaymentStatus.PENDING)
+                    & (
+                        (PaymentAttempt.provider == "raygate")
+                        | (PaymentAttempt.expires_at <= now)
+                    )
+                ),
+                (
+                    (PaymentAttempt.provider == "raygate")
+                    & (
+                        PaymentAttempt.status.in_(
+                            {
+                                PaymentStatus.EXPIRED,
+                                PaymentStatus.FAILED,
+                            }
+                        )
+                    )
+                    & (
+                        PaymentAttempt.expires_at
+                        >= raygate_late_payment_cutoff
+                    )
+                ),
+            )
+        )
+    )
+
+
 async def _reconcile_expired_payments(
     session: AsyncSession,
     settings: Settings,
     now: datetime,
     limit: int,
 ) -> int:
-    raygate_late_payment_cutoff = now - timedelta(
-        hours=settings.raygate_payment_reconcile_hours
-    )
-    due = or_(PaymentAttempt.next_reconcile_at.is_(None), PaymentAttempt.next_reconcile_at <= now)
     attempt_ids = list(
         await session.scalars(
-            select(PaymentAttempt.id)
-            .where(
-                due,
-                PaymentAttempt.provider.in_({"raygate", "ecpay"}),
-                or_(
-                    (PaymentAttempt.activity_charge_id.is_not(None)
-                     & PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED})
-                     & PaymentAttempt.unpaid_verified_at.is_(None) & (PaymentAttempt.expires_at <= now)),
-                    exists(select(Order.id).where(
-                        Order.id == PaymentAttempt.order_id, Order.group_campaign_id.is_not(None),
-                        Order.cancelled_at.is_(None), Order.fulfillment_status != FulfillmentStatus.CANCELLED,
-                        Order.payment_status.notin_({PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}),
-                        PaymentAttempt.superseded_at.is_(None), PaymentAttempt.order_revision == Order.revision,
-                        PaymentAttempt.amount == Order.amount_total, PaymentAttempt.unpaid_verified_at.is_(None),
-                        PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
-                        PaymentAttempt.expires_at <= now)),
-                    (
-                        (PaymentAttempt.status == PaymentStatus.PENDING)
-                        & (
-                            (PaymentAttempt.provider == "raygate")
-                            | (PaymentAttempt.expires_at <= now)
-                        )
-                    ),
-                    (
-                        (PaymentAttempt.provider == "raygate")
-                        & (
-                            PaymentAttempt.status.in_(
-                                {
-                                    PaymentStatus.EXPIRED,
-                                    PaymentStatus.FAILED,
-                                }
-                            )
-                        )
-                        & (
-                            PaymentAttempt.expires_at
-                            >= raygate_late_payment_cutoff
-                        )
-                    ),
-                )
-            )
+            expired_payment_candidates(settings, now)
             .order_by(
                 func.coalesce(PaymentAttempt.next_reconcile_at, PaymentAttempt.created_at),
                 case(
@@ -449,7 +519,7 @@ async def _reconcile_expired_payments(
             .where(
                 PaymentAttempt.id == attempt_id,
                 PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
-                due,
+                _payment_reconcile_due(now),
             )
             .values(next_reconcile_at=claim_time + timedelta(seconds=settings.reconciliation_interval_seconds))
             .execution_options(synchronize_session=False)
@@ -658,7 +728,10 @@ async def _reconcile_member_proposals(
                     & (MemberProposal.voting_ends_at <= now),
                 )
             )
-            .options(selectinload(MemberProposal.votes))
+            .options(
+                selectinload(MemberProposal.votes),
+                selectinload(MemberProposal.options),
+            )
             .order_by(MemberProposal.created_at)
             .limit(limit)
             .with_for_update()
@@ -735,6 +808,32 @@ async def _reconcile_activities(
     return len(activities)
 
 
+def meal_event_candidates(now: datetime):
+    return (
+        select(MealEvent)
+        .where(
+            or_(
+                MealEvent.status.in_([
+                    MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSED,
+                ]) & (MealEvent.pickup_starts_at <= now),
+                (
+                    MealEvent.status == MealEventStatus.PUBLISHED
+                )
+                & (MealEvent.ordering_ends_at <= now),
+                (
+                    MealEvent.status.in_(
+                        [
+                            MealEventStatus.ORDERING_CLOSED,
+                            MealEventStatus.PICKUP_OPEN,
+                        ]
+                    )
+                )
+                & (MealEvent.pickup_ends_at <= now),
+            )
+        )
+    )
+
+
 async def _reconcile_meal_events(
     session: AsyncSession,
     now: datetime,
@@ -742,27 +841,7 @@ async def _reconcile_meal_events(
 ) -> int:
     events = list(
         await session.scalars(
-            select(MealEvent)
-            .where(
-                or_(
-                    MealEvent.status.in_([
-                        MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSED,
-                    ]) & (MealEvent.pickup_starts_at <= now),
-                    (
-                        MealEvent.status == MealEventStatus.PUBLISHED
-                    )
-                    & (MealEvent.ordering_ends_at <= now),
-                    (
-                        MealEvent.status.in_(
-                            [
-                                MealEventStatus.ORDERING_CLOSED,
-                                MealEventStatus.PICKUP_OPEN,
-                            ]
-                        )
-                    )
-                    & (MealEvent.pickup_ends_at <= now),
-                )
-            )
+            meal_event_candidates(now)
             .order_by(MealEvent.pickup_ends_at)
             .limit(limit)
             .with_for_update()
@@ -939,6 +1018,27 @@ async def _enqueue_campaign_refunds(
         await request_order_refund(session, order, actor, "共同購買未成立，自動退款")
 
 
+EMAIL_OUTBOX_TYPES = {"send_email", "auth.email_verification_requested", "auth.password_reset_requested", MEMBER_LOOKUP_EVENT}
+
+
+def _email_delivery_state(event, state, *, receipt=None, provider=None):
+    previous = event.payload.get("email_delivery")
+    previous = previous if isinstance(previous, dict) else {}
+    delivery = {**previous, "state": state, "idempotency_key": f"outbox-{event.id}"}
+    if receipt is not None:
+        delivery.update(provider=receipt.provider, message_id=receipt.provider_message_id)
+    elif provider:
+        delivery["provider"] = provider
+    event.payload = {**event.payload, "email_delivery": delivery}
+
+
+def _mark_email_delivery_unknown(event, *, receipt=None, provider=None):
+    _email_delivery_state(event, "unknown", receipt=receipt, provider=provider)
+    event.status = OutboxStatus.FAILED
+    event.last_error = "Email delivery result unknown; provider confirmation required"
+    _redact_auth_credential(event)
+
+
 async def _process_outbox(
     session: AsyncSession,
     settings: Settings,
@@ -955,7 +1055,10 @@ async def _process_outbox(
         )
     )
     for event in stale:
-        event.status = OutboxStatus.PENDING
+        if event.event_type in EMAIL_OUTBOX_TYPES:
+            _mark_email_delivery_unknown(event)
+        else:
+            event.status = OutboxStatus.PENDING
     await session.commit()
 
     event_ids = list(
@@ -982,14 +1085,30 @@ async def _process_outbox(
         )
         if event is None:
             continue
+        email_job = event.event_type in EMAIL_OUTBOX_TYPES
+        delivery = event.payload.get("email_delivery")
+        retry_proven_safe = isinstance(delivery, dict) and delivery.get("state") in {"rejected", "resend_authorized"}
+        if email_job and event.attempts > 0 and not retry_proven_safe:
+            _mark_email_delivery_unknown(event)
+            await session.commit()
+            failed += 1
+            continue
         event.status = OutboxStatus.PROCESSING
         event.attempts += 1
         event.available_at = now
+        if email_job:
+            event.payload = {**event.payload, "email_delivery": {"state": "sending", "started_at": now.isoformat(),
+                "idempotency_key": f"outbox-{event.id}"}}
         await session.commit()
+        receipt = None
         try:
-            await _dispatch_outbox_event(session, settings, event_id)
+            receipt = await _dispatch_outbox_event(session, settings, event_id)
             event = await session.get(OutboxEvent, event_id)
             if event is not None:
+                if email_job:
+                    if not isinstance(receipt, EmailSendResult) or not receipt.accepted:
+                        raise EmailDeliveryUnknown("Email response could not be confirmed")
+                    _email_delivery_state(event, "accepted", receipt=receipt)
                 event.status = OutboxStatus.COMPLETED
                 event.processed_at = datetime.now(timezone.utc)
                 event.last_error = None
@@ -1000,8 +1119,19 @@ async def _process_outbox(
             await session.rollback()
             event = await session.get(OutboxEvent, event_id)
             if event is not None:
+                if email_job and event.status == OutboxStatus.COMPLETED:
+                    completed += 1
+                    continue
                 event.last_error = str(exc)[:500]
-                if event.attempts >= 8:
+                if email_job and isinstance(exc, EmailDeliveryRejected):
+                    _email_delivery_state(event, "rejected", provider=exc.provider)
+                if email_job and (isinstance(exc, EmailDeliveryUnknown) or receipt is not None):
+                    _mark_email_delivery_unknown(event, receipt=receipt, provider=getattr(exc, "provider", None))
+                elif email_job and isinstance(exc, EmailDeliveryRejected) and not exc.retryable:
+                    _email_delivery_state(event, "rejected", provider=exc.provider)
+                    event.status = OutboxStatus.FAILED
+                    _redact_auth_credential(event)
+                elif event.attempts >= 8:
                     event.status = OutboxStatus.FAILED
                     _redact_auth_credential(event)
                     await _notify_refund_terminal_failure(session, event)
@@ -1110,7 +1240,7 @@ async def _dispatch_outbox_event(
     session: AsyncSession,
     settings: Settings,
     event_id: str,
-) -> None:
+) -> EmailSendResult | None:
     event = await session.get(OutboxEvent, event_id)
     if event is None:
         return
@@ -1132,12 +1262,15 @@ async def _dispatch_outbox_event(
         "auth.email_verification_requested",
         "auth.password_reset_requested",
     }:
-        await _process_auth_email_event(settings, event)
+        return await _process_auth_email_event(settings, event)
     elif event.event_type == MEMBER_LOOKUP_EVENT:
-        message = await prepare_member_lookup_email(session, settings, event)
-        await email_sender_from_settings(settings).send(message)
+        try:
+            message = await prepare_member_lookup_email(session, settings, event)
+        except Exception as exc:
+            raise EmailDeliveryRejected("社員查詢信無法準備，尚未送出", allow_failover=False) from exc
+        return await _send_prepared_email(settings, message)
     elif event.event_type == "send_email":
-        await _process_email_event(settings, event)
+        return await _process_email_event(settings, event)
     else:
         await _process_domain_event(session, event)
 
@@ -1490,6 +1623,12 @@ async def _process_invoice_event(
     event: OutboxEvent,
 ) -> None:
     order_id = str(event.payload.get("order_id") or event.aggregate_id)
+    order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
+    if order is not None and (order.payment_status != PaymentStatus.PAID or order.cancelled_at is not None):
+        from .invoice_timing import cancel_unissued_invoice_jobs
+        await cancel_unissued_invoice_jobs(session, order)
+        await session.commit()
+        return
     adapter = invoice_adapter_from_settings(settings)
     result = await issue_paid_order_invoice(
         session,
@@ -1499,7 +1638,7 @@ async def _process_invoice_event(
     order = await session.get(Order, order_id)
     if order is None:
         raise ValueError("找不到發票訂單")
-    if order.invoice_status != InvoiceStatus.ISSUED:
+    if order.invoice_status != InvoiceStatus.ISSUED or order.user_id is None:
         await session.commit()
         return
     service = NotificationService(SQLAlchemyNotificationRepository(session))
@@ -1554,60 +1693,56 @@ async def _process_invoice_void_event(
         raise InvoiceApplicationError("發票作廢結果尚未確認，背景工作將繼續查詢，不會重送作廢")
 
 
-async def _process_email_event(
-    settings: Settings, event: OutboxEvent
-) -> None:
-    payload = event.payload
-    await email_sender_from_settings(settings).send(
-        EmailMessage(
-            to_email=str(payload["to_email"]),
-            subject=str(payload["subject"]),
+async def _send_prepared_email(settings: Settings, message: EmailMessage) -> EmailSendResult:
+    try:
+        message.validate()
+        sender = email_sender_from_settings(settings)
+    except Exception as exc:
+        raise EmailDeliveryRejected("Email request was not attempted", allow_failover=False) from exc
+    try:
+        result = await sender.send(message)
+    except (EmailDeliveryUnknown, EmailDeliveryRejected):
+        raise
+    except Exception as exc:
+        raise email_transport_failure(exc, "unknown") from exc
+    if not isinstance(result, EmailSendResult):
+        raise EmailDeliveryUnknown("Email provider response could not be confirmed")
+    if not result.accepted:
+        raise EmailDeliveryRejected("Email provider rejected the request", provider=result.provider)
+    return result
+
+
+async def _process_email_event(settings: Settings, event: OutboxEvent) -> EmailSendResult:
+    try:
+        payload = event.payload
+        message = EmailMessage(to_email=str(payload["to_email"]), subject=str(payload["subject"]),
             text_content=str(payload["text_content"]),
-            html_content=(
-                str(payload["html_content"])
-                if payload.get("html_content")
-                else None
-            ),
-            idempotency_key=f"outbox-{event.id}",
-        )
-    )
+            html_content=str(payload["html_content"]) if payload.get("html_content") else None,
+            idempotency_key=f"outbox-{event.id}")
+    except Exception as exc:
+        raise EmailDeliveryRejected("Email payload was invalid; request was not attempted", allow_failover=False, retryable=False) from exc
+    return await _send_prepared_email(settings, message)
 
 
-async def _process_auth_email_event(
-    settings: Settings,
-    event: OutboxEvent,
-) -> None:
-    payload = event.payload
-    encrypted = payload.get("credential_encrypted")
-    credential = (
-        decrypt_auth_outbox_credential(
-            settings,
-            event.event_type,
-            event.aggregate_id,
-            str(encrypted),
-        )
-        if encrypted
-        else None
-    )
-    if event.event_type == "auth.email_verification_requested":
-        token = credential or str(payload["verification_token"])
-        subject = "十里方圓 Email 驗證"
-        text = f"您的 Email 驗證碼是：{token}\n\n驗證碼將於 10 分鐘後失效。"
-    else:
-        token = credential or str(payload["reset_token"])
-        subject = "十里方圓密碼重設"
-        action_url = (
-            f"{settings.web_base_url.rstrip('/')}/reset-password?token={token}"
-        )
-        text = f"請使用以下連結重設密碼：{action_url}"
-    await email_sender_from_settings(settings).send(
-        EmailMessage(
-            to_email=str(payload["recipient"]),
-            subject=subject,
-            text_content=text,
-            idempotency_key=f"outbox-{event.id}",
-        )
-    )
+async def _process_auth_email_event(settings: Settings, event: OutboxEvent) -> EmailSendResult:
+    try:
+        payload = event.payload
+        encrypted = payload.get("credential_encrypted")
+        credential = decrypt_auth_outbox_credential(settings, event.event_type, event.aggregate_id, str(encrypted)) if encrypted else None
+        if event.event_type == "auth.email_verification_requested":
+            token = credential or str(payload["verification_token"])
+            subject = "十里方圓 Email 驗證"
+            text = f"您的 Email 驗證碼是：{token}\n\n驗證碼將於 10 分鐘後失效。"
+        else:
+            token = credential or str(payload["reset_token"])
+            subject = "十里方圓密碼重設"
+            action_url = f"{settings.web_base_url.rstrip('/')}/reset-password?token={token}"
+            text = f"請使用以下連結重設密碼：{action_url}"
+        message = EmailMessage(to_email=str(payload["recipient"]), subject=subject, text_content=text,
+            idempotency_key=f"outbox-{event.id}")
+    except Exception as exc:
+        raise EmailDeliveryRejected("Auth email could not be prepared; request was not attempted", allow_failover=False) from exc
+    return await _send_prepared_email(settings, message)
 
 
 async def _process_domain_event(
@@ -1752,7 +1887,7 @@ async def _process_domain_event(
                 dedupe_key=f"outbox:{event.id}:{user.id}"))
     elif event.event_type == "order.cancelled":
         order = await session.get(Order, event.aggregate_id)
-        if order is not None:
+        if order is not None and order.user_id is not None:
             await service.publish(
                 NotificationCommand(
                     user_id=order.user_id,
@@ -1764,7 +1899,7 @@ async def _process_domain_event(
                     dedupe_key="outbox:{}".format(event.id),
                 )
             )
-    await session.commit()
+    await session.flush()
 
 
 router = jobs_router

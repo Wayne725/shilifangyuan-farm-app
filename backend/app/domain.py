@@ -304,6 +304,8 @@ def admin_order_cancellation_allowed(order: Order, now: Optional[datetime] = Non
 
 
 def order_amendment_blocked_reason(order: Order, now: Optional[datetime] = None) -> Optional[str]:
+    if getattr(order, "customer_kind", "account") == "walk_in":
+        return "現場交易不適用網站商品數量修改"
     current = now or utcnow()
     if order.payment_status != PaymentStatus.PENDING or order.paid_at is not None:
         return "僅可修改未付款訂單；已付款請由管理員整單退款後重新下單"
@@ -326,10 +328,12 @@ def order_amendment_blocked_reason(order: Order, now: Optional[datetime] = None)
         except ValueError as exc:
             return str(exc)
     elif order.group_campaign_id is not None:
-        from .group_review import order_has_uncertain_group_payment
+        from .group_review import order_has_uncertain_group_payment, order_matches_group_contract
         if order_has_uncertain_group_payment(order, current):
             return "付款結果仍待核對，暫時無法修改數量"
         campaign = order.__dict__.get("group_campaign")
+        if not order_matches_group_contract(order, campaign):
+            return "共同購買核心條件已更新，請回共同購買頁重新確認"
         if (campaign is None or campaign.intake_status not in {GroupIntakeStatus.OPEN, GroupIntakeStatus.FULL}
             or campaign.decision_status not in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}
             or current >= aware(campaign.deadline)):
@@ -377,13 +381,13 @@ def order_available_actions(
             )
         )
         campaign = order.__dict__.get("group_campaign")
-        from .group_review import order_has_uncertain_group_payment, current_order_attempt
+        from .group_review import order_has_uncertain_group_payment, current_order_attempt, order_matches_group_contract
         has_open_group_checkout = any(
             current_order_attempt(attempt, order) and attempt.status == PaymentStatus.PENDING
             and aware(attempt.expires_at) > current and bool(attempt.checkout_payload)
             for attempt in order.__dict__.get("payment_attempts", []))
         group_payment_ready = not order.group_campaign_id or (
-            campaign is not None and current < aware(campaign.deadline)
+            campaign is not None and order_matches_group_contract(order, campaign) and current < aware(campaign.deadline)
             and campaign.decision_status in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}
             and (campaign.intake_status == GroupIntakeStatus.OPEN
                  or (campaign.intake_status == GroupIntakeStatus.FULL and has_open_group_checkout))
@@ -394,6 +398,8 @@ def order_available_actions(
         ):
             actions.append("pay")
     if viewer_is_admin:
+        if getattr(order, "customer_kind", "account") == "walk_in" and order.payment_status == PaymentStatus.PAID:
+            actions.append("refund_walk_in")
         if admin_order_cancellation_allowed(order, current):
             actions.append("cancel")
         event = order.__dict__.get("meal_event")
@@ -404,6 +410,7 @@ def order_available_actions(
             actions.append("confirm_cash_payment")
         if (order.payment_method == PaymentMethod.CASH_ON_PICKUP
             and order.payment_status == PaymentStatus.PAID and not meal_fulfillment_closed
+            and getattr(order, "customer_kind", "account") != "walk_in"
             and not order_fulfillment_is_irreversible(order)):
             actions.append("mark_cash_unpaid")
         if order.payment_method == PaymentMethod.CASH_ON_PICKUP and order.payment_status == PaymentStatus.REFUND_PENDING:

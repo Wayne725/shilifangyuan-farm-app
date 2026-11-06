@@ -3,9 +3,12 @@ import { Printer, X } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../context/AuthContext";
-import { ApiError, apiFetch } from "../lib/api";
+import { ApiError } from "../lib/api";
+import { useAdminPanelAccess } from "../lib/admin-panel-access";
 import type { Order } from "../lib/types";
 import "./AdminOrderPrint.css";
+
+const privateQueryKeys = [] as const;
 
 type Job = { id: string; status: string; mode: "live" | "dry_run"; kind: string; created_at: string };
 type Preview = {
@@ -29,6 +32,7 @@ function readAttempt(key: string): Attempt | null {
 
 export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_number" | "sales_channel" | "payment_status" | "paid_at" | "cancelled_at" | "fulfillment_status" | "fulfillment"> }) {
   const { user } = useAuth();
+  const access = useAdminPanelAccess(privateQueryKeys);
   const client = useQueryClient();
   const eligible = order.payment_status === "paid" && Boolean(order.paid_at) && !order.cancelled_at
     && order.fulfillment_status !== "cancelled" && order.fulfillment?.status !== "cancelled";
@@ -52,22 +56,22 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
     setAttempt(value);
   };
   const operate = async (action: () => Promise<void>) => {
-    if (busyRef.current) return;
+    if (access.isDenied() || busyRef.current) return;
     busyRef.current = true; setBusy(true); setError("");
     try { await action(); }
-    catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : "無法完成出單操作。"); }
-    finally { busyRef.current = false; if (mounted.current) setBusy(false); }
+    catch (failure) { if (mounted.current && !access.isDenied()) setError(failure instanceof Error ? failure.message : "無法完成出單操作。"); }
+    finally { busyRef.current = false; if (mounted.current && !access.isDenied()) setBusy(false); }
   };
   const loadPreview = () => operate(async () => {
     setPreview(null); setReason(""); setAcknowledge(false); setAnother(false);
-    const value = await apiFetch<Preview>(`/v1/admin/printers/orders/${order.id}/preview`);
-    if (mounted.current) setPreview(value);
+    const value = await access.request<Preview>(`/v1/admin/printers/orders/${order.id}/preview`);
+    if (mounted.current && !access.isDenied()) setPreview(value);
   });
   const findJob = () => operate(async () => {
     if (!attempt) return;
     try {
-      const value = await apiFetch<Job>(`/v1/admin/printers/orders/${order.id}/print-requests/${attempt.request_id}`);
-      if (mounted.current) setJob(value);
+      const value = await access.request<Job>(`/v1/admin/printers/orders/${order.id}/print-requests/${attempt.request_id}`);
+      if (mounted.current && !access.isDenied()) setJob(value);
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 404) throw new Error(eligible ? "尚未查到這筆送印，可重試同一筆送印。" : "尚未查到這筆送印；訂單目前不符出單條件，請核對原送印結果。");
       throw failure;
@@ -80,11 +84,11 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
     // Keep the request across lost responses, dialog closes and page reloads.
     saveAttempt(value);
     try {
-      const result = await apiFetch<Job>(`/v1/admin/printers/orders/${order.id}/print`, { method: "POST", body: JSON.stringify(value) });
-      if (mounted.current) { setJob(result); setPreview(null); }
-      await client.invalidateQueries({ queryKey: ["print-jobs"] });
+      const result = await access.request<Job>(`/v1/admin/printers/orders/${order.id}/print`, { method: "POST", body: JSON.stringify(value) });
+      if (mounted.current && !access.isDenied()) { setJob(result); setPreview(null); }
+      if (!access.isDenied()) await client.invalidateQueries({ queryKey: ["print-jobs"] });
     } catch (failure) {
-      if (failure instanceof ApiError && [400, 409, 422].includes(failure.status) && mounted.current) {
+      if (failure instanceof ApiError && [400, 409, 422].includes(failure.status) && mounted.current && !access.isDenied()) {
         saveAttempt(null); setPreview(null);
       }
       throw failure;
@@ -92,20 +96,22 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
   });
   const settled = job && ["printed", "failed", "simulated"].includes(job.status);
   useEffect(() => {
-    if (!open || !attempt || !job || settled) return;
+    if (access.isDenied() || !open || !attempt || !job || settled) return;
     let active = true;
     const timer = setInterval(() => {
-      void apiFetch<Job>(`/v1/admin/printers/orders/${order.id}/print-requests/${attempt.request_id}`)
-        .then(value => { if (active) setJob(value); })
+      if (access.isDenied()) return;
+      void access.request<Job>(`/v1/admin/printers/orders/${order.id}/print-requests/${attempt.request_id}`)
+        .then(value => { if (active && !access.isDenied()) setJob(value); })
         .catch(() => { /* Manual refresh exposes errors without discarding the last known state. */ });
     }, 4000);
     return () => { active = false; clearInterval(timer); };
-  }, [open, order.id, attempt?.request_id, job?.id, settled]);
+  }, [open, order.id, attempt?.request_id, job?.id, settled, access.denied, access.isDenied, access.request]);
 
   if (user?.user_role !== "admin" || order.sales_channel !== "meal_preorder" || (!eligible && !attempt)) return null;
+  if (access.denied) return <div className="admin-gate"><p role="alert">管理權限已失效或已變更，請重新驗證後再操作。</p><button className="button button-system" type="button" onClick={() => window.location.reload()}>重新驗證管理權限</button></div>;
   return <div className="admin-order-print">
     <Dialog.Root open={open} onOpenChange={next => {
-      if (busyRef.current) return;
+      if (access.isDenied() || busyRef.current) return;
       setOpen(next);
       if (next) { setError(""); if (attempt) void findJob(); else void loadPreview(); }
     }}>

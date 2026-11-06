@@ -75,7 +75,7 @@ async def current_manual_snapshot(session: AsyncSession, order: Order, settings:
             value, associated_data=f"receipt-contact:{order.id}:{field}")}
     except IntegrationError:
         raise FeieError("receipt_contact_decryption_failed") from None
-    snapshot = order_print_snapshot(order, order.user.display_name, contact)
+    snapshot = order_print_snapshot(order, order.user.display_name if order.user else order.customer_name_snapshot or "現場客人", contact)
     status = current_fulfillment_status(order)
     labels = {"pending_confirmation": "待確認", "preparing": "製作中", "ready_for_pickup": "待取餐",
               "picked_up": "已取餐", "awaiting_shipment": "待出貨", "shipped": "已出貨",

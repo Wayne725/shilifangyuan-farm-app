@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 
 import pytest
 from alembic import command
@@ -22,8 +23,8 @@ def test_summary_print_migration_roundtrip_and_preserves_print_history(tmp_path,
         command.check(config)
         command.downgrade(config, "0040_membership_admission")
         assert not next(column for column in inspect(engine).get_columns("print_jobs") if column["name"] == "order_id")["nullable"]
-        command.upgrade(config, "head")
-        command.check(config)
+        # Exercise this guard on its original linear feature head; merged paths have a separate parity test.
+        command.upgrade(config, "0041_order_summary_printing")
         assert next(column for column in inspect(engine).get_columns("print_jobs") if column["name"] == "order_id")["nullable"]
         insert = text("""INSERT INTO print_jobs
             (id, event_key, order_id, kind, mode, status, printer_fingerprint, snapshot, attempts,
@@ -35,8 +36,15 @@ def test_summary_print_migration_roundtrip_and_preserves_print_history(tmp_path,
                 connection.execute(insert, values)
         with engine.begin() as connection:
             connection.execute(insert, {"kind": "summary", "order_id": None})
+        def snapshot():
+            with engine.connect() as connection:
+                raw = "\n".join(connection.connection.driver_connection.iterdump()).encode()
+            return hashlib.sha256(raw).hexdigest()
+
+        before_rejected_downgrade = snapshot()
         with pytest.raises(RuntimeError, match="已有訂單彙總出單紀錄"):
             command.downgrade(config, "0040_membership_admission")
+        assert snapshot() == before_rejected_downgrade
         with engine.connect() as connection:
             assert connection.scalar(text("SELECT COUNT(*) FROM print_jobs WHERE kind='summary'")) == 1
             assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0041_order_summary_printing"

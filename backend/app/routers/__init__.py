@@ -29,8 +29,10 @@ from .promotions import promotions_router
 
 from .invoice_reports import invoice_reports_router
 from .financial_statements import router as financial_statements_router
+from .walk_in_sales import walk_in_sales_router
 
 ALL_ROUTERS = [
+    walk_in_sales_router,
     activity_payments_router,
     activity_finance_router,
     photos_router,

@@ -28,6 +28,7 @@ from .routers.meal_kitchen import meal_kitchen_router
 from .routers.printers import printers_router
 from .printer_worker import periodic_printing
 from .seed import seed_demo_data
+from .request_logging import install_access_log_redaction, redact_request_target
 
 
 AUTH_EMAIL_PATHS = {
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    install_access_log_redaction()
     settings = get_settings()
     if settings.environment.strip().lower() in {"development", "test"}:
         async with SessionLocal() as session:
@@ -54,6 +56,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
     settings.validate_runtime_secrets()
+    install_access_log_redaction()
     web_url = urlsplit(settings.web_base_url)
     web_origin = (
         f"{web_url.scheme}://{web_url.netloc}"
@@ -81,6 +84,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Error-Code"],
     )
     allowed_hosts = {
         host
@@ -120,7 +124,7 @@ def create_app() -> FastAPI:
                 "request_failed request_id=%s method=%s path=%s",
                 request_id,
                 request.method,
-                request.url.path,
+                redact_request_target(getattr(request.scope.get("route"), "path", request.url.path)),
             )
             raise
         duration_ms = (time.perf_counter() - started_at) * 1000
@@ -129,7 +133,7 @@ def create_app() -> FastAPI:
             "status=%s duration_ms=%.1f",
             request_id,
             request.method,
-            request.url.path,
+            redact_request_target(getattr(request.scope.get("route"), "path", request.url.path)),
             response.status_code,
             duration_ms,
         )
@@ -173,7 +177,9 @@ def create_app() -> FastAPI:
                 settings,
                 minimum_interval_seconds=0,
             )
-        elif request.url.path.startswith("/v1/") and should_reconcile_now():
+        elif (request.url.path.startswith("/v1/")
+              and request.url.path.rstrip("/") != "/v1/admin/reconciliation-status"
+              and should_reconcile_now()):
             schedule_background_reconcile(settings)
         return response
 

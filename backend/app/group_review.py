@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import Optional
 
 from email_validator import EmailNotValidError, validate_email
@@ -10,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .domain import aware
 from .models import (GroupCampaign, GroupDecisionStatus, GroupIntakeStatus, InventoryReservation,
                      Notification, Order, PaymentAttempt, PaymentStatus, ReservationStatus, User, UserRole, FulfillmentStatus)
+from .models import TargetType
 from .integrations.notifications import NotificationCommand, NotificationService, SQLAlchemyNotificationRepository
 
 
@@ -17,6 +20,29 @@ UNSETTLED_STATUSES = {PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatu
 TERMINAL_DECISIONS = {GroupDecisionStatus.CONFIRMED, GroupDecisionStatus.REJECTED,
                      GroupDecisionStatus.CANCELLED, GroupDecisionStatus.FAILED_UNMET,
                      GroupDecisionStatus.EXPIRED_UNCONFIRMED}
+
+
+def group_contract_fingerprint(campaign: GroupCampaign) -> str:
+    core = {name: getattr(campaign, name) for name in (
+        "target_type", "target_id", "member_price", "nonmember_price", "min_paid_quantity",
+        "supply_cap", "per_user_cap", "can_ship", "shipping_temperature",
+    )}
+    core["deadline"] = aware(campaign.deadline).astimezone(timezone.utc).isoformat()
+    core["allowed_shipping_channels"] = sorted(campaign.allowed_shipping_channels or [])
+    return hashlib.sha256(json.dumps(core, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def order_matches_group_contract(order: Order, campaign: GroupCampaign | None) -> bool:
+    if campaign is None or order.group_campaign_id != campaign.id:
+        return False
+    saved = getattr(order, "group_contract_fingerprint", None)
+    if saved is not None:
+        return saved == group_contract_fingerprint(campaign)
+    # Historical orders have no full contract; only their saved target identity is provable.
+    items = order.__dict__.get("items", [])
+    if campaign.target_type == TargetType.PRODUCT:
+        return bool(items) and all(item.source_product_id == campaign.target_id and item.source_bundle_id is None for item in items)
+    return bool(items) and all(item.source_bundle_id == campaign.target_id and item.source_product_id is None for item in items)
 
 
 def current_order_attempt(attempt: PaymentAttempt, order: Order) -> bool:
@@ -103,6 +129,7 @@ async def publish_campaign_notification_once(session: AsyncSession, command: Not
     # Callers hold the campaign row lock; notification and email are committed together.
     existing = await session.scalar(select(Notification.id).where(
         Notification.user_id == command.user_id,
+        Notification.event_type == command.event_type,
         Notification.data["dedupe_key"].as_string() == command.dedupe_key).limit(1))
     if existing is not None:
         return False

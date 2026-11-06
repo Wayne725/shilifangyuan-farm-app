@@ -25,6 +25,7 @@ async function fixture(t, width, { admin = false, ready = true, startFails = fal
     if (path === '/isolated-line-authorize') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>隔離 LINE 授權頁</h1>' });
     if (!path.startsWith('/v1/')) return route.continue();
     if (path === '/v1/auth/refresh') return route.fulfill(admin ? { json: { access_token: 'isolated-admin', user: { id: 'admin', user_role: 'admin', display_name: '隔離管理員', email: 'admin@example.test' } } } : { status: 401, json: { detail: '未登入' } });
+    if (path === '/v1/admin/reconciliation-status') return route.fulfill({ json: { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] } });
     if (req.method() === 'GET') {
       state.reads.push({ path, params: Object.fromEntries(url.searchParams) });
       if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready, linked: false, identity_verified: false, message: ready ? '' : 'LINE登入尚未啟用，可使用Email登入' } });
@@ -91,18 +92,21 @@ for (const width of [1440, 390]) {
     await page.getByRole('heading', { name: '使用 LINE 登入', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '使用LINE登入', exact: true }).count(), 0);
     await page.getByRole('link', { name: '我是社員', exact: true }).click();
-    await page.getByLabel('姓名', { exact: true }).fill('隔離社員');
-    await page.getByLabel('社員編號', { exact: true }).fill('M001');
+    await page.getByLabel('電話號碼', { exact: true }).fill('0912345678');
     await page.getByLabel('Email', { exact: true }).fill('member@example.test');
-    await page.getByRole('button', { name: '繼續選擇註冊方式', exact: true }).click();
-    await page.getByRole('button', { name: '使用 LINE 註冊', exact: true }).click();
+    assert.equal(await page.getByLabel('姓名', { exact: true }).count(), 0);
+    assert.equal(await page.getByLabel('社員編號', { exact: true }).count(), 0);
+    await page.getByRole('button', { name: '繼續使用 LINE', exact: true }).click();
+    await page.getByText('電話號碼與 Email 用於核對社員名冊；顯示名稱使用 LINE 名稱，完成原信箱驗證後啟用資格。', { exact: false }).waitFor();
     assert.deepEqual(state.writes, []);
+    assert.equal(await page.getByRole('button', { name: '使用LINE登入', exact: true }).isDisabled(), true);
     await page.getByLabel('我已閱讀並同意 LINE 登入及社員資料的使用說明。', { exact: true }).check();
+    await page.locator('.reading-menu > summary').click();
     await page.getByRole('button', { name: '放大', exact: true }).click();
     await verify(page, state);
     await page.getByRole('button', { name: '使用LINE登入', exact: true }).click();
     await page.getByRole('heading', { name: '隔離 LINE 授權頁', exact: true }).waitFor();
-    assert.deepEqual(state.writes, [{ path: '/v1/auth/line/start', body: { intent: 'member', remember_me: false, mode: 'login', member_claim: { legal_name: '隔離社員', member_number: 'M001', email: 'member@example.test' }, data_consent_version: 'line-data-v1', return_to: returnTo } }]);
+    assert.deepEqual(state.writes, [{ path: '/v1/auth/line/start', body: { intent: 'member', remember_me: false, mode: 'login', member_claim: { phone: '0912345678', email: 'member@example.test' }, data_consent_version: 'line-data-v1', return_to: returnTo } }]);
     await verify(page, state);
   });
 }

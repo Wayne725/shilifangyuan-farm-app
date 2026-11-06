@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
 from ..config import Settings
+from ..point_accounts import point_account
 from ..controlled_product_payments import is_meals_test_product_order
 from ..sales_scope import SalesScopeError, ensure_sales_scope_allows
 from ..domain import (
@@ -337,11 +338,7 @@ async def reverse_order_purchase_points(
 async def award_order_purchase_points(session: AsyncSession, order: Order) -> None:
     if order.membership_type_snapshot != MembershipType.MEMBER:
         return
-    account = await session.scalar(select(PointAccount).where(PointAccount.user_id == order.user_id))
-    if account is None:
-        account = PointAccount(user_id=order.user_id)
-        session.add(account)
-        await session.flush()
+    account = await point_account(session, order.user_id)
     existing = await session.scalar(select(PointTransaction.id).where(
         PointTransaction.account_id == account.id,
         PointTransaction.source_type == PointSourceType.PURCHASE,
@@ -680,10 +677,12 @@ async def create_payment_attempt(
     }:
         raise PaymentApplicationError("此訂單目前無法付款")
     if order.group_campaign_id:
-        from ..group_review import order_has_uncertain_group_payment
+        from ..group_review import order_has_uncertain_group_payment, order_matches_group_contract
         campaign = order.group_campaign
         if campaign is None or current >= _aware(campaign.deadline):
             raise PaymentApplicationError("共同購買已截止")
+        if not order_matches_group_contract(order, campaign):
+            raise PaymentApplicationError("共同購買核心條件已更新，請回共同購買頁重新確認")
         if order_has_uncertain_group_payment(order, current):
             raise PaymentApplicationError("付款結果仍待核對，請勿重複付款")
     if order.amount_total <= 0:
@@ -1515,8 +1514,8 @@ class SQLAlchemyPaymentCallbackRepository:
                 reservation is not None
                 and payment_time <= _aware(attempt.expires_at)
             )
-            from ..group_review import order_accepts_group_payment
-            decision_accepts_payment = order_accepts_group_payment(order) and campaign is not None and (
+            from ..group_review import order_accepts_group_payment, order_matches_group_contract
+            decision_accepts_payment = order_accepts_group_payment(order) and order_matches_group_contract(order, campaign) and (
                 campaign.decision_status in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.PENDING_CONFIRMATION}
                 or (campaign.decision_status == GroupDecisionStatus.CONFIRMED and campaign.legacy_confirmed_intake))
             can_reacquire = (

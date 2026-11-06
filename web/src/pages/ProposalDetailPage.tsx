@@ -1,26 +1,24 @@
 import { ArrowLeft, CheckCircle, ChatCircle, NotePencil, UsersThree, XCircle } from "@phosphor-icons/react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 
 import { SocialNav } from "../components/SocialNav";
+import { MembershipReadError } from "../components/MembershipReadError";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDateTime } from "../lib/api";
 import { proposalStatusLabel } from "../lib/labels";
-import type { MembershipSummary, Proposal, ProposalComment, ProposalVote } from "../lib/types";
+import type { Proposal, ProposalComment, ProposalVote } from "../lib/types";
+import { useMembership } from "../lib/social-access";
 
 export function ProposalDetailPage() {
   const { proposalId } = useParams({ from: "/proposals/$proposalId" });
   const { user, openLogin } = useAuth();
   const queryClient = useQueryClient();
   const [comment, setComment] = useState("");
-  const membership = useQuery({
-    queryKey: ["membership-me", user?.id],
-    queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
-    enabled: Boolean(user),
-  });
-  const canAccess = membership.data?.membership_type === "member";
+  const membership = useMembership(user);
+  const canAccess = membership.isSuccess && membership.data.membership_type === "member";
   const [proposal, comments, namedVotes] = useQueries({ queries: [
     { queryKey: ["member-proposal", proposalId], queryFn: () => apiFetch<Proposal>(`/v1/member-proposals/${proposalId}`), enabled: canAccess },
     { queryKey: ["member-proposal-comments", proposalId], queryFn: () => apiFetch<ProposalComment[]>(`/v1/member-proposals/${proposalId}/comments`), enabled: canAccess },
@@ -57,8 +55,10 @@ export function ProposalDetailPage() {
   if (!user) {
     return <section className="social-page-shell"><SocialNav /><div className="social-access-card"><NotePencil size={38} weight="light" /><h2>登入後查看社員提案</h2><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></div></section>;
   }
-  if (membership.isPending || proposal.isPending) return <section className="social-page-shell"><SocialNav /><LoadingLines count={5} /></section>;
+  if (membership.isPending) return <section className="social-page-shell"><SocialNav /><LoadingLines count={5} /></section>;
+  if (membership.isError) return <section className="social-page-shell"><SocialNav /><MembershipReadError error={membership.error} onRetry={() => void membership.refetch()} /></section>;
   if (!canAccess) return <section className="social-page-shell"><SocialNav /><div className="social-access-card"><UsersThree size={38} weight="light" /><h2>此功能開放給正式社員</h2><Link className="button button-system" to="/membership">查看入社進度</Link></div></section>;
+  if (proposal.isPending) return <section className="social-page-shell"><SocialNav /><LoadingLines count={5} /></section>;
   if (proposal.isError || !proposal.data) return <section className="social-page-shell"><SocialNav /><DataState kind="error" title="找不到這筆提案" detail={proposal.error?.message || "提案不存在或你沒有查看權限。"} /></section>;
 
   const item = proposal.data;

@@ -1,11 +1,15 @@
+import hashlib
 import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Protocol, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from ..models import Notification, OutboxEvent
+from ..models import Notification, OutboxEvent, new_id
 
 
 EMAIL_EVENT_TYPES = {
@@ -107,45 +111,73 @@ class NotificationService:
 class SQLAlchemyNotificationRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        self._notification_ids: dict[int, str] = {}
+
+    def _insert(self, model):
+        factory = postgres_insert if self.session.get_bind().dialect.name == "postgresql" else sqlite_insert
+        return factory(model)
 
     async def create_notification(
         self, command: NotificationCommand
     ) -> Notification:
-        notification = Notification(
+        values = dict(
+            id=new_id(),
             user_id=command.user_id,
             event_type=command.event_type,
+            dedupe_hash=(hashlib.sha256(command.dedupe_key.encode("utf-8")).hexdigest()
+                if command.dedupe_key is not None else None),
+            delivery_version=1,
             title=command.title,
             body=command.body,
             data={
                 **dict(command.data),
                 **(
                     {"dedupe_key": command.dedupe_key}
-                    if command.dedupe_key
+                    if command.dedupe_key is not None
                     else {}
                 ),
             },
             created_at=command.created_at,
         )
-        self.session.add(notification)
-        await self.session.flush()
+        if values["dedupe_hash"] is None:
+            notification = Notification(**values)
+            self.session.add(notification)
+            await self.session.flush()
+        else:
+            notification_id = await self.session.scalar(self._insert(Notification).values(**values)
+                .on_conflict_do_nothing(index_elements=["user_id", "event_type", "dedupe_hash"])
+                .returning(Notification.id))
+            if notification_id:
+                notification = await self.session.get(Notification, notification_id)
+            else:
+                notification = await self.session.scalar(select(Notification).where(
+                    Notification.user_id == command.user_id, Notification.event_type == command.event_type,
+                    Notification.dedupe_hash == values["dedupe_hash"]))
+        self._notification_ids[id(command)] = notification.id
         return notification
 
     async def enqueue_email_notification(
         self, command: NotificationCommand
-    ) -> OutboxEvent:
-        event = OutboxEvent(
+    ) -> Optional[OutboxEvent]:
+        notification = await self.session.get(Notification, self._notification_ids.pop(id(command)))
+        if notification.delivery_version == 0:
+            # Historical email jobs have no reliable notification link; never guess or resend.
+            return None
+        event_id = await self.session.scalar(self._insert(OutboxEvent).values(
+            id=new_id(),
+            notification_id=notification.id,
             event_type="send_email",
             aggregate_type="user",
             aggregate_id=command.user_id,
             payload={
                 "to_email": command.email,
-                "subject": command.title,
-                "text_content": command.body,
+                "subject": notification.title,
+                "text_content": notification.body,
                 "event_type": command.event_type,
-                "data": dict(command.data),
+                "data": {key: value for key, value in notification.data.items() if key != "dedupe_key"},
             },
             available_at=command.created_at,
-        )
-        self.session.add(event)
-        await self.session.flush()
-        return event
+        ).on_conflict_do_nothing(index_elements=["notification_id"]).returning(OutboxEvent.id))
+        if event_id:
+            return await self.session.get(OutboxEvent, event_id)
+        return await self.session.scalar(select(OutboxEvent).where(OutboxEvent.notification_id == notification.id))

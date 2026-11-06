@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings
+from .invoice_timing import invoice_handling, pickup_invoice_due, cancel_unissued_invoice_jobs
 from .models import (
     AdminAudit, FulfillmentState, FulfillmentStatus, InventoryReservation,
     MealEvent, MealEventOffering, MealEventStatus, Order, PaymentAttempt,
@@ -48,7 +49,7 @@ async def reserve_cash_order(session: AsyncSession, order: Order) -> None:
 
 async def confirm_cash_payment(
     session: AsyncSession, order: Order, *, amount: int, reason: str,
-    actor_id: str, settings: Settings, now: datetime, collection_method: str = "cash", reference: str = "",
+    actor_id: str, settings: Settings, now: datetime, collection_method: str = "cash", reference: str = "", invoice_policy: str | None = None,
 ) -> None:
     if order.payment_method != PaymentMethod.CASH_ON_PICKUP or order.sales_channel != SalesChannel.MEAL_PREORDER:
         raise PaymentApplicationError("此訂單不是現場付款")
@@ -78,6 +79,13 @@ async def confirm_cash_payment(
             raise PaymentApplicationError("訂單保留已過期，不可收款")
     if not active or reserved != expected:
         raise PaymentApplicationError("訂單保留數量不完整，不可收款")
+    if invoice_policy is not None:
+        if invoice_policy not in {"external", "on_payment", "pickup_day"}:
+            raise PaymentApplicationError("開票方式不正確")
+        if order.__dict__.get("invoice") is not None:
+            raise PaymentApplicationError("已有開票紀錄，不可變更開票方式")
+        order.invoice_handling = invoice_policy
+        order.invoice_issue_after = pickup_invoice_due(order.fulfillment.pickup_at or order.meal_event.pickup_starts_at) if invoice_policy == "pickup_day" else None
     attempt = PaymentAttempt(
         order=order, order_revision=order.revision, provider="onsite", merchant_trade_no=f"SITE{new_id().replace('-', '')}",
         provider_trade_no=new_id(), amount=amount, status=PaymentStatus.PAID,
@@ -96,7 +104,10 @@ async def confirm_cash_payment(
         reservation.payment_attempt = attempt
     order.payment_status = PaymentStatus.PAID
     order.paid_at = now
-    order.invoice_status = InvoiceStatus.EXTERNAL
+    if invoice_handling(order) == "external":
+        order.invoice_status = InvoiceStatus.EXTERNAL
+    else:
+        enqueue_invoice_issue(session, order, trigger="onsite_payment_confirmed")
     await award_order_purchase_points(session, order)
     if attempts:
         await _adjust_collection_points(session, order, 1, new_id())
@@ -139,6 +150,7 @@ async def confirm_cash_refund(
     refund.provider_response = {"confirmed_by_id": actor_id, "reason": reason, "confirmed_at": now.isoformat()}
     attempt.status = PaymentStatus.REFUNDED
     order.payment_status = PaymentStatus.REFUNDED
+    await cancel_unissued_invoice_jobs(session, order)
     await reverse_order_purchase_points(session, order, refund.id)
     enqueue_invoice_adjustment_after_refund(session, order, refund)
     session.add(AdminAudit(actor_id=actor_id, action="order.cash_refund", aggregate_type="order", aggregate_id=order.id, reason=reason, data={"amount": amount, "refund_id": refund.id}))
@@ -178,6 +190,8 @@ async def _adjust_collection_points(session: AsyncSession, order: Order, directi
 
 async def mark_cash_unpaid(session: AsyncSession, order: Order, *, amount: int, reason: str, actor_id: str, now: datetime) -> None:
     from .domain import order_available_actions
+    if order.__dict__.get("invoice") is not None:
+        raise PaymentApplicationError("此訂單已有開票紀錄，請使用退款與發票作廢流程")
     if "mark_cash_unpaid" not in order_available_actions(order, True, now) or amount != order.amount_total:
         raise PaymentApplicationError("此訂單目前無法更正為未付款")
     if order.meal_event is None or now >= _aware(order.meal_event.pickup_ends_at):
@@ -209,6 +223,7 @@ async def mark_cash_unpaid(session: AsyncSession, order: Order, *, amount: int, 
     attempt.paid_at = None
     order.payment_status = PaymentStatus.PENDING
     order.paid_at = None
+    await cancel_unissued_invoice_jobs(session, order)
     await _adjust_collection_points(session, order, -1, audit_id)
     session.add(AdminAudit(id=audit_id, actor_id=actor_id, action="order.cash_payment_unpaid",
         aggregate_type="order", aggregate_id=order.id, reason=reason,

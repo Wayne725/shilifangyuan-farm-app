@@ -60,7 +60,8 @@ def _search_condition(search):
     if not (term := search.strip()):
         return True
     return or_(Order.order_number.icontains(term, autoescape=True), Order.contact_email.icontains(term, autoescape=True),
-               User.email.icontains(term, autoescape=True), User.display_name.icontains(term, autoescape=True))
+               User.email.icontains(term, autoescape=True), User.display_name.icontains(term, autoescape=True),
+               Order.customer_name_snapshot.icontains(term, autoescape=True))
 
 
 def _day_expression(session, column):
@@ -71,7 +72,7 @@ def _day_expression(session, column):
 
 def _order_scope(filters, receipts):
     start, end = filters.bounds()
-    return select(Order).join(User, User.id == Order.user_id).where(
+    return select(Order).outerjoin(User, User.id == Order.user_id).where(
         _channel_scope(filters), _search_condition(filters.search), or_(
             and_(Order.created_at >= start, Order.created_at < end),
             exists().where(receipts.c.order_id == Order.id, receipts.c.occurred_at >= start, receipts.c.occurred_at < end),
@@ -110,7 +111,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
         fulfillment = order.fulfillment
         event = order.meal_event
         details.append({
-            "id": order.id, "order_number": order.order_number, "sales_channel": order.sales_channel.value, "customer_name": order.user.display_name,
+            "id": order.id, "order_number": order.order_number, "sales_channel": order.sales_channel.value, "customer_name": order.user.display_name if order.user else order.customer_name_snapshot or "現場客人",
             "customer_email": order.contact_email, "membership_type": order.membership_type_snapshot.value,
             "revision": order.revision,
             "receipts": [{"merchant_trade_no": attempt.merchant_trade_no, "order_revision": attempt.order_revision,
@@ -143,7 +144,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
 async def meal_sales_report(session: AsyncSession, filters: MealSalesFilters):
     start, end = filters.bounds()
     receipts = _receipts(filters)
-    scope = select(Order.id).join(User, User.id == Order.user_id).where(
+    scope = select(Order.id).outerjoin(User, User.id == Order.user_id).where(
         _channel_scope(filters), _search_condition(filters.search),
     ).cte("selected_meal_orders")
     receipt_day = _day_expression(session, receipts.c.occurred_at)

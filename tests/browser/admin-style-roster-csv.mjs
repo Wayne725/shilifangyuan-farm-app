@@ -14,7 +14,7 @@ async function fixture(t, width, invalid = false) {
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block' });
   const state = { writes: [], reads: [], unknown: [], errors: [], conflict: false };
-  const emptyLists = ['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/admin/members', '/v1/admin/member-roster', '/v1/notifications'];
+  const emptyLists = ['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/admin/activity-refund-requests', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/admin/members', '/v1/admin/member-roster', '/v1/notifications'];
   await context.route('**/*', (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -22,9 +22,15 @@ async function fixture(t, width, invalid = false) {
     if (!url.pathname.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     const path = url.pathname;
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-csv-test', user: { id: 'test-admin', email: 'admin@example.com', display_name: '隔離管理員', user_role: 'admin' } } });
+    if (path === '/v1/admin/reconciliation-status') return route.fulfill({ json: { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] } });
     if (request.method() === 'GET') {
       state.reads.push(path);
       if (emptyLists.includes(path)) return route.fulfill({ json: [] });
+      if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', sales_scope: 'all' } });
+      if (path === '/v1/admin/membership/admissions') return route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0 } });
+      if (path === '/v1/admin/printers/status') return route.fulfill({ json: { enabled: false, dry_run: true, status: 'disabled', error: null } });
+      if (path === '/v1/admin/printers/jobs') return route.fulfill({ json: { items: [], total: 0, limit: 30, offset: 0 } });
+      if (path === '/v1/admin/platform') return route.fulfill({ json: { kitchen_sound: false } });
       if (['/v1/admin/order-search', '/v1/admin/failed-jobs'].includes(path)) return route.fulfill({ json: { items: [], total: 0, limit: 12, offset: 0 } });
       if (path === '/v1/admin/meal-kitchen') return route.fulfill({ json: { items: [], total: 0, meal_quantity: 0, products: [] } });
       if (path === '/v1/admin/finance/meal-sales') return route.fulfill({ json: { summary: { received: 0, refunded: 0, net: 0, receipt_count: 0, refund_count: 0, paid_meal_quantity: 0, pending_refund_amount: 0 }, orders: { items: [], total: 0 }, daily: [], weekly: [], monthly: [], products: [] } });
@@ -78,6 +84,7 @@ for (const width of [1440, 390]) {
       return { background: style.backgroundColor, border: style.borderBottomColor, font: style.fontSize };
     });
     assert.deepEqual(style, expected);
+    assert.equal(style.font, '18px');
     if (width === 1440) {
       const box = await nav.boundingBox();
       assert.ok(Math.abs(box.x + box.width / 2 - width / 2) < 1);
@@ -86,6 +93,13 @@ for (const width of [1440, 390]) {
       const boxes = await nav.locator('a').evaluateAll((links) => links.map((link) => link.getBoundingClientRect().width));
       assert.ok(Math.max(...boxes) - Math.min(...boxes) < 1, '子頁籤等寬');
     }
+    await page.locator('.reading-menu > summary').click();
+    const textSize = page.getByRole('group', { name: '文字大小', exact: true });
+    await textSize.getByRole('button', { name: '放大', exact: true }).click();
+    assert.equal(await active.evaluate(element => getComputedStyle(element).fontSize), '22.5px');
+    await noOverflow(page);
+    await page.locator('.reading-menu > summary').click();
+    await textSize.getByRole('button', { name: '標準', exact: true }).click();
     await screenshot(page, `admin-underline-${width}`);
     await noOverflow(page);
     for (const [label, section] of [['問題回報', 'issues'], ['供應者與審核狀態', 'suppliers'], ['取貨點維護', 'locations']]) {

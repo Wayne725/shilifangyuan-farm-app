@@ -48,6 +48,7 @@ from app.routers import groups, logistics, membership, orders
 from app.routers.payments import payments_router
 from app.sales_scope import MEALS_ONLY_MESSAGE, PICKUP_ONLY_MESSAGE, SalesScopeError, ensure_sales_scope_allows
 from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.foreign_key_support import unrelated_catalog_sources
 from tests.test_payment_return import payment_return_context, payment_settings, successful_result
 from tests.test_raygate import raygate_callback_context
 from tests.test_meals_production_configuration import meal_production_settings
@@ -110,8 +111,8 @@ def test_preview_acceptance_allowlist_cannot_bypass_meal_scope():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint,kwargs", [
-    (orders.create_order, {"body": SimpleNamespace(fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP)}),
-    (groups.join_campaign, {"campaign_id": "existing", "body": SimpleNamespace(fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP)}),
+    (orders.create_order, {"body": SimpleNamespace(fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP, client_request_id=None)}),
+    (groups.join_campaign, {"campaign_id": "existing", "body": SimpleNamespace(fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP, client_request_id=None)}),
     (membership.create_document_upload_url, {"body": None, "request": None, "storage": Mock()}),
     (membership.confirm_document_upload, {"document_id": "existing", "body": None, "storage": Mock()}),
     (logistics.create_logistics_selection, {"order_id": "existing", "body": None}),
@@ -324,20 +325,22 @@ async def test_forged_or_incomplete_meal_order_cannot_start_payment(
     database_session, complete_meal_order, corruption
 ):
     order = complete_meal_order
+    if corruption in {"group_campaign", "product_source", "bundle_source"}:
+        sources = await unrelated_catalog_sources(database_session, order.user_id)
     if corruption == "group_kind":
         order.order_kind = OrderKind.GROUP
     elif corruption == "group_campaign":
-        order.group_campaign_id = "unrelated-group"
+        order.group_campaign_id = sources.campaign.id
     elif corruption == "no_items":
         order.items = []
     elif corruption == "missing_offering":
         order.items[0].source_meal_offering_id = None
     elif corruption == "product_source":
-        order.items[0].source_product_id = "unrelated-product"
+        order.items[0].source_product_id = sources.product.id
     elif corruption == "bundle_source":
-        order.items[0].source_bundle_id = "unrelated-bundle"
+        order.items[0].source_bundle_id = sources.bundle.id
     elif corruption == "missing_event":
-        order.meal_event_id = "nonexistent-event"
+        order.meal_event_id = None
     elif corruption == "cross_event_offering":
         now = datetime.now(timezone.utc)
         other = MealEvent(
@@ -353,7 +356,8 @@ async def test_forged_or_incomplete_meal_order_cannot_start_payment(
     elif corruption == "wrong_pickup":
         order.fulfillment.method = FulfillmentMethod.ECPAY_LOGISTICS
     await database_session.flush()
-    with pytest.raises(PaymentApplicationError, match="資料不完整"):
+    expected_message = MEALS_ONLY_MESSAGE if corruption == "missing_event" else "資料不完整"
+    with pytest.raises(PaymentApplicationError, match=expected_message):
         await ensure_order_payment_runtime_enabled(database_session, meal_scope_settings(), order)
     assert await database_session.scalar(select(func.count(PaymentAttempt.id))) == 0
 

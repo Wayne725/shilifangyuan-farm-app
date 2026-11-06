@@ -5,10 +5,12 @@ import { Link } from "@tanstack/react-router";
 
 import { PhotoImage, PhotoPicker, savePhoto } from "../components/PhotoPicker";
 import { SocialNav } from "../components/SocialNav";
+import { MembershipReadError } from "../components/MembershipReadError";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
-import type { MemberDirectoryEntry, MembershipSummary } from "../lib/types";
+import type { MemberDirectoryEntry } from "../lib/types";
+import { useMembership } from "../lib/social-access";
 
 const emptyForm = { is_public: false, nickname: "", expertise: "", bio: "" };
 
@@ -19,12 +21,8 @@ export function DirectoryPage() {
   const [form, setForm] = useState(emptyForm);
   const [photo, setPhoto] = useState<File | null>(null);
   const [removePhoto, setRemovePhoto] = useState(false);
-  const membership = useQuery({
-    queryKey: ["membership-me", user?.id],
-    queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
-    enabled: Boolean(user),
-  });
-  const canAccess = membership.data?.membership_type === "member";
+  const membership = useMembership(user);
+  const canAccess = membership.isSuccess && membership.data.membership_type === "member";
   const directory = useQuery({
     queryKey: ["member-directory"],
     queryFn: () => apiFetch<MemberDirectoryEntry[]>("/v1/members/directory"),
@@ -71,7 +69,7 @@ export function DirectoryPage() {
 
       {!user ? (
         <div className="social-access-card"><IdentificationCard size={38} weight="light" /><h2>登入後查看社員名錄</h2><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></div>
-      ) : membership.isPending ? <LoadingLines count={3} /> : !canAccess ? (
+      ) : membership.isPending ? <LoadingLines count={3} /> : membership.isError ? <MembershipReadError error={membership.error} onRetry={() => void membership.refetch()} /> : !canAccess ? (
         <div className="social-access-card"><IdentificationCard size={38} weight="light" /><h2>此功能開放給正式社員</h2><Link className="button button-system" to="/membership">查看入社進度</Link></div>
       ) : (
         <>

@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Optional
 
-from sqlalchemy import MetaData, text
+from sqlalchemy import MetaData, event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -29,6 +29,14 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
+def _enable_sqlite_foreign_keys(connection, _record) -> None:
+    cursor = connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
+
+
 def create_engine(database_url: Optional[str] = None) -> AsyncEngine:
     settings = get_settings()
     url = database_url or settings.async_database_url
@@ -43,7 +51,10 @@ def create_engine(database_url: Optional[str] = None) -> AsyncEngine:
             pool_recycle=settings.database_pool_recycle_seconds,
             connect_args={"timeout": settings.database_connect_timeout_seconds},
         )
-    return create_async_engine(url, **kwargs)
+    database_engine = create_async_engine(url, **kwargs)
+    if url.startswith("sqlite"):
+        event.listen(database_engine.sync_engine, "connect", _enable_sqlite_foreign_keys)
+    return database_engine
 
 
 engine = create_engine()

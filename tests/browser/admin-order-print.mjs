@@ -254,7 +254,9 @@ test('送出時權限失效不自動改識別碼重送，保留原工作供核�
   let dialog = await openPreview(page);
   await dialog.getByLabel('出單原因', { exact: true }).fill('權限到期前預覽');
   await dialog.getByRole('button', { name: '確認送至出單機', exact: true }).click();
-  await dialog.getByRole('alert').getByText('登入或管理員權限已失效', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '重新驗證管理權限', exact: true }).waitFor();
+  assert.equal(await dialog.count(), 0);
+  assert.equal(await page.locator('.admin-order-print').count(), 0);
   const first = structuredClone(state.writes[0].body);
   await page.reload();
   await page.getByRole('button', { name: '再次出單', exact: true }).click();

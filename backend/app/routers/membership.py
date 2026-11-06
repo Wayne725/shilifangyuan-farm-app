@@ -44,6 +44,7 @@ from ..member_claims import (
 )
 from ..member_shares import MemberSharesError, update_member_shares
 from ..membership_admission_guards import has_admission_round, require_legacy_admission_allowed
+from ..membership_demo_documents import is_demo_membership_document
 from ..roster_csv import (
     MAX_CSV_BYTES, RosterCsvEntry, RosterCsvImport, RosterCsvImported,
     RosterCsvPreview, duplicate_numbers, parse_roster_csv,
@@ -125,6 +126,7 @@ def _ensure_user_can_apply(user: User, application: Optional[MembershipApplicati
 
 def _document_response(
     document: MembershipDocument,
+    user_id: str,
 ) -> MembershipDocumentRead:
     return MembershipDocumentRead(
         id=document.id,
@@ -134,6 +136,20 @@ def _document_response(
         size_bytes=document.size_bytes,
         checksum_sha256=document.checksum_sha256,
         confirmed_at=_aware_optional(document.confirmed_at),
+        is_demo_placeholder=_is_demo_document(document, user_id),
+    )
+
+
+def _is_demo_document(document: MembershipDocument, user_id: str) -> bool:
+    return is_demo_membership_document(
+        application_id=document.application_id,
+        user_id=user_id,
+        document_type=document.document_type,
+        object_key=document.object_key,
+        content_type=document.content_type,
+        size_bytes=document.size_bytes,
+        checksum_sha256=document.checksum_sha256,
+        status=document.status,
     )
 
 
@@ -330,7 +346,7 @@ async def _application_response(
         created_at=_aware(application.created_at),
         updated_at=_aware(application.updated_at),
         profile=profile_read,
-        documents=[_document_response(document) for document in documents],
+        documents=[_document_response(document, application.user_id) for document in documents],
     )
 
 
@@ -750,7 +766,7 @@ async def list_my_documents(
     if application is None:
         return []
     return [
-        _document_response(document)
+        _document_response(document, application.user_id)
         for document in application.documents
         if document.status != MembershipDocumentStatus.DELETED
     ]
@@ -971,7 +987,7 @@ async def confirm_document_upload(
     document.checksum_sha256 = head.sha256
     document.confirmed_at = datetime.now(timezone.utc)
     await session.commit()
-    return _document_response(document)
+    return _document_response(document, user.id)
 
 
 @membership_router.get(
@@ -1396,16 +1412,27 @@ async def create_document_download_url(
     session: AsyncSession = Depends(get_session),
     storage=Depends(get_document_storage),
 ) -> dict[str, Any]:
-    document = await session.scalar(
-        select(MembershipDocument).where(
-            MembershipDocument.id == document_id,
-            MembershipDocument.application_id == application_id,
-            MembershipDocument.status
-            == MembershipDocumentStatus.CONFIRMED,
+    row = (
+        await session.execute(
+            select(MembershipDocument, MembershipApplication.user_id)
+            .join(MembershipApplication)
+            .where(
+                MembershipDocument.id == document_id,
+                MembershipDocument.application_id == application_id,
+                MembershipDocument.status
+                == MembershipDocumentStatus.CONFIRMED,
+            )
         )
-    )
-    if document is None:
+    ).one_or_none()
+    if row is None:
         raise HTTPException(status_code=404, detail="找不到證件")
+    document, user_id = row
+    if _is_demo_document(document, user_id):
+        raise HTTPException(
+            status_code=409,
+            detail="示範資料，無實際檔案",
+            headers={"X-Error-Code": "demo_document_placeholder"},
+        )
     url = storage.create_download_url(document.object_key)
     expires_in_seconds = getattr(
         getattr(storage, "settings", None),

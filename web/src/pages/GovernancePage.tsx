@@ -1,28 +1,39 @@
 import { NotePencil, Plus, UsersThree } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { SocialNav } from "../components/SocialNav";
+import { MembershipReadError } from "../components/MembershipReadError";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch } from "../lib/api";
+import { ApiError, apiFetch, isCurrentSessionUser } from "../lib/api";
+import { clearProposalSubmission, markProposalCreateUncertain, prepareProposalSubmission, readProposalSubmission, recordCreatedProposal, type ProposalSubmission } from "../lib/proposal-submission";
 import { proposalStatusLabel } from "../lib/labels";
-import type { MembershipSummary, Proposal } from "../lib/types";
+import type { Proposal } from "../lib/types";
+import { useMembership } from "../lib/social-access";
+import "./GovernancePage.css";
 
 const emptyForm = { title: "", body: "", proposal_type: "resolution" as Proposal["proposal_type"], options: "" };
+const asForm = (submission: ProposalSubmission | null) => submission
+  ? { ...submission.input, options: submission.input.options.map(option => option.label).join("\n") } : emptyForm;
 
 export function GovernancePage() {
   const { user, openLogin } = useAuth();
   const queryClient = useQueryClient();
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState(emptyForm);
-  const membership = useQuery({
-    queryKey: ["membership-me", user?.id],
-    queryFn: () => apiFetch<MembershipSummary>("/v1/members/me"),
-    enabled: Boolean(user),
-  });
-  const canAccess = membership.data?.membership_type === "member";
+  const [submission, setSubmission] = useState(() => user ? readProposalSubmission(user.id) : null);
+  const [showForm, setShowForm] = useState(Boolean(submission));
+  const [form, setForm] = useState(() => asForm(submission));
+  const userId = user?.id;
+  useEffect(() => {
+    if (!userId) return;
+    const saved = readProposalSubmission(userId);
+    setSubmission(saved);
+    setForm(asForm(saved));
+    setShowForm(Boolean(saved));
+  }, [userId]);
+  const membership = useMembership(user);
+  const canAccess = membership.isSuccess && membership.data.membership_type === "member";
   const proposals = useQuery({
     queryKey: ["member-proposals"],
     queryFn: () => apiFetch<Proposal[]>("/v1/member-proposals"),
@@ -30,19 +41,53 @@ export function GovernancePage() {
   });
   const createProposal = useMutation({
     mutationFn: async () => {
+      if (!user) throw new Error("請先登入");
       const options = form.proposal_type === "multiple_choice"
         ? form.options.split("\n").map((label) => label.trim()).filter(Boolean).map((label) => ({ label }))
         : [];
-      const proposal = await apiFetch<Proposal>("/v1/member-proposals", {
-        method: "POST",
-        body: JSON.stringify({ title: form.title, body: form.body, proposal_type: form.proposal_type, options }),
-      });
-      return apiFetch<Proposal>(`/v1/member-proposals/${proposal.id}/submit`, { method: "POST" });
+      let pending = prepareProposalSubmission(user.id, { title: form.title, body: form.body, proposal_type: form.proposal_type, options });
+      setSubmission(pending);
+      let proposal: Proposal;
+      if (pending.createdId) proposal = await apiFetch<Proposal>(`/v1/member-proposals/${pending.createdId}`);
+      else {
+        try {
+          proposal = await apiFetch<Proposal>("/v1/member-proposals", {
+            method: "POST", body: JSON.stringify({ ...pending.input, client_request_id: pending.requestId }),
+          });
+        } catch (reason) {
+          if (reason instanceof ApiError && reason.status === 422 && !pending.createUncertain) clearProposalSubmission(user.id, pending.requestId);
+          else markProposalCreateUncertain(user.id, pending);
+          throw reason;
+        }
+      }
+      pending = recordCreatedProposal(user.id, pending, proposal.id);
+      setSubmission(pending);
+      if (proposal.status !== "draft") return { proposal, requestId: pending.requestId, userId: user.id };
+      try {
+        const submitted = await apiFetch<Proposal>(`/v1/member-proposals/${proposal.id}/submit`, { method: "POST" });
+        return { proposal: submitted, requestId: pending.requestId, userId: user.id };
+      } catch (reason) {
+        try {
+          const confirmed = await apiFetch<Proposal>(`/v1/member-proposals/${proposal.id}`);
+          if (confirmed.status !== "draft") return { proposal: confirmed, requestId: pending.requestId, userId: user.id };
+        } catch { /* Keep the original request when the submission result is still unknown. */ }
+        throw reason;
+      }
     },
-    onSuccess: () => {
+    onSuccess: ({ requestId, userId }) => {
+      if (!isCurrentSessionUser(userId)) return;
+      clearProposalSubmission(userId, requestId);
+      setSubmission(null);
       setForm(emptyForm);
       setShowForm(false);
       queryClient.invalidateQueries({ queryKey: ["member-proposals"] });
+    },
+    onError: () => {
+      if (user && isCurrentSessionUser(user.id)) {
+        const pending = readProposalSubmission(user.id);
+        setSubmission(pending);
+        if (pending) setForm(asForm(pending));
+      }
     },
   });
 
@@ -55,25 +100,26 @@ export function GovernancePage() {
     <section className="social-page-shell">
       <header className="social-page-heading">
         <div><p className="eyebrow">PROPOSALS / 社員提案</p><h1>社員提案</h1></div>
-        {canAccess && <button className="button button-system" type="button" onClick={() => setShowForm((value) => !value)}><Plus size={18} />提出提案</button>}
+        {canAccess && <button className="button button-system" type="button" onClick={() => setShowForm((value) => !value)}><Plus size={18} />{submission ? "繼續原提案" : "提出提案"}</button>}
       </header>
       <SocialNav />
 
       {!user ? (
         <div className="social-access-card"><NotePencil size={38} weight="light" /><h2>登入後查看社員提案</h2><button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button></div>
-      ) : membership.isPending ? <LoadingLines count={3} /> : !canAccess ? (
+      ) : membership.isPending ? <LoadingLines count={3} /> : membership.isError ? <MembershipReadError error={membership.error} onRetry={() => void membership.refetch()} /> : !canAccess ? (
         <div className="social-access-card"><UsersThree size={38} weight="light" /><h2>此功能開放給正式社員</h2><Link className="button button-system" to="/membership">查看入社進度</Link></div>
       ) : (
         <>
           {showForm && (
             <form className="social-form" onSubmit={submit}>
               <div className="form-heading"><div><p className="eyebrow">NEW PROPOSAL / 新增提案</p><h2>提出社員提案</h2></div><span>送出後由管理員安排討論與表決</span></div>
-              <div className="field-grid two-columns">
+              {submission && <p role="status">已保留這份提案，請先完成原送審流程。</p>}
+              <fieldset className="field-grid two-columns proposal-fields" disabled={createProposal.isPending || Boolean(submission)}>
                 <label className="field wide"><span>提案主旨</span><input required maxLength={160} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
                 <label className="field"><span>表決方式</span><select value={form.proposal_type} onChange={(event) => setForm({ ...form, proposal_type: event.target.value as Proposal["proposal_type"] })}><option value="resolution">贊成／反對／棄權</option><option value="multiple_choice">多選項表決</option></select></label>
                 {form.proposal_type === "multiple_choice" && <label className="field"><span>選項（每行一個）</span><textarea required rows={4} placeholder={'選項一\n選項二'} value={form.options} onChange={(event) => setForm({ ...form, options: event.target.value })} /></label>}
                 <label className="field wide"><span>提案內容</span><textarea required rows={8} maxLength={20000} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} /></label>
-              </div>
+              </fieldset>
               {createProposal.isError && <p className="form-error">{createProposal.error.message}</p>}
               <div className="form-actions"><button className="button button-quiet" type="button" onClick={() => setShowForm(false)}>取消</button><button className="button button-primary" disabled={createProposal.isPending}>送出審核</button></div>
             </form>

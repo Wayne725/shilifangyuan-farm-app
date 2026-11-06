@@ -1,7 +1,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Printer, X } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { ApiError, apiFetch } from "../lib/api";
+import { ApiError } from "../lib/api";
+import type { AdminPanelAccess } from "../lib/admin-panel-access";
 import { orderSummaryParameters, type OrderSummaryFilters } from "../lib/order-summary";
 import "./OrderSummaryPrint.css";
 
@@ -35,7 +36,7 @@ function BatchResult({ batch }: { batch: Batch }) {
   </div>;
 }
 
-export function OrderSummaryPrint({ filters, userId, disabled }: { filters: OrderSummaryFilters; userId: string; disabled?: boolean }) {
+export function OrderSummaryPrint({ filters, userId, disabled, access }: { filters: OrderSummaryFilters; userId: string; disabled?: boolean; access: AdminPanelAccess }) {
   const storageKey = `order-summary-print:${userId}`;
   const [attempt, setAttempt] = useState<Attempt | null>(() => readAttempt(storageKey));
   const [open, setOpen] = useState(false);
@@ -59,23 +60,23 @@ export function OrderSummaryPrint({ filters, userId, disabled }: { filters: Orde
     else sessionStorage.removeItem(storageKey);
   };
   const operate = async (action: () => Promise<void>) => {
-    if (busyRef.current) return;
+    if (access.isDenied() || busyRef.current) return;
     busyRef.current = true; setBusy(true); setError("");
     try { await action(); }
-    catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : "無法完成操作，請再試一次。"); }
-    finally { busyRef.current = false; if (mounted.current) setBusy(false); }
+    catch (failure) { if (mounted.current && !access.isDenied()) setError(failure instanceof Error ? failure.message : "無法完成操作，請再試一次。"); }
+    finally { busyRef.current = false; if (mounted.current && !access.isDenied()) setBusy(false); }
   };
   const loadPreview = () => operate(async () => {
     setPreview(null); setResolvePage(""); setResolveReason(""); setReviewedPaper(false);
     const params = { ...orderSummaryParameters(filters), status: "paid" };
-    const value = await apiFetch<Preview>(`/v1/admin/order-summary/print-preview?${new URLSearchParams(params)}`);
-    if (mounted.current) { setPreview(value); setBatch(null); setReviewedPaper(false); }
+    const value = await access.request<Preview>(`/v1/admin/order-summary/print-preview?${new URLSearchParams(params)}`);
+    if (mounted.current && !access.isDenied()) { setPreview(value); setBatch(null); setReviewedPaper(false); }
   });
   const findBatch = () => operate(async () => {
     if (!attempt) return;
     try {
-      const value = await apiFetch<Batch>(`/v1/admin/order-summary/print-jobs/${attempt.request_id}`);
-      if (mounted.current) setBatch(value);
+      const value = await access.request<Batch>(`/v1/admin/order-summary/print-jobs/${attempt.request_id}`);
+      if (mounted.current && !access.isDenied()) setBatch(value);
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 404) throw new Error("尚未查到這筆送印，可重試同一筆送印；系統會沿用原識別碼。");
       throw failure;
@@ -87,43 +88,45 @@ export function OrderSummaryPrint({ filters, userId, disabled }: { filters: Orde
     // Persist before sending so a lost response or reload reuses the same request.
     saveAttempt(value);
     try {
-      const result = await apiFetch<Batch>("/v1/admin/order-summary/print-jobs", { method: "POST", body: JSON.stringify(value) });
-      if (mounted.current) { setBatch(result); setPreview(null); }
+      const result = await access.request<Batch>("/v1/admin/order-summary/print-jobs", { method: "POST", body: JSON.stringify(value) });
+      if (mounted.current && !access.isDenied()) { setBatch(result); setPreview(null); }
     } catch (failure) {
       if (failure instanceof ApiError && [400, 409, 422].includes(failure.status)) {
-        if (mounted.current) { saveAttempt(null); setPreview(null); }
+        if (mounted.current && !access.isDenied()) { saveAttempt(null); setPreview(null); }
       }
       throw failure;
     }
   });
   const loadHistory = async () => {
+    if (access.isDenied()) return;
     setHistoryError("");
     try {
-      const result = await apiFetch<{ items: Batch[] }>("/v1/admin/order-summary/print-jobs?limit=10");
-      if (mounted.current) setHistory(result.items);
-    } catch (failure) { if (mounted.current) setHistoryError(failure instanceof Error ? failure.message : "無法讀取列印紀錄。"); }
+      const result = await access.request<{ items: Batch[] }>("/v1/admin/order-summary/print-jobs?limit=10");
+      if (mounted.current && !access.isDenied()) setHistory(result.items);
+    } catch (failure) { if (mounted.current && !access.isDenied()) setHistoryError(failure instanceof Error ? failure.message : "無法讀取列印紀錄。"); }
   };
   const resolve = (printed: boolean) => operate(async () => {
     if (!batch || !resolvePage || resolveReason.trim().length < 2) return;
-    const value = await apiFetch<Batch>(`/v1/admin/order-summary/print-jobs/${batch.request_id}/pages/${resolvePage}/resolve`, {
+    const value = await access.request<Batch>(`/v1/admin/order-summary/print-jobs/${batch.request_id}/pages/${resolvePage}/resolve`, {
       method: "POST", body: JSON.stringify({ printed, reason: resolveReason.trim() }),
     });
-    if (mounted.current) { setBatch(value); setResolvePage(""); setResolveReason(""); }
+    if (mounted.current && !access.isDenied()) { setBatch(value); setResolvePage(""); setResolveReason(""); }
   });
 
   useEffect(() => {
-    if (!open || !batch || isSettled(batch)) return;
+    if (access.isDenied() || !open || !batch || isSettled(batch)) return;
     let active = true;
     const timer = setInterval(() => {
-      void apiFetch<Batch>(`/v1/admin/order-summary/print-jobs/${batch.request_id}`)
-        .then((value) => { if (active) setBatch(value); })
+      if (access.isDenied()) return;
+      void access.request<Batch>(`/v1/admin/order-summary/print-jobs/${batch.request_id}`)
+        .then((value) => { if (active && !access.isDenied()) setBatch(value); })
         .catch(() => { /* Keep the last confirmed state; manual refresh reports errors. */ });
     }, 4000);
     return () => { active = false; clearInterval(timer); };
-  }, [open, batch?.request_id, batch && isSettled(batch)]);
+  }, [open, batch?.request_id, batch && isSettled(batch), access.denied, access.isDenied, access.request]);
 
   const show = (value: boolean) => {
-    if (busyRef.current) return;
+    if (access.isDenied() || busyRef.current) return;
     setOpen(value);
     if (value) {
       setError("");
@@ -132,6 +135,7 @@ export function OrderSummaryPrint({ filters, userId, disabled }: { filters: Orde
     }
   };
 
+  if (access.denied) return null;
   return <section className="order-summary-print" aria-label="彙總列印">
     <Dialog.Root open={open} onOpenChange={show}>
       <Dialog.Trigger asChild><button type="button" className="button button-primary" disabled={disabled && !attempt}><Printer size={20} />{attempt ? "查看彙總送印結果" : "列印彙總單"}</button></Dialog.Trigger>

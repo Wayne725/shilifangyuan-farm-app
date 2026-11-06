@@ -6,7 +6,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 
 import { OrderSearch } from "../components/OrderSearch";
-import { filterOrders } from "../lib/order-search";
+import { useOrderHistory } from "../lib/use-order-history";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { OrderCancellationContact } from "./OrderCancellationContact";
@@ -23,18 +23,13 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState("");
   const [selectedId, setSelectedId] = useState(orderId || "");
-  const orders = useQuery({
-    queryKey: ["meal-orders", user?.id],
-    queryFn: () => apiFetch<MealOrder[]>("/v1/meal-orders"),
-    enabled: Boolean(user),
-    refetchInterval: 5000,
-  });
-  const visibleOrders = filterOrders(orders.data || [], query, payment);
+  const orders = useOrderHistory<MealOrder>("meal", user?.id, query, payment, selectedId, orderId);
+  const visibleOrders = orders.items;
   const selected = visibleOrders.find((order) => order.id === selectedId) || visibleOrders[0];
   const credentialAvailable = Boolean(selected?.payment_status === "paid" && !selected.cancelled_at && selected.pickup_code && !["picked_up", "no_show", "cancelled"].includes(selected.fulfillment_status));
   const credentialQuery = useQuery({
     queryKey: ["meal-pickup-credential", user?.id, selected?.id, selected?.payment_status, selected?.fulfillment_status],
-    queryFn: () => apiFetch<MealPickupCredential>(`/v1/meal-orders/${selected?.id}/pickup-credential`),
+    queryFn: ({ signal }) => apiFetch<MealPickupCredential>(`/v1/meal-orders/${selected?.id}/pickup-credential`, { signal }),
     enabled: Boolean(selected?.id && credentialAvailable),
     refetchInterval: credentialAvailable ? 5000 : false,
     retry: false,
@@ -48,8 +43,8 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
   }, [orderId]);
 
   useEffect(() => {
-    if (!selectedId && orders.data?.[0]) setSelectedId(orders.data[0].id);
-  }, [orders.data, selectedId]);
+    if (!selectedId && orders.items[0]) setSelectedId(orders.items[0].id);
+  }, [orders.items, selectedId]);
 
 
   if (!isAuthReady) return <section className="orders-page meal-orders-page" aria-label="正在恢復登入"><LoadingLines count={3} /></section>;
@@ -59,11 +54,15 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
     <section className={embedded ? "meal-orders-embedded" : "orders-page meal-orders-page"}>
       {!embedded && <><Link className="text-link" to="/shop" search={{ tab: "meals" }}><ArrowLeft size={17} />回到便當預訂</Link>
       <header className="workspace-heading"><div><h1>餐點訂單</h1></div><Link className="text-link" to="/orders">訂單中心</Link></header></>}
-      <OrderSearch query={query} payment={payment} onQuery={setQuery} onPayment={setPayment} count={visibleOrders.length} />
-      {orders.data && orders.data.length > 0 && visibleOrders.length === 0 && <DataState title="沒有符合條件的餐點訂單" detail="請調整關鍵字或付款狀態。" />}
+      <OrderSearch query={query} payment={payment} onQuery={setQuery} onPayment={setPayment} count={visibleOrders.length} searching={orders.searching} refreshing={orders.isFetching} onRefresh={orders.refresh} />
       {orders.isPending && <LoadingLines count={4} />}
-      {orders.isError && <DataState kind="error" title="便當訂單無法讀取" detail={orders.error.message} onAction={() => orders.refetch()} />}
-      {orders.data?.length === 0 && <DataState title="目前沒有便當訂單" detail="可先查看明天的餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />}
+      {orders.isError && visibleOrders.length === 0 && <DataState kind="error" title="便當訂單無法讀取" detail={orders.error.message} onAction={orders.refresh} />}
+      {orders.targetPending && <p role="status">正在讀取返回的原餐點訂單…</p>}
+      {orders.targetError && <DataState kind="error" title="原餐點訂單暫時無法讀取" detail={orders.targetError.message} onAction={orders.refresh} />}
+      {orders.selectedError && <p className="form-error" role="alert">餐點訂單更新失敗：{orders.selectedError.message}</p>}
+      {orders.isSuccess && visibleOrders.length === 0 && (query || payment
+        ? <DataState title="沒有符合條件的餐點訂單" detail="請調整關鍵字或付款狀態。" />
+        : <DataState title="目前沒有便當訂單" detail="可先查看明天的餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />)}
       {visibleOrders.length > 0 && <div className="orders-layout"><div className="order-index" aria-label="選擇便當訂單">{visibleOrders.map((order) => <button className={order.id === selected?.id ? "selected" : ""} aria-pressed={order.id === selected?.id} key={order.id} type="button" onClick={() => setSelectedId(order.id)}><span>{order.venue_name}</span><strong>{formatMealDate(order.pickup_at || order.pickup_start)}</strong><small className="order-number">訂單編號：{order.order_number}</small><small>{formatMoney(order.amount_total)}</small><i className={`order-state ${order.payment_status}`}>{paymentStatus(order.payment_status)}</i></button>)}</div>{selected ? <article className="order-detail meal-order-detail"><div className="order-detail-head"><div><h2>{formatMealDate(selected.pickup_at || selected.pickup_start)}</h2><span className="order-number">訂單編號：{selected.order_number}</span></div><strong>{formatMoney(selected.amount_total)}</strong></div>
       <div className="meal-pickup-info">
         <div><MapPin size={20} /><span>取餐點</span><strong>{selected.venue_name}{selected.pickup_address && <small>{selected.pickup_address}</small>}</strong></div>
@@ -81,6 +80,8 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} taxAmount={selected.tax_amount} />
       <p className="meal-order-created-at">下單時間：{formatDateTime(selected.created_at)}</p>
       {pay.isError && <p className="form-error">{pay.error.message}</p>}<OrderCancellationContact /></article> : <DataState title="找不到這筆便當訂單" detail="請從左方或上方的訂單清單選擇一筆訂單。" />}</div>}
+      {orders.isFetchNextPageError && <p className="form-error" role="alert">更多餐點訂單暫時無法讀取：{orders.error.message}</p>}
+      {orders.hasNextPage && <button className="button button-quiet" type="button" disabled={orders.isFetching} onClick={() => void orders.fetchNextPage()}>{orders.isFetchingNextPage ? "載入更多中…" : orders.isFetchNextPageError ? "重試載入更多" : "載入更多訂單"}</button>}
       <div className="orders-footnote"><Link className="button button-quiet" to="/shop" search={{ tab: "meals" }}>我要訂餐</Link></div>
     </section>
   );

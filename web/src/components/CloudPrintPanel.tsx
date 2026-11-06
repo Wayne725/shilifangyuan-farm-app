@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { apiFetch } from "../lib/api";
+import type { AdminPanelAccess } from "../lib/admin-panel-access";
 import { financeDateTime } from "../lib/meal-finance";
 import "./CloudPrintPanel.css";
 
@@ -14,7 +14,7 @@ const jobKindLabel = (job: Job) => `${({order: "訂餐單", cancellation: "取�
 const jobStatusLabel = (job: Job) => job.awaiting_payment ? "等待付款" : states[job.status];
 const errorText = (code: string) => errors[code] || (code.startsWith("provider_rejected_") ? `飛鵝拒絕工作（${code.replace("provider_rejected_", "")}）` : code);
 
-export function CloudPrintPanel() {
+export function CloudPrintPanel({ access }: { access: AdminPanelAccess }) {
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
@@ -24,14 +24,16 @@ export function CloudPrintPanel() {
   const [acknowledge, setAcknowledge] = useState(false);
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const queryClient = useQueryClient();
-  const device = useQuery({queryKey: ["cloud-printer"], queryFn: () => apiFetch<Device>("/v1/admin/printers/status"), staleTime: 60_000});
-  const jobs = useQuery({queryKey: ["print-jobs", filter, search, offset], queryFn: () => apiFetch<{items: Job[]; total: number}>(`/v1/admin/printers/jobs?${new URLSearchParams({...(filter ? {status: filter} : {}), ...(search ? {search} : {}), offset: String(offset), limit: "30"})}`), refetchInterval: 10_000});
-  const preview = useQuery({queryKey: ["print-job", selected], queryFn: () => apiFetch<Job & {preview: string}>(`/v1/admin/printers/jobs/${selected}`), enabled: Boolean(selected), refetchInterval: selected ? 10_000 : false});
-  const refresh = () => Promise.all([queryClient.invalidateQueries({queryKey: ["print-jobs"]}), queryClient.invalidateQueries({queryKey: ["print-job"]})]);
-  const reprint = useMutation({mutationFn: () => apiFetch<Job>(`/v1/admin/printers/jobs/${selected}/reprint`, {method: "POST", body: JSON.stringify({request_id: requestId, reason, acknowledge_duplicate: acknowledge})}), onSuccess: () => { setRequestId(crypto.randomUUID()); return refresh(); }});
-  const query = useMutation({mutationFn: () => apiFetch<Job>(`/v1/admin/printers/jobs/${selected}/query`, {method: "POST"}), onSuccess: refresh});
-  const resolve = useMutation({mutationFn: (printed: boolean) => apiFetch<Job>(`/v1/admin/printers/jobs/${selected}/resolve`, {method: "POST", body: JSON.stringify({printed, reason})}), onSuccess: refresh});
+  const retryRead = (count: number) => !access.isDenied() && count < 1;
+  const device = useQuery({queryKey: ["cloud-printer"], queryFn: ({ signal }) => access.request<Device>("/v1/admin/printers/status", { signal }), enabled: !access.denied, retry: retryRead, staleTime: 60_000});
+  const jobs = useQuery({queryKey: ["print-jobs", filter, search, offset], queryFn: ({ signal }) => access.request<{items: Job[]; total: number}>(`/v1/admin/printers/jobs?${new URLSearchParams({...(filter ? {status: filter} : {}), ...(search ? {search} : {}), offset: String(offset), limit: "30"})}`, { signal }), enabled: !access.denied, retry: retryRead, refetchInterval: access.denied ? false : 10_000});
+  const preview = useQuery({queryKey: ["print-job", selected], queryFn: ({ signal }) => access.request<Job & {preview: string}>(`/v1/admin/printers/jobs/${selected}`, { signal }), enabled: !access.denied && Boolean(selected), retry: retryRead, refetchInterval: !access.denied && selected ? 10_000 : false});
+  const refresh = () => { if (!access.isDenied()) return Promise.all([queryClient.invalidateQueries({queryKey: ["print-jobs"]}), queryClient.invalidateQueries({queryKey: ["print-job"]})]); };
+  const reprint = useMutation({mutationFn: () => access.request<Job>(`/v1/admin/printers/jobs/${selected}/reprint`, {method: "POST", body: JSON.stringify({request_id: requestId, reason, acknowledge_duplicate: acknowledge})}), retry: false, onSuccess: () => { if (!access.isDenied()) { setRequestId(crypto.randomUUID()); return refresh(); } }});
+  const query = useMutation({mutationFn: () => access.request<Job>(`/v1/admin/printers/jobs/${selected}/query`, {method: "POST"}), retry: false, onSuccess: refresh});
+  const resolve = useMutation({mutationFn: (printed: boolean) => access.request<Job>(`/v1/admin/printers/jobs/${selected}/resolve`, {method: "POST", body: JSON.stringify({printed, reason})}), retry: false, onSuccess: refresh});
   const job = preview.data;
+  if (access.denied) return null;
   return <details className="cloud-print-panel" open>
     <summary><span>雲端出單 <small>CLOUD PRINT</small></span><span>{device.data ? deviceStates[device.data.status] : "讀取設備狀態"}</span></summary>
     <div className="cloud-print-body">

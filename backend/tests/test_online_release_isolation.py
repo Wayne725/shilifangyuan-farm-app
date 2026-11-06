@@ -88,10 +88,21 @@ def test_online_product_exception_rejects_skus_longer_than_eighty_characters():
         )
 
 
-def test_core_release_keeps_one_linear_migration_head():
+def test_core_release_keeps_one_merged_migration_head():
     backend = Path(__file__).resolve().parents[1]
     migrations = ScriptDirectory(str(backend / "alembic"))
-    assert migrations.get_heads() == ["0042_order_reference_printing"]
+    assert migrations.get_heads() == ["0048_merge_remediation_print"]
+    assert len(list(migrations.walk_revisions())) == 50
+    assert migrations.get_revision("0048_merge_remediation_print").down_revision == (
+        "0047_credential_rate_limits", "0042_order_reference_printing"
+    )
+    assert migrations.get_revision("0047_credential_rate_limits").down_revision == "0046_reconciliation_retention"
+    assert migrations.get_revision("0046_reconciliation_retention").down_revision == "0045_reconciliation_runs"
+    assert migrations.get_revision("0045_reconciliation_runs").down_revision == "0044_group_order_contract"
+    assert migrations.get_revision("0044_group_order_contract").down_revision == "0043_notification_dedupe"
+    assert migrations.get_revision("0043_notification_dedupe").down_revision == "0042_open_proposal_target"
+    assert migrations.get_revision("0042_open_proposal_target").down_revision == "0041_proposal_submission"
+    assert migrations.get_revision("0041_proposal_submission").down_revision == "0040_membership_admission"
     assert migrations.get_revision("0042_order_reference_printing").down_revision == "0041_order_summary_printing"
     assert migrations.get_revision("0041_order_summary_printing").down_revision == "0040_membership_admission"
     assert migrations.get_revision("0040_membership_admission").down_revision == "0039_product_daily_sales"
