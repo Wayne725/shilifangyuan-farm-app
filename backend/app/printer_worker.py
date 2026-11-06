@@ -12,6 +12,7 @@ from .config import Settings, get_settings
 from .database import SessionLocal
 from .integrations.feie import FeieClient, FeieError, validate_live_config
 from .models import FulfillmentStatus, Order, PaymentStatus, PrintJob
+from .manual_order_printing import current_manual_snapshot, load_manual_print_order, manual_print_kind
 from .printing import (confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
                        receipt_time, render_receipt_snapshot, seal_receipt_content)
 from .summary_printing import summary_job_is_current
@@ -37,7 +38,9 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         candidate = (await session.execute(select(PrintJob.id, PrintJob.order_id).outerjoin(Order, Order.id == PrintJob.order_id).where(
             PrintJob.next_attempt_at <= now,
             or_(and_(PrintJob.status == "pending", or_(
-                PrintJob.kind.in_({"cancellation", "summary"}), Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
+                PrintJob.kind.in_({"cancellation", "summary", "reference"}),
+                and_(PrintJob.kind == "order", PrintJob.snapshot["manual"].as_boolean().is_(True)),
+                Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
                 Order.payment_status.in_([PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED]),
                 and_(Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None)),
             )), (PrintJob.status.in_(["submitted", "unknown"]) & PrintJob.vendor_order_id.is_not(None))),
@@ -50,6 +53,8 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id).with_for_update())
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
             return True
+        if job.kind == "reference" or (job.kind == "order" and job.snapshot.get("manual")):
+            order = await load_manual_print_order(session, job.order_id)
         if job.kind in {"cancellation", "amendment"} and job.status == "pending":
             sending = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == job.order_id, PrintJob.id != job.id, PrintJob.kind.in_({"order", "amendment"}), PrintJob.status == "sending").limit(1))
             if sending:
@@ -66,6 +71,13 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 await session.commit()
                 return True
             if not confirmed_print_payment(order):
+                if job.snapshot.get("manual"):
+                    job.status, job.last_error = "failed", "order_payment_unconfirmed_before_send"
+                    await session.commit()
+                return True
+            if job.snapshot.get("manual") and manual_print_kind(order) != "order":
+                job.status, job.last_error = "failed", "order_cancelled_before_send"
+                await session.commit()
                 return True
         if job.status == "pending" and job.kind in {"order", "amendment"} and job.snapshot.get("revision", 1) != order.revision:
             job.status, job.last_error = "failed", "order_revision_superseded"
@@ -73,7 +85,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
             return True
         mode = "dry_run" if settings.printer_dry_run else "live"
         if not job_matches_printer(job, settings):
-            if job.kind == "summary" and job.status == "pending":
+            if job.status == "pending" and (job.kind in {"summary", "reference"} or job.snapshot.get("manual")):
                 job.status = "failed"
             job.last_error = "printer_configuration_changed"
             job.next_attempt_at = now + timedelta(seconds=60)
@@ -116,7 +128,14 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         content = job.content
         if submitting:
             try:
-                if content is None:
+                if job.kind == "reference" or (job.kind == "order" and job.snapshot.get("manual")):
+                    snapshot = await current_manual_snapshot(session, order, settings, reference=job.kind == "reference")
+                    snapshot["print_requested_at"] = receipt_time(now)
+                    job.snapshot = snapshot
+                    content = format_receipt({**render_receipt_snapshot(snapshot, job.order_id, settings),
+                        "reprint": bool(job.reprint_of_id), "dry_run": mode == "dry_run"}, width=settings.printer_line_width)
+                    job.content = seal_receipt_content(content, snapshot, job.order_id, settings, force=True)
+                elif content is None:
                     snapshot = {key: value for key, value in job.snapshot.items() if key != "customer_phone"}
                     snapshot.update(await payment_snapshot_from_session(session, order))
                     if not snapshot.get("print_requested_at"):

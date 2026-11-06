@@ -27,7 +27,7 @@ async function fixture(t, width, dryRun = true, admin = true) {
       const jobs = state.jobs.filter(job => (!url.searchParams.get('status') || job.status === url.searchParams.get('status')) && (!url.searchParams.get('search') || job.order_number.includes(url.searchParams.get('search'))));
       return route.fulfill({json: {items: jobs, total: jobs.length}});
     }
-    if (path === '/v1/admin/printers/jobs/job-1') return route.fulfill({json: {...state.jobs[0], preview: `十里方圓 合作社\n${state.jobs[0].kind === 'amendment' ? '數量修訂單' : '訂餐單'}\n姓名：測試同學\n繁體中文餐點\n付款方式：現場付款\n付款狀態：未付款`}});
+    if (path === '/v1/admin/printers/jobs/job-1') return route.fulfill({json: {...state.jobs[0], preview: `十里方圓 合作社\n${({amendment: '數量修訂單', reference: '訂單紀錄單\n請勿製作'})[state.jobs[0].kind] || '訂餐單'}\n姓名：測試同學\n繁體中文餐點\n付款方式：現場付款\n付款狀態：未付款`}});
     if (path === '/v1/admin/printers/jobs/job-1/reprint') {
       const body = request.postDataJSON(); state.writes.push({path, body});
       if (state.reprintConflict) return route.fulfill({status: 409, json: {detail: '訂單數量已更新，請選擇最新版本補印'}});
@@ -150,16 +150,23 @@ test('列印與備餐各自查詢並清除，不執行出單或更改訂單', as
 });
 
 for (const width of [390, 899, 1542]) {
-  test(`${width}px 列印與備餐下拉控制等高且桌面底部對齊`, async t => {
+  test(`${width}px 列印查詢同列控制與備餐控制等高、工具按鈕易點擊`, async t => {
     const {page} = await fixture(t, width);
     await page.goto(`${base}/admin/kitchen`);
     await page.getByText('模擬模式', {exact: true}).waitFor();
     for (const large of [false, true]) {
       await page.evaluate(value => { document.documentElement.dataset.textSize = value ? 'large' : 'standard'; }, large);
-      const select = await page.getByLabel('列印狀態', {exact: true}).boundingBox();
-      const button = await page.getByRole('button', {name: '查詢設備', exact: true}).boundingBox();
-      assert.ok(Math.abs(select.height - button.height) < 1, `高度 ${select.height}/${button.height}`);
-      if (width >= 1200) assert.ok(Math.abs(select.y + select.height - button.y - button.height) < 1, `下緣 ${select.y + select.height}/${button.y + button.height}`);
+      const filters = page.getByRole('form', {name: '列印紀錄查詢'});
+      const select = await filters.getByLabel('列印狀態', {exact: true}).boundingBox();
+      const search = await filters.getByRole('searchbox').boundingBox();
+      assert.ok(Math.abs(select.height - search.height) < 1, `查詢欄位高度 ${select.height}/${search.height}`);
+      if (width > 600) assert.ok(Math.abs(select.y + select.height - search.y - search.height) < 1, `查詢欄位下緣 ${select.y + select.height}/${search.y + search.height}`);
+      const query = await filters.getByRole('button', {name: '查詢', exact: true}).boundingBox();
+      const clear = await filters.getByRole('button', {name: '清除', exact: true}).boundingBox();
+      assert.ok(Math.abs(query.height - clear.height) < 1, `查詢按鈕高度 ${query.height}/${clear.height}`);
+      assert.ok(Math.abs(query.y + query.height - clear.y - clear.height) < 1, '查詢與清除按鈕下緣應對齊');
+      const device = await page.getByRole('button', {name: '查詢設備', exact: true}).boundingBox();
+      for (const control of [select, search, query, clear, device]) assert.ok(control.height >= 48, `觸控目標至少48px，實際${control.height}`);
       const period = await page.getByRole('combobox', {name: '備餐時段', exact: true}).boundingBox();
       const date = await page.getByLabel('取餐日期', {exact: true}).boundingBox();
       const refresh = await page.getByRole('button', {name: '更新清單', exact: true}).boundingBox();
@@ -168,6 +175,31 @@ for (const width of [390, 899, 1542]) {
       if (width >= 1200) assert.ok(Math.abs(period.y + period.height - refresh.y - refresh.height) < 1);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     }
+  });
+}
+
+for (const width of [390, 1280]) {
+  test(`${width}px 紀錄單顯示請勿製作並導向目前訂單，不能補印舊快照`, async t => {
+    const {page, state} = await fixture(t, width);
+    Object.assign(state.jobs[0], {kind: 'reference', revision: 3, status: 'printed', can_query: false, last_error: null});
+    await page.goto(`${base}/admin/kitchen`);
+    const jobs = page.locator('.cloud-print-jobs');
+    await jobs.getByRole('button', {name: '查看／補印', exact: true}).waitFor();
+    assert.match(await jobs.innerText(), /訂單紀錄單／請勿製作 · 第 3 版/);
+    await jobs.getByRole('button', {name: '查看／補印', exact: true}).click();
+    const preview = page.getByRole('region', {name: '雲端出單預覽'});
+    await preview.getByRole('heading', {name: /訂單紀錄單／請勿製作/}).waitFor();
+    assert.match(await preview.locator('pre').innerText(), /訂單紀錄單\n請勿製作/);
+    assert.equal(await preview.getByLabel('補印原因', {exact: true}).count(), 0);
+    assert.equal(await preview.getByRole('button', {name: /建立.*補印/}).count(), 0);
+    assert.equal(await preview.locator('form').count(), 0);
+    const link = preview.getByRole('link', {name: '回訂單頁依目前狀態出單', exact: true});
+    const destination = new URL(await link.getAttribute('href'), base);
+    assert.equal(destination.pathname, '/admin');
+    assert.equal(destination.searchParams.get('section'), 'orders');
+    assert.equal(destination.searchParams.get('q'), state.jobs[0].order_number);
+    assert.deepEqual(state.writes, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   });
 }
 

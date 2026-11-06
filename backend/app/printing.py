@@ -53,7 +53,7 @@ def wrap_text(value: object, width: int) -> list[str]:
 
 
 def format_receipt(snapshot: dict, *, width: int = 32) -> str:
-    titles = {"order": "便當訂餐單", "cancellation": "取消通知", "amendment": "數量修訂單"}
+    titles = {"order": "便當訂餐單", "cancellation": "取消通知", "amendment": "數量修訂單", "reference": "訂單紀錄單"}
     lines: list[str] = []
 
     def add(value: object, *tags: str) -> None:
@@ -65,17 +65,21 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
 
     add("十里方圓 合作社", "C")
     add(titles.get(snapshot.get("kind", "order"), "便當訂餐單"), "CB")
+    if snapshot.get("kind") == "reference":
+        add("＊＊ 請勿製作 ＊＊", "CB")
+    if snapshot.get("manual"):
+        add("＊＊ 管理員補印 ＊＊", "CB")
     if snapshot.get("revision"):
         add(f"訂單版本：{snapshot['revision']}")
     if snapshot.get("kind") == "amendment":
         add("＊＊ 請依最新版調整原單 ＊＊", "BOLD")
         for change in snapshot.get("quantity_changes", []):
             add(f"{change['name']}：{change['before']} → {change['after']} 份", "BOLD")
-    if snapshot.get("reprint"):
+    if snapshot.get("reprint") and not snapshot.get("manual"):
         add("＊＊ 補印 ＊＊", "CB")
     if snapshot.get("dry_run"):
         add("＊＊ 模擬列印 ＊＊", "BOLD")
-    if snapshot.get("pickup_code"):
+    if snapshot.get("pickup_code") and snapshot.get("kind") != "reference":
         add(f"取餐碼 {snapshot['pickup_code']}", "CB")
     add(f"訂單：{snapshot['order_number']}")
     add(f"顧客：{snapshot['customer_name']}", "L", "BOLD")
@@ -113,6 +117,8 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
     add("-" * width)
     add(f"付款方式：{snapshot['payment_method']}", "C")
     add(f"付款狀態：{snapshot['payment_status']}", "C", "L")
+    if snapshot.get("fulfillment_status_label"):
+        add(f"履約狀態：{snapshot['fulfillment_status_label']}", "C", "L")
     add(f"總金額：NT${snapshot['amount_total']}", "C", "L", "BOLD")
     add("-" * width)
     add(f"送印時間：{snapshot.get('print_requested_at') or '送印時產生'}")
@@ -128,7 +134,7 @@ def receipt_preview(content: str) -> str:
 
 
 def payment_snapshot(order: Order) -> dict:
-    statuses = {"paid": "已付款", "pending": "未付款", "expired": "已逾期／取消", "refund_pending": "退款待處理", "refunded": "已退款", "failed": "付款失敗"}
+    statuses = {"paid": "已付款", "pending": "未付款", "expired": "已逾期／取消", "refund_pending": "退款待處理", "refunded": "已退款", "failed": "付款失敗", "late_paid_refund_required": "逾期付款待退款"}
     return {
         "payment_method": {PaymentMethod.CASH_ON_PICKUP: "現場付款", PaymentMethod.CASH_ON_DELIVERY: "貨到付款"}.get(order.payment_method, "線上付款"),
         "payment_status": statuses.get(order.payment_status.value, order.payment_status.value),
@@ -179,12 +185,22 @@ def render_receipt_snapshot(snapshot: dict, order_id: str, settings: Settings) -
         except IntegrationError:
             raise FeieError("receipt_contact_decryption_failed") from None
         result.pop("customer_email", None)
+        result.pop("customer_email_encrypted", None)
         result["customer_phone"] = phone
+    elif "customer_email_encrypted" in result:
+        try:
+            encrypted = result.pop("customer_email_encrypted")
+            if not isinstance(encrypted, str) or not encrypted:
+                raise FeieError("receipt_contact_decryption_failed")
+            result["customer_email"] = pii_cipher_from_settings(settings).decrypt_text(
+                encrypted, associated_data=f"receipt-contact:{order_id}:email")
+        except IntegrationError:
+            raise FeieError("receipt_contact_decryption_failed") from None
     return result
 
 
 def seal_receipt_content(content: str, snapshot: dict, order_id: str, settings: Settings, *, force: bool = False) -> str:
-    if not force and "customer_phone_encrypted" not in snapshot:
+    if not force and not snapshot.get("manual") and "customer_phone_encrypted" not in snapshot and "customer_email_encrypted" not in snapshot:
         return content
     try:
         encrypted = pii_cipher_from_settings(settings).encrypt_text(content, associated_data=f"receipt-content:{order_id}")
@@ -208,12 +224,14 @@ def open_receipt_content(content: str, order_id: str, settings: Settings) -> str
 def receipt_contact(snapshot: dict, contact_email: str) -> dict:
     if "customer_phone_encrypted" in snapshot:
         return {"customer_phone_encrypted": snapshot["customer_phone_encrypted"]}
+    if "customer_email_encrypted" in snapshot:
+        return {"customer_email_encrypted": snapshot["customer_email_encrypted"]}
     return {"customer_email": snapshot.get("customer_email") or contact_email}
 
 
 async def fresh_receipt_snapshot(session: AsyncSession, snapshot: dict, order: Order) -> dict:
     result = {key: value for key, value in snapshot.items()
-              if key not in {"print_requested_at", "customer_phone", "customer_phone_encrypted", "customer_email"}}
+              if key not in {"print_requested_at", "customer_phone", "customer_phone_encrypted", "customer_email", "customer_email_encrypted", "manual"}}
     result.update(receipt_contact(snapshot, order.contact_email))
     result.setdefault("ordered_at", receipt_time(order.created_at))
     if "pickup_code" not in result:
@@ -231,16 +249,17 @@ def _contact_phone(ciphertext: str | None, aad: str, settings: Settings) -> str 
 
 
 def order_print_snapshot(order: Order, customer_name: str, contact: dict | None = None) -> dict:
-    pickup = order.fulfillment.pickup_at or order.fulfillment.pickup_starts_at
-    if pickup.tzinfo is None:
+    fulfillment = order.fulfillment
+    pickup = (fulfillment.pickup_at or fulfillment.pickup_starts_at) if fulfillment else None
+    if pickup is not None and pickup.tzinfo is None:
         pickup = pickup.replace(tzinfo=ZoneInfo("UTC"))
     snapshot = {
         "kind": "order", "revision": order.revision or 1, "order_number": order.order_number, "customer_name": customer_name,
-        "ordered_at": receipt_time(order.created_at), "pickup_code": order.fulfillment.pickup_code,
-        "pickup_at": pickup.astimezone(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M"),
-        "location": order.fulfillment.pickup_location, "amount_total": order.amount_total,
-        "pickup_address": order.fulfillment.pickup_address,
-        "needs_utensils": bool(order.fulfillment.needs_utensils),
+        "ordered_at": receipt_time(order.created_at), "pickup_code": fulfillment.pickup_code if fulfillment else None,
+        "pickup_at": pickup.astimezone(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M") if pickup else "未指定",
+        "location": (fulfillment.pickup_location if fulfillment else None) or "未指定", "amount_total": order.amount_total,
+        "pickup_address": fulfillment.pickup_address if fulfillment else None,
+        "needs_utensils": bool(fulfillment.needs_utensils) if fulfillment else False,
         "note": order.kitchen_note, **payment_snapshot(order),
         "items": [{"id": item.id, "name": item.product_name, "quantity": item.quantity, "unit_price": item.unit_price,
                    "subtotal": item.subtotal, "options": [f"{option.group_name}：{option.option_name}" for option in item.selected_options]}
@@ -355,7 +374,7 @@ def job_read(job: PrintJob, settings: Settings | None = None, order: Order | Non
     return {key: getattr(job, key) for key in (
         "id", "order_id", "kind", "mode", "status", "reprint_of_id", "attempts", "last_error",
         "last_result", "created_at", "updated_at", "submitted_at", "printed_at",
-    )} | {"revision": job.snapshot.get("revision", 1), "order_number": job.snapshot["order_number"], "pickup_at": job.snapshot["pickup_at"],
+    )} | {"manual": bool(job.snapshot.get("manual")), "revision": job.snapshot.get("revision", 1), "order_number": job.snapshot["order_number"], "pickup_at": job.snapshot["pickup_at"],
            "printer_region": job_region(job),
            "awaiting_payment": bool(job.status == "pending" and job.kind in {"order", "amendment"}
                                     and order is not None and not confirmed_print_payment(order)

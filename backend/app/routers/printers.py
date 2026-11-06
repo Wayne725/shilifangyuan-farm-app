@@ -2,15 +2,18 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..integrations.feie import FeieClient, FeieError, configuration_read, configured_region, validate_live_config
 from ..models import AdminAudit, Order, OrderItem, PrintJob, User
+from ..manual_order_printing import (current_fulfillment_status, current_manual_snapshot, load_manual_print_order,
+                                    manual_print_blocked_reason, order_print_jobs, order_print_preview_token)
 from ..printer_worker import wake_printer
 from ..printing import (confirmed_print_payment, format_receipt, fresh_receipt_snapshot, job_matches_printer, job_read, job_region,
                         open_receipt_content, payment_snapshot_from_session, printer_fingerprint, receipt_preview,
@@ -87,12 +90,16 @@ async def print_job(job_id: str, _admin: User = Depends(require_admin), session:
 
 
 class ReprintRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     request_id: UUID
     reason: str = Field(min_length=2, max_length=200)
     acknowledge_duplicate: bool = False
 
 
 class ResolveRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     printed: bool
     reason: str = Field(min_length=2, max_length=200)
 
@@ -134,6 +141,8 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
     order_id = source_info.order_id
     order = await session.scalar(select(Order).where(Order.id == order_id).execution_options(populate_existing=True).with_for_update())
     source = await session.scalar(select(PrintJob).where(PrintJob.id == job_id).with_for_update())
+    if source.kind == "reference" or source.snapshot.get("manual"):
+        raise HTTPException(409, "請回到訂單頁重新預覽目前狀態後列印")
     region = configured_region(settings)
     if region is None or job_region(source) != region:
         raise HTTPException(409, "原工作與目前印表機的雲端區域不同，不能跨區補印")
@@ -153,6 +162,14 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
         raise HTTPException(409, "訂單尚未確認付款成功，不能補印製作單")
     if source.kind in {"order", "amendment"} and source.snapshot.get("revision", 1) != order.revision:
         raise HTTPException(409, "訂單已更新，請選擇最新版出單工作補印")
+    in_progress = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == order_id,
+        PrintJob.id != source.id, PrintJob.status.in_({"pending", "sending"})).limit(1))
+    if in_progress:
+        raise HTTPException(409, "這筆訂單已有等待發送或正在發送的工作，請先確認結果")
+    uncertain = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == order_id,
+        PrintJob.id != source.id, PrintJob.status.in_({"submitted", "unknown"})).limit(1))
+    if uncertain and not body.acknowledge_duplicate:
+        raise HTTPException(409, "同筆訂單另有結果待確認的工作，請先核對並接受可能重複列印")
     mode = "dry_run" if settings.printer_dry_run else "live"
     snapshot = {**await fresh_receipt_snapshot(session, source.snapshot, order), "printer_region": region,
                 **await payment_snapshot_from_session(session, order)}
@@ -181,3 +198,90 @@ async def query_job(job_id: str, _admin: User = Depends(require_admin), session:
     await session.commit()
     wake_printer()
     return job_read(job, settings)
+
+
+class OrderPrintRequest(ReprintRequest):
+    preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def _duplicate_risk(jobs: list[PrintJob]) -> bool:
+    return any(job.status in {"submitted", "unknown"} for job in jobs)
+
+
+@printers_router.get("/orders/{order_id}/preview")
+async def preview_order_print(order_id: str, _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    order = await load_manual_print_order(session, order_id)
+    jobs = await order_print_jobs(session, order_id)
+    blocked = manual_print_blocked_reason(order, jobs, settings)
+    try:
+        snapshot = await current_manual_snapshot(session, order, settings)
+        token = order_print_preview_token(snapshot, order, settings)
+        content = format_receipt({**render_receipt_snapshot(snapshot, order.id, settings),
+            "dry_run": settings.printer_dry_run}, width=settings.printer_line_width)
+    except FeieError as exc:
+        message = "訂單內容超出單張上限，請由管理員另外處理" if exc.code == "receipt_too_long" else "聯絡資料加密設定無法使用，請先確認伺服器資料金鑰"
+        raise HTTPException(409, message) from None
+    return {"order_id": order.id, "order_number": order.order_number, "preview": receipt_preview(content),
+        "preview_token": token, "kind": snapshot["kind"], "revision": order.revision,
+        "payment_status": order.payment_status, "fulfillment_status": current_fulfillment_status(order),
+        "duplicate_risk": _duplicate_risk(jobs), "can_print": blocked is None, "blocked_reason": blocked,
+        "mode": "dry_run" if settings.printer_dry_run else "live",
+        "jobs": [job_read(job, settings, order) for job in jobs]}
+
+
+@printers_router.get("/orders/{order_id}/print-requests/{request_id}")
+async def find_order_print(order_id: str, request_id: UUID, _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    order = await load_manual_print_order(session, order_id)
+    job = await session.scalar(select(PrintJob).where(
+        PrintJob.event_key == f"manual-order:{request_id}", PrintJob.order_id == order.id))
+    if job is None:
+        raise HTTPException(404, "尚未找到這筆列印要求")
+    return job_read(job, settings, order)
+
+
+@printers_router.post("/orders/{order_id}/print", status_code=201)
+async def create_order_print(order_id: str, body: OrderPrintRequest, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+    order = await load_manual_print_order(session, order_id, lock=True)
+    event_key = f"manual-order:{body.request_id}"
+    existing = await session.scalar(select(PrintJob).where(PrintJob.event_key == event_key))
+    if existing:
+        if existing.order_id != order_id:
+            raise HTTPException(409, "列印識別碼已用於另一筆訂單")
+        return job_read(existing, settings, order)
+    jobs = await order_print_jobs(session, order_id)
+    if blocked := manual_print_blocked_reason(order, jobs, settings):
+        raise HTTPException(409, blocked)
+    if _duplicate_risk(jobs) and not body.acknowledge_duplicate:
+        raise HTTPException(409, "原單可能已列印，請先核對並接受可能重複列印")
+    try:
+        snapshot = await current_manual_snapshot(session, order, settings)
+        if order_print_preview_token(snapshot, order, settings) != body.preview_token:
+            raise HTTPException(409, "訂單資料、狀態或出單設備已變更，請重新預覽")
+        format_receipt(render_receipt_snapshot(snapshot, order.id, settings), width=settings.printer_line_width)
+    except FeieError as exc:
+        message = "訂單內容超出單張上限，請由管理員另外處理" if exc.code == "receipt_too_long" else "聯絡資料加密設定無法使用，請先確認伺服器資料金鑰"
+        raise HTTPException(409, message) from None
+    job = PrintJob(order_id=order.id, event_key=event_key, kind=snapshot["kind"], snapshot=snapshot,
+        mode="dry_run" if settings.printer_dry_run else "live", printer_fingerprint=printer_fingerprint(settings))
+    session.add(job)
+    try:
+        await session.flush()
+        session.add(AdminAudit(actor_id=admin.id, action="printer.order.print", aggregate_type="order",
+            aggregate_id=order.id, reason=body.reason, data={"print_job_id": job.id, "request_id": str(body.request_id),
+                "kind": job.kind, "revision": order.revision, "payment_status": order.payment_status.value,
+                "fulfillment_status": current_fulfillment_status(order),
+                "acknowledge_duplicate": body.acknowledge_duplicate, "mode": job.mode}))
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await session.scalar(select(PrintJob).where(PrintJob.event_key == event_key))
+        if existing is None:
+            raise
+        if existing.order_id != order_id:
+            raise HTTPException(409, "列印識別碼已用於另一筆訂單") from None
+        return job_read(existing, settings)
+    wake_printer()
+    return job_read(job, settings, order)
