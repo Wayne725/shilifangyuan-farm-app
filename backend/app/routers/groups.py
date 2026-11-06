@@ -139,13 +139,16 @@ async def target_order_snapshot(
     session: AsyncSession,
     target_type: TargetType,
     target_id: str,
+    *,
+    lock: bool = False,
 ) -> Tuple[str, str, TaxType, Optional[str], Optional[str]]:
     if target_type == TargetType.PRODUCT:
-        product = await session.scalar(
-            select(Product).where(
-                Product.id == target_id, Product.is_active.is_(True)
-            )
+        query = select(Product).where(
+            Product.id == target_id, Product.is_active.is_(True)
         )
+        if lock:
+            query = query.with_for_update().execution_options(populate_existing=True)
+        product = await session.scalar(query)
         if product is None:
             raise HTTPException(status_code=422, detail="選擇的商品不存在")
         return (
@@ -168,6 +171,12 @@ async def target_order_snapshot(
     )
     if bundle is None:
         raise HTTPException(status_code=422, detail="選擇的共同購買套組不存在")
+    products_query = select(Product).join(GroupBundleItem).where(GroupBundleItem.bundle_id == bundle.id).order_by(Product.id)
+    if lock:
+        products_query = products_query.with_for_update(of=Product).execution_options(populate_existing=True)
+    products = list(await session.scalars(products_query))
+    if any(not product.is_active for product in products):
+        raise HTTPException(status_code=422, detail="此套組包含已停止販售的商品")
     tax_type = (
         TaxType.TAXABLE
         if any(
@@ -533,7 +542,7 @@ async def join_campaign(
     except DomainError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     name, unit, tax_type, product_id, bundle_id = await target_order_snapshot(
-        session, campaign.target_type, campaign.target_id
+        session, campaign.target_type, campaign.target_id, lock=True
     )
     membership_type = membership_type_for_user(user)
     tax_type = sale_tax_type(tax_type, membership_type, body.invoice_buyer_type)

@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from .domain import aware, included_tax_amount, order_amendment_blocked_reason, order_shipping_tax_type
 from .integrations.payment_service import lock_order_payment_subject, release_attempt_reservations
 from .models import (
-    AdminAudit, FulfillmentStatus, GroupBundle, InventoryReservation, MealEventOffering,
+    AdminAudit, FulfillmentStatus, GroupBundle, GroupBundleItem, InventoryReservation, MealEventOffering,
     Order, OrderAmendment, OrderFulfillment, OrderItem, PaymentAttempt,
     PaymentMethod, PaymentStatus, PointTransaction, Product, Promotion, Refund,
     ReservationStatus, SalesChannel, TargetType, UserRole,
@@ -105,6 +105,12 @@ async def _check_resources(session, order, quantities, now):
                 .with_for_update().execution_options(populate_existing=True))
             if target is None or not target.is_active:
                 raise HTTPException(409, "共同購買品項已停用，只能減少數量")
+            if campaign.target_type == TargetType.BUNDLE:
+                products = await session.scalars(select(Product).join(GroupBundleItem)
+                    .where(GroupBundleItem.bundle_id == target.id).order_by(Product.id)
+                    .with_for_update(of=Product).execution_options(populate_existing=True))
+                if any(not product.is_active for product in products):
+                    raise HTTPException(409, "套組包含已停止販售的商品，只能減少數量")
         others = await session.scalar(select(func.coalesce(func.sum(OrderItem.quantity), 0)).join(Order).where(
             Order.group_campaign_id == campaign.id, Order.user_id == order.user_id, Order.id != order.id,
             Order.fulfillment_status != FulfillmentStatus.CANCELLED,
