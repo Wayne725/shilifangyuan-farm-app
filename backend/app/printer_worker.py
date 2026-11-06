@@ -6,13 +6,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
 
 from .config import Settings, get_settings
 from .database import SessionLocal
 from .integrations.feie import FeieClient, FeieError, validate_live_config
-from .models import Order, PrintJob
-from .printing import (format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
+from .models import FulfillmentStatus, Order, PaymentStatus, PrintJob
+from .printing import (confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
                        receipt_time, render_receipt_snapshot, seal_receipt_content)
 
 logger = logging.getLogger(__name__)
@@ -33,14 +33,18 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         await session.execute(update(PrintJob).where(PrintJob.status == "sending", PrintJob.lease_until <= now).values(
             status="unknown", last_error="sender_interrupted_result_unknown", lease_until=None, lease_token=None, next_attempt_at=now))
         await session.commit()
-        candidate = (await session.execute(select(PrintJob.id, PrintJob.order_id).where(
+        candidate = (await session.execute(select(PrintJob.id, PrintJob.order_id).join(Order, Order.id == PrintJob.order_id).where(
             PrintJob.next_attempt_at <= now,
-            or_(PrintJob.status == "pending", (PrintJob.status.in_(["submitted", "unknown"]) & PrintJob.vendor_order_id.is_not(None))),
+            or_(and_(PrintJob.status == "pending", or_(
+                PrintJob.kind == "cancellation", Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
+                Order.payment_status.in_([PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED]),
+                and_(Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None)),
+            )), (PrintJob.status.in_(["submitted", "unknown"]) & PrintJob.vendor_order_id.is_not(None))),
             or_(PrintJob.lease_until.is_(None), PrintJob.lease_until <= now),
         ).order_by(PrintJob.created_at, PrintJob.id).limit(1))).first()
         if candidate is None:
             return False
-        await session.scalar(select(Order.id).where(Order.id == candidate.order_id).with_for_update())
+        order = await session.scalar(select(Order).where(Order.id == candidate.order_id).execution_options(populate_existing=True).with_for_update())
         job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id).with_for_update())
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
             return True
@@ -50,7 +54,17 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.next_attempt_at = now + timedelta(seconds=settings.printer_poll_seconds)
                 await session.commit()
                 return True
-        order = await session.get(Order, job.order_id)
+        if job.status == "pending" and job.kind in {"order", "amendment"}:
+            if order.cancelled_at is not None or order.fulfillment_status == FulfillmentStatus.CANCELLED:
+                job.status, job.last_error = "failed", "order_cancelled_before_send"
+                await session.commit()
+                return True
+            if order.payment_status in {PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}:
+                job.status, job.last_error = "failed", "order_payment_reversed_before_send"
+                await session.commit()
+                return True
+            if not confirmed_print_payment(order):
+                return True
         if job.status == "pending" and job.kind in {"order", "amendment"} and job.snapshot.get("revision", 1) != order.revision:
             job.status, job.last_error = "failed", "order_revision_superseded"
             await session.commit()
@@ -69,6 +83,10 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.next_attempt_at = now + timedelta(seconds=60)
                 await session.commit()
                 return True
+        if job.status == "pending" and job.kind in {"order", "amendment"} and job.content is not None and job.snapshot.get("payment_status") != "已付款":
+            job.status, job.last_error = "failed", "unpaid_receipt_snapshot"
+            await session.commit()
+            return True
         submitting = job.status == "pending"
         token = str(uuid4())
         # The compare-and-swap also protects SQLite and a claim racing another process.

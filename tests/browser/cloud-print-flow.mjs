@@ -53,6 +53,19 @@ async function fixture(t, width, dryRun = true, admin = true) {
 }
 
 for (const width of [390, 1280]) {
+  test(`${width}px 未付款出單工作顯示等待付款且不能補印`, async t => {
+    const {page, state} = await fixture(t, width);
+    state.jobs[0] = {...original, status: 'pending', awaiting_payment: true, attempts: 0, can_query: false, last_error: null};
+    await page.goto(`${base}/admin/kitchen`);
+    await page.getByText(/正式 · 等待付款/).waitFor();
+    await page.getByRole('button', {name: '查看／補印', exact: true}).click();
+    await page.getByRole('heading', {name: /等待付款/}).waitFor();
+    assert.equal(await page.getByRole('button', {name: '建立模擬補印', exact: true}).isEnabled(), false);
+    assert.equal(await page.getByRole('button', {name: '重新查詢結果', exact: true}).count(), 0);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+  });
+
   test(`${width}px 雲端出單待確認可查詢並明確確認模擬補印`, async t => {
     const {page, state} = await fixture(t, width);
     await page.goto(`${base}/admin/kitchen`);

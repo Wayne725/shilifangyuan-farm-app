@@ -10,12 +10,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.integrations.feie import FeieClient, FeieError, configuration_read
-from app.models import AdminAudit, Order, PrintJob
+from app.models import AdminAudit, Order, PaymentStatus, PrintJob
 from app.printer_worker import process_print_job
 from app.printing import enqueue_cancellation_print, format_receipt, printer_fingerprint, wrap_text
 from app.routers.printers import printers_router
 from tests.support import api_test_context, auth_headers, make_test_settings
-from tests.test_cash_payments import cash_context, create_cash, approve_cancellation
+from tests.test_cash_payments import cash_context, create_cash, approve_cancellation, action
 
 
 def live_settings(**overrides):
@@ -237,6 +237,10 @@ async def print_context(cash_context):
     assert response.status_code == 201, response.text
     c.order_id = response.json()["id"]
     c.job_id = await c.session.scalar(select(PrintJob.id).where(PrintJob.order_id == c.order_id))
+    order = await c.session.get(Order, c.order_id)
+    order.payment_status = PaymentStatus.PAID
+    order.paid_at = datetime.now(timezone.utc)
+    await c.session.commit()
     return c
 
 
@@ -303,7 +307,7 @@ async def test_dry_run_never_uses_network_or_claims_printed(print_context, monke
     assert await process_print_job(c.settings, factory=c.factory)
     job = await read_job(c)
     assert job.status == "simulated" and job.vendor_order_id is None and job.printed_at is None
-    assert "模擬列印" in job.content and "飯少" in job.content and "未付款" in job.content
+    assert "模擬列印" in job.content and "飯少" in job.content and "已付款" in job.content
     assert not await process_print_job(c.settings, factory=c.factory)
 
 
@@ -430,6 +434,11 @@ async def test_admin_permissions_reprint_ack_audit_and_idempotency(print_context
 
 async def test_approved_cancellation_route_enqueues_notice_in_same_transaction(print_context):
     c = print_context
+    order = await c.session.get(Order, c.order_id)
+    order.payment_status, order.paid_at = PaymentStatus.PENDING, None
+    await c.session.commit()
+    confirmed = await action(c, c.order_id)
+    assert confirmed.status_code == 200, confirmed.text
     await set_job(c, status="printed")
     await approve_cancellation(c, c.order_id)
     async with c.factory() as session:

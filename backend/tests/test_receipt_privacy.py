@@ -12,7 +12,7 @@ from app.models import MemberProfile, PrintJob
 from app.printer_worker import process_print_job
 from app.routers.printers import printers_router
 from tests.support import api_test_context, auth_headers
-from tests.test_cash_payments import cash_context, create_cash
+from tests.test_cash_payments import cash_context, create_cash, action
 from tests.test_feie_printing import live_settings, print_context, read_job, set_job
 from tests.test_receipt_context import RecordingFeie, configure_test_cipher
 
@@ -46,6 +46,8 @@ async def test_phone_order_never_persists_plaintext_in_snapshot_or_receipt(cash_
     c.order_id = response.json()["id"]
     c.job_id = await c.session.scalar(select(PrintJob.id).where(PrintJob.order_id == c.order_id))
     c.factory = async_sessionmaker(c.session.bind, expire_on_commit=False)
+    confirmed = await action(c, c.order_id)
+    assert confirmed.status_code == 200, confirmed.text
     await process_print_job(c.settings, factory=c.factory, now=datetime.now(timezone.utc) + timedelta(seconds=1))
     job = await read_job(c)
     assert PHONE not in json.dumps(job.snapshot, ensure_ascii=False)
@@ -95,6 +97,7 @@ async def test_unreadable_archived_phone_blocks_preview_and_fails_job_without_su
             associated_data=f"receipt-contact:{wrong_order_id}:phone")
         await set_job(c, snapshot=snapshot)
     else:
+        snapshot["payment_status"] = "已付款"
         snapshot["print_requested_at"] = "2026-11-01 12:00:00"
         body = printing.seal_receipt_content(f"電話：{PHONE}<BR>", snapshot, wrong_order_id, settings)
         await set_job(c, snapshot=snapshot, content=body)
