@@ -13,7 +13,7 @@ from app.models import PrintJob
 from app.printer_worker import process_print_job
 from app.routers.printers import printers_router
 from tests.support import api_test_context, auth_headers, make_test_settings
-from tests.test_cash_payments import cash_context, create_cash, approve_cancellation
+from tests.test_cash_payments import cash_context, create_cash, approve_cancellation, action
 from tests.test_feie_printing import live_settings
 
 
@@ -113,6 +113,9 @@ async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(ca
     order_id = order_response.json()["id"]
     job_id = await c.session.scalar(select(PrintJob.id).where(PrintJob.order_id == order_id))
     assert cloud["calls"] == [], "order request must not call external printer API"
+    assert not await process_print_job(c.settings, factory=factory)
+    confirmed = await action(c, order_id)
+    assert confirmed.status_code == 200, confirmed.text
     now = datetime.now(timezone.utc) + timedelta(seconds=1)
     async with api_test_context(c.session, [printers_router], settings=c.settings) as client:
         headers = auth_headers(c.admin)
@@ -124,7 +127,7 @@ async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(ca
         detail = await client.get(job_url, headers=headers)
         assert detail.json()["status"] == "submitted" and detail.json()["can_query"]
         assert detail.json()["printer_region"] == region
-        assert "付款狀態：未付款" in detail.json()["preview"]
+        assert "付款狀態：已付款" in detail.json()["preview"]
         assert "飯少，不要辣" in cloud["contents"][0]
         await process_print_job(c.settings, factory=factory, now=now + timedelta(seconds=20))
         assert (await client.get(job_url, headers=headers)).json()["status"] == "submitted"

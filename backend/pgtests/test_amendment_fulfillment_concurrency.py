@@ -75,9 +75,8 @@ class ControlledPrinter:
         return True
 
 
-@pytest.mark.parametrize("first", ["amendment", "print_claim"])
-async def test_print_claim_and_quantity_change_preserve_latest_receipt(postgres_sessions, cash_api, first):
-    request, buyer, _other, _admin, _second_admin, event = cash_api
+async def test_unpaid_quantity_change_waits_then_prints_paid_latest_revision(postgres_sessions, cash_api):
+    request, buyer, _other, admin, _second_admin, event = cash_api
     settings = live_settings()
     async with postgres_sessions() as session:
         offering = await session.get(MealEventOffering, event["offerings"][0]["id"])
@@ -94,65 +93,35 @@ async def test_print_claim_and_quantity_change_preserve_latest_receipt(postgres_
         await session.commit()
         original_id = job.id
 
-    printer = ControlledPrinter(hold_first=first == "print_claim")
-    if first == "amendment":
-        async with postgres_sessions() as session:
-            blocker = await session.scalar(text("SELECT pg_backend_pid()"))
-            await change_quantity(session, buyer.id, order_id, body, settings)
-            worker = asyncio.create_task(process_print_job(settings, factory=postgres_sessions, client=printer))
-            try:
-                await wait_for_lock_waiter(postgres_sessions, blocker)
-                assert not printer.submissions
-                await session.commit()
-                assert await asyncio.wait_for(worker, timeout=10)
-            finally:
-                if not worker.done():
-                    worker.cancel()
-                    await asyncio.gather(worker, return_exceptions=True)
+    printer = ControlledPrinter()
+    async with postgres_sessions() as session:
+        await change_quantity(session, buyer.id, order_id, body, settings)
+        assert not await process_print_job(settings, factory=postgres_sessions, client=printer)
         assert not printer.submissions
-    else:
-        worker = asyncio.create_task(process_print_job(settings, factory=postgres_sessions, client=printer))
-        try:
-            await asyncio.wait_for(printer.started.wait(), timeout=5)
-            async with postgres_sessions() as session:
-                # The printer HTTP call is in flight; it must no longer own the order lock.
-                await asyncio.wait_for(change_quantity(session, buyer.id, order_id, body, settings), timeout=5)
-                await session.commit()
-            assert await process_print_job(settings, factory=postgres_sessions, client=printer)
-            assert len(printer.submissions) == 1
-            async with postgres_sessions() as session:
-                latest = await session.scalar(select(PrintJob).where(PrintJob.order_id == order_id, PrintJob.id != original_id))
-                assert latest.kind == "amendment" and latest.status == "pending"
-        finally:
-            printer.release.set()
-            await asyncio.wait_for(worker, timeout=10)
-
+        await session.commit()
+    assert not await process_print_job(settings, factory=postgres_sessions, client=printer)
+    paid = await request("POST", f"/v1/orders/{order_id}/admin/cash-payment", admin,
+        {"amount": 200, "reason": "核對改量後實收"})
+    assert paid.status_code == 200, paid.text
     run_at = datetime.now(timezone.utc) + timedelta(minutes=1)
     for _ in range(4):
         await process_print_job(settings, factory=postgres_sessions, client=printer, now=run_at)
         run_at += timedelta(minutes=1)
     async with postgres_sessions() as session:
         order = await session.get(Order, order_id)
-        assert (order.revision, order.amount_total, order.payment_status) == (2, 200, PaymentStatus.PENDING)
+        assert (order.revision, order.amount_total, order.payment_status) == (2, 200, PaymentStatus.PAID)
         assert await session.scalar(select(OrderItem.quantity).where(OrderItem.order_id == order_id)) == 2
         assert await session.scalar(select(func.count(OrderAmendment.id)).where(OrderAmendment.order_id == order_id)) == 1
         jobs = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == order_id)))
         assert len(jobs) == 2
         original = next(job for job in jobs if job.id == original_id)
         latest = next(job for job in jobs if job.id != original_id)
+        assert original.status == "failed" and original.attempts == 0
+        assert original.last_error == "order_revision_superseded"
         assert latest.status == "printed" and latest.snapshot["revision"] == 2
-        assert latest.snapshot["items"][0]["quantity"] == 2
-        if first == "amendment":
-            assert original.status == "failed" and original.attempts == 0
-            assert original.last_error == "order_revision_superseded"
-            assert latest.kind == "order" and len(printer.submissions) == 1
-        else:
-            assert original.status == "printed" and original.attempts == 1
-            assert latest.kind == "amendment" and len(printer.submissions) == 2
-            assert latest.snapshot["quantity_changes"][0]["before"] == 1
-            assert latest.snapshot["quantity_changes"][0]["after"] == 2
-            assert "數量修訂單" in printer.submissions[-1]
-        assert latest.attempts == 1
+        assert latest.kind == "order" and latest.snapshot["items"][0]["quantity"] == 2
+        assert latest.snapshot["payment_status"] == "已付款"
+        assert latest.attempts == 1 and len(printer.submissions) == 1
 
 
 @pytest.mark.parametrize("first", ["amendment", "selection_callback"])

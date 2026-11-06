@@ -12,7 +12,7 @@ from ..database import get_session
 from ..integrations.feie import FeieClient, FeieError, configuration_read, configured_region, validate_live_config
 from ..models import AdminAudit, Order, OrderItem, PrintJob, User
 from ..printer_worker import wake_printer
-from ..printing import (format_receipt, fresh_receipt_snapshot, job_matches_printer, job_read, job_region,
+from ..printing import (confirmed_print_payment, format_receipt, fresh_receipt_snapshot, job_matches_printer, job_read, job_region,
                         open_receipt_content, payment_snapshot_from_session, printer_fingerprint, receipt_preview,
                         render_receipt_snapshot)
 
@@ -44,20 +44,20 @@ async def print_jobs(status: str | None = Query(default=None, pattern="^(pending
     search: str = Query(default="", max_length=100),
     order_id: str | None = None, limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
-    query = select(PrintJob)
+    query = select(PrintJob, Order).join(Order, Order.id == PrintJob.order_id)
     if status:
         query = query.where(PrintJob.status == status)
     if order_id:
         query = query.where(PrintJob.order_id == order_id)
     if term := search.strip():
-        query = query.join(Order, Order.id == PrintJob.order_id).where(or_(
+        query = query.where(or_(
             Order.order_number.icontains(term, autoescape=True),
             Order.user.has(User.display_name.icontains(term, autoescape=True)),
             Order.items.any(OrderItem.product_name.icontains(term, autoescape=True)),
         ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
-    jobs = await session.scalars(query.order_by(PrintJob.created_at.desc(), PrintJob.id.desc()).offset(offset).limit(limit))
-    return {"items": [job_read(job, settings) for job in jobs], "total": total}
+    jobs = await session.execute(query.order_by(PrintJob.created_at.desc(), PrintJob.id.desc()).offset(offset).limit(limit))
+    return {"items": [job_read(job, settings, order) for job, order in jobs], "total": total}
 
 
 @printers_router.get("/jobs/{job_id}")
@@ -65,6 +65,7 @@ async def print_job(job_id: str, _admin: User = Depends(require_admin), session:
     job = await session.get(PrintJob, job_id)
     if job is None:
         raise HTTPException(404, "找不到列印工作")
+    order = await session.get(Order, job.order_id)
     try:
         if job.content is not None:
             preview = open_receipt_content(job.content, job.order_id, settings)
@@ -73,10 +74,10 @@ async def print_job(job_id: str, _admin: User = Depends(require_admin), session:
             preview = format_receipt({**snapshot, "reprint": bool(job.reprint_of_id), "dry_run": job.mode == "dry_run"}, width=settings.printer_line_width)
     except FeieError as exc:
         if exc.code != "receipt_too_long":
-            return {**job_read(job, settings), "preview": "加密收據或聯絡資料無法解密，請確認資料金鑰後再處理。",
+            return {**job_read(job, settings, order), "preview": "加密收據或聯絡資料無法解密，請確認資料金鑰後再處理。",
                     "preview_error": exc.code}
         preview = "內容超出單張 5000 bytes 上限，請依訂單人工處理。"
-    return {**job_read(job, settings), "preview": receipt_preview(preview)}
+    return {**job_read(job, settings, order), "preview": receipt_preview(preview)}
 
 
 class ReprintRequest(BaseModel):
@@ -131,13 +132,15 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
     if existing:
         if existing.reprint_of_id != job_id:
             raise HTTPException(409, "補印識別碼已用於其他工作")
-        return job_read(existing, settings)
+        return job_read(existing, settings, order)
     if source.status in {"pending", "sending"}:
         raise HTTPException(409, "工作仍待發送或正在發送，請先確認結果")
     if source.status in {"submitted", "unknown"} and not body.acknowledge_duplicate:
         raise HTTPException(409, "原單可能已列印；請先查詢並確認可重複列印")
     if order.cancelled_at and source.kind in {"order", "amendment"}:
         raise HTTPException(409, "訂單已取消，僅能補印取消通知")
+    if source.kind in {"order", "amendment"} and not confirmed_print_payment(order):
+        raise HTTPException(409, "訂單尚未確認付款成功，不能補印製作單")
     if source.kind in {"order", "amendment"} and source.snapshot.get("revision", 1) != order.revision:
         raise HTTPException(409, "訂單已更新，請選擇最新版出單工作補印")
     mode = "dry_run" if settings.printer_dry_run else "live"
@@ -151,7 +154,7 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
         reason=body.reason, data={"source_job_id": source.id, "print_job_id": job.id, "acknowledge_duplicate": body.acknowledge_duplicate, "mode": mode}))
     await session.commit()
     wake_printer()
-    return job_read(job, settings)
+    return job_read(job, settings, order)
 
 
 @printers_router.post("/jobs/{job_id}/query")

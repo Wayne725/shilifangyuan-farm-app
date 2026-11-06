@@ -13,7 +13,7 @@ from .config import Settings
 from .integrations.common import IntegrationError
 from .integrations.feie import FeieError, configured_region
 from .integrations.pii_crypto import pii_cipher_from_settings
-from .models import MemberProfile, Order, OrderFulfillment, PaymentAttempt, PaymentMethod, PaymentStatus, PrintJob, User
+from .models import FulfillmentStatus, MemberProfile, Order, OrderFulfillment, PaymentAttempt, PaymentMethod, PaymentStatus, PrintJob, User
 
 
 def printer_fingerprint(settings: Settings) -> str:
@@ -347,11 +347,18 @@ async def enqueue_cancellation_print(session: AsyncSession, order: Order, settin
                       "cancellation_reason": order.cancellation_reason, **await payment_snapshot_from_session(session, order)}))
 
 
-def job_read(job: PrintJob, settings: Settings | None = None) -> dict:
+def confirmed_print_payment(order: Order) -> bool:
+    return order.payment_status == PaymentStatus.PAID and order.paid_at is not None
+
+
+def job_read(job: PrintJob, settings: Settings | None = None, order: Order | None = None) -> dict:
     return {key: getattr(job, key) for key in (
         "id", "order_id", "kind", "mode", "status", "reprint_of_id", "attempts", "last_error",
         "last_result", "created_at", "updated_at", "submitted_at", "printed_at",
     )} | {"revision": job.snapshot.get("revision", 1), "order_number": job.snapshot["order_number"], "pickup_at": job.snapshot["pickup_at"],
            "printer_region": job_region(job),
+           "awaiting_payment": bool(job.status == "pending" and job.kind in {"order", "amendment"}
+                                    and order is not None and not confirmed_print_payment(order)
+                                    and order.cancelled_at is None and order.fulfillment_status != FulfillmentStatus.CANCELLED),
            "can_query": bool(job.vendor_order_id) and job.status in {"submitted", "unknown"}
                         and (settings is None or job_matches_printer(job, settings))}
