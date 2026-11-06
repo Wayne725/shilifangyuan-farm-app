@@ -5492,6 +5492,41 @@ p {
   margin-top: 18px;
 }
 
+.admin-catalog-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.admin-catalog-filters > .field {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+
+.admin-catalog-filters .admin-quick-buttons {
+  margin: 0;
+}
+
+.admin-product-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.admin-product-actions .button {
+  min-height: 44px;
+  padding: 9px 12px;
+  font-size: 1rem;
+  letter-spacing: 0;
+}
+
+.admin-record-card :is(h3, p) {
+  overflow-wrap: anywhere;
+}
+
 .admin-record-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

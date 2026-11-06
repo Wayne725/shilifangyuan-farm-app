@@ -64,13 +64,11 @@ async def list_products(
     session: AsyncSession = Depends(get_session),
 ) -> List[Product]:
     query = select(Product).options(selectinload(Product.supplier))
-    if current_user is None or current_user.user_role != UserRole.ADMIN:
-        query = query.where(Product.is_active.is_(True))
-    result = await session.scalars(
-        query.order_by(
-            Product.is_active.desc(), Product.category, Product.name
-        )
-    )
+    if current_user is not None and current_user.user_role == UserRole.ADMIN:
+        query = query.order_by(Product.created_at.desc(), Product.id.desc())
+    else:
+        query = query.where(Product.is_active.is_(True)).order_by(Product.category, Product.name)
+    result = await session.scalars(query)
     return list(result)
 
 
@@ -136,7 +134,7 @@ async def update_product(
     if product is None:
         raise HTTPException(status_code=404, detail="找不到商品")
     updates = body.model_dump(exclude_unset=True, mode="json")
-    if "supplier_id" in updates and updates["supplier_id"] is not None:
+    if updates.get("supplier_id") is not None and updates["supplier_id"] != product.supplier_id:
         supplier = await session.scalar(
             select(Supplier).where(
                 Supplier.id == updates["supplier_id"],
