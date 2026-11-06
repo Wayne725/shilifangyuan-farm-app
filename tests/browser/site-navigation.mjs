@@ -82,7 +82,7 @@ for (const width of [1440, 1024, 390]) for (const sample of cases) {
     const menu = page.getByRole('navigation', { name: '網站選單', exact: true });
     await menu.waitFor();
     assert.equal(await menu.getByRole('link', { name: '社務系統', exact: true }).count(), 1);
-    assert.equal(await menu.getByRole('link', { name: '管理工作台', exact: true }).count(), sample.user?.user_role === 'admin' ? 1 : 0);
+    assert.equal(await menu.getByRole('link', { name: '管理者', exact: true }).count(), sample.user?.user_role === 'admin' ? 1 : 0);
     await menu.getByRole('link', { name: '常見問題', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '關閉導覽', exact: true }).getAttribute('aria-expanded'), 'true');
     await page.keyboard.press('Escape');

@@ -2,6 +2,7 @@ import {
   Basket,
   Buildings,
   CalendarBlank,
+  GearSix,
   List,
   Receipt,
   SignIn,
@@ -23,6 +24,7 @@ const navItems = [
   { to: "/shop" as const, label: "生活消費", icon: Storefront },
   { to: "/activities" as const, label: "永續活動", icon: CalendarBlank },
   { to: "/social" as const, label: "社務系統", icon: Buildings },
+  { to: "/admin" as const, label: "管理者", icon: GearSix },
 ];
 
 export function AppShell() {
@@ -32,7 +34,10 @@ export function AppShell() {
   const menuButton = useRef<HTMLButtonElement>(null);
   const readingMenu = useRef<HTMLDetailsElement>(null);
   const socialAccess = useSocialAccess(user);
-  const visibleNavItems = navItems.filter((item) => item.to !== "/social" || socialAccess);
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.to === "/admin") return user?.user_role === "admin";
+    return item.to !== "/social" || socialAccess;
+  });
   useEffect(() => {
     if (!mobileOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -61,7 +66,7 @@ export function AppShell() {
   return (
     <div className="site-frame">
       <a className="skip-link" href="#main-content">跳到主要內容</a>
-      <header className="site-header">
+      <header className={user?.user_role === "admin" ? "site-header has-admin-nav" : "site-header"}>
         <Link className="brand" to="/" aria-label="十里方圓首頁">
           <img className="brand-logo" src="/brand/logo-transparent.png" alt="十里方圓標誌" />
           <span>
@@ -159,11 +164,6 @@ export function AppShell() {
                 會員中心
               </Link>
             </>
-          )}
-          {user?.user_role === "admin" && (
-            <Link to="/admin" onClick={() => setMobileOpen(false)}>
-              管理工作台
-            </Link>
           )}
           <Link to="/help" onClick={() => setMobileOpen(false)}>常見問題</Link>
           {user ? (
