@@ -14,14 +14,15 @@ from app.routers.admin_users import OfflineMembershipConfirmation, admin_users_r
 from app.routers.membership import return_share_capital
 from app.schemas import MembershipApplicationReview
 from pgtests.test_transaction_concurrency import postgres_sessions
-from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.support import api_test_context, auth_headers
+from tests.test_admin_users import offline_settings, roster
 from tests.test_v2_payment_jobs import fake_payment, make_pending_membership, payment_settings, successful_callback
 
 
-def confirmation(number=None):
+def confirmation(entry_id, phone="0912345678"):
     return OfflineMembershipConfirmation(
         confirmed_offline=True, confirmed_on=datetime.now(TAIPEI).date(),
-        reason="隔離並行核對線下入社紀錄", member_number=number,
+        reason="隔離並行核對線下入社紀錄", phone=phone, roster_entry_id=entry_id,
     )
 
 
@@ -34,13 +35,21 @@ async def seed_users(factory):
         return admin.id, [user.id for user in users]
 
 
-async def grant_via_api(factory, admin_id, user_id, number=None):
+async def seed_roster(factory, number):
+    async with factory() as session:
+        entry = roster(number)
+        session.add(entry)
+        await session.commit()
+        return entry.id
+
+
+async def grant_via_api(factory, admin_id, user_id, entry_id, phone="0912345678"):
     async with factory() as session:
         admin = await session.get(User, admin_id)
-        async with api_test_context(session, [admin_users_router], settings=make_test_settings()) as client:
+        async with api_test_context(session, [admin_users_router], settings=offline_settings()) as client:
             response = await client.post(
                 f"/v1/admin/users/{user_id}/offline-membership",
-                json=confirmation(number).model_dump(mode="json"), headers=auth_headers(admin),
+                json=confirmation(entry_id, phone).model_dump(mode="json"), headers=auth_headers(admin),
             )
             return response.status_code, response.json()
 
@@ -48,8 +57,9 @@ async def grant_via_api(factory, admin_id, user_id, number=None):
 @pytest.mark.asyncio
 async def test_concurrent_offline_confirmations_create_one_membership_and_one_audit(postgres_sessions):
     admin_id, user_ids = await seed_users(postgres_sessions)
+    entry_id = await seed_roster(postgres_sessions, "PG-OFFLINE-001")
     results = await asyncio.wait_for(asyncio.gather(*(
-        grant_via_api(postgres_sessions, admin_id, user_ids[0], "PG-OFFLINE-001") for _ in range(5)
+        grant_via_api(postgres_sessions, admin_id, user_ids[0], entry_id) for _ in range(5)
     )), timeout=15)
     assert all(status == 200 for status, _ in results)
     assert len({body["membership_id"] for _, body in results}) == 1
@@ -62,10 +72,11 @@ async def test_concurrent_offline_confirmations_create_one_membership_and_one_au
 
 
 @pytest.mark.asyncio
-async def test_two_people_requesting_same_number_only_one_succeeds(postgres_sessions):
+async def test_two_people_matching_same_phone_roster_only_one_succeeds(postgres_sessions):
     admin_id, user_ids = await seed_users(postgres_sessions)
+    entry_id = await seed_roster(postgres_sessions, "PG-OFFLINE-SAME")
     results = await asyncio.wait_for(asyncio.gather(*(
-        grant_via_api(postgres_sessions, admin_id, user_id, "PG-OFFLINE-SAME") for user_id in user_ids[:2]
+        grant_via_api(postgres_sessions, admin_id, user_id, entry_id) for user_id in user_ids[:2]
     )), timeout=15)
     assert sorted(status for status, _ in results) == [200, 409]
     async with postgres_sessions() as session:
@@ -74,22 +85,19 @@ async def test_two_people_requesting_same_number_only_one_succeeds(postgres_sess
 
 
 @pytest.mark.asyncio
-async def test_concurrent_automatic_numbers_skip_reserved_roster_numbers(postgres_sessions):
+async def test_concurrent_unknown_phones_do_not_create_membership_or_number(postgres_sessions):
     admin_id, user_ids = await seed_users(postgres_sessions)
-    reserved = f"SLF-{datetime.now(timezone.utc).year}-0001"
-    async with postgres_sessions() as session:
-        session.add(MemberRosterEntry(member_number=reserved, legal_name_encrypted="synthetic", email_encrypted="synthetic", phone_encrypted="synthetic"))
-        await session.commit()
+    entry_id = await seed_roster(postgres_sessions, "PG-RESERVED-001")
     results = await asyncio.wait_for(asyncio.gather(*(
-        grant_via_api(postgres_sessions, admin_id, user_id) for user_id in user_ids
+        grant_via_api(postgres_sessions, admin_id, user_id, entry_id, phone="0987654321") for user_id in user_ids
     )), timeout=15)
-    assert all(status == 200 for status, _ in results)
-    numbers = {body["member_number"] for _, body in results}
-    assert len(numbers) == 3 and reserved not in numbers
+    assert all(status == 409 for status, _ in results)
     async with postgres_sessions() as session:
-        entry = await session.scalar(select(MemberRosterEntry))
-        assert entry.member_number == reserved and entry.claimed_user_id is None
+        entry = await session.get(MemberRosterEntry, entry_id)
+        assert entry.member_number == "PG-RESERVED-001" and entry.claimed_user_id is None
         assert await session.scalar(select(func.count(MemberRosterEntry.id))) == 1
+        assert await session.scalar(select(func.count(Membership.id))) == 0
+        assert await session.scalar(select(func.count(AdminAudit.id))) == 0
 
 
 @pytest.mark.asyncio
@@ -98,7 +106,8 @@ async def test_offline_confirmation_and_membership_payment_callback_serialize_wi
     async with postgres_sessions() as session:
         buyer, membership, admission, _capital = await make_pending_membership(session)
         admin = User(email="pg-offline-payment-admin@example.com", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
-        session.add(admin)
+        entry = roster("PG-OFFLINE-PAYMENT")
+        session.add_all([admin, entry])
         await session.commit()
         now = datetime.now(timezone.utc)
         attempt = await create_membership_payment_attempt(session, admission.id, buyer, payment_settings(), now=now)
@@ -124,7 +133,7 @@ async def test_offline_confirmation_and_membership_payment_callback_serialize_wi
                 return await SQLAlchemyPaymentCallbackRepository(session).apply_ecpay_payment_callback("pg-offline-callback-race", payload)
             admin = await session.get(User, state["admin_id"])
             try:
-                await confirm_offline_membership(state["user_id"], confirmation("PG-OFFLINE-PAYMENT"), admin, session)
+                await confirm_offline_membership(state["user_id"], confirmation(entry.id), admin, session, offline_settings())
                 return 200
             except HTTPException as exc:
                 await session.rollback()
@@ -160,7 +169,8 @@ async def test_new_membership_payment_cannot_start_after_offline_confirmation_ta
     async with postgres_sessions() as session:
         buyer, _membership, admission, _capital = await make_pending_membership(session)
         admin = User(email="pg-offline-start-admin@example.com", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
-        session.add(admin)
+        entry = roster("PG-OFFLINE-START")
+        session.add_all([admin, entry])
         await session.commit()
         user_id, admin_id, charge_id = buyer.id, admin.id, admission.id
     locked = asyncio.Event()
@@ -173,7 +183,7 @@ async def test_new_membership_payment_cannot_start_after_offline_confirmation_ta
             locked.set()
             await finish.wait()
             admin = await session.get(User, admin_id)
-            await confirm_offline_membership(user_id, confirmation(), admin, session)
+            await confirm_offline_membership(user_id, confirmation(entry.id), admin, session, offline_settings())
             return 200
 
     async def start_payment():
@@ -211,7 +221,8 @@ async def test_offline_confirmation_and_resigned_member_capital_return_do_not_de
     async with postgres_sessions() as session:
         buyer, membership, _admission, capital = await make_pending_membership(session)
         admin = User(email="pg-capital-return-admin@example.com", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
-        session.add(admin)
+        entry = roster("PG-RESIGNED-CAPITAL")
+        session.add_all([admin, entry])
         await session.commit()
         now = datetime.now(timezone.utc)
         attempt = await create_membership_payment_attempt(session, capital.id, buyer, payment_settings(), now=now)
@@ -240,7 +251,7 @@ async def test_offline_confirmation_and_resigned_member_capital_return_do_not_de
             await finish.wait()
             admin = await session.get(User, admin_id)
             try:
-                await confirm_offline_membership(user_id, confirmation(), admin, session)
+                await confirm_offline_membership(user_id, confirmation(entry.id), admin, session, offline_settings())
                 return 200
             except HTTPException as exc:
                 await session.rollback()

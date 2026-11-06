@@ -21,7 +21,7 @@ from app.models import (
 )
 from app.routers.membership import _ensure_membership_charges, start_traineeship_if_fully_paid
 from tests.support import auth_headers
-from tests.test_admin_users import grant, users_context
+from tests.test_admin_users import check_phone, grant, users_context
 from tests.test_v2_routers import v2_context
 
 
@@ -63,6 +63,9 @@ async def test_new_admission_cannot_use_legacy_approval_or_charge_service(v2_con
 async def test_new_admission_cannot_be_activated_by_offline_confirmation(users_context):
     c = users_context
     await admission_round(c.session, c.buyer)
+    preview = await check_phone(c)
+    assert preview.status_code == 409
+    assert preview.json()["detail"] == LEGACY_ADMISSION_BLOCKED
     response = await grant(c)
     assert response.status_code == 409
     assert response.json()["detail"] == LEGACY_ADMISSION_BLOCKED
