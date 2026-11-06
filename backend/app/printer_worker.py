@@ -14,6 +14,7 @@ from .integrations.feie import FeieClient, FeieError, validate_live_config
 from .models import FulfillmentStatus, Order, PaymentStatus, PrintJob
 from .printing import (confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
                        receipt_time, render_receipt_snapshot, seal_receipt_content)
+from .summary_printing import summary_job_is_current
 
 logger = logging.getLogger(__name__)
 _wake: asyncio.Event | None = None
@@ -33,18 +34,19 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         await session.execute(update(PrintJob).where(PrintJob.status == "sending", PrintJob.lease_until <= now).values(
             status="unknown", last_error="sender_interrupted_result_unknown", lease_until=None, lease_token=None, next_attempt_at=now))
         await session.commit()
-        candidate = (await session.execute(select(PrintJob.id, PrintJob.order_id).join(Order, Order.id == PrintJob.order_id).where(
+        candidate = (await session.execute(select(PrintJob.id, PrintJob.order_id).outerjoin(Order, Order.id == PrintJob.order_id).where(
             PrintJob.next_attempt_at <= now,
             or_(and_(PrintJob.status == "pending", or_(
-                PrintJob.kind == "cancellation", Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
+                PrintJob.kind.in_({"cancellation", "summary"}), Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
                 Order.payment_status.in_([PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED]),
                 and_(Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None)),
             )), (PrintJob.status.in_(["submitted", "unknown"]) & PrintJob.vendor_order_id.is_not(None))),
             or_(PrintJob.lease_until.is_(None), PrintJob.lease_until <= now),
-        ).order_by(PrintJob.created_at, PrintJob.id).limit(1))).first()
+        ).order_by(PrintJob.created_at, PrintJob.event_key, PrintJob.id).limit(1))).first()
         if candidate is None:
             return False
-        order = await session.scalar(select(Order).where(Order.id == candidate.order_id).execution_options(populate_existing=True).with_for_update())
+        order = (await session.scalar(select(Order).where(Order.id == candidate.order_id)
+                 .execution_options(populate_existing=True).with_for_update())) if candidate.order_id else None
         job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id).with_for_update())
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
             return True
@@ -83,6 +85,17 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.next_attempt_at = now + timedelta(seconds=60)
                 await session.commit()
                 return True
+        if job.kind == "summary" and job.status == "pending":
+            source_ids = [source["id"] for source in job.snapshot["source_versions"]]
+            await session.execute(select(Order.id).where(Order.id.in_(source_ids)).order_by(Order.id).with_for_update())
+            if not await summary_job_is_current(session, job, settings):
+                job.status, job.last_error = "failed", "summary_changed_before_send"
+                await session.commit()
+                return True
+            if job.content is None:
+                job.status, job.last_error = "failed", "summary_content_missing"
+                await session.commit()
+                return True
         if job.status == "pending" and job.kind in {"order", "amendment"} and job.content is not None and job.snapshot.get("payment_status") != "已付款":
             job.status, job.last_error = "failed", "unpaid_receipt_snapshot"
             await session.commit()
@@ -111,7 +124,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                     content = format_receipt({**rendered, "reprint": bool(job.reprint_of_id), "dry_run": mode == "dry_run"}, width=settings.printer_line_width)
                     job.content = seal_receipt_content(content, snapshot, job.order_id, settings)
                 else:
-                    content = open_receipt_content(content, job.order_id, settings)
+                    content = open_receipt_content(content, job.order_id or f"summary:{job.id}", settings)
             except FeieError as exc:
                 job.status, job.last_error, job.attempts = "failed", exc.code, attempts
                 job.lease_token = job.lease_until = None

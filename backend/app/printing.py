@@ -183,8 +183,8 @@ def render_receipt_snapshot(snapshot: dict, order_id: str, settings: Settings) -
     return result
 
 
-def seal_receipt_content(content: str, snapshot: dict, order_id: str, settings: Settings) -> str:
-    if "customer_phone_encrypted" not in snapshot:
+def seal_receipt_content(content: str, snapshot: dict, order_id: str, settings: Settings, *, force: bool = False) -> str:
+    if not force and "customer_phone_encrypted" not in snapshot:
         return content
     try:
         encrypted = pii_cipher_from_settings(settings).encrypt_text(content, associated_data=f"receipt-content:{order_id}")

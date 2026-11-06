@@ -1,0 +1,25 @@
+.order-summary-print { display: flex; align-items: start; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+.order-summary-print > details { flex: 1; min-width: min(100%, 18rem); padding: .75rem 0; }
+.order-summary-print summary { cursor: pointer; }
+.summary-print-overlay { position: fixed; inset: 0; background: rgb(22 32 27 / .55); z-index: 80; }
+.summary-print-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(42rem, calc(100vw - 2rem)); max-height: 88dvh; overflow: auto; padding: 2rem; background: var(--paper, #f7f4ea); color: var(--ink, #202d26); z-index: 81; box-sizing: border-box; }
+.summary-print-dialog h2 { padding-right: 2rem; margin-top: 0; }
+.summary-print-close { position: absolute; top: 1rem; right: 1rem; }
+.summary-print-scope { line-height: 1.7; }
+.summary-print-previews { display: grid; gap: 1rem; margin: 1rem 0; }
+.summary-print-previews section { min-width: 0; border: 1px solid #c7c8bc; padding: 1rem; background: #fffdf5; }
+.summary-print-previews h3 { font-size: 1rem; }
+.summary-print-previews pre { font-size: 1rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.summary-print-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }
+.summary-print-result { display: grid; gap: .5rem; border-bottom: 1px solid #c7c8bc; padding: 1rem 0; overflow-wrap: anywhere; }
+.summary-print-result small { color: #516159; }
+.summary-print-result ul { padding: 0; list-style: none; margin: .25rem 0; }
+.summary-print-result li { display: flex; gap: .75rem; flex-wrap: wrap; padding: .3rem 0; }
+.summary-print-result li .form-error { flex-basis: 100%; }
+.summary-print-new { display: grid; gap: 1rem; margin-top: 1.5rem; }
+.summary-print-new label { display: flex; align-items: start; gap: .6rem; }
+.summary-print-new input { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; }
+@media (max-width: 600px) {
+  .summary-print-dialog { padding: 1.25rem; width: calc(100vw - 1rem); max-height: 92dvh; }
+  .order-summary-print > button, .summary-print-actions .button { width: 100%; }
+}
