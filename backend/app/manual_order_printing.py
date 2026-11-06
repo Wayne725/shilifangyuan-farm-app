@@ -12,7 +12,7 @@ from .config import Settings
 from .integrations.common import IntegrationError
 from .integrations.feie import FeieError, configured_region, validate_live_config
 from .integrations.pii_crypto import pii_cipher_from_settings
-from .models import FulfillmentState, FulfillmentStatus, MemberProfile, Order, OrderItem, PrintJob, SalesChannel
+from .models import FulfillmentState, FulfillmentStatus, MemberProfile, Order, OrderItem, PaymentStatus, PrintJob, SalesChannel
 from .printing import (_contact_phone, confirmed_print_payment, order_print_snapshot,
                        payment_snapshot_from_session, printer_fingerprint, render_receipt_snapshot)
 
@@ -40,6 +40,25 @@ def manual_print_kind(order: Order) -> str:
     finished = (current_fulfillment_status(order) in {"cancelled", "picked_up", "delivered", "no_show"}
                 or order.fulfillment_status in {FulfillmentStatus.CANCELLED, FulfillmentStatus.PICKED_UP})
     return "order" if confirmed_print_payment(order) and not finished else "reference"
+
+
+def manual_print_status_error(order: Order) -> str | None:
+    if (order.cancelled_at is not None or order.fulfillment_status == FulfillmentStatus.CANCELLED
+            or (order.fulfillment and order.fulfillment.status == FulfillmentState.CANCELLED)):
+        return "order_cancelled_before_send"
+    if order.payment_status in {PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}:
+        return "order_payment_reversed_before_send"
+    if not confirmed_print_payment(order):
+        return "order_payment_unconfirmed_before_send"
+    return None
+
+
+def manual_print_order_blocked_reason(order: Order) -> str | None:
+    return {
+        "order_cancelled_before_send": "訂單已取消，無法再次出單",
+        "order_payment_reversed_before_send": "訂單已退款或正在處理退款，無法再次出單",
+        "order_payment_unconfirmed_before_send": "訂單尚未確認付款成功，無法再次出單",
+    }.get(manual_print_status_error(order))
 
 
 async def current_manual_snapshot(session: AsyncSession, order: Order, settings: Settings,
@@ -77,6 +96,8 @@ async def order_print_jobs(session: AsyncSession, order_id: str) -> list[PrintJo
 
 
 def manual_print_blocked_reason(order: Order, jobs: list[PrintJob], settings: Settings) -> str | None:
+    if blocked := manual_print_order_blocked_reason(order):
+        return blocked
     if not settings.printer_enabled:
         return "出單功能尚未啟用"
     if not settings.printer_dry_run:
@@ -88,9 +109,6 @@ def manual_print_blocked_reason(order: Order, jobs: list[PrintJob], settings: Se
         if job.status == "sending":
             return "這筆訂單正在送印，請先查詢出單結果"
         if job.status == "pending":
-            if (job.kind in {"order", "amendment"} and not job.snapshot.get("manual")
-                    and not confirmed_print_payment(order)):
-                continue
             return "這筆訂單已有等待發送的工作，請先確認出單結果"
     return None
 

@@ -104,7 +104,7 @@ async function verifyIsolated(page, state) {
 }
 
 for (const width of [390, 1280]) {
-  for (const payment of ['paid', 'pending', 'refunded']) {
+  for (const payment of ['paid']) {
     test(`${width}px ${payment} 便當可預覽目前狀態並確認送印`, { timeout: 25000 }, async t => {
       const { page, state } = await fixture(t, { width, payment, cancelled: payment === 'refunded' });
       await page.goto(`${base}/admin?section=orders`);
@@ -136,6 +136,23 @@ for (const width of [390, 1280]) {
       assert.match(state.writes[0].body.request_id, /^[0-9a-f-]{36}$/);
       assert.equal(state.writes[0].body.acknowledge_duplicate, false);
       assert.equal(await dialog.getByRole('button', { name: '再印一份', exact: true }).count(), 0);
+      await verifyIsolated(page, state);
+    });
+  }
+}
+
+for (const width of [390, 1280]) {
+  for (const scenario of [
+    { payment: 'pending' }, { payment: 'refunded' }, { payment: 'refund_pending' },
+    { payment: 'expired' }, { payment: 'paid', cancelled: true }, { payment: 'paid', missingPaidAt: true },
+  ]) {
+    test(`${width}px ${JSON.stringify(scenario)} 不顯示再次出單`, async t => {
+      const { page, state } = await fixture(t, { width, ...scenario });
+      if (scenario.missingPaidAt) state.order.paid_at = null;
+      await page.goto(`${base}/admin?section=orders`);
+      await page.getByText(orderFixture.order_number, { exact: true }).waitFor();
+      assert.equal(await page.getByRole('button', { name: '再次出單', exact: true }).count(), 0);
+      assert.deepEqual(state.previews, []); assert.deepEqual(state.writes, []);
       await verifyIsolated(page, state);
     });
   }
@@ -293,3 +310,31 @@ test('一般商品訂單不顯示便當補印入口', async t => {
   assert.deepEqual(state.previews, []); assert.deepEqual(state.writes, []);
   await verifyIsolated(page, state);
 });
+
+for (const lost of ['before', 'after']) {
+  test(`送印回應遺失${lost}後變成未付款，保留原查詢但不能重送或另印`, async t => {
+    const { page, state } = await fixture(t);
+    state.lostResponse = lost; state.printedStatus = 'printed';
+    await page.goto(`${base}/admin?section=orders`);
+    let dialog = await openPreview(page);
+    await dialog.getByLabel('出單原因', { exact: true }).fill('核對原送印');
+    await dialog.getByRole('button', { name: '確認送至出單機', exact: true }).click();
+    await dialog.getByRole('alert').waitFor();
+    state.order.payment_status = 'pending'; state.order.paid_at = null;
+    await page.reload();
+    await page.getByRole('button', { name: '查詢送印結果', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: '訂單出單／補印', exact: true });
+    if (lost === 'after') await dialog.getByText('已建立出單工作：已確認列印', { exact: true }).waitFor();
+    else {
+      await dialog.getByRole('alert').waitFor();
+      assert.doesNotMatch(await dialog.getByRole('alert').innerText(), /可重試/);
+      await dialog.getByText('訂單目前不符出單條件，僅可查詢原送印結果。', { exact: true }).waitFor();
+    }
+    assert.equal(await page.getByRole('button', { name: '再次出單', exact: true }).count(), 0);
+    assert.equal(await dialog.getByRole('button', { name: '重試同一筆送印', exact: true }).count(), 0);
+    assert.equal(await dialog.getByRole('button', { name: '再印一份', exact: true }).count(), 0);
+    assert.equal(state.writes.length, 1);
+    assert.equal(state.lookups.length, 1);
+    await verifyIsolated(page, state);
+  });
+}

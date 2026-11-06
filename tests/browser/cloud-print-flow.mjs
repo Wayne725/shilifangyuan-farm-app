@@ -193,7 +193,7 @@ for (const width of [390, 1280]) {
     assert.equal(await preview.getByLabel('補印原因', {exact: true}).count(), 0);
     assert.equal(await preview.getByRole('button', {name: /建立.*補印/}).count(), 0);
     assert.equal(await preview.locator('form').count(), 0);
-    const link = preview.getByRole('link', {name: '回訂單頁依目前狀態出單', exact: true});
+    const link = preview.getByRole('link', {name: '回訂單頁查看目前狀態', exact: true});
     const destination = new URL(await link.getAttribute('href'), base);
     assert.equal(destination.pathname, '/admin');
     assert.equal(destination.searchParams.get('section'), 'orders');
@@ -232,3 +232,20 @@ test('舊版本停止發送顯示可讀原因，補印409保留原因且不宣�
   assert.equal(await page.getByText('已建立模擬補印工作：等待發送', {exact: true}).count(), 0);
   assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });
+
+for (const width of [390, 1280]) {
+  test(`${width}px 歷史雲端工作不符付款條件時只能查結果不能補印`, async t => {
+    const {page, state} = await fixture(t, width, false);
+    state.jobs[0].reprint_blocked_reason = '訂單尚未確認付款成功，無法再次出單';
+    await page.goto(`${base}/admin/kitchen`);
+    await page.getByRole('button', {name: '查看／補印', exact: true}).click();
+    const preview = page.getByRole('region', {name: '雲端出單預覽'});
+    await preview.getByText(state.jobs[0].reprint_blocked_reason, {exact: true}).waitFor();
+    assert.equal(await preview.getByRole('button', {name: '建立正式補印', exact: true}).isEnabled(), false);
+    await preview.getByRole('button', {name: '重新查詢結果', exact: true}).click();
+    await preview.getByText('已安排查詢雲端結果', {exact: true}).waitFor();
+    assert.equal(state.writes.length, 1);
+    assert.ok(state.writes[0].path.endsWith('/query'));
+    assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
+  });
+}

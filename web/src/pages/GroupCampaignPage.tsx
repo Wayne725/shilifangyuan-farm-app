@@ -75,7 +75,7 @@ export function GroupCampaignPage() {
   });
   const selectedPickupLocation = locations.data?.find((location) => location.id === pickupLocationId);
   const quote = useQuery({
-    queryKey: ["group-quote", campaignId, quantity, method, shippingChannel, user?.id, invoicePreference.buyerType],
+    queryKey: ["group-quote", campaignId, quantity, method, shippingChannel, user?.id, user?.membership_type, invoicePreference.buyerType],
     queryFn: () => apiFetch<GroupQuote>(`/v1/group-campaigns/${campaignId}/quote`, {
       method: "POST",
       body: JSON.stringify({
@@ -146,7 +146,9 @@ export function GroupCampaignPage() {
 
   const item = campaign.data;
   const shippingAvailable = shippingEnabled && item.can_ship;
-  const currentQuote = !orderBlockReason && !quote.isError ? quote.data : undefined;
+  const currentQuote = !orderBlockReason && !quote.isError && !quote.isFetching ? quote.data : undefined;
+  const unitPriceLabel = !currentQuote ? "單價"
+    : currentQuote.membership_type === "member" || currentQuote.membership_type === "trainee" ? "社員單價" : "一般單價";
   const shippingReady = Boolean(shippingChannel && recipientName.trim() && recipientPhone.trim() && shippingAddress.trim());
   const submitReady = Boolean(
     !orderBlockReason && quote.data && !quote.isFetching && !quote.isError &&
@@ -250,7 +252,7 @@ export function GroupCampaignPage() {
               <dl>
                 {method === "pickup" && <div><dt>取貨地點</dt><dd>{locations.isError ? "暫時無法使用" : selectedPickupLocation?.name || "尚未選擇"}</dd></div>}
                 {method === "pickup" && !locations.isError && selectedPickupLocation?.address && <div><dt>取貨地址</dt><dd>{selectedPickupLocation.address}</dd></div>}
-                <div><dt>社員單價</dt><dd>{formatMoney(currentQuote?.unit_price ?? item.member_price)}</dd></div>
+                <div><dt>{unitPriceLabel}</dt><dd>{currentQuote ? formatMoney(currentQuote.unit_price) : "—"}</dd></div>
                 <div><dt>商品小計</dt><dd>{currentQuote ? formatMoney(currentQuote.product_subtotal) : "—"}</dd></div>
                 {shippingEnabled && <div><dt>運費</dt><dd>{currentQuote ? formatMoney(currentQuote.shipping_fee) : "—"}</dd></div>}
                 <InvoicePreferenceSummary value={invoicePreference} />

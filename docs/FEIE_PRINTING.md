@@ -24,7 +24,7 @@
 
 ## 現有架構與整合決策
 
-2026-11-06 新增管理員「再次出單」入口，詳見 [管理員訂單補印](ADMIN_ORDER_REPRINT.md)。付款後自動出單規則保持不變；管理員可明確要求列印未付款、退款或取消訂單的紀錄單，紙本標示「請勿製作」，與製作單分開。舊工作補印 API 不用來繞過此區分。
+2026-11-06 新增管理員「再次出單」入口，詳見 [管理員訂單補印](ADMIN_ORDER_REPRINT.md)。付款後自動出單規則保持不變；管理員再次出單也僅限已確認付款且未取消的訂單，已取餐等歷史紀錄標示「請勿製作」。未付款、退款中、已退款與已取消不提供手動補印；舊排隊工作與舊補印 API 同樣受付款門檻限制，既有結果查詢與自動停做取消通知保留。
 
 - 後端為 **FastAPI**，入口 `backend/app/main.py`；訂單 API 為 `backend/app/routers/meals.py` 的 `POST /v1/meal-events/{event_id}/orders`。不是 Flask，也不需另建訂餐網站。
 - SQLAlchemy async ORM；Render 設定使用 PostgreSQL，本機與測試使用 SQLite。

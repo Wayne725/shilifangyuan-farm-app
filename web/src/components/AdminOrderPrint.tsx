@@ -27,9 +27,11 @@ function readAttempt(key: string): Attempt | null {
   } catch { return null; }
 }
 
-export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_number" | "sales_channel"> }) {
+export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_number" | "sales_channel" | "payment_status" | "paid_at" | "cancelled_at" | "fulfillment_status" | "fulfillment"> }) {
   const { user } = useAuth();
   const client = useQueryClient();
+  const eligible = order.payment_status === "paid" && Boolean(order.paid_at) && !order.cancelled_at
+    && order.fulfillment_status !== "cancelled" && order.fulfillment?.status !== "cancelled";
   const storageKey = `admin-order-print:${user?.id}:${order.id}`;
   const [attempt, setAttempt] = useState<Attempt | null>(() => readAttempt(storageKey));
   const [open, setOpen] = useState(false);
@@ -67,11 +69,12 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
       const value = await apiFetch<Job>(`/v1/admin/printers/orders/${order.id}/print-requests/${attempt.request_id}`);
       if (mounted.current) setJob(value);
     } catch (failure) {
-      if (failure instanceof ApiError && failure.status === 404) throw new Error("尚未查到這筆送印，可重試同一筆送印。");
+      if (failure instanceof ApiError && failure.status === 404) throw new Error(eligible ? "尚未查到這筆送印，可重試同一筆送印。" : "尚未查到這筆送印；訂單目前不符出單條件，請核對原送印結果。");
       throw failure;
     }
   });
   const send = () => operate(async () => {
+    if (!eligible) return;
     if (!attempt && (!preview?.can_print || reason.trim().length < 2 || (preview.duplicate_risk && !acknowledge))) return;
     const value = attempt || { request_id: crypto.randomUUID(), preview_token: preview!.preview_token, reason: reason.trim(), acknowledge_duplicate: acknowledge };
     // Keep the request across lost responses, dialog closes and page reloads.
@@ -99,14 +102,14 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
     return () => { active = false; clearInterval(timer); };
   }, [open, order.id, attempt?.request_id, job?.id, settled]);
 
-  if (user?.user_role !== "admin" || order.sales_channel !== "meal_preorder") return null;
+  if (user?.user_role !== "admin" || order.sales_channel !== "meal_preorder" || (!eligible && !attempt)) return null;
   return <div className="admin-order-print">
     <Dialog.Root open={open} onOpenChange={next => {
       if (busyRef.current) return;
       setOpen(next);
       if (next) { setError(""); if (attempt) void findJob(); else void loadPreview(); }
     }}>
-      <Dialog.Trigger asChild><button type="button" className="button button-quiet"><Printer size={20} />再次出單</button></Dialog.Trigger>
+      <Dialog.Trigger asChild><button type="button" className="button button-quiet"><Printer size={20} />{eligible ? "再次出單" : "查詢送印結果"}</button></Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="admin-order-print-overlay" />
         <Dialog.Content className="admin-order-print-dialog" aria-describedby={undefined}
@@ -126,14 +129,14 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
             </form>
           </>}
           {job && <div role="status" className="admin-order-print-result"><strong>已建立出單工作：{statuses[job.status] || job.status}</strong><span>{job.mode === "dry_run" ? "模擬" : "正式"} · {job.kind === "reference" ? "訂單紀錄單／請勿製作" : "便當訂餐單"}</span></div>}
-          {attempt && !job && <p role="status">這筆送印結果待確認，請查詢或重試同一筆送印。</p>}
+          {attempt && !job && <p role="status">{eligible ? "這筆送印結果待確認，請查詢或重試同一筆送印。" : "訂單目前不符出單條件，僅可查詢原送印結果。"}</p>}
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="admin-order-print-actions">
             {!attempt && <button type="button" className="button button-quiet" disabled={busy} onClick={() => void loadPreview()}>{busy ? "讀取中…" : "重新產生預覽"}</button>}
             {attempt && <button type="button" className="button button-quiet" disabled={busy} onClick={() => void findJob()}>查詢送印結果</button>}
-            {attempt && !job && <button type="button" className="button button-primary" disabled={busy} onClick={() => void send()}>重試同一筆送印</button>}
+            {eligible && attempt && !job && <button type="button" className="button button-primary" disabled={busy} onClick={() => void send()}>重試同一筆送印</button>}
           </div>
-          {job && !["pending", "sending"].includes(job.status) && <div className="admin-order-print-another">
+          {eligible && job && !["pending", "sending"].includes(job.status) && <div className="admin-order-print-another">
             <label className="admin-order-print-check"><input type="checkbox" checked={another} disabled={busy} onChange={event => setAnother(event.target.checked)} />已核對紙本，需要再印一份</label>
             <button type="button" className="button button-quiet" disabled={busy || !another} onClick={() => { saveAttempt(null); setJob(null); void loadPreview(); }}>再印一份</button>
           </div>}

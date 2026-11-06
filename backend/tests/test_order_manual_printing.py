@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.integrations.feie import FeieError
 from app.manual_order_printing import load_manual_print_order
-from app.models import AdminAudit, FulfillmentState, Order, OrderItemOption, PaymentStatus, PrintJob, SalesChannel
+from app.models import AdminAudit, FulfillmentState, FulfillmentStatus, Order, OrderItemOption, PaymentStatus, PrintJob, SalesChannel
 from app.printer_worker import process_print_job
 from app.printing import enqueue_cancellation_print, open_receipt_content
 from app.routers.printers import printers_router
@@ -33,6 +33,8 @@ async def manual_context(cash_context):
     initial = await c.session.scalar(select(PrintJob).where(PrintJob.order_id == c.order_id))
     initial.status = "failed"
     c.initial_id = initial.id
+    order = await c.session.get(Order, c.order_id)
+    order.payment_status, order.paid_at = PaymentStatus.PAID, datetime.now(timezone.utc)
     await c.session.commit()
     async with api_test_context(c.session, [printers_router], settings=c.settings) as client:
         yield SimpleNamespace(**{**vars(c), "client": client,
@@ -76,14 +78,18 @@ async def stored(c, job_id):
     (PaymentStatus.PAID, True, True, "reference"),
     (PaymentStatus.PAID, False, False, "reference"),
 ])
-async def test_all_payment_states_use_safe_manual_document(manual_context, payment, cancelled, paid_at, kind):
+async def test_only_confirmed_paid_uncancelled_orders_allow_manual_print(manual_context, payment, cancelled, paid_at, kind):
     c = manual_context
     order = await state(c, payment, cancelled=cancelled, paid_at=paid_at)
     order.fulfillment.pickup_code = "876543"
     await c.session.commit()
     data = await preview(c)
-    assert data["kind"] == kind and data["can_print"] is True
+    eligible = payment == PaymentStatus.PAID and paid_at and not cancelled
+    assert data["kind"] == kind and data["can_print"] is eligible
     assert data["payment_status"] == payment.value
+    historical = await c.client.get(f"/v1/admin/printers/jobs/{c.initial_id}", headers=auth_headers(c.admin))
+    assert historical.status_code == 200
+    assert historical.json()["reprint_blocked_reason"] == data["blocked_reason"]
     assert "管理員補印" in data["preview"].splitlines()
     if payment == PaymentStatus.LATE_PAID_REFUND_REQUIRED:
         assert "逾期付款待退款" in data["preview"]
@@ -91,6 +97,11 @@ async def test_all_payment_states_use_safe_manual_document(manual_context, payme
         assert "訂單紀錄單" in data["preview"] and "請勿製作" in data["preview"].splitlines()
         assert "876543" not in data["preview"] and "取餐碼" not in data["preview"]
     result, _ = await submit(c, data)
+    if not eligible:
+        assert data["blocked_reason"] and result.status_code == 409
+        assert result.json()["detail"] == data["blocked_reason"]
+        assert await c.session.scalar(select(func.count()).select_from(PrintJob)) == 1
+        return
     assert result.status_code == 201, result.text
     job = await stored(c, result.json()["id"])
     assert job.kind == kind and c.buyer.email not in json.dumps(job.snapshot)
@@ -114,6 +125,13 @@ async def test_finished_paid_orders_are_reference_only(manual_context, fulfillme
     data = await preview(c)
     assert data["kind"] == "reference" and "請勿製作" in data["preview"]
     assert "取餐碼" not in data["preview"]
+    assert data["can_print"] is True
+    response, _ = await submit(c, data)
+    assert response.status_code == 201
+    assert await process_print_job(c.settings, factory=c.factory)
+    job = await stored(c, response.json()["id"])
+    assert job.status == "simulated" and job.kind == "reference"
+    assert "請勿製作" in open_receipt_content(job.content, c.order_id, c.settings)
 
 
 async def test_manual_order_print_requires_admin_and_meal_order(manual_context):
@@ -163,19 +181,21 @@ async def test_state_change_invalidates_preview_before_creation(manual_context):
     data = await preview(c)
     await state(c, PaymentStatus.REFUNDED)
     response, _ = await submit(c, data)
-    assert response.status_code == 409 and "重新預覽" in response.text
+    assert response.status_code == 409 and "退款" in response.text
     assert await c.session.scalar(select(func.count()).select_from(PrintJob)) == 1
 
 
-async def test_waiting_payment_auto_job_allows_reference_but_second_pending_job_does_not(manual_context):
+async def test_waiting_payment_auto_job_cannot_be_bypassed_by_manual_print(manual_context):
     c = manual_context
+    await state(c, PaymentStatus.PENDING)
     initial = await c.session.get(PrintJob, c.initial_id)
     initial.status = "pending"
     await c.session.commit()
     data = await preview(c)
-    assert data["can_print"] and data["kind"] == "reference"
-    first, _ = await submit(c, data)
-    assert first.status_code == 201
+    assert not data["can_print"] and "付款" in data["blocked_reason"]
+    response, _ = await submit(c, data)
+    assert response.status_code == 409
+    await state(c, PaymentStatus.PAID)
     data = await preview(c)
     assert not data["can_print"] and "等待發送" in data["blocked_reason"]
     second, _ = await submit(c, data)
@@ -199,6 +219,9 @@ async def test_unknown_other_job_requires_acknowledgement_and_same_request_never
 
 async def test_reference_refreshes_status_before_sending_but_never_becomes_production(manual_context):
     c = manual_context
+    order = await state(c, PaymentStatus.PAID)
+    order.fulfillment.status = FulfillmentState.PICKED_UP
+    await c.session.commit()
     response, _ = await submit(c)
     await state(c, PaymentStatus.PAID)
     assert await process_print_job(c.settings, factory=c.factory)
@@ -219,6 +242,92 @@ async def test_manual_production_does_not_send_after_payment_or_cancellation_cha
     assert await process_print_job(c.settings, factory=c.factory, client=fake)
     job = await stored(c, response.json()["id"])
     assert job.status == "failed" and job.attempts == 0 and fake.submissions == 0
+
+
+@pytest.mark.parametrize("payment,cancelled,paid_at", [
+    *[(payment, False, True) for payment in PaymentStatus if payment != PaymentStatus.PAID],
+    (PaymentStatus.PAID, True, True), (PaymentStatus.PAID, False, False),
+])
+async def test_legacy_queued_reference_never_sends_ineligible_order(manual_context, payment, cancelled, paid_at):
+    c = manual_context
+    await state(c, payment, cancelled=cancelled, paid_at=paid_at)
+    job = await c.session.get(PrintJob, c.initial_id)
+    job.kind, job.status = "reference", "pending"
+    job.snapshot = {**job.snapshot, "kind": "reference", "manual": True}
+    await c.session.commit()
+    fake = FakeFeie()
+    assert await process_print_job(c.settings, factory=c.factory, client=fake)
+    job = await stored(c, c.initial_id)
+    assert job.status == "failed" and job.attempts == 0 and fake.submissions == 0
+
+
+@pytest.mark.parametrize("cancel_field", ["order", "fulfillment"])
+async def test_cancellation_flags_also_block_preview_post_and_queued_reference(manual_context, cancel_field):
+    c = manual_context
+    order = await state(c, PaymentStatus.PAID)
+    order.fulfillment.status = FulfillmentState.PICKED_UP
+    await c.session.commit()
+    data = await preview(c)
+    response, _ = await submit(c, data)
+    assert response.status_code == 201
+    if cancel_field == "order":
+        order.fulfillment_status = FulfillmentStatus.CANCELLED
+    else:
+        order.fulfillment.status = FulfillmentState.CANCELLED
+    await c.session.commit()
+    data = await preview(c)
+    assert not data["can_print"] and "取消" in data["blocked_reason"]
+    rejected, _ = await submit(c, data)
+    assert rejected.status_code == 409
+    fake = FakeFeie()
+    assert await process_print_job(c.settings, factory=c.factory, client=fake)
+    assert (await stored(c, response.json()["id"])).status == "failed" and fake.submissions == 0
+
+
+@pytest.mark.parametrize("kind", ["order", "amendment", "cancellation"])
+async def test_legacy_reprint_rejects_refunded_order_for_every_document_kind(manual_context, kind):
+    c = manual_context
+    await state(c, PaymentStatus.REFUNDED, cancelled=True)
+    source = await c.session.get(PrintJob, c.initial_id)
+    source.kind, source.status = kind, "printed"
+    await c.session.commit()
+    response = await c.client.post(f"/v1/admin/printers/jobs/{source.id}/reprint", headers=auth_headers(c.admin),
+        json={"request_id": str(uuid4()), "reason": "已退款不可再次出單"})
+    assert response.status_code == 409
+    assert await c.session.scalar(select(func.count()).select_from(PrintJob)) == 1
+
+
+async def test_queued_cancellation_reprint_is_blocked_but_original_notice_is_preserved(manual_context):
+    c = manual_context
+    await state(c, PaymentStatus.REFUNDED, cancelled=True)
+    source = await c.session.get(PrintJob, c.initial_id)
+    source.kind, source.status = "cancellation", "printed"
+    retry = PrintJob(order_id=c.order_id, event_key=f"reprint:{uuid4()}", kind="cancellation",
+        mode=source.mode, status="pending", reprint_of_id=source.id,
+        printer_fingerprint=source.printer_fingerprint, snapshot=source.snapshot)
+    c.session.add(retry)
+    await c.session.commit()
+    assert await process_print_job(c.settings, factory=c.factory)
+    assert (await stored(c, retry.id)).status == "failed"
+
+
+async def test_submitted_reference_after_refund_only_queries_without_resending(manual_context):
+    c = manual_context
+    settings = live_settings(pii_encryption_keys_json=c.settings.pii_encryption_keys_json,
+        pii_encryption_current_version=c.settings.pii_encryption_current_version)
+    for key in ("printer_dry_run", "feie_user", "feie_ukey", "feie_printer_sn", "feie_ukey_rotated", "feie_ap_endpoint_verified"):
+        setattr(c.settings, key, getattr(settings, key))
+    order = await state(c, PaymentStatus.PAID)
+    order.fulfillment.status = FulfillmentState.PICKED_UP
+    await c.session.commit()
+    response, _ = await submit(c)
+    fake = FakeFeie(printed=True)
+    assert await process_print_job(c.settings, factory=c.factory, client=fake)
+    await state(c, PaymentStatus.REFUNDED, cancelled=True)
+    assert await process_print_job(c.settings, factory=c.factory, client=fake,
+        now=datetime.now(timezone.utc) + timedelta(minutes=5))
+    assert fake.submissions == 1 and fake.queries == 1
+    assert (await stored(c, response.json()["id"])).status == "printed"
 
 
 async def test_reference_legacy_reprint_is_rejected_and_reason_cannot_be_blank(manual_context):
@@ -253,10 +362,12 @@ async def test_cancellation_after_manual_production_keeps_stop_notice_and_reason
     assert "履約狀態：製作中" not in content
 
 
-@pytest.mark.parametrize("payment", [PaymentStatus.PENDING, PaymentStatus.PAID])
-async def test_unsent_manual_job_fails_when_device_changes(manual_context, payment):
+@pytest.mark.parametrize("fulfillment", [FulfillmentState.PREPARING, FulfillmentState.PICKED_UP])
+async def test_unsent_manual_job_fails_when_device_changes(manual_context, fulfillment):
     c = manual_context
-    await state(c, payment)
+    order = await state(c, PaymentStatus.PAID)
+    order.fulfillment.status = fulfillment
+    await c.session.commit()
     response, _ = await submit(c)
     c.settings.feie_printer_sn = SecretStr("different-test-device")
     fake = FakeFeie()
