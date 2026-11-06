@@ -892,6 +892,7 @@ def test_auth_email_requests_are_marked_for_immediate_delivery() -> None:
     assert main.AUTH_EMAIL_PATHS == {
         "/v1/auth/register",
         "/v1/auth/register-existing-member",
+        "/v1/auth/member-lookup",
         "/v1/auth/resend-verification",
         "/v1/auth/forgot-password",
     }
