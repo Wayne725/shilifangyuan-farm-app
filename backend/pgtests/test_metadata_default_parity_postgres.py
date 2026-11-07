@@ -22,7 +22,7 @@ from tests.test_open_proposal_migration import proposal_migration_db
 
 
 pytestmark = pytest.mark.skipif(not os.environ.get("TEST_POSTGRES_URL"), reason="Requires the isolated local PostgreSQL test database")
-STATE = {"migration_target": "0048_merge_remediation_print", "cases": [], "owned_schemas": [], "owned_databases": []}
+STATE = {"migration_target": "0049_merge_commerce_remediation", "cases": [], "owned_schemas": [], "owned_databases": []}
 
 
 @pytest.fixture(scope="module", autouse=True)

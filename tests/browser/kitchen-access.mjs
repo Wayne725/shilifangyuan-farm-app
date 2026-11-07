@@ -91,6 +91,14 @@ async function fixture(t, width) {
     assert.deepEqual(state.errors, []); assert.deepEqual(state.unknown, []); assert.deepEqual(state.external, []);
   });
   async function hidden() {
+    // A response event can precede error-body parsing and the React access-gate commit.
+    try {
+      await page.locator('section.admin-gate').waitFor({ state: 'visible', timeout: 6000 });
+    } catch (error) {
+      t.diagnostic(JSON.stringify({ phase: 'await-access-gate', engine: process.env.BROWSER_ENGINE || 'chromium',
+        recent_reads: state.reads.slice(-10), writes: state.writes.length, print_calls: state.prints, errors: state.errors }));
+      throw error;
+    }
     const body = await page.locator('body').innerText();
     for (const value of [privateOrder, privateName, privatePreview]) assert.equal(body.includes(value), false, `撤權後不得保留${value}`);
     assert.equal(await page.getByRole('button', { name: /建立正式補印|開始製作|重新查詢結果|開啟列印對話框/ }).count(), 0);
