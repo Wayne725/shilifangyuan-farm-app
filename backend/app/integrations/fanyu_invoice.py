@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import re
@@ -38,6 +39,23 @@ from .invoice_context import fanyu_account_context
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 INVOICE_NUMBER_PATTERN = re.compile(r"^[A-Z]{2}[0-9]{8}$")
+MAX_INVOICE_PDF_BYTES = 2 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class FanyuInvoicePrintCodes:
+    invoice_number: str
+    barcode: str
+    left_qrcode: str
+    right_qrcode: str
+
+
+def _validate_invoice_identity(invoice_number: str, invoice_date: str) -> None:
+    if not isinstance(invoice_number, str) or not INVOICE_NUMBER_PATTERN.fullmatch(invoice_number):
+        raise ValueError("發票號碼格式不正確")
+    if not isinstance(invoice_date, str) or not re.fullmatch(r"[0-9]{8}", invoice_date):
+        raise ValueError("發票日期必須為YYYYMMDD")
+    datetime.strptime(invoice_date, "%Y%m%d")
 
 
 def fanyu_signature(create_datetime: str, api_key: str) -> str:
@@ -370,6 +388,50 @@ class FanyuInvoiceAdapter:
             "ProviderStatus": provider_status,
             "ProviderResponse": response,
         }
+
+    async def get_invoice_print_codes(
+        self, invoice_number: str, invoice_date: str, *, buyer_type: str = "personal",
+    ) -> FanyuInvoicePrintCodes:
+        _validate_invoice_identity(invoice_number, invoice_date)
+        if buyer_type not in {"personal", "company"}:
+            raise ValueError("發票買方類型不正確")
+        response = await self._request("/getInvoicePrintCode", {
+            "invNo": invoice_number, "invDate": invoice_date,
+            "processType": "B" if buyer_type == "company" else "C",
+            "sellerID": self.settings.seller_id,
+        })
+        if response.get("invNo") != invoice_number:
+            raise IntegrationResponseError("汎宇列印資料的發票號碼不符")
+        values = {}
+        for key, limit in [("barcode", 256), ("leftQrcode", 8192), ("rightQrcode", 8192)]:
+            value = response.get(key)
+            if not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > limit or "\x00" in value:
+                raise IntegrationResponseError("汎宇列印資料缺少完整條碼或超出長度限制")
+            values[key] = value
+        return FanyuInvoicePrintCodes(invoice_number, values["barcode"], values["leftQrcode"], values["rightQrcode"])
+
+    async def get_invoice_b2c_pdf(
+        self, invoice_number: str, invoice_date: str, *, random_number: str = "", no_details: bool = False,
+    ) -> bytes:
+        _validate_invoice_identity(invoice_number, invoice_date)
+        if random_number and not re.fullmatch(r"[0-9]{4}", random_number):
+            raise ValueError("發票隨機碼必須為4碼數字")
+        request = {"invNo": invoice_number, "invDate": invoice_date, "sellerID": self.settings.seller_id}
+        if random_number:
+            request["ranNo"] = random_number
+        if no_details:
+            request["isNoDetails"] = "Y"
+        response = await self._request("/getInvoiceB2CPDF", request)
+        encoded = response.get("b2c_PDF")
+        if not isinstance(encoded, str) or len(encoded) > ((MAX_INVOICE_PDF_BYTES + 2) // 3) * 4:
+            raise IntegrationResponseError("汎宇證明聯PDF缺少內容或超過大小限制")
+        try:
+            document = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise IntegrationResponseError("汎宇證明聯PDF編碼不正確") from error
+        if len(document) > MAX_INVOICE_PDF_BYTES or not document.startswith(b"%PDF-") or not document.rstrip().endswith(b"%%EOF"):
+            raise IntegrationResponseError("汎宇證明聯不是完整PDF資料")
+        return document
 
     async def cancel_invoice(
         self,
