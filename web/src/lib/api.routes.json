@@ -35,6 +35,7 @@
   "GET /v1/admin/financial-statements/{batch_id}/reconciliation.csv",
   "GET /v1/admin/invoice-register",
   "GET /v1/admin/invoice-register.csv",
+  "GET /v1/admin/manual-invoice-records",
   "GET /v1/admin/meal-cancellation-requests",
   "GET /v1/admin/meal-cancellation-summary",
   "GET /v1/admin/meal-cancellations.csv",
