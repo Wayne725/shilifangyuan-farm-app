@@ -40,10 +40,14 @@ def test_onsite_migration_preserves_legacy_orders_and_blocks_unsafe_downgrade(tm
             assert connection.execute(text("SELECT id, order_number, amount_total FROM orders")).all() == before
             assert connection.execute(text("SELECT payment_method FROM orders")).scalar_one() == "online"
         with engine.begin() as connection:
-            connection.execute(text("UPDATE orders SET payment_method='cash_on_pickup'"))
+            connection.execute(text(
+                "UPDATE orders SET payment_method='cash_on_pickup', "
+                "invoice_handling='external', invoice_status='external'"
+            ))
         with pytest.raises(RuntimeError, match="現場付款紀錄"):
             command.downgrade(config, "0028_financial_statements")
         with engine.connect() as connection:
+            assert connection.execute(text("SELECT id, order_number, amount_total FROM orders")).all() == before
             assert connection.execute(text("SELECT payment_method FROM orders")).scalar_one() == "cash_on_pickup"
     finally:
         engine.dispose()
