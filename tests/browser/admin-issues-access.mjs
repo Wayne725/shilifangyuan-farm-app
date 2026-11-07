@@ -26,9 +26,10 @@ async function fixture(t, width) {
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
   const state = { monitorReads: 0, jobReads: 0, refreshes: 0, monitorCode: 200, jobCode: 200, refreshCode: 200, retryCodes: [], monitorCodes: [], posts: [], errors: [], unknown: [], holdMonitor: false, holdJobs: false, holdRetry: false, pendingMonitor: [], pendingJobs: [], pendingRetry: [] };
-  let markMonitorHeld, markJobsHeld;
+  let markMonitorHeld, markJobsHeld, markRetryHeld;
   const monitorHeldIngress = new Promise(resolve => { markMonitorHeld = resolve; });
   const jobsHeldIngress = new Promise(resolve => { markJobsHeld = resolve; });
+  const retryHeldIngress = new Promise(resolve => { markRetryHeld = resolve; });
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
@@ -62,7 +63,10 @@ async function fixture(t, width) {
     if (path === '/v1/admin/failed-jobs/isolated-private-email/retry' && request.method() === 'POST') {
       state.posts.push(request.postDataJSON());
       const code = state.retryCodes.shift() ?? 200;
-      if (state.holdRetry) await new Promise(resolve => state.pendingRetry.push(resolve));
+      if (state.holdRetry) await new Promise(resolve => {
+        state.pendingRetry.push(resolve);
+        markRetryHeld();
+      });
       return route.fulfill(code === 200 ? { json: { message: '已重新排入隔離通知' } } : { status: code, json: { detail: code === 403 ? '管理權限已撤銷' : code === 401 ? '登入已失效' : '隔離重試暫時受阻' } });
     }
     state.unknown.push(`${request.method()} ${path}`);
@@ -95,6 +99,27 @@ async function fixture(t, width) {
     await page.clock.runFor(61000);
     assert.deepEqual([state.monitorReads, state.jobReads, state.posts.length], before, '撤權後不得繼續私有輪詢或重試');
   }
+  function watchCompletionOrder() {
+    const events = [];
+    page.on('response', response => events.push({ kind: 'response', request: response.request(), status: response.status() }));
+    for (const name of ['requestfailed', 'requestfinished']) page.on(name, request => events.push({ kind: 'terminal', request }));
+    return (delayedRequest, denied) => {
+      assert.equal(denied.status(), 403);
+      const denialIndex = events.findIndex(event => event.kind === 'response' && event.request === denied.request() && event.status === 403);
+      assert.ok(denialIndex >= 0, '必須觀察到指定請求真正的403');
+      assert.ok(!events.slice(0, denialIndex).some(event => event.kind === 'terminal' && event.request === delayedRequest), '延遲請求不得在真正403之前已逾時、取消或完成');
+    };
+  }
+  async function assertLateReplyOrAbort(request) {
+    const response = await request.response();
+    if (response) {
+      assert.equal(response.status(), 200);
+      const error = await response.finished();
+      if (error) assert.match(String(error), /abort|cancel/i);
+    } else {
+      assert.match(request.failure()?.errorText || '', /abort|cancel/i);
+    }
+  }
   async function releaseMonitorAndObserve(request) {
     state.pendingMonitor.splice(0).forEach(resolve => resolve());
     state.holdMonitor = false;
@@ -109,7 +134,7 @@ async function fixture(t, width) {
     assert.match(request.failure()?.errorText || '', /abort|cancel/i);
     return '舊 monitor GET 已取消，未收到 200 response';
   }
-  return { page, state, monitor, monitorHeldIngress, jobsHeldIngress, releaseMonitorAndObserve, prepareRetry, assertPrivateHidden, assertPollingStopped };
+  return { page, state, monitor, monitorHeldIngress, jobsHeldIngress, retryHeldIngress, watchCompletionOrder, assertLateReplyOrAbort, releaseMonitorAndObserve, prepareRetry, assertPrivateHidden, assertPollingStopped };
 }
 
 for (const width of [390, 1440]) {
@@ -117,8 +142,10 @@ for (const width of [390, 1440]) {
     const f = await fixture(t, width);
     await f.prepareRetry();
     f.state.monitorCode = 403;
+    const response403 = f.page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/v1/admin/reconciliation-status' && response.status() === 403);
     await f.monitor.getByRole('button', { name: '更新結算狀態', exact: true }).click();
-    await f.page.getByRole('alert').first().waitFor();
+    await response403;
+    await f.page.getByRole('button', { name: '重新驗證管理權限', exact: true }).waitFor();
     await f.assertPrivateHidden();
     await f.assertPollingStopped();
     assert.equal(await f.page.getByRole('heading', { name: '待處理問題', exact: true }).count(), 1);
@@ -202,14 +229,22 @@ for (const width of [390, 1440]) {
     const f = await fixture(t, width);
     await f.prepareRetry();
     f.state.holdJobs = true;
+    const assertDenialPrecedesEnd = f.watchCompletionOrder();
+    const jobsRequestPromise = f.page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).pathname === '/v1/admin/failed-jobs');
     await f.page.clock.runFor(31000);
-    assert.ok(f.state.pendingJobs.length > 0);
+    const jobsRequest = await jobsRequestPromise;
+    await f.jobsHeldIngress;
+    assert.equal(f.state.pendingJobs.length, 1);
     f.state.retryCodes.push(403);
+    const retryResponse = f.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/admin/failed-jobs/isolated-private-email/retry' && response.status() === 403);
     await f.page.getByRole('button', { name: '排入重試', exact: true }).click();
-    await f.page.getByRole('alert').first().waitFor();
+    const denied = await retryResponse;
+    await f.page.getByRole('button', { name: '重新驗證管理權限', exact: true }).waitFor();
     await f.assertPrivateHidden();
+    assertDenialPrecedesEnd(jobsRequest, denied);
     f.state.pendingJobs.splice(0).forEach(resolve => resolve());
     f.state.holdJobs = false;
+    await f.assertLateReplyOrAbort(jobsRequest);
     await f.page.clock.runFor(100);
     await f.assertPrivateHidden();
     await f.assertPollingStopped();
@@ -220,17 +255,23 @@ for (const width of [390, 1440]) {
     const f = await fixture(t, width);
     await f.prepareRetry();
     f.state.holdRetry = true;
+    const assertDenialPrecedesEnd = f.watchCompletionOrder();
     const posted = f.page.waitForRequest(request => request.url().endsWith('/isolated-private-email/retry'));
     await f.page.getByRole('button', { name: '排入重試', exact: true }).click();
-    await posted;
+    const retryRequest = await posted;
+    await f.retryHeldIngress;
     await f.page.getByRole('button', { name: '排入中…', exact: true }).waitFor();
     assert.equal(f.state.pendingRetry.length, 1);
     f.state.monitorCode = 403;
+    const response403 = f.page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/v1/admin/reconciliation-status' && response.status() === 403);
     await f.monitor.getByRole('button', { name: '更新結算狀態', exact: true }).click();
-    await f.page.getByRole('alert').first().waitFor();
+    const denied = await response403;
+    await f.page.getByRole('button', { name: '重新驗證管理權限', exact: true }).waitFor();
     await f.assertPrivateHidden();
+    assertDenialPrecedesEnd(retryRequest, denied);
     f.state.pendingRetry.splice(0).forEach(resolve => resolve());
     f.state.holdRetry = false;
+    await f.assertLateReplyOrAbort(retryRequest);
     await f.page.clock.runFor(100);
     await f.assertPrivateHidden();
     assert.equal(await f.page.getByText('已重新排入隔離通知', { exact: true }).count(), 0);
