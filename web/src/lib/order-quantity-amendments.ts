@@ -20,6 +20,7 @@ export function replaceAmendedOrder(data: unknown, updated: Order, quote: OrderQ
   if (Array.isArray(data)) return data.map((item) => replaceAmendedOrder(item, updated, quote));
   if (!data || typeof data !== "object") return data;
   const record = data as Record<string, unknown>;
+  if (Array.isArray(record.pages)) return { ...record, pages: replaceAmendedOrder(record.pages, updated, quote) };
   if (record.id === updated.id && Array.isArray(record.items)) {
     if ("meal_event_title" in record) {
       const meal = data as MealOrder;

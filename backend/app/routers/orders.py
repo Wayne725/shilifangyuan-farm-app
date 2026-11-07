@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import secrets
+import hashlib
+import json
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Annotated, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -14,8 +16,12 @@ from ..auth import (
     membership_type_for_user,
     require_admin,
 )
+from ..invoice_tax_summary import invoice_tax_summary
 from ..database import get_session
+from ..group_review import order_accepts_group_payment, order_has_uncertain_group_payment, order_matches_group_contract
 from ..platform_settings import require_accepting_orders
+from ..order_numbers import allocate_order_number, insert_order_with_unique_number, is_order_submission_collision, make_order_number
+from ..order_history import OrderHistoryQuery, read_order_history
 from ..config import Settings, get_settings
 from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled, meals_test_product_pairs
 from ..sales_scope import require_sales_scope_allows
@@ -32,6 +38,7 @@ from ..domain import (
     remove_paid_quantity,
     sale_tax_type,
 )
+from ..invoice_timing import invoice_handling, cancel_unissued_invoice_jobs
 from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
 from ..integrations.payment_service import (
     PaymentApplicationError,
@@ -88,11 +95,6 @@ from ..schemas import (
 orders_router = APIRouter(prefix="/v1/orders", tags=["orders"])
 
 
-def make_order_number() -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%y%m%d%H%M%S")
-    return f"SLF{timestamp}{secrets.token_hex(2).upper()}"
-
-
 def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
     fulfillment = order.__dict__.get("fulfillment")
     shipment = (
@@ -102,10 +104,14 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
     )
     requests = order.__dict__.get("cancellation_requests", [])
     latest = max(requests, key=lambda request: (aware(request.requested_at), request.id), default=None)
+    group_contract_changed = bool(order.group_campaign_id and order_accepts_group_payment(order)
+        and not order_matches_group_contract(order, order.__dict__.get("group_campaign")))
     actions = order_available_actions(order, viewer_is_admin)
     if latest and latest.status == "pending":
         actions = [action for action in actions if action != "refund"]
     return OrderRead(
+        invoice_tax=invoice_tax_summary(order.__dict__.get("invoice")),
+        customer_kind=order.customer_kind or "account",
         id=order.id,
         revision=order.revision,
         amendment_blocked_reason=order_amendment_blocked_reason(order),
@@ -116,12 +122,14 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         fulfillment_method=order.fulfillment_method,
         group_campaign_id=order.group_campaign_id,
         group_campaign_deadline=aware(order.group_campaign.deadline) if order.__dict__.get("group_campaign") else None,
+        group_contract_changed=group_contract_changed,
+        group_payment_uncertain=order_has_uncertain_group_payment(order, datetime.now(timezone.utc)),
         meal_event_id=order.meal_event_id,
         membership_type_snapshot=order.membership_type_snapshot,
         member_tax_exempt_snapshot=order.member_tax_exempt_snapshot,
         amount_total=order.amount_total,
         tax_amount=order.tax_amount,
-        contact_email=order.contact_email,
+        contact_email=order.contact_email or None,
         invoice_buyer_type=order.invoice_buyer_type,
         invoice_buyer_tax_id=order.invoice_buyer_tax_id,
         invoice_buyer_name=order.invoice_buyer_name,
@@ -131,6 +139,8 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
         payment_status=order.payment_status,
         payment_method=order.payment_method,
         invoice_status=order.invoice_status,
+        invoice_handling=invoice_handling(order),
+        invoice_issue_after=order.invoice_issue_after,
         paid_at=aware(order.paid_at) if order.paid_at is not None else None,
         cancelled_at=order.cancelled_at,
         created_at=order.created_at,
@@ -202,17 +212,21 @@ async def quote_products(
                 ),
             )
         )
+    member_tax_exempt = member_sale_is_tax_exempt(membership_type, invoice_buyer_type)
+    tax_amount = sum(included_tax_amount(line.subtotal, line.tax_type) for line in lines)
+    amount_total = sum(line.subtotal for line in lines)
+    confirmation = {
+        "membership_type": membership_type.value, "member_tax_exempt": member_tax_exempt,
+        "amount_total": amount_total, "tax_amount": tax_amount,
+        "items": [line.model_dump(mode="json", include={"product_id", "quantity", "unit_price", "subtotal", "tax_type"})
+                  for line in sorted(lines, key=lambda line: line.product_id)],
+    }
     return OrderQuoteRead(
-        membership_type=membership_type,
-        member_tax_exempt=member_sale_is_tax_exempt(
-            membership_type, invoice_buyer_type
-        ),
-        tax_amount=sum(
-            included_tax_amount(line.subtotal, line.tax_type)
-            for line in lines
-        ),
-        amount_total=sum(line.subtotal for line in lines),
-        items=lines,
+        confirmation_fingerprint=hashlib.sha256(json.dumps(
+            confirmation, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode()).hexdigest(),
+        membership_type=membership_type, member_tax_exempt=member_tax_exempt,
+        tax_amount=tax_amount, amount_total=amount_total, items=lines,
     )
 
 
@@ -270,6 +284,54 @@ async def create_order(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> OrderRead:
+    submitting_user_id = user.id
+    fingerprint = None
+    if body.client_request_id is not None:
+        fingerprint_body = body.model_dump(mode="json", exclude={"client_request_id"})
+        # Preserve submission fingerprints saved before quote confirmations existed.
+        if body.expected_quote_fingerprint is None:
+            fingerprint_body.pop("expected_quote_fingerprint")
+        fingerprint_body["items"] = [
+            {"product_id": product_id, "quantity": quantity}
+            for product_id, quantity in sorted(consolidate_lines(body.items).items())
+        ]
+        fingerprint_body["contact_email"] = str(body.contact_email).lower()
+        for field in ("invoice_buyer_tax_id", "invoice_buyer_name", "invoice_carrier_value"):
+            value = fingerprint_body[field]
+            fingerprint_body[field] = value.strip() if value else None
+        if fingerprint_body["invoice_carrier_value"]:
+            fingerprint_body["invoice_carrier_value"] = fingerprint_body["invoice_carrier_value"].upper()
+        if fingerprint_body["invoice_buyer_email"]:
+            fingerprint_body["invoice_buyer_email"] = fingerprint_body["invoice_buyer_email"].lower()
+        fingerprint = hashlib.sha256(json.dumps(
+            {"channel": "regular", "body": fingerprint_body}, sort_keys=True, ensure_ascii=False,
+        ).encode()).hexdigest()
+        if session.get_bind().dialect.name == "postgresql":
+            # Serialize only this buyer's submission key before mutable checkout gates.
+            lock_key = int.from_bytes(hashlib.sha256(
+                f"regular-checkout:{submitting_user_id}:{body.client_request_id}".encode()
+            ).digest()[:8], "big", signed=True)
+            await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+
+    async def existing_submission() -> Optional[OrderRead]:
+        if body.client_request_id is None:
+            return None
+        existing = (await session.execute(select(
+            Order.id, Order.order_kind, Order.sales_channel, Order.meal_event_id,
+            Order.group_campaign_id, Order.request_fingerprint,
+        ).where(Order.user_id == submitting_user_id, Order.client_request_id == str(body.client_request_id)))).first()
+        if existing is None:
+            return None
+        if (existing.order_kind != OrderKind.REGULAR or existing.sales_channel != SalesChannel.REGULAR
+            or existing.meal_event_id is not None or existing.group_campaign_id is not None
+            or existing.request_fingerprint != fingerprint):
+            raise HTTPException(status_code=409, detail="此送單識別碼已使用，請重新確認訂單",
+                                headers={"X-Error-Code": "idempotency_conflict"})
+        return order_read(await load_order(session, existing.id, refresh=True), False)
+
+    existing = await existing_submission()
+    if existing is not None:
+        return existing
     controlled_product = meals_test_product_enabled(settings)
     if not controlled_product:
         require_sales_scope_allows(
@@ -291,10 +353,23 @@ async def create_order(
         FulfillmentMethod.ECPAY_LOGISTICS,
     }:
         raise HTTPException(status_code=422, detail="一般訂單不支援此履約方式")
-    quote = await quote_products(
-        session, consolidate_lines(body.items), user, lock=True,
-        invoice_buyer_type=body.invoice_buyer_type,
-    )
+    try:
+        quote = await quote_products(
+            session, consolidate_lines(body.items), user, lock=True,
+            invoice_buyer_type=body.invoice_buyer_type,
+        )
+    except HTTPException:
+        existing = await existing_submission()
+        if existing is not None:
+            return existing
+        raise
+    existing = await existing_submission()
+    if existing is not None:
+        return existing
+    if ((body.expected_total is not None and body.expected_total != quote.amount_total)
+        or (body.expected_quote_fingerprint is not None and body.expected_quote_fingerprint != quote.confirmation_fingerprint)):
+        raise HTTPException(status_code=409, detail="價格已變動，請重新確認訂單明細",
+                            headers={"X-Error-Code": "quote_changed"})
     pickup_location = None
     if body.pickup_location_id is not None:
         if body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP:
@@ -311,7 +386,9 @@ async def create_order(
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(
-        order_number=make_order_number(),
+        client_request_id=str(body.client_request_id) if body.client_request_id is not None else None,
+        request_fingerprint=fingerprint,
+        order_number=await allocate_order_number(session, "O"),
         order_kind=OrderKind.REGULAR,
         payment_method=body.payment_method,
         invoice_provider_context=invoice_context_from_settings(settings),
@@ -371,7 +448,16 @@ async def create_order(
     if controlled_product and not await is_meals_test_product_order(session, settings, order):
         require_sales_scope_allows(settings)
     user.notification_email = order.contact_email
-    session.add(order)
+    try:
+        await insert_order_with_unique_number(session, order, lambda: allocate_order_number(session, "O"))
+    except IntegrityError as exc:
+        if body.client_request_id is None or not is_order_submission_collision(exc, session.get_bind().dialect.name):
+            raise
+        await session.rollback()
+        existing = await existing_submission()
+        if existing is not None:
+            return existing
+        raise
     await session.commit()
     order = await load_order(session, order.id)
     return order_read(order, False)
@@ -379,26 +465,11 @@ async def create_order(
 
 @orders_router.get("", response_model=List[OrderRead])
 async def list_orders(
+    filters: Annotated[OrderHistoryQuery, Query()],
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> List[OrderRead]:
-    query = select(Order).options(
-        selectinload(Order.cancellation_requests),
-        selectinload(Order.amendments),
-        selectinload(Order.payment_attempts),
-        selectinload(Order.items).selectinload(OrderItem.selected_options),
-        selectinload(Order.group_campaign),
-        selectinload(Order.meal_event),
-        selectinload(Order.invoice),
-        selectinload(Order.fulfillment).selectinload(
-            OrderFulfillment.shipment
-        ),
-    )
-    if user.user_role != UserRole.ADMIN:
-        query = query.where(Order.user_id == user.id)
-    orders = list(
-        await session.scalars(query.order_by(Order.created_at.desc(), Order.id.desc()))
-    )
+    orders = await read_order_history(session, user, filters)
     return [
         order_read(order, user.user_role == UserRole.ADMIN) for order in orders
     ]
@@ -409,9 +480,10 @@ async def get_order(
     order_id: str,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    own_only: bool = False,
 ) -> OrderRead:
     order = await load_order(session, order_id)
-    if order.user_id != user.id and user.user_role != UserRole.ADMIN:
+    if order.user_id != user.id and (own_only or user.user_role != UserRole.ADMIN):
         raise HTTPException(status_code=404, detail="找不到訂單")
     return order_read(order, user.user_role == UserRole.ADMIN)
 
@@ -582,6 +654,7 @@ async def request_order_refund(
             shipment.status = ShipmentStatus.CANCELLED
     order.cancelled_at = now
     order.cancellation_reason = reason
+    await cancel_unissued_invoice_jobs(session, order)
 
 
 @orders_router.post("/{order_id}/cancel", response_model=OrderRead)
@@ -714,7 +787,7 @@ async def receive_cash_payment(
     order = await load_order(session, order_id, lock=True, refresh=True)
     try:
         await confirm_cash_payment(session, order, amount=body.amount, reason=body.reason,
-            actor_id=admin.id, settings=settings, now=datetime.now(timezone.utc), collection_method=body.collection_method, reference=body.reference)
+            actor_id=admin.id, settings=settings, now=datetime.now(timezone.utc), collection_method=body.collection_method, reference=body.reference, invoice_policy=body.invoice_handling)
     except PaymentApplicationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
@@ -829,13 +902,13 @@ async def update_fulfillment(
                 aggregate_type="order",
                 aggregate_id=order.id,
             ),
-            Notification(
+            *([Notification(
                 user_id=order.user_id,
                 event_type=f"order.{body.status.value}",
                 title="訂單狀態已更新",
                 body=f"訂單 {order.order_number}：{body.status.value}",
                 data={"order_id": order.id},
-            ),
+            )] if order.user_id is not None else []),
         ]
     )
     await session.commit()

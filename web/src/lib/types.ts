@@ -101,6 +101,13 @@ export type InvoiceStatus =
   | "void_pending"
   | "voided";
 
+export interface InvoiceTax {
+  status: string;
+  tax_type: "taxable" | "tax_exempt" | "mixed" | "unknown";
+  amount_semantics: "separately_stated" | "included_not_separately_stated" | "unknown";
+  tax_amount: number | null;
+}
+
 export interface InvoiceRecord {
   id: string;
   provider: string;
@@ -166,6 +173,8 @@ export interface Order {
   fulfillment_method: FulfillmentMethod;
   group_campaign_id?: string | null;
   group_campaign_deadline?: string | null;
+  group_contract_changed?: boolean;
+  group_payment_uncertain?: boolean;
   meal_event_id?: string | null;
   membership_type_snapshot: string;
   member_tax_exempt_snapshot?: boolean;
@@ -180,7 +189,10 @@ export interface Order {
   fulfillment_status: string;
   payment_status: string;
   payment_method?: PaymentMethod;
+  invoice_handling?: "on_payment" | "pickup_day" | "external";
+  invoice_issue_after?: string | null;
   invoice_status: InvoiceStatus;
+  invoice_tax?: InvoiceTax | null;
   paid_at?: string | null;
   cancelled_at?: string | null;
   created_at: string;
@@ -224,6 +236,8 @@ export interface PaymentAttemptStatus {
   order_id?: string | null;
   membership_charge_id?: string | null;
   activity_charge_id?: string | null;
+  order_revision?: number | null;
+  superseded?: boolean;
 }
 
 export interface PickupLocation {
@@ -364,6 +378,7 @@ export interface MembershipDocument {
   size_bytes: number;
   checksum_sha256?: string | null;
   confirmed_at?: string | null;
+  is_demo_placeholder?: boolean;
   expires_at?: string | null;
   retention_expired?: boolean;
   deleted_at?: string | null;
@@ -645,7 +660,10 @@ export interface MealOrder {
   pickup_qr_payload?: string | null;
   payment_status: string;
   payment_method?: PaymentMethod;
+  invoice_handling?: "on_payment" | "pickup_day" | "external";
+  invoice_issue_after?: string | null;
   invoice_status: string;
+  invoice_tax?: InvoiceTax | null;
   invoice_number?: string | null;
   invoice_date?: string | null;
   fulfillment_status: string;
@@ -842,6 +860,7 @@ export interface CartItem {
 }
 
 export interface OrderQuote {
+  confirmation_fingerprint?: string;
   membership_type: string;
   member_tax_exempt?: boolean;
   tax_amount?: number;

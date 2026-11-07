@@ -93,9 +93,10 @@ async def prepare_member_lookup_email(session: AsyncSession, settings: Settings,
         "subject": "十里方圓社員資格查詢結果",
         "text_content": f"查詢時間：{checked_at}（台灣）\n\n{result}\n\n登入／既有社員入口：{root}/line-consent\n操作說明與聯絡協助：{root}/help\n\n本查詢不會建立帳號或授予社員資格。若不是您提出查詢，可忽略此信。",
     }
+    delivery = event.payload.get("email_delivery")
     event.payload = {"result_encrypted": encrypt_auth_outbox_credential(
         settings, f"{MEMBER_LOOKUP_EVENT}.result", event.aggregate_id, json.dumps(snapshot, ensure_ascii=False),
-    )}
+    ), **({"email_delivery": delivery} if isinstance(delivery, dict) else {})}
     # Persist the exact message before sending so retries keep the same provider idempotency payload.
     await session.commit()
     return EmailMessage(**snapshot, idempotency_key=f"outbox-{event.id}")

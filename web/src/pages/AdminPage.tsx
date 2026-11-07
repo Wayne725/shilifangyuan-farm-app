@@ -1,3 +1,5 @@
+import { AdminWalkInSale } from "../components/AdminWalkInSale";
+import { AdminInvoiceIssue } from "../components/AdminInvoiceIssue";
 import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
 import {
   Buildings,
@@ -25,6 +27,7 @@ import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import "./AdminOrderOperations.css";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
+import { useAdminOrderAccess } from "../lib/admin-order-access";
 import { shippingChannelLabels } from "../lib/commerce";
 import {
   adminPaymentStatusLabel,
@@ -35,8 +38,14 @@ import type {
   Supplier,
 } from "../lib/types";
 
+interface AdminOrder extends Order {
+  customer_name: string;
+  contact_phone: string | null;
+  contact_phone_status: "available" | "missing" | "unavailable";
+}
+
 interface AdminOrderPage {
-  items: Order[];
+  items: AdminOrder[];
   total: number;
   limit: number;
   offset: number;
@@ -51,6 +60,7 @@ export function AdminPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
+  const orderAccess = useAdminOrderAccess();
   const routeSearch = useSearch({ from: "/admin" });
   const section: OperationSection = routeSearch.section || "orders";
   const [orderSearchInput, setOrderSearchInput] = useState(routeSearch.q || "");
@@ -78,9 +88,10 @@ export function AdminPage() {
         enabled: isAdmin && section === "locations",
       },
       {
-        queryKey: ["admin-orders", orderSearch, orderOffset, cancellationPending, orderCategory, orderPayment],
-        queryFn: () => apiFetch<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}&order_category=${orderCategory}${orderPayment ? `&payment_status=${orderPayment}` : ""}`),
-        enabled: isAdmin && section === "orders",
+        queryKey: ["admin-orders", user?.id, orderSearch, orderOffset, cancellationPending, orderCategory, orderPayment],
+        queryFn: ({ signal }) => orderAccess.request<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}&order_category=${orderCategory}${orderPayment ? `&payment_status=${orderPayment}` : ""}`, { signal }),
+        enabled: isAdmin && !orderAccess.denied && section === "orders",
+        retry: (failureCount) => !orderAccess.isDenied() && failureCount < 2,
       },
     ],
   });
@@ -89,7 +100,7 @@ export function AdminPage() {
   }, [orderOffset, orderQuery.data]);
   const updateFulfillment = useMutation({
     mutationFn: ({ orderId, status }: { orderId: string; status: string }) =>
-      apiFetch<Order>(`/v1/orders/${orderId}/admin/fulfillment`, {
+      orderAccess.request<Order>(`/v1/orders/${orderId}/admin/fulfillment`, {
         method: "PATCH",
         body: JSON.stringify({ status }),
       }),
@@ -97,12 +108,12 @@ export function AdminPage() {
   });
   const createLogistics = useMutation({
     mutationFn: (orderId: string) =>
-      apiFetch(`/v1/admin/orders/${orderId}/logistics/create`, { method: "POST" }),
+      orderAccess.request(`/v1/admin/orders/${orderId}/logistics/create`, { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
   const advanceShipment = useMutation({
     mutationFn: ({ orderId, status }: { orderId: string; status: string }) =>
-      apiFetch(`/v1/admin/orders/${orderId}/logistics/sandbox-status`, {
+      orderAccess.request(`/v1/admin/orders/${orderId}/logistics/sandbox-status`, {
         method: "POST",
         body: JSON.stringify({ status, reason: "後台模擬物流狀態更新" }),
       }),
@@ -120,7 +131,10 @@ export function AdminPage() {
     );
   }
 
-  const orderContent = <section className="admin-orders-panel">
+  const orderContent = orderAccess.denied
+    ? <DataState kind="error" title="管理權限待重新驗證" detail="請重新整理頁面並確認管理者登入狀態。" />
+    : <section className="admin-orders-panel">
+    <AdminWalkInSale key={user.id} />
     <OrderCategoryFilter value={orderCategory} onChange={(value) => { setOrderCategory(value); setOrderOffset(0); }} />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
@@ -132,20 +146,24 @@ export function AdminPage() {
       <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderPayment(""); setCancellationPending(false); setOrderOffset(0); }}>清除查詢</button>
     </form>
     <div className="operations-list">
-      {orderQuery.data?.items.map((order) => (
+      {!orderQuery.isError && orderQuery.data?.items.map((order) => (
         <article key={order.id}>
           <div className="operation-title">
             <span>{orderCategoryLabels[order.sales_channel === "meal_preorder" ? "meal" : "general"]} · {formatDate(order.created_at)}</span>
             <strong>{order.order_number}</strong>
             <small>{formatMoney(order.amount_total)}</small>
           </div>
+          <dl className="admin-order-contact" aria-label="訂購者資訊">
+            <div><dt>訂購者</dt><dd>{order.customer_name || "未提供"}</dd></div>
+            <div><dt>聯絡電話</dt><dd>{order.contact_phone_status === "available" && order.contact_phone ? <a href={`tel:${order.contact_phone}`}>{order.contact_phone}</a> : order.contact_phone_status === "unavailable" ? "暫時無法讀取" : "未提供"}</dd></div>
+          </dl>
           <div className="operation-state">
             <OrderStatusBadge kind="payment" status={order.payment_status} />
             <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} />
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />
             {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {order.shipment.status}</span>}
           </div>
-          <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} />
+          <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} invoiceTax={order.invoice_tax} invoiceStatus={order.invoice_status} />
           <AdminOrderAction
             order={order}
             busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending}
@@ -153,6 +171,7 @@ export function AdminPage() {
             onCreateLogistics={() => createLogistics.mutate(order.id)}
             onShipment={(status) => advanceShipment.mutate({ orderId: order.id, status })}
           />
+          <AdminInvoiceIssue key={order.id + order.invoice_status + (order.invoice_handling || "")} order={order} />
           <OrderQuantityAmendment order={order} disabled={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending} />
           <AdminOrderPrint order={order} />
           <AdminCancelOrder order={order} />
@@ -163,12 +182,12 @@ export function AdminPage() {
         </article>
       ))}
     </div>
-    {orderQuery.data && <nav className="admin-pagination" aria-label="訂單分頁">
+    {!orderQuery.isError && orderQuery.data && <nav className="admin-pagination" aria-label="訂單分頁">
       <button className="button button-quiet" type="button" disabled={orderOffset === 0 || orderQuery.isFetching} onClick={() => setOrderOffset(Math.max(0, orderOffset - 12))}>上一頁</button>
       <span>共 {orderQuery.data.total} 筆 · 第 {Math.floor(orderOffset / 12) + 1} 頁</span>
       <button className="button button-quiet" type="button" disabled={orderOffset + 12 >= orderQuery.data.total || orderQuery.isFetching} onClick={() => setOrderOffset(orderOffset + 12)}>下一頁</button>
     </nav>}
-    {orderQuery.data?.total === 0 && <p>沒有符合條件的訂單。</p>}
+    {!orderQuery.isError && orderQuery.data?.total === 0 && <p>沒有符合條件的訂單。</p>}
     {(updateFulfillment.isError || createLogistics.isError || advanceShipment.isError) && (
       <p className="form-error">{(updateFulfillment.error || createLogistics.error || advanceShipment.error)?.message}</p>
     )}

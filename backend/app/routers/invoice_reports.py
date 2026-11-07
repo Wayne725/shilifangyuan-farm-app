@@ -1,18 +1,80 @@
 from datetime import date, datetime, time, timedelta
 from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, or_
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import and_, case, func, select, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_admin
 from ..csv_export import csv_response
 from ..database import get_session
+from ..invoice_tax_summary import invoice_tax_summary
 from ..domain import aware
 from ..meal_booking import TAIPEI
 from ..models import AdminAudit, Order, Invoice, InvoiceStatus, User
 from ..order_categories import OrderCategory, order_category_condition
 
 invoice_reports_router = APIRouter(prefix='/v1/admin', tags=['invoice-reports'])
+
+
+@invoice_reports_router.get('/manual-invoice-records')
+async def read_manual_invoice_records(
+    response: Response,
+    limit: int = Query(default=10, ge=1, le=30),
+    offset: int = Query(default=0, ge=0),
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    response.headers['Cache-Control'] = 'no-store'
+    arranged_handling = AdminAudit.data['handling'].as_string()
+    collected_handling = AdminAudit.data['invoice_handling'].as_string()
+    manual_record = and_(
+        AdminAudit.aggregate_type == 'order',
+        or_(
+            and_(AdminAudit.action == 'invoice.arranged', arranged_handling.in_(['on_payment', 'pickup_day'])),
+            and_(AdminAudit.action == 'walk_in_sale.collected', collected_handling.in_(['on_payment', 'pickup_day'])),
+        ),
+    )
+    total = await session.scalar(
+        select(func.count(AdminAudit.id)).select_from(AdminAudit)
+        .join(Order, Order.id == AdminAudit.aggregate_id).where(manual_record)
+    )
+    query = (
+        select(
+            AdminAudit.id,
+            Order.id.label('order_id'),
+            Order.order_number,
+            AdminAudit.created_at.label('recorded_at'),
+            User.display_name.label('operator_name'),
+            AdminAudit.action,
+            case((AdminAudit.action == 'invoice.arranged', arranged_handling), else_=collected_handling).label('handling'),
+            case(
+                (AdminAudit.action == 'walk_in_sale.collected', func.coalesce(AdminAudit.data['amount'].as_integer(), Order.amount_total)),
+                else_=Order.amount_total,
+            ).label('amount'),
+            AdminAudit.reason,
+            Order.invoice_status,
+            Invoice.invoice_number,
+            Invoice.invoice_date,
+            Order.invoice_issue_after.label('issue_after'),
+            AdminAudit.data['issue_after'].as_string().label('requested_issue_after'),
+        )
+        .select_from(AdminAudit)
+        .join(Order, Order.id == AdminAudit.aggregate_id)
+        .outerjoin(User, User.id == AdminAudit.actor_id)
+        .outerjoin(Invoice, Invoice.order_id == Order.id)
+        .where(manual_record)
+        .order_by(AdminAudit.created_at.desc(), AdminAudit.id.desc())
+        .limit(limit).offset(offset)
+    )
+    rows = (await session.execute(query)).mappings().all()
+    items = []
+    for row in rows:
+        item = dict(row)
+        for field in ('recorded_at', 'invoice_date', 'issue_after'):
+            item[field] = aware(item[field]) if item[field] else None
+        items.append(item)
+    return {'items': items, 'total': total}
+
 
 async def invoice_rows(session, q, status, start, end, order_category='all'):
     if start and end and start > end: raise HTTPException(422, '結束日期不可早於開始日期')
@@ -22,7 +84,7 @@ async def invoice_rows(session, q, status, start, end, order_category='all'):
     if start: query = query.where(Order.created_at >= datetime.combine(start, time.min, TAIPEI))
     if end: query = query.where(Order.created_at < datetime.combine(end + timedelta(days=1), time.min, TAIPEI))
     orders = list(await session.scalars(query.order_by(Order.created_at.desc(), Order.id)))
-    return [{'order_id': row.id, 'order_number': row.order_number, 'sales_channel': row.sales_channel.value, 'email': row.contact_email, 'created_at': row.created_at, 'invoice_number': row.invoice.invoice_number if row.invoice else None, 'invoice_date': row.invoice.invoice_date if row.invoice else None, 'status': row.invoice_status.value, 'payment_status': row.payment_status.value, 'amount': row.invoice.total_amount if row.invoice else row.amount_total, 'tax_amount': row.invoice.tax_amount if row.invoice else row.tax_amount, 'provider': row.invoice.provider if row.invoice else ''} for row in orders]
+    return [{'order_id': row.id, 'order_number': row.order_number, 'sales_channel': row.sales_channel.value, 'email': row.contact_email, 'created_at': row.created_at, 'invoice_number': row.invoice.invoice_number if row.invoice else None, 'invoice_date': row.invoice.invoice_date if row.invoice else None, 'status': row.invoice_status.value, 'payment_status': row.payment_status.value, 'amount': row.invoice.total_amount if row.invoice else row.amount_total, 'tax_amount': row.invoice.tax_amount if row.invoice else row.tax_amount, 'estimated_tax_amount': row.tax_amount, 'invoice_tax': invoice_tax_summary(row.invoice), 'provider': row.invoice.provider if row.invoice else ''} for row in orders]
 
 @invoice_reports_router.get('/invoice-register')
 async def read_invoice_register(q: str = Query(default='', max_length=120), status: InvoiceStatus | None = None, starts_on: date | None = None, ends_on: date | None = None, order_category: OrderCategory = 'all', limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0), _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):

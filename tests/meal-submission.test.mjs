@@ -37,3 +37,14 @@ test("餐點、取餐安排、發票及使用者改變仍產生不同送單識�
   ]) assert.notEqual(mealSubmissionFingerprint("buyer", { ...input, ...change }), original);
   assert.notEqual(mealSubmissionFingerprint("other-buyer", input), original);
 });
+
+test("新增開票時機沿用舊送單識別，真正改開票日期才更換識別", () => {
+  for (const [paymentMethod, invoiceHandling] of [["online", "on_payment"], ["cash_on_pickup", "external"]]) {
+    const legacy = { ...input, paymentMethod };
+    const legacyStored = JSON.stringify({ userId: "buyer", ...legacy });
+    assert.equal(mealSubmissionFingerprint("buyer", { ...legacy, invoiceHandling }), legacyStored);
+    assert.equal(mealSubmissionFingerprint("buyer", { ...legacy, invoiceHandling: undefined }), legacyStored);
+    assert.notEqual(mealSubmissionFingerprint("buyer", { ...legacy, invoiceHandling: "pickup_day" }), legacyStored);
+    if (paymentMethod === "cash_on_pickup") assert.notEqual(mealSubmissionFingerprint("buyer", { ...legacy, invoiceHandling: "on_payment" }), legacyStored);
+  }
+});

@@ -12,11 +12,12 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Link, Outlet } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
 import { useSocialAccess } from "../lib/social-access";
+import { browserStorageStatus, localStore } from "../lib/browser-storage";
 import "../styles/site-navigation.css";
 
 const navItems = [
@@ -29,7 +30,7 @@ const navItems = [
 
 export function AppShell() {
   const { itemCount } = useCommerce();
-  const { user, isAuthReady, sessionError, retrySession, openLogin, logout } = useAuth();
+  const { user, isAuthReady, sessionError, sessionScope, retrySession, openLogin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const readingMenu = useRef<HTMLDetailsElement>(null);
@@ -49,11 +50,12 @@ export function AppShell() {
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [mobileOpen]);
   const [largeText, setLargeText] = useState(() => {
-    try { return localStorage.getItem("slf_text_size") === "large"; } catch { return false; }
+    return localStore.getItem("slf_text_size") === "large";
   });
+  const storageUnavailable = useSyncExternalStore(browserStorageStatus.subscribe, browserStorageStatus.getSnapshot, () => false);
   useEffect(() => {
     document.documentElement.dataset.textSize = largeText ? "large" : "standard";
-    try { localStorage.setItem("slf_text_size", largeText ? "large" : "standard"); } catch { /* The current size still applies when storage is unavailable. */ }
+    localStore.setItem("slf_text_size", largeText ? "large" : "standard");
   }, [largeText]);
   const changeTextSize = (large: boolean) => {
     setLargeText(large);
@@ -65,6 +67,7 @@ export function AppShell() {
 
   return (
     <div className="site-frame">
+      {storageUnavailable && <p className="return-banner" role="status">瀏覽器儲存受限，部分資料只在本頁暫存，重整後可能無法保留。</p>}
       <a className="skip-link" href="#main-content">跳到主要內容</a>
       <header className={user?.user_role === "admin" ? "site-header has-admin-nav" : "site-header"}>
         <Link className="brand" to="/" aria-label="十里方圓首頁">
@@ -199,7 +202,7 @@ export function AppShell() {
             <p>目前尚未判定為登出，請重試連線，不需要立即重新輸入帳號密碼。</p>
             <button className="button button-primary" type="button" onClick={retrySession}>重試連線</button>
           </section>
-        ) : <Outlet />}
+        ) : <Outlet key={sessionScope} />}
       </main>
 
       <footer className="site-footer">

@@ -14,8 +14,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..auth import get_optional_user
+from ..auth import get_optional_user, optional_oauth2_scheme
 from ..config import Settings, get_settings
+from ..credential_rate_limit import consume_credential_quota
 from ..database import get_session
 from ..identity_numbers import next_identity_number
 from ..integrations.common import IntegrationConfigurationError, IntegrationError
@@ -24,7 +25,7 @@ from ..models import ExternalIdentity, LineOAuthState, User, Membership, Members
 from ..member_claims import MemberClaimError, verified_roster_entry, verified_roster_contact, reserve_roster_claim
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..schemas import ExistingMemberIdentity
-from ..rate_limit import LOGIN_RULE, client_key, enforce
+from ..rate_limit import LOGIN_RULE, client_key
 from .auth import _new_token_pair_and_session, _validate_cookie_origin, token_response, _issue_email_verification
 
 line_auth_router = APIRouter(prefix="/v1/auth/line", tags=["auth"])
@@ -145,9 +146,10 @@ async def line_status(response: Response, settings: Settings = Depends(get_setti
 @line_auth_router.post("/start")
 async def line_start(body: LineStart, request: Request, response: Response,
     session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
-    user: User | None = Depends(get_optional_user)) -> dict:
+    token: str | None = Depends(optional_oauth2_scheme)) -> dict:
     _validate_cookie_origin(request, settings)
-    enforce(client_key(request, "line-start"), LOGIN_RULE)
+    await consume_credential_quota(session, client_key(request, "line-start"), LOGIN_RULE, settings)
+    user = await get_optional_user(token=token, session=session, settings=settings)
     client = _client(settings)
     if body.mode == "link" and user is None:
         raise HTTPException(status_code=401, detail="請先登入原帳號再連結LINE")

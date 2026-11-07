@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from ..config import Settings
 from ..domain import order_shipping_tax_type
+from ..invoice_timing import invoice_handling, invoice_not_due
 from ..models import (
     Invoice,
     InvoiceCarrierType,
@@ -134,7 +135,7 @@ def invoice_request_from_order(
         buyer_name=order.invoice_buyer_name or "",
         carrier_type=carrier_type,
         carrier_number=order.invoice_carrier_value or "",
-        customer_id=order.user_id.replace("-", "")[:20],
+        customer_id=(order.user_id or order.id).replace("-", "")[:20],
         remark="十里方圓訂單 {}".format(order.order_number),
     )
 
@@ -145,10 +146,10 @@ def enqueue_invoice_issue(
     *,
     trigger: str,
 ) -> bool:
-    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+    if invoice_handling(order) == "external":
         order.invoice_status = InvoiceStatus.EXTERNAL
         return False
-    if order.payment_status != PaymentStatus.PAID:
+    if order.payment_status != PaymentStatus.PAID or order.cancelled_at is not None:
         return False
     if order.invoice_status in {
         InvoiceStatus.PENDING,
@@ -164,6 +165,7 @@ def enqueue_invoice_issue(
             aggregate_type="order",
             aggregate_id=order.id,
             payload={"order_id": order.id, "trigger": trigger},
+            available_at=order.invoice_issue_after if invoice_handling(order) == "pickup_day" else datetime.now(timezone.utc),
         )
     )
     return True
@@ -174,7 +176,7 @@ def enqueue_invoice_adjustment_after_refund(
     order: Order,
     refund: Refund,
 ) -> bool:
-    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+    if invoice_handling(order) == "external":
         return False
     invoice = order.__dict__.get("invoice")
     if invoice is None or invoice.status not in {
@@ -475,6 +477,8 @@ async def reconcile_order_invoice(
     )
     if order is None:
         raise InvoiceApplicationError("找不到發票訂單")
+    if order.invoice is None and (invoice_handling(order) == "external" or invoice_not_due(order)):
+        raise InvoiceApplicationError("此訂單尚未安排可查詢的系統發票")
     if order.invoice is None and order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以查詢發票")
     _ensure_provider_binding(order, adapter)
@@ -516,10 +520,14 @@ async def issue_paid_order_invoice(
     )
     if order is None:
         raise InvoiceApplicationError("找不到發票訂單")
-    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+    if invoice_handling(order) == "external":
         raise InvoiceApplicationError("現場付款發票由合作社 POS 處理")
     if order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以開立發票")
+    if order.cancelled_at is not None:
+        raise InvoiceApplicationError("已取消訂單不可開立發票")
+    if invoice_not_due(order):
+        raise InvoiceApplicationError("尚未到訂單安排的取餐開票日")
 
     _ensure_provider_binding(order, adapter)
     request = invoice_request_from_order(
@@ -563,10 +571,14 @@ async def issue_paid_order_invoice(
     )
     if order is None or order.invoice is None:
         raise InvoiceApplicationError("找不到發票開立意圖")
-    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+    if invoice_handling(order) == "external":
         raise InvoiceApplicationError("現場付款發票由合作社 POS 處理")
     if order.payment_status != PaymentStatus.PAID:
         raise InvoiceApplicationError("只有已付款訂單可以開立發票")
+    if order.cancelled_at is not None:
+        raise InvoiceApplicationError("已取消訂單不可開立發票")
+    if invoice_not_due(order):
+        raise InvoiceApplicationError("尚未到訂單安排的取餐開票日")
     _ensure_provider_binding(order, adapter)
     invoice, _ = await _ensure_invoice_record(
         session,

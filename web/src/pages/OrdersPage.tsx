@@ -18,8 +18,10 @@ import { useEffect, useRef, useState } from "react";
 
 import * as Tabs from "@radix-ui/react-tabs";
 import { MealOrderHistory } from "../components/MealOrderHistory";
+import { OrderHandoffBoundary } from "../components/OrderHandoffBoundary";
 import { OrderSearch } from "../components/OrderSearch";
-import { filterOrders } from "../lib/order-search";
+import { useOrderHistory } from "../lib/use-order-history";
+import { attemptMatchesReturnedOrder, holdReturnedOrderActions, resolveOrderReturn } from "../lib/order-return-result";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { OrderCancellationContact } from "../components/OrderCancellationContact";
@@ -53,6 +55,10 @@ const shipmentLabels: Record<string, string> = {
 };
 
 export function OrdersPage() {
+  return <OrderHandoffBoundary><OrderWorkspace /></OrderHandoffBoundary>;
+}
+
+function OrderWorkspace() {
   const { user, isAuthReady, openLogin } = useAuth();
   const search = useSearch({ from: "/orders" });
   const navigate = useNavigate();
@@ -62,17 +68,12 @@ export function OrdersPage() {
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState("");
   const [selectedId, setSelectedId] = useState(search.order_id || "");
-  const orders = useQuery({
-    queryKey: ["orders", user?.id],
-    queryFn: () => apiFetch<Order[]>("/v1/orders"),
-    enabled: Boolean(user),
-    refetchInterval: 5000,
-  });
+  const orders = useOrderHistory<Order>("general", user?.id, query, payment, selectedId, search.order_id, orderType === "regular");
   const paymentConfirmation = useQuery({
     queryKey: ["payment-attempt-refresh", search.attempt_id],
-    queryFn: () => refreshPaymentAttempt(search.attempt_id || ""),
+    queryFn: ({ signal }) => refreshPaymentAttempt(search.attempt_id || "", signal),
     enabled: Boolean(
-      user && search.payment === "confirming" && search.attempt_id,
+      user && search.order_id && search.payment === "confirming" && search.attempt_id,
     ),
     refetchInterval: (query) => {
       const status = (query.state.data as PaymentAttemptStatus | undefined)
@@ -102,29 +103,19 @@ export function OrdersPage() {
   }, [search.order_id]);
 
   useEffect(() => {
-    if (!selectedId && orders.data?.[0]) setSelectedId(orders.data[0].id);
-  }, [orders.data, selectedId]);
+    if (!selectedId && orders.items[0]) setSelectedId(orders.items[0].id);
+  }, [orders.items, selectedId]);
 
-  useEffect(() => {
-    if (
-      refreshedPaymentStatus
-      && !["pending", "confirming"].includes(refreshedPaymentStatus)
-    ) {
-      queryClient.invalidateQueries({ queryKey: ["orders"] });
-    }
-  }, [queryClient, refreshedPaymentStatus]);
-
-  const generalOrders = (orders.data || []).filter((order) => order.sales_channel !== "meal_preorder");
-  const visibleOrders = filterOrders(generalOrders, query, payment);
+  const visibleOrders = orders.items.filter((order) => order.sales_channel !== "meal_preorder");
   const selected = visibleOrders.find((order) => order.id === selectedId) || visibleOrders[0];
   const now = useDeadlineClock(selected?.group_campaign_deadline);
   const groupPaymentClosed = Boolean(selected?.group_campaign_deadline && campaignTimestamp(selected.group_campaign_deadline) <= now);
-  const returnedOrder = orders.data?.find((order) => order.id === search.order_id);
+  const returnedOrder = orders.returnedOrder;
   const returnedMeal = useQuery({
     queryKey: ["returned-meal-order", user?.id, search.order_id],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
-        return await apiFetch<MealOrder>(`/v1/meal-orders/${search.order_id}`);
+        return await apiFetch<MealOrder>(`/v1/meal-orders/${search.order_id}`, { signal });
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) return null;
         throw error;
@@ -133,22 +124,22 @@ export function OrdersPage() {
     enabled: Boolean(user && search.order_id && returnedOrder?.sales_channel === "meal_preorder"),
     retry: false,
   });
-  const storedPaymentStatus =
-    returnedOrder
-      ? returnedOrder.payment_status
-      : undefined;
-  const returnResult =
-    refreshedPaymentStatus
-      && !["pending", "confirming"].includes(refreshedPaymentStatus)
-      ? refreshedPaymentStatus
-      : search.payment === "confirming"
-        && storedPaymentStatus
-        && storedPaymentStatus !== "pending"
-        ? storedPaymentStatus
-        : search.result || search.payment || search.logistics;
+  const returnSearch = { orderId: search.order_id, attemptId: search.attempt_id,
+    result: search.result, payment: search.payment, logistics: search.logistics };
+  const returnVerification = {
+    orderReading: orders.returnedReading, orderError: Boolean(orders.returnedError),
+    attemptReading: paymentConfirmation.isFetching, attemptError: paymentConfirmation.isError, attempt: paymentConfirmation.data,
+  };
+  const returnNotice = resolveOrderReturn(returnSearch, returnedOrder, returnVerification);
+  const matchingAttempt = attemptMatchesReturnedOrder(returnedOrder, paymentConfirmation.data, search.order_id, search.attempt_id);
+  useEffect(() => {
+    if (matchingAttempt && refreshedPaymentStatus && !["pending", "confirming"].includes(refreshedPaymentStatus)) {
+      void queryClient.invalidateQueries({ queryKey: ["orders"] });
+    }
+  }, [matchingAttempt, queryClient, refreshedPaymentStatus]);
   const selectedPaymentIsConfirming = Boolean(
     returnedOrder
-      && returnResult === "confirming",
+      && holdReturnedOrderActions(returnSearch, returnedOrder, returnVerification),
   );
   const actionError =
     openPayment.error || reopenLogistics.error;
@@ -189,12 +180,12 @@ export function OrdersPage() {
         </div>
       </header>
 
-      {returnResult && (
-        <div className={`return-banner ${returnResult}`}>
-          {returnResult === "resume" ? <ArrowClockwise size={22} /> : <CheckCircle size={22} />}
+      {returnNotice && (
+        <div className={`return-banner ${returnNotice.kind === "unconfirmed" ? "failed" : returnNotice.kind}`} role="status">
+          {returnNotice.success ? <CheckCircle size={22} /> : <ArrowClockwise size={22} />}
           <div>
-            <strong>{returnTitle(returnResult)}</strong>
-            <span>{search.message || returnMessage(returnResult)}</span>
+            <strong>{returnNotice.title}</strong>
+            <span>{returnNotice.message}</span>
           </div>
         </div>
       )}
@@ -203,15 +194,18 @@ export function OrdersPage() {
         <Tabs.List className="tab-list" aria-label="訂單分類"><Tabs.Trigger value="meal">餐點訂單</Tabs.Trigger><Tabs.Trigger value="regular">一般訂單</Tabs.Trigger></Tabs.List>
         <Tabs.Content value="meal"><MealOrderHistory embedded /></Tabs.Content>
         <Tabs.Content value="regular">
-      <OrderSearch query={query} payment={payment} onQuery={setQuery} onPayment={setPayment} count={visibleOrders.length} />
-      {orders.data && generalOrders.length > 0 && visibleOrders.length === 0 && <DataState title="沒有符合條件的一般訂單" detail="請調整關鍵字或付款狀態。" />}
+      <OrderSearch query={query} payment={payment} onQuery={setQuery} onPayment={setPayment} count={visibleOrders.length} searching={orders.searching} refreshing={orders.isFetching} onRefresh={orders.refresh} />
       {orders.isPending && <LoadingLines count={4} />}
       {returnedMeal.isError && <DataState kind="error" title="便當取餐頁暫時無法開啟" detail={returnedMeal.error.message} />}
-      {orders.isError && (
-        <DataState kind="error" title="訂單暫時無法讀取" detail={orders.error.message} />
+      {orders.targetPending && <p role="status">正在讀取返回的原訂單…</p>}
+      {orders.targetError && <DataState kind="error" title="原訂單暫時無法讀取" detail={orders.targetError.message} onAction={orders.refresh} />}
+      {orders.selectedError && <p className="form-error" role="alert">訂單更新失敗：{orders.selectedError.message}</p>}
+      {orders.isError && visibleOrders.length === 0 && (
+        <DataState kind="error" title="訂單暫時無法讀取" detail={orders.error.message} onAction={orders.refresh} />
       )}
-      {orders.isSuccess && generalOrders.length === 0 && (
-        <DataState title="目前還沒有一般訂單" detail="從生活消費選擇商品，第一筆交易會出現在這裡。" />
+      {orders.isSuccess && visibleOrders.length === 0 && (
+        query || payment ? <DataState title="沒有符合條件的一般訂單" detail="請調整關鍵字或付款狀態。" />
+          : <DataState title="目前還沒有一般訂單" detail="從生活消費選擇商品，第一筆交易會出現在這裡。" />
       )}
 
       {visibleOrders.length > 0 && (
@@ -262,7 +256,7 @@ export function OrdersPage() {
                 <p><strong>餐具：</strong>{selected.fulfillment.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
               </div>}
 
-              <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} shippingFee={selected.shipment?.shipping_fee} taxAmount={selected.tax_amount} />
+              <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} shippingFee={selected.shipment?.shipping_fee} taxAmount={selected.tax_amount} invoiceTax={selected.invoice_tax} invoiceStatus={selected.invoice_status} />
 
               {selected.invoice_status !== "not_eligible" && (
                 <div className="invoice-summary-card">
@@ -318,13 +312,15 @@ export function OrdersPage() {
                 {selected.cancellation_request.review_reason && <p>審核原因：{selected.cancellation_request.review_reason}</p>}
               </section>}
               {actionError && <p className="form-error">{actionError.message}</p>}
+              {selected.group_payment_uncertain ? <p className="form-error" role="status">付款結果仍待核對，請勿再次下單或付款。</p> : selected.group_contract_changed && <p className="form-error" role="status">共同購買核心條件已更新，這筆訂單無法繼續付款，請重新確認。</p>}
               <div className="order-actions">
+                {selected.group_contract_changed && !selected.group_payment_uncertain && selected.group_campaign_id && <Link className="button button-system" to="/groups/$campaignId" params={{campaignId:selected.group_campaign_id}}>回共同購買重新確認</Link>}
                 {selectedPaymentIsConfirming && (
                   <small className="no-action">
                     正在向金流確認，請勿重複付款。
                   </small>
                 )}
-                {selected.shipment?.status === "selection_pending" && (
+                {!selected.group_contract_changed && !selected.group_payment_uncertain && selected.shipment?.status === "selection_pending" && (
                   <button
                     className="button button-system"
                     type="button"
@@ -335,7 +331,7 @@ export function OrdersPage() {
                     {reopenLogistics.isPending ? "準備物流頁…" : "繼續選擇物流"}
                   </button>
                 )}
-                {!groupPaymentClosed && !selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
+                {!selected.group_contract_changed && !selected.group_payment_uncertain && !groupPaymentClosed && !selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
                   <button
                     className="button button-primary"
                     type="button"
@@ -353,6 +349,9 @@ export function OrdersPage() {
           )}
         </div>
       )}
+
+      {orders.isFetchNextPageError && <p className="form-error" role="alert">更多訂單暫時無法讀取：{orders.error.message}</p>}
+      {orders.hasNextPage && <button className="button button-quiet" type="button" disabled={orders.isFetching} onClick={() => void orders.fetchNextPage()}>{orders.isFetchingNextPage ? "載入更多中…" : orders.isFetchNextPageError ? "重試載入更多" : "載入更多訂單"}</button>}
 
       <div className="orders-footnote">
         <Clock size={18} weight="light" />
@@ -398,28 +397,4 @@ function invoiceDeliveryLabel(order: Order): string {
   }
   if (order.invoice_carrier_type === "mobile_barcode") return "手機條碼載具";
   return "Email 通知";
-}
-
-function returnTitle(result: string): string {
-  return {
-    resume: "訂單已保存，請從這裡繼續",
-    paid: "線上付款已完成",
-    succeeded: "線上付款已完成",
-    confirming: "付款結果確認中",
-    expired: "付款時間已結束",
-    selected: "物流資料已確認",
-    failed: "這次操作尚未完成",
-  }[result] || "訂單狀態已更新";
-}
-
-function returnMessage(result: string): string {
-  return {
-    resume: "付款或物流服務暫時未開啟，訂單不會重複建立。",
-    paid: "付款已由金流查詢確認，發票將接續處理。",
-    succeeded: "付款已由金流查詢確認，發票將接續處理。",
-    confirming: "系統正在向金流查詢，請勿重複付款；離開頁面後仍會在背景補查。",
-    expired: "尚未確認付款；若已扣款，系統仍會繼續補查。",
-    selected: "現在可以建立付款頁，完成這筆交易。",
-    failed: "請查看下方狀態並重新操作。",
-  }[result] || "訂單狀態已更新。";
 }

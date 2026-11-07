@@ -4,7 +4,8 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const { chromium, webkit } = createRequire(import.meta.url)('playwright');
+const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4185');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || !['http:', 'https:'].includes(target.protocol)
   || target.pathname !== '/' || target.username || target.password || target.search || target.hash) {
@@ -33,7 +34,7 @@ function report(query) {
 }
 
 async function fixture(t, { width = 390, role = 'admin', mode = 'live' } = {}) {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
   const state = { summaries: [], previews: [], writes: [], resolutions: [], history: [], lookups: [], batches: new Map(), unknown: [], external: [], errors: [],
@@ -239,14 +240,16 @@ for (const status of [401, 403]) {
   test(`已建立且回應遺失後重試 ${status}，保留原識別碼避免重複出單`, { timeout: 25000 }, async (t) => {
     const { page, state } = await fixture(t); state.lostResponse = 'after';
     await page.goto(`${base}/admin?section=summary`); await waitForReport(page);
-    const dialog = await openPreview(page);
+    let dialog = await openPreview(page);
     await dialog.getByRole('button', { name: '確認列印 2 張', exact: true }).click();
     await dialog.getByRole('alert').waitFor();
     const originalAttempt = structuredClone(state.writes[0].body);
     assert.equal(state.batches.size, 1);
     state.rejectPost = status;
     await dialog.getByRole('button', { name: '重試同一筆送印', exact: true }).click();
-    await dialog.getByRole('alert').getByText('隔離測試：登入或權限已變更', { exact: true }).waitFor();
+    await page.getByRole('button', { name: status === 401 ? '管理者登入' : '重新驗證管理權限', exact: true }).waitFor();
+    assert.equal(await dialog.count(), 0);
+    assert.equal(await page.locator('.order-summary-print').count(), 0);
     assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem('order-summary-print:isolated-admin'))), originalAttempt);
     assert.ok(state.writes.length >= 2);
     for (const request of state.writes) assert.deepEqual(request.body, originalAttempt);
@@ -255,7 +258,9 @@ for (const status of [401, 403]) {
     assert.equal(await dialog.getByRole('button', { name: '確認列印 2 張', exact: true }).count(), 0);
     state.rejectPost = 0;
     const postCount = state.writes.length;
-    await dialog.getByRole('button', { name: '查詢送印結果', exact: true }).click();
+    await page.reload();
+    await page.getByRole('button', { name: '查看彙總送印結果', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: '彙總單列印', exact: true });
     await dialog.getByText('彙總單列印紀錄 · 20 筆訂單 · 2 張', { exact: true }).waitFor();
     assert.equal(state.writes.length, postCount); assert.equal(state.batches.size, 1);
     assert.deepEqual(state.lookups, [originalAttempt.request_id]);

@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from .contact_phone import normalize_contact_phone
+
 from .models import (
     ActivityRegistrationStatus,
     ActivityStatus,
@@ -699,6 +701,7 @@ class OrderQuoteLine(ApiModel):
 
 
 class OrderQuoteRead(ApiModel):
+    confirmation_fingerprint: str
     membership_type: MembershipType
     member_tax_exempt: bool = False
     tax_amount: int = 0
@@ -707,6 +710,9 @@ class OrderQuoteRead(ApiModel):
 
 
 class OrderCreate(InvoicePreferenceInput):
+    client_request_id: Optional[UUID] = None
+    expected_total: Optional[int] = Field(default=None, ge=0)
+    expected_quote_fingerprint: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     payment_method: PaymentMethod = PaymentMethod.ONLINE
     items: List[OrderLineInput] = Field(min_length=1, max_length=100)
     contact_email: EmailStr
@@ -715,6 +721,9 @@ class OrderCreate(InvoicePreferenceInput):
 
 
 class GroupJoinRequest(InvoicePreferenceInput):
+    client_request_id: Optional[UUID] = None
+    expected_total: Optional[int] = Field(default=None, ge=0)
+    expected_quote_fingerprint: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     quantity: int = Field(ge=1, le=999)
     contact_email: EmailStr
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
@@ -758,6 +767,7 @@ class GroupJoinQuoteRequest(BaseModel):
 
 
 class GroupJoinQuoteRead(ApiModel):
+    confirmation_fingerprint: str
     membership_type: MembershipType
     member_tax_exempt: bool = False
     tax_type: TaxType
@@ -781,6 +791,13 @@ class OrderItemRead(ApiModel):
     unit_price: int
     subtotal: int
     tax_type: TaxType
+
+
+class InvoiceTaxRead(ApiModel):
+    status: Literal["external", "not_eligible", "pending", "issued", "failed", "void_pending", "voided", "unknown"]
+    tax_type: Literal["taxable", "tax_exempt", "mixed", "unknown"]
+    amount_semantics: Literal["separately_stated", "included_not_separately_stated", "unknown"]
+    tax_amount: Optional[int] = Field(default=None, ge=0)
 
 
 class InvoiceRead(ApiModel):
@@ -850,6 +867,10 @@ class OrderAmendmentRead(ApiModel):
 
 
 class OrderRead(ApiModel):
+    invoice_tax: Optional[InvoiceTaxRead] = None
+    customer_kind: Literal["account", "walk_in"] = "account"
+    invoice_handling: str = "on_payment"
+    invoice_issue_after: Optional[datetime] = None
     revision: int = 1
     amendment_blocked_reason: Optional[str] = None
     amendments: List[OrderAmendmentRead] = Field(default_factory=list)
@@ -861,12 +882,14 @@ class OrderRead(ApiModel):
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
     group_campaign_id: Optional[str]
     group_campaign_deadline: Optional[datetime] = None
+    group_contract_changed: bool = False
+    group_payment_uncertain: bool = False
     meal_event_id: Optional[str] = None
     membership_type_snapshot: MembershipType
     member_tax_exempt_snapshot: bool = False
     amount_total: int
     tax_amount: int = 0
-    contact_email: EmailStr
+    contact_email: Optional[EmailStr]
     invoice_buyer_type: InvoiceBuyerType
     invoice_buyer_tax_id: Optional[str] = None
     invoice_buyer_name: Optional[str] = None
@@ -896,6 +919,7 @@ class RefundRequest(BaseModel):
 
 
 class CashConfirmationRequest(BaseModel):
+    invoice_handling: Optional[Literal["on_payment", "pickup_day", "external"]] = None
     collection_method: Literal["cash", "pos", "qr"] = "cash"
     reference: str = Field(default="", max_length=100)
     amount: int = Field(gt=0, strict=True)
@@ -993,6 +1017,7 @@ class MembershipDocumentRead(ApiModel):
     size_bytes: int
     checksum_sha256: Optional[str]
     confirmed_at: Optional[datetime]
+    is_demo_placeholder: bool = False
     expires_at: Optional[datetime] = None
     retention_expired: bool = False
     deleted_at: Optional[datetime] = None
@@ -1324,6 +1349,7 @@ class ProposalOptionInput(BaseModel):
 
 
 class MemberProposalCreate(BaseModel):
+    client_request_id: Optional[UUID] = None
     title: str = Field(min_length=1, max_length=160)
     body: str = Field(min_length=1, max_length=20000)
     proposal_type: MemberProposalType = MemberProposalType.RESOLUTION
@@ -1675,6 +1701,7 @@ class MealOrderLineInput(BaseModel):
 
 
 class MealOrderCreate(InvoicePreferenceInput):
+    invoice_handling: Optional[Literal["on_payment", "pickup_day", "external"]] = None
     client_request_id: Optional[UUID] = None
     kitchen_note: Optional[str] = Field(default=None, max_length=500)
     payment_method: PaymentMethod = PaymentMethod.ONLINE
@@ -1682,9 +1709,21 @@ class MealOrderCreate(InvoicePreferenceInput):
     expected_total: Optional[int] = Field(default=None, ge=1)
     items: List[MealOrderLineInput] = Field(min_length=1, max_length=20)
     contact_email: EmailStr
+    contact_phone: Optional[str] = Field(default=None, max_length=40)
     pickup_at: Optional[datetime] = None
     pickup_location_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
     needs_utensils: bool = False
+
+    @model_validator(mode="after")
+    def external_invoice_requires_onsite(self):
+        if self.invoice_handling == "external" and self.payment_method != PaymentMethod.CASH_ON_PICKUP:
+            raise ValueError("外部 POS 開票僅適用現場付款")
+        return self
+
+    @field_validator("contact_phone")
+    @classmethod
+    def validate_contact_phone(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_contact_phone(value) if value and value.strip() else None
 
     @field_validator("pickup_at")
     @classmethod
@@ -1781,6 +1820,9 @@ class MealCancellationRequestRead(ApiModel):
 
 
 class MealOrderRead(ApiModel):
+    invoice_tax: Optional[InvoiceTaxRead] = None
+    invoice_handling: str = "on_payment"
+    invoice_issue_after: Optional[datetime] = None
     revision: int = 1
     amendment_blocked_reason: Optional[str] = None
     amendments: List[OrderAmendmentRead] = Field(default_factory=list)
@@ -1959,17 +2001,7 @@ class LogisticsSelectionRequest(BaseModel):
     @field_validator("recipient_phone")
     @classmethod
     def validate_recipient_phone(cls, value: str) -> str:
-        phone = re.sub(r"\s", "", value)
-        valid = (
-            re.fullmatch(r"09\d{8}", phone)
-            if phone.startswith("09")
-            else re.fullmatch(r"0\d{1,2}-?\d{6,8}", phone)
-        )
-        if valid is None:
-            raise ValueError(
-                "手機需為 09 開頭的 10 碼數字；市話請輸入含區碼的完整號碼"
-            )
-        return phone
+        return normalize_contact_phone(value)
 
     @field_validator("shipping_address")
     @classmethod

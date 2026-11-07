@@ -197,6 +197,12 @@ class Settings(BaseSettings):
     payment_reservation_minutes: int = 15
     reconciliation_enabled: bool = False
     reconciliation_interval_seconds: float = Field(default=60.0, ge=30, le=3600)
+    reconciliation_retention_enabled: bool = True
+    reconciliation_retention_days: int = Field(default=30, ge=1, le=365)
+    reconciliation_retention_batch_size: int = Field(default=100, ge=1, le=100)
+    reconciliation_retention_max_batches: int = Field(default=5, ge=1, le=5)
+    reconciliation_retention_interval_seconds: int = Field(default=3600, ge=3600, le=86400)
+    reconciliation_retention_lease_seconds: int = Field(default=300, ge=30, le=1800)
     integration_timeout_seconds: float = 15.0
     default_vote_threshold: int = 10
     default_vote_days: int = 7

@@ -14,7 +14,7 @@ import app.jobs as jobs_module
 from app.config import get_settings
 from app.database import get_session
 from app.integrations.common import IntegrationResponseError
-from app.integrations.email_sender import EmailSendResult
+from app.integrations.email_sender import EmailDeliveryRejected, EmailDeliveryUnknown, EmailSendResult
 from app.integrations.pii_crypto import decrypt_auth_outbox_credential, encrypt_auth_outbox_credential, pii_cipher_from_settings
 from app.member_claims import roster_aad
 from app.member_lookup import MEMBER_LOOKUP_EVENT, MEMBER_LOOKUP_MESSAGE
@@ -93,6 +93,14 @@ async def process_lookup(session, settings):
     return await jobs_module._process_outbox(session, settings, datetime.now(timezone.utc) + timedelta(seconds=1), 10)
 
 
+def assert_redacted_delivery(event, state):
+    assert set(event.payload) == {"credential_redacted", "email_delivery"}
+    assert event.payload["credential_redacted"] is True
+    assert event.payload["email_delivery"]["state"] == state
+    assert event.payload["email_delivery"]["idempotency_key"] == f"outbox-{event.id}"
+    assert PHONE not in json.dumps(event.payload) and EMAIL not in json.dumps(event.payload)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario, expected", [
     ("unclaimed", "已找到相符的既有社員名冊"),
@@ -160,7 +168,7 @@ async def test_lookup_returns_same_public_result_and_emails_current_status_witho
     assert "https://coop.example.com/line-consent" in sent[0].text_content
     assert all(value not in sent[0].text_content for value in [PHONE, "LOOKUP-001", "不可公開的社員姓名"])
     assert event.status == OutboxStatus.COMPLETED
-    assert event.payload == {"credential_redacted": True}
+    assert_redacted_delivery(event, "accepted")
     assert await identity_snapshot(database_session) == before
     assert await process_lookup(database_session, settings) == (0, 0)
     assert len(sent) == 1
@@ -198,7 +206,7 @@ async def test_lookup_email_retry_preserves_snapshot_and_idempotency_after_membe
         async def send(self, message):
             attempts.append(message)
             if len(attempts) == 1:
-                raise IntegrationResponseError("provider temporarily unavailable")
+                raise EmailDeliveryRejected("provider explicitly rejected request; retry is safe")
             sent.append(message)
             return EmailSendResult(accepted=True, provider_message_id="retried", status_code=200)
 
@@ -208,7 +216,9 @@ async def test_lookup_email_retry_preserves_snapshot_and_idempotency_after_membe
     assert await process_lookup(database_session, settings) == (0, 1)
     event = await database_session.scalar(select(OutboxEvent))
     assert event.status == OutboxStatus.PENDING and event.attempts == 1
-    assert set(event.payload) == {"result_encrypted"}
+    assert set(event.payload) == {"result_encrypted", "email_delivery"}
+    assert event.payload["email_delivery"]["state"] == "rejected"
+    assert event.payload["email_delivery"]["started_at"]
     assert PHONE not in json.dumps(event.payload) and EMAIL not in json.dumps(event.payload)
     await database_session.refresh(membership)
     membership.status = MembershipStatus.SUSPENDED
@@ -218,7 +228,7 @@ async def test_lookup_email_retry_preserves_snapshot_and_idempotency_after_membe
     assert attempts[0].idempotency_key == attempts[1].idempotency_key
     assert "具有正式社員資格" in attempts[0].text_content
     assert attempts[0] == attempts[1] == sent[0]
-    assert event.payload == {"credential_redacted": True}
+    assert_redacted_delivery(event, "accepted")
 
 
 @pytest.mark.asyncio
@@ -234,7 +244,8 @@ async def test_invalid_encrypted_query_does_not_leak_contact_in_worker_error(dat
     await database_session.commit()
     assert await process_lookup(database_session, settings) == (0, 1)
     assert sent == []
-    assert event.last_error == "社員查詢資料格式無效"
+    assert event.last_error == "社員查詢信無法準備，尚未送出"
+    assert event.payload["email_delivery"]["state"] == "rejected"
     assert PHONE not in event.last_error and "private-contact" not in event.last_error
 
 
@@ -243,16 +254,50 @@ async def test_terminal_lookup_delivery_failure_removes_contact_envelope(databas
     application, settings, _ = lookup_app
     class Rejected:
         async def send(self, message):
-            raise IntegrationResponseError("provider unavailable")
+            raise EmailDeliveryRejected("provider explicitly rejected request")
     monkeypatch.setattr(jobs_module, "email_sender_from_settings", lambda _: Rejected())
     async with client_for(application) as client:
         await client.post("/v1/auth/member-lookup", json={"phone": PHONE, "email": EMAIL})
     event = await database_session.scalar(select(OutboxEvent))
     event.attempts = 7
+    event.payload = {**event.payload, "email_delivery": {"state": "rejected", "idempotency_key": f"outbox-{event.id}"}}
     await database_session.commit()
     assert await process_lookup(database_session, settings) == (0, 1)
     assert event.status == OutboxStatus.FAILED and event.attempts == 8
-    assert event.payload == {"credential_redacted": True}
+    assert_redacted_delivery(event, "rejected")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["explicit_unknown", "ambiguous_response", "missing_receipt"])
+async def test_lookup_unknown_delivery_is_redacted_and_never_automatically_resent(database_session, lookup_app, monkeypatch, mode):
+    application, settings, _ = lookup_app
+    attempts = []
+
+    class UnknownSender:
+        async def send(self, message):
+            attempts.append(message)
+            if mode == "explicit_unknown":
+                raise EmailDeliveryUnknown("provider response lost")
+            if mode == "ambiguous_response":
+                raise IntegrationResponseError("provider response lost")
+            return None
+
+    monkeypatch.setattr(jobs_module, "email_sender_from_settings", lambda _: UnknownSender())
+    async with client_for(application) as client:
+        response = await client.post("/v1/auth/member-lookup", json={"phone": PHONE, "email": EMAIL})
+    assert response.status_code == 202
+    assert await process_lookup(database_session, settings) == (0, 1)
+    event = await database_session.scalar(select(OutboxEvent))
+    assert event.status == OutboxStatus.FAILED and event.attempts == 1
+    assert_redacted_delivery(event, "unknown")
+    assert len(attempts) == 1 and attempts[0].idempotency_key == f"outbox-{event.id}"
+    assert await process_lookup(database_session, settings) == (0, 0)
+    event.status = OutboxStatus.PENDING
+    await database_session.commit()
+    assert await process_lookup(database_session, settings) == (0, 1)
+    assert event.status == OutboxStatus.FAILED and event.attempts == 1
+    assert len(attempts) == 1
+    assert_redacted_delivery(event, "unknown")
 
 
 @pytest.mark.asyncio

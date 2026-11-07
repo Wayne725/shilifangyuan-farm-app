@@ -21,8 +21,10 @@ import {
 } from "../components/InvoicePreferenceFields";
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
+import { sessionStore } from "../lib/browser-storage";
 import { apiFetch, formatMoney } from "../lib/api";
 import { beginMealCheckout, invoicePreferencePayload } from "../lib/commerce";
+import { contactPhoneIsValid } from "../lib/contact-phone";
 import { taxTypeLabel } from "../lib/invoice-tax";
 import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
 import { mealSubmissionFingerprint } from "../lib/meal-submission";
@@ -72,6 +74,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const { user, openLogin, saveMobileBarcode } = useAuth();
   const notificationEmail = user?.notification_email || user?.email || "";
   const [kitchenNote, setKitchenNote] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const contactPhoneReady = contactPhoneIsValid(contactPhone);
   const submission = useRef<{storageKey: string; id: string} | null>(null);
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
   const [paymentMethod, setPaymentMethod] = useState<"online" | "cash_on_pickup">("online");
@@ -80,7 +84,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const [draftAdjusted, setDraftAdjusted] = useState(false);
   const [now, setNow] = useState(Date.now);
   const [invoicePreference, setInvoicePreference] = useInvoicePreference(notificationEmail);
-  const invoiceReady = paymentMethod === "cash_on_pickup" ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invoicePreference.buyerEmail.trim()) : invoicePreferenceIsValid(invoicePreference);
+  const [invoiceHandling, setInvoiceHandling] = useState<"on_payment" | "pickup_day" | "external">("on_payment");
+  const invoiceReady = paymentMethod === "cash_on_pickup" && invoiceHandling === "external" ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invoicePreference.buyerEmail.trim()) : invoicePreferenceIsValid(invoicePreference);
   const [editingInvoice, setEditingInvoice] = useState(false);
   const event = useQuery({
     queryKey: ["meal-event", eventId],
@@ -126,7 +131,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     .map((item) => `${item.offering_id}:${item.quantity}:${[...item.option_ids].sort().join(",")}`)
     .join("|");
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, paymentMethod],
+    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, paymentMethod, invoiceHandling],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
       body: JSON.stringify({
@@ -137,7 +142,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         needs_utensils: needsUtensils,
         contact_email: invoicePreference.buyerEmail.trim(),
         payment_method: paymentMethod,
-        ...(paymentMethod === "online" ? invoicePreferencePayload(invoicePreference) : {}),
+        ...(paymentMethod === "online" || invoiceHandling !== "external" ? invoicePreferencePayload(invoicePreference) : {}),
       }),
     }),
     enabled:
@@ -152,6 +157,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     mutationFn: async () => {
       if (platform.data?.orders_open === false) throw new Error(platform.data.closed_message);
       if (!user) throw new Error("請先登入");
+      if (!contactPhoneReady) throw new Error("請輸入完整手機號碼或含區碼的市話");
       if (!event.data || !mealOrderingOpen(event.data)) throw new Error("只能提前一天預訂，且須在本場次的開放時間內送出");
       if (!event.data || !validPickupTime(pickupAt, event.data)) throw new Error("請重新選擇可預訂的半小時取餐時段");
       if (!pickupLocationReady) throw new Error("請選擇可用的取餐點");
@@ -169,18 +175,20 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         contactEmail: invoicePreference.buyerEmail.trim(),
         invoicePreference,
         paymentMethod,
+        ...(invoiceHandling === "pickup_day" || (paymentMethod === "cash_on_pickup" && invoiceHandling === "on_payment") ? { invoiceHandling } : {}),
         kitchenNote: kitchenNote.trim(),
+        ...(contactPhone.trim() ? { contactPhone: contactPhone.replace(/\s/g, "") } : {}),
       };
       const fingerprint = mealSubmissionFingerprint(user.id, input);
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprint));
       const storageKey = `meal-submission:${Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("")}`;
-      const id = sessionStorage.getItem(storageKey) || crypto.randomUUID();
-      sessionStorage.setItem(storageKey, id);
+      const id = sessionStore.getItem(storageKey) || crypto.randomUUID();
+      if (!sessionStore.setItem(storageKey, id)) throw new Error("瀏覽器無法儲存送單識別，請允許網站儲存資料後重試");
       submission.current = {storageKey, id};
       return beginMealCheckout({...input, clientRequestId: submission.current.id});
     },
     onSuccess: (outcome) => {
-      if (submission.current) sessionStorage.removeItem(submission.current.storageKey);
+      if (submission.current) sessionStore.removeItem(submission.current.storageKey);
       clearMealDraft(eventId);
       setDraft(emptyMealDraft());
       setDraftAdjusted(false);
@@ -227,7 +235,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     pickupLocationReady &&
     items.length > 0 &&
     selectionsReady &&
-    invoiceReady;
+    invoiceReady && contactPhoneReady;
   const selectedMeals = activeOfferings
     .filter((offering) => (quantities[offering.id] || 0) > 0)
     .map((offering) => {
@@ -366,7 +374,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               );
             })}
           </div>
-          <PaymentMethodFields value={paymentMethod} onChange={setPaymentMethod} allowCash={Boolean(mealEvent.allow_cash_payment)} disabled={checkout.isPending} />
+          <PaymentMethodFields value={paymentMethod} onChange={method => { setPaymentMethod(method); setInvoiceHandling(current => current === "pickup_day" ? current : method === "cash_on_pickup" ? "external" : "on_payment"); }} allowCash={Boolean(mealEvent.allow_cash_payment)} disabled={checkout.isPending} />
           {activeOfferings.length === 0 && <DataState title="菜單待公告" detail="管理員公布餐點後即可選餐，請稍後再查看。" />}
         </div>
 
@@ -422,7 +430,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             <div className="meal-coupon-field"><label className="field"><span>優惠碼</span><input maxLength={32} value={couponInput} onChange={event => setCouponInput(event.target.value.toUpperCase())} /></label><button className="button button-quiet" type="button" onClick={() => setCouponCode(couponInput.trim())}>套用優惠碼</button>{couponCode && <button type="button" className="text-link" onClick={() => {setCouponCode(""); setCouponInput("");}}>移除優惠碼</button>}</div>
           </details>
           <div className="meal-checkout-settings">
-            {paymentMethod === "cash_on_pickup" ? <section className="meal-invoice-settings"><h3>合作社現場開票</h3><label className="field"><span>訂單通知 Email</span><input type="email" autoComplete="email" required value={invoicePreference.buyerEmail} onChange={event => setInvoicePreference({ ...invoicePreference, buyerEmail: event.target.value })} /></label></section> : <section className="meal-invoice-settings" aria-label="電子發票設定">
+            <label className="field"><span>開票時機</span><select value={paymentMethod === "online" && invoiceHandling === "external" ? "on_payment" : invoiceHandling} onChange={event => setInvoiceHandling(event.target.value as typeof invoiceHandling)}><option value="on_payment">付款後開立</option><option value="pickup_day">取餐日開立</option>{paymentMethod === "cash_on_pickup" && <option value="external">由現場 POS 開立</option>}</select></label>
+            {paymentMethod === "cash_on_pickup" && invoiceHandling === "external" ? <section className="meal-invoice-settings"><h3>合作社現場開票</h3><label className="field"><span>訂單通知 Email</span><input type="email" autoComplete="email" required value={invoicePreference.buyerEmail} onChange={event => setInvoicePreference({ ...invoicePreference, buyerEmail: event.target.value })} /></label></section> : <section className="meal-invoice-settings" aria-label="電子發票設定">
               <div className="meal-invoice-heading"><h3>電子發票</h3>
                 {invoicePreferenceIsValid(invoicePreference) && <button type="button" className="text-link" aria-expanded={editingInvoice} aria-controls="meal-invoice-fields" onClick={() => setEditingInvoice(!editingInvoice)}>{editingInvoice ? "完成發票設定" : "修改發票設定"}</button>}
               </div>
@@ -430,6 +439,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               {!editingInvoice && invoicePreferenceIsValid(invoicePreference) && <dl className="meal-invoice-summary"><InvoicePreferenceSummary value={invoicePreference} typeLabel="發票形式" /></dl>}
             </section>}
           </div>
+          <label className="field"><span>聯絡電話（選填）</span><input type="tel" autoComplete="tel" maxLength={40} value={contactPhone} aria-invalid={!contactPhoneReady} aria-describedby={!contactPhoneReady ? "meal-contact-phone-error" : undefined} onChange={event => setContactPhone(event.target.value)} /></label>
+          {!contactPhoneReady && <p id="meal-contact-phone-error" className="form-error" role="alert">請輸入完整手機號碼或含區碼的市話</p>}
           <label className="field"><span>餐點備註（選填）</span><textarea maxLength={500} value={kitchenNote} onChange={event => setKitchenNote(event.target.value)} /></label>
           <div className="meal-payment-action">
           <dl className="meal-payment-total"><div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div></dl>

@@ -13,7 +13,7 @@ services:
     runtime: python
     region: singapore
     rootDir: backend
-    buildCommand: python scripts/bootstrap_pip.py && python -m pip install -r requirements.txt
+    buildCommand: python scripts/bootstrap_pip.py && python -m pip install --require-hashes -r requirements.txt
     startCommand: python -m app.startup prepare && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     envVars:

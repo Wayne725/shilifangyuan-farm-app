@@ -70,12 +70,9 @@ class MigrationDatabase:
             return
         differences = self.run(lambda connection: compare_metadata(
             MigrationContext.configure(connection, opts={"compare_type": True}), Base.metadata))
-        # These three model comments predate this migration and have no corresponding DDL.
-        known_comments = {("orders", "order_kind"), ("orders", "fulfillment_status"), ("users", "membership_type")}
         flattened = [operation for difference in differences
                      for operation in (difference if isinstance(difference, list) else [difference])]
-        assert [operation for operation in flattened if not (
-            operation[0] == "modify_comment" and (operation[2], operation[3]) in known_comments)] == []
+        assert flattened == []
 
 
 @pytest.fixture(params=["sqlite"] + (["postgres"] if PG_URL else []))

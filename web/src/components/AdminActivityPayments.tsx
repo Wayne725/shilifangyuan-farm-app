@@ -13,7 +13,13 @@ export function AdminActivityCard({activity,onDone,onDenied}:{activity:Activity;
   const [list,setList]=useState(false),[q,setQ]=useState(''),[filter,setFilter]=useState('');
   const registrations=useQuery({queryKey:['admin-activity-registrations',user?.id,activity.id],queryFn:()=>apiFetch<Array<ActivityRegistration&{display_name:string;email?:string}>>(`/v1/admin/activities/${activity.id}/registrations`),enabled:list,retry:retryActivityRead});
   const action=useMutation({mutationFn:({decision,reason}:{decision:string;reason:string})=>apiFetch(`/v1/admin/activities/${activity.id}/${decision}`,{method:'POST',body:JSON.stringify({reason:reason||null})}),onSuccess:onDone,onError:error=>{if(activityAccessDenied(error))onDenied();}});
-  const attendance=useMutation({mutationFn:({id,status}:{id:string;status:string})=>apiFetch(`/v1/admin/activities/${activity.id}/registrations/${id}/${status}`,{method:'POST'}),onSuccess:()=>{void client.invalidateQueries({queryKey:['admin-activity-registrations']});},onError:error=>{if(activityAccessDenied(error))onDenied();}});
+  const attendance=useMutation({
+    mutationFn:({id,status,reason,expectedStatus}:{id:string;status:string;reason?:string;expectedStatus?:string})=>apiFetch(`/v1/admin/activities/${activity.id}/registrations/${id}/${status}`,{
+      method:'POST',...(expectedStatus?{body:JSON.stringify({expected_status:expectedStatus,reason})}:{}),
+    }),
+    onSuccess:()=>client.invalidateQueries({queryKey:['admin-activity-registrations']}),
+    onError:error=>{if(activityAccessDenied(error))onDenied();else if(error instanceof ApiError&&error.status===409)void registrations.refetch();},
+  });
   const denied=activityAccessDenied(registrations.error);
   useEffect(()=>{if(denied)onDenied();},[denied,onDenied]);
   if(denied)return null;
@@ -21,9 +27,33 @@ export function AdminActivityCard({activity,onDone,onDenied}:{activity:Activity;
   return <article className="admin-review-card admin-review-card-expandable"><div className="review-card-copy"><span className="status-chip">{{published:'已發布',pending_review:'待審核',rejected:'已駁回',completed:'已完成',cancelled:'已取消'}[activity.status]||activity.status}</span><h3>{activity.title}</h3><p>{activityDate(activity.starts_at)} · {activity.location} · {activity.registration_count}/{activity.capacity} 人</p><p className="activity-price">社員 {formatMoney(activity.member_price||0)} · 非社員 {formatMoney(activity.non_member_price||0)}</p></div>
     <div className="review-card-actions">{activity.status==='pending_review'&&<><SocialActionButton disabled={action.isPending} action="approve" requireReason={false} onConfirm={reason=>action.mutate({decision:'approve',reason})}>核准</SocialActionButton><SocialActionButton disabled={action.isPending} action="reject" requireReason onConfirm={reason=>action.mutate({decision:'reject',reason})}>駁回</SocialActionButton></>}{activity.status==='published'&&Date.now()>=activityTime(activity.ends_at)&&<SocialActionButton disabled={action.isPending} action="complete" requireReason={false} onConfirm={reason=>action.mutate({decision:'complete',reason})}>完成活動</SocialActionButton>}<button className="button button-quiet" onClick={()=>setList(!list)}>{list?'收起名單':'報名名單'}</button>{action.isError&&<p className="form-error">{action.error.message}</p>}</div>
     <div className="activity-admin-section">{['published','pending_review'].includes(activity.status)&&<><ActivityPricing activity={activity} onDone={onDone} onDenied={onDenied}/><ActivityCancellation activity={activity} onDone={onDone} onDenied={onDenied}/></>}
-    {list&&<section aria-label={`${activity.title}報名名單`}><div className="activity-filter"><label className="field"><span>查詢報名者</span><input value={q} onChange={event=>setQ(event.target.value)} placeholder="姓名、Email 或繳款編號"/></label><label className="field"><span>報名狀態</span><select value={filter} onChange={event=>setFilter(event.target.value)}><option value="">全部</option>{['pending_payment','registered','waitlisted','cancelled','attended','no_show'].map(value=><option key={value} value={value}>{activityRegistrationLabel(value)}</option>)}</select></label></div>{registrations.isPending?<LoadingLines count={2}/>:registrations.isError?<DataState title="報名名單無法讀取" detail={registrations.error.message}/>:visible.length===0?<p>沒有符合的報名紀錄</p>:visible.map(item=><div className="activity-refund-row" key={item.id}><strong>{item.contact_name||item.display_name}</strong><p>{item.contact_email||item.email} · {activityRegistrationLabel(item.status)} · 順序 {item.queue_position}</p>{item.charge&&<p>{item.charge.number} · {formatMoney(item.charge.amount)} · {activityPaymentLabel(item.charge.payment_status)} · 付款期限 {activityDate(item.charge.expires_at)}</p>}{item.refund_request&&<p>{activityRefundLabel(item.refund_request.status)}</p>}{item.status==='registered'&&<div className="form-actions"><button className="button button-quiet" disabled={attendance.isPending} onClick={()=>attendance.mutate({id:item.id,status:'attended'})}>已出席</button><button className="button button-quiet" disabled={attendance.isPending} onClick={()=>attendance.mutate({id:item.id,status:'no_show'})}>未出席</button></div>}</div>)}{attendance.isError&&<p className="form-error">{attendance.error.message}</p>}</section>}</div>
+    {list&&<section aria-label={`${activity.title}報名名單`}><div className="activity-filter"><label className="field"><span>查詢報名者</span><input value={q} onChange={event=>setQ(event.target.value)} placeholder="姓名、Email 或繳款編號"/></label><label className="field"><span>報名狀態</span><select value={filter} onChange={event=>setFilter(event.target.value)}><option value="">全部</option>{['pending_payment','registered','waitlisted','cancelled','attended','no_show'].map(value=><option key={value} value={value}>{activityRegistrationLabel(value)}</option>)}</select></label></div>{registrations.isPending?<LoadingLines count={2}/>:registrations.isError?<DataState title="報名名單無法讀取" detail={registrations.error.message}/>:visible.length===0?<p>沒有符合的報名紀錄</p>:visible.map(item=><div className="activity-refund-row" key={item.id}><strong>{item.contact_name||item.display_name}</strong><p>{item.contact_email||item.email} · {activityRegistrationLabel(item.status)} · 順序 {item.queue_position}</p>{item.charge&&<p>{item.charge.number} · {formatMoney(item.charge.amount)} · {activityPaymentLabel(item.charge.payment_status)} · 付款期限 {activityDate(item.charge.expires_at)}</p>}{item.refund_request&&<p>{activityRefundLabel(item.refund_request.status)}</p>}{item.status==='registered'&&<div className="form-actions"><button className="button button-quiet" disabled={attendance.isPending} onClick={()=>attendance.mutate({id:item.id,status:'attended'})}>已出席</button><button className="button button-quiet" disabled={attendance.isPending} onClick={()=>attendance.mutate({id:item.id,status:'no_show'})}>未出席</button></div>}{['published','completed'].includes(activity.status)&&['attended','no_show'].includes(item.status)&&<AttendanceCorrection registration={item} busy={attendance.isPending} onBegin={()=>attendance.reset()} onCorrect={value=>attendance.mutateAsync({id:item.id,...value})}/>}</div>)}{attendance.isError&&<p className="form-error">{attendance.error.message}</p>}</section>}</div>
   </article>;
 }
+function AttendanceCorrection({registration,busy,onBegin,onCorrect}:{
+  registration:ActivityRegistration&{display_name:string};busy:boolean;onBegin:()=>void;
+  onCorrect:(value:{status:string;expectedStatus:string;reason:string})=>Promise<unknown>;
+}) {
+  const [open,setOpen]=useState(false),[reason,setReason]=useState('');
+  const [expectedStatus,setExpectedStatus]=useState(registration.status);
+  const [target,setTarget]=useState<'attended'|'no_show'>(registration.status==='attended'?'no_show':'attended');
+  const changed=registration.status!==expectedStatus;
+  return <div>
+    {!open?<button type="button" className="button button-quiet" disabled={busy} onClick={()=>{
+      onBegin();setExpectedStatus(registration.status);setTarget(registration.status==='attended'?'no_show':'attended');setOpen(true);
+    }}>更正出席</button>:<form className="social-form" aria-label={`${registration.contact_name||registration.display_name}出席更正`} onSubmit={event=>{
+      event.preventDefault();
+      if(busy||changed||!reason.trim()||target===expectedStatus)return;
+      void onCorrect({status:target,expectedStatus,reason:reason.trim()}).then(()=>{setOpen(false);setReason('');},()=>{});
+    }}>
+      <label className="field"><span>更正後出席狀態</span><select disabled={busy} value={target} onChange={event=>setTarget(event.target.value as 'attended'|'no_show')}><option value="attended">已出席</option><option value="no_show">未出席</option></select></label>
+      <label className="field"><span>更正原因</span><textarea aria-label="更正原因" required maxLength={1000} disabled={busy} value={reason} onChange={event=>setReason(event.target.value)}/></label>
+      {changed&&<p className="form-error" role="alert">名單狀態已更新，請返回後重新更正。</p>}
+      <div className="form-actions"><button className="button button-primary" disabled={busy||changed||!reason.trim()||target===expectedStatus}>確認更正</button><button type="button" className="button button-quiet" disabled={busy} onClick={()=>setOpen(false)}>返回</button></div>
+    </form>}
+  </div>;
+}
+
 function ActivityPricing({activity,onDone,onDenied}:{activity:Activity;onDone:()=>void;onDenied:()=>void}) {
   const [open,setOpen]=useState(false),[form,setForm]=useState({member_price:activity.member_price||0,non_member_price:activity.non_member_price||0,payment_window_hours:activity.payment_window_hours||24});
   const [version,setVersion]=useState(activity.updated_at),[conflict,setConflict]=useState(false),[checked,setChecked]=useState(false),[latest,setLatest]=useState<Activity|null>(null);

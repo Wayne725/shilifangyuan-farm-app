@@ -118,7 +118,7 @@ for (const width of [1440, 390]) {
     assert.equal(state.reads[0].sales_channel, 'all');
     assert.equal(await page.locator('.meal-finance-sale').getAttribute('open'), null);
     await page.locator('.meal-finance-sale > summary').click();
-    await page.getByText('免稅稅額', { exact: true }).waitFor();
+    await page.getByText('預估稅額', { exact: true }).waitFor();
     assert.match(await page.locator('.meal-finance-order-totals').innerText(), /期間淨收款\s*\$220/);
     await page.getByText('查看退款紀錄（1 筆）', { exact: true }).click();
     await page.getByText(/原因：跨期退款/).waitFor();

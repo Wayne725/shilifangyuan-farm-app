@@ -4,7 +4,8 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const { chromium, webkit } = createRequire(import.meta.url)('playwright');
+const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4185');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || !['http:', 'https:'].includes(target.protocol)
   || target.pathname !== '/' || target.username || target.password || target.search || target.hash) {
@@ -24,7 +25,7 @@ const orderFixture = {
 };
 
 async function fixture(t, { width = 390, role = 'admin', payment = 'paid', cancelled = false, channel = 'meal_preorder' } = {}) {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
   const state = {
@@ -254,7 +255,9 @@ test('送出時權限失效不自動改識別碼重送，保留原工作供核�
   let dialog = await openPreview(page);
   await dialog.getByLabel('出單原因', { exact: true }).fill('權限到期前預覽');
   await dialog.getByRole('button', { name: '確認送至出單機', exact: true }).click();
-  await dialog.getByRole('alert').getByText('登入或管理員權限已失效', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '重新驗證管理權限', exact: true }).waitFor();
+  assert.equal(await dialog.count(), 0);
+  assert.equal(await page.locator('.admin-order-print').count(), 0);
   const first = structuredClone(state.writes[0].body);
   await page.reload();
   await page.getByRole('button', { name: '再次出單', exact: true }).click();

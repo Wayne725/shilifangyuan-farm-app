@@ -99,27 +99,30 @@ test('缺貨詳情保留禁用，切換商品不沿用另一商品加入成功�
   assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });
 
-test('首次儲存失敗保留所選三份且不改清單，重試成功只增加三份', async (t) => {
+test('儲存失敗仍以記憶體加入三份，原清單不覆寫，重整後恢復原清單並可正常加入', async (t) => {
   const { page, state } = await fixture(t, 390, `/products/${product.id}`);
   const button = page.getByRole('button', { name: `加入購物車：${product.name}`, exact: true });
   const result = page.locator('.cart-add-feedback');
   await button.waitFor();
+  const nativeCart = await page.evaluate(() => localStorage.getItem('slf_cart'));
   await page.getByRole('combobox', { name: `${product.name}加入數量`, exact: true }).selectOption('3');
   await page.evaluate(() => {
     const set_item = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-      if (this === localStorage && key === 'slf_cart') {
-        Storage.prototype.setItem = set_item;
-        throw new DOMException('隔離測試儲存失敗', 'QuotaExceededError');
-      }
+      if (this === localStorage && key === 'slf_cart') throw new DOMException('隔離測試儲存失敗', 'QuotaExceededError');
       return set_item.call(this, key, value);
     };
   });
   await button.click();
-  assert.equal(await page.getByRole('alert').textContent(), '無法儲存結帳清單，請再試一次。');
-  assert.equal(await result.textContent(), '');
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 2);
+  await result.getByText(`${product.name}已加入，清單共 5 瓶`, { exact: true }).waitFor();
+  await page.getByText('瀏覽器儲存受限，部分資料只在本頁暫存，重整後可能無法保留。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('slf_cart')), nativeCart);
   assert.equal(await page.getByRole('combobox', { name: `${product.name}加入數量`, exact: true }).inputValue(), '3');
+  await page.reload();
+  await button.waitFor();
+  assert.equal(await result.textContent(), '');
+  assert.equal(await page.evaluate(() => localStorage.getItem('slf_cart')), nativeCart);
+  await page.getByRole('combobox', { name: `${product.name}加入數量`, exact: true }).selectOption('3');
   await button.click();
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity === 5);
   assert.equal(await result.textContent(), `${product.name}已加入，清單共 5 瓶`);
@@ -222,7 +225,7 @@ test('目前庫存低於已選量時不靜默刪減，結帳仍接受後端核�
   assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });
 
-test('結帳快速增減不漏計且不超單項上限，儲存失敗可重試，單價採後端核價', async (t) => {
+test('結帳快速增減不漏計且不超單項上限，儲存失敗用記憶體保留原清單，單價採後端核價', async (t) => {
   const { page, state } = await fixture(t, 390, '/checkout', { initialStock: 5000, initialQuantity: 996, signedIn: true });
   const row = page.locator('.checkout-item');
   await row.getByText('$315／瓶', { exact: true }).waitFor();
@@ -234,19 +237,23 @@ test('結帳快速增減不漏計且不超單項上限，儲存失敗可重試�
   assert.match(await page.getByRole('alert').textContent(), /可購上限為 999 瓶/);
   await decrease.evaluate((element) => { element.click(); element.click(); });
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 997);
+  const nativeCart = await page.evaluate(() => localStorage.getItem('slf_cart'));
   await page.evaluate(() => {
     const set_item = Storage.prototype.setItem;
+    window.__auditCartStorageBlocked = true;
     Storage.prototype.setItem = function (key, value) {
-      if (this === localStorage && key === 'slf_cart') {
-        Storage.prototype.setItem = set_item;
-        throw new DOMException('隔離測試儲存失敗', 'QuotaExceededError');
-      }
+      if (this === localStorage && key === 'slf_cart' && window.__auditCartStorageBlocked) throw new DOMException('隔離測試儲存失敗', 'QuotaExceededError');
       return set_item.call(this, key, value);
     };
   });
   await increase.click();
-  assert.equal(await page.getByRole('alert').textContent(), '無法儲存結帳清單，請再試一次。');
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 997);
+  await page.locator('.summary-lines').getByText(`${product.name} × 998 · 應稅`, { exact: true }).waitFor();
+  await page.getByText('瀏覽器儲存受限，部分資料只在本頁暫存，重整後可能無法保留。', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('slf_cart')), nativeCart);
+  await page.reload();
+  await row.getByText('$315／瓶', { exact: true }).waitFor();
+  await page.locator('.summary-lines').getByText(`${product.name} × 997 · 應稅`, { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('slf_cart')), nativeCart);
   await increase.click();
   await page.locator('.summary-lines').getByText(`${product.name} × 998 · 應稅`, { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 998);
@@ -287,18 +294,22 @@ for (const [signedIn, membershipType, price] of [[false, 'nonmember', 320], [tru
   });
 }
 
-test('選三份加原兩份後，核價與送單都是五份，送單期間暫停改量', async (t) => {
+test('選三份加原兩份後核價送單都是五份，未知結果凍結原單，同UUID重試至明確拒絕才允許改量', async (t) => {
   const { page, state } = await fixture(t, 390, `/products/${product.id}`, { signedIn: true });
   await page.getByRole('combobox', { name: `${product.name}加入數量`, exact: true }).selectOption('3');
   await page.locator('.product-add-control > button').click();
   await page.route('**/v1/pickup-locations', (route) => route.fulfill({ json: [{ id: 'isolated-pickup', name: '隔離測試取貨點', is_active: true }] }));
   let releaseOrder;
   const gate = new Promise((resolve) => { releaseOrder = resolve; });
+  t.after(() => releaseOrder());
   const orders = [];
   await page.route('**/v1/orders', async (route) => {
     orders.push(route.request().postDataJSON());
-    await gate;
-    return route.fulfill({ status: 503, json: { detail: '隔離測試：未建立真實訂單' } });
+    if (orders.length === 1) {
+      await gate;
+      return route.fulfill({ status: 503, json: { detail: '隔離測試：送單結果暫時未知' } });
+    }
+    return route.fulfill({ status: 422, json: { detail: '隔離測試：已明確拒絕且未建立訂單' } });
   });
   await page.goto(`${base}/checkout`);
   await page.locator('.summary-lines').getByText(`${product.name} × 5 · 應稅`, { exact: true }).waitFor();
@@ -306,14 +317,25 @@ test('選三份加原兩份後，核價與送單都是五份，送單期間暫�
   await page.getByRole('button', { name: '前往線上付款', exact: true }).click();
   await orderRequest;
   assert.deepEqual(orders[0].items, [{ product_id: product.id, quantity: 5 }]);
+  assert.match(orders[0].client_request_id, /^[0-9a-f-]{36}$/i);
   assert.ok(state.quotes.includes(5));
-  const row = page.locator('.checkout-item');
-  await page.waitForFunction(() => document.querySelector('.checkout-item [aria-label="增加數量"]')?.disabled);
-  assert.equal(await row.getByRole('button', { name: '增加數量', exact: true }).isDisabled(), true);
-  assert.equal(await row.getByRole('button', { name: '減少數量', exact: true }).isDisabled(), true);
+  const frozen = page.locator('.checkout-recovery');
+  await frozen.getByText(`${product.name} × 5`, { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '增加數量', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '減少數量', exact: true }).count(), 0);
+  assert.equal(await frozen.getByRole('button', { name: '確認訂單中…', exact: true }).isDisabled(), true);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 5);
   releaseOrder();
-  await page.getByText('隔離測試：未建立真實訂單', { exact: true }).waitFor();
+  await page.getByText('隔離測試：送單結果暫時未知', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '增加數量', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '減少數量', exact: true }).count(), 0);
+  await frozen.getByRole('button', { name: '重試原訂單', exact: true }).click();
+  await page.getByText('隔離測試：已明確拒絕且未建立訂單', { exact: true }).waitFor();
+  assert.equal(orders.length, 2);
+  assert.deepEqual(orders[1], orders[0]);
+  const row = page.locator('.checkout-item');
   assert.equal(await row.getByRole('button', { name: '增加數量', exact: true }).isDisabled(), false);
+  assert.equal(await row.getByRole('button', { name: '減少數量', exact: true }).isDisabled(), false);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 5);
   assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
 });

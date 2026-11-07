@@ -1,9 +1,7 @@
-"""In-process rate limiting for the credential endpoints.
+"""Legacy process-local budgets and common rule/key definitions.
 
-Deliberately dependency-free and per-process: the Sandbox runs a single web
-service, and the goal is to blunt credential stuffing and reset-mail flooding,
-not to be a distributed quota system. Move this to Redis before running more
-than one API instance.
+The seven existing credential gates use credential_rate_limit's shared database
+store. Admin, payment and upload callers retain this synchronous local limiter.
 """
 
 from __future__ import annotations
@@ -45,6 +43,10 @@ _bucket_windows: Dict[str, float] = {}
 RateLimitKey = Union[str, RateLimitKeys]
 
 
+def account_key(scope: str, identifier: str) -> str:
+    return f"{scope}:account:{identifier.strip().lower()}"
+
+
 def client_key(
     request: Request,
     scope: str,
@@ -54,7 +56,7 @@ def client_key(
     values = [f"{scope}:ip:{client}"]
     normalized_identifier = identifier.strip().lower()
     if normalized_identifier:
-        values.append(f"{scope}:account:{normalized_identifier}")
+        values.append(account_key(scope, normalized_identifier))
     return RateLimitKeys(tuple(values))
 
 

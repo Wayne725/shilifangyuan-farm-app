@@ -12,6 +12,7 @@ from app.models import (
     OrderItem,
     OrderKind,
     PaymentStatus,
+    Product,
     SalesChannel,
     TaxType,
     User,
@@ -188,7 +189,10 @@ async def test_points_and_wish_launch(cooperative_context) -> None:
     wish = await client.post("/v1/wishes", json={"name": "新作物", "description": "希望共同採購"}, headers=auth_headers(member))
     assert wish.status_code == 201
     wish_id = wish.json()["id"]
-    launched = await client.put(f"/v1/admin/wishes/{wish_id}/status", json={"status": "launched", "launched_product_id": "product-demo", "proposer_points": 120}, headers=auth_headers(cooperative_context["admin"]))
+    product = Product(slug="wish-launched-product", name="願望成案商品", category="測試", unit="份", member_price=100, nonmember_price=100, stock_quantity=10)
+    cooperative_context["session"].add(product)
+    await cooperative_context["session"].flush()
+    launched = await client.put(f"/v1/admin/wishes/{wish_id}/status", json={"status": "launched", "launched_product_id": product.id, "proposer_points": 120}, headers=auth_headers(cooperative_context["admin"]))
     assert launched.status_code == 200
     points = await client.get("/v1/me/points", headers=auth_headers(member))
     assert points.json()["balance"] == 120

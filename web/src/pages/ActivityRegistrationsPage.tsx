@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearch } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
-import { apiFetch } from '../lib/api';
+import { ApiError, apiFetch, captureSessionIdentityGuard } from '../lib/api';
 import { refreshPaymentAttempt } from '../lib/commerce';
 import { activityAccessDenied, activityDate, activityPaymentLabel, filterActivityRegistrations, retryActivityRead, type ActivityCharge, type ActivityRegistration } from '../lib/activities';
 import { ActivityChargeDetails, ActivityRegistrationActions } from '../components/ActivityRegistrationActions';
@@ -18,10 +18,12 @@ export function ActivityRegistrationsPage() {
 function RegistrationWorkspace({userId}:{userId:string}) {
   const search=useSearch({from:'/activities/registrations'}), client=useQueryClient();
   const [denied,setDenied]=useState(false),[q,setQ]=useState(''),[status,setStatus]=useState('');
+  const [sameSession]=useState(captureSessionIdentityGuard);
+  const readPrivate=async <T,>(read:()=>Promise<T>)=>{if(!sameSession())throw new ApiError(401,'登入狀態已變更，請重新登入。');return read();};
   const started=useRef(Date.now());
-  const registrations=useQuery({queryKey:['activity-registrations',userId],queryFn:()=>apiFetch<ActivityRegistration[]>('/v1/activity-registrations'),enabled:!denied,retry:retryActivityRead,refetchInterval:query=>activityAccessDenied(query.state.error)?false:30000});
-  const charges=useQuery({queryKey:['activity-charges',userId],queryFn:()=>apiFetch<ActivityCharge[]>('/v1/activity-charges'),enabled:!denied,retry:retryActivityRead,refetchInterval:query=>activityAccessDenied(query.state.error)?false:30000});
-  const confirmation=useQuery({queryKey:['activity-payment-refresh',userId,search.attempt_id],queryFn:()=>refreshPaymentAttempt(search.attempt_id!),enabled:!denied&&Boolean(search.attempt_id&&search.payment==='confirming'),retry:retryActivityRead,refetchInterval:query=>{if(activityAccessDenied(query.state.error)||Date.now()-started.current>=120000)return false;const state=query.state.data?.status;return state&&!['pending','confirming'].includes(state)?false:Date.now()-started.current<30000?5000:15000;},refetchIntervalInBackground:false});
+  const registrations=useQuery({queryKey:['activity-registrations',userId],queryFn:({signal})=>readPrivate(()=>apiFetch<ActivityRegistration[]>('/v1/activity-registrations',{signal})),enabled:!denied,retry:retryActivityRead,refetchInterval:query=>!sameSession()||activityAccessDenied(query.state.error)?false:30000});
+  const charges=useQuery({queryKey:['activity-charges',userId],queryFn:({signal})=>readPrivate(()=>apiFetch<ActivityCharge[]>('/v1/activity-charges',{signal})),enabled:!denied,retry:retryActivityRead,refetchInterval:query=>!sameSession()||activityAccessDenied(query.state.error)?false:30000});
+  const confirmation=useQuery({queryKey:['activity-payment-refresh',userId,search.attempt_id],queryFn:({signal})=>readPrivate(()=>refreshPaymentAttempt(search.attempt_id!,signal)),enabled:!denied&&Boolean(search.attempt_id&&search.payment==='confirming'),retry:retryActivityRead,refetchInterval:query=>{if(!sameSession()||activityAccessDenied(query.state.error)||Date.now()-started.current>=120000)return false;const state=query.state.data?.status;return state&&!['pending','confirming'].includes(state)?false:Date.now()-started.current<30000?5000:15000;},refetchIntervalInBackground:false});
   const refresh=()=>{void client.invalidateQueries({queryKey:['activity-registrations']});void client.invalidateQueries({queryKey:['activity-charges']});void client.invalidateQueries({queryKey:['activities']});};
   useEffect(()=>{started.current=Date.now();},[search.attempt_id]);
   useEffect(()=>{if(confirmation.data) refresh();},[confirmation.data]); // eslint-disable-line react-hooks/exhaustive-deps

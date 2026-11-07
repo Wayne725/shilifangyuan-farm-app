@@ -97,3 +97,12 @@
 .admin-orders-panel .admin-order-search > label { min-width: 0; flex: 1 1 240px; }
 .admin-orders-panel .admin-order-search select { width: 100%; min-width: 0; min-height: 52px; font: inherit; color: var(--ink); background: var(--paper-light); border: 1px solid var(--line-strong); padding: 12px; }
 @media (max-width: 600px) { .admin-orders-panel .admin-order-search > label, .admin-orders-panel .admin-order-search > .button { flex-basis: 100%; } }
+.admin-order-contact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem 2rem;
+  margin: .75rem 0;
+}
+.admin-order-contact > div { display: grid; gap: .25rem; }
+.admin-order-contact dt { color: var(--color-muted, #536055); font-size: .875rem; }
+.admin-order-contact dd { margin: 0; overflow-wrap: anywhere; }

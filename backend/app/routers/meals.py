@@ -19,7 +19,12 @@ from ..auth import (
     require_admin,
 )
 from ..config import Settings, get_settings
+from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..integrations.common import IntegrationError
+from ..invoice_tax_summary import invoice_tax_summary
 from ..database import get_session
+from ..order_numbers import allocate_order_number
+from ..order_history import OrderHistoryQuery, read_order_history
 from ..printing import enqueue_order_print, enqueue_cancellation_print
 from ..printer_worker import wake_printer
 from ..platform_settings import require_accepting_orders
@@ -37,6 +42,7 @@ from ..integrations.notifications import (
     NotificationService,
     SQLAlchemyNotificationRepository,
 )
+from ..invoice_timing import invoice_handling, pickup_invoice_due, cancel_unissued_invoice_jobs
 from ..integrations.invoice_service import (
     invoice_context_from_settings,
     enqueue_invoice_adjustment_after_refund,
@@ -131,15 +137,6 @@ def _require_live_meal_event(event_id: str, settings: Settings) -> None:
         and event_id in DEMO_MEAL_EVENT_IDS
     ):
         raise HTTPException(status_code=409, detail="展示場次不可正式下單，請等待正式場次公告")
-
-
-def make_meal_order_number(
-    order_id: str,
-    now: datetime | None = None,
-) -> str:
-    current = now or datetime.now(timezone.utc)
-    compact_id = order_id.replace("-", "").upper()
-    return f"M{current:%y%m%d%H%M%S}{compact_id[-12:]}"
 
 
 def _aware(value: datetime) -> datetime:
@@ -255,26 +252,28 @@ _MEAL_FULFILLMENT_LABELS = {
 }
 
 
+async def _meal_ids_for_offerings(session: AsyncSession, offering_ids: set[str]) -> dict[str, str]:
+    if not offering_ids:
+        return {}
+    rows = await session.execute(select(MealEventOffering.id, MealEventOffering.meal_id).where(
+        MealEventOffering.id.in_(offering_ids)))
+    return dict(rows.all())
+
+
 async def _meal_order_read(
     session: AsyncSession,
     order: Order,
     viewer_is_admin: bool = False,
+    *,
+    offering_meal_ids: Optional[dict[str, str]] = None,
 ) -> MealOrderRead:
     offering_ids = {
         item.source_meal_offering_id
         for item in order.items
         if item.source_meal_offering_id is not None
     }
-    meal_ids: dict[str, str] = {}
-    if offering_ids:
-        offerings = await session.scalars(
-            select(MealEventOffering).where(
-                MealEventOffering.id.in_(offering_ids)
-            )
-        )
-        meal_ids = {
-            offering.id: offering.meal_id for offering in offerings
-        }
+    meal_ids = (offering_meal_ids if offering_meal_ids is not None
+        else await _meal_ids_for_offerings(session, offering_ids))
     fulfillment = order.fulfillment
     event = order.meal_event
     if event is None or fulfillment is None:
@@ -308,6 +307,7 @@ async def _meal_order_read(
             onsite_payment = {"method": attempt.provider_response.get("collection_method", "cash"),
                 "reference": attempt.provider_response.get("reference", ""), "paid_at": _aware(attempt.paid_at).isoformat()}
     return MealOrderRead(
+        invoice_tax=invoice_tax_summary(order.__dict__.get("invoice")),
         kitchen_note=order.kitchen_note,
         onsite_payment=onsite_payment,
         id=order.id,
@@ -334,6 +334,8 @@ async def _meal_order_read(
         payment_status=order.payment_status,
         payment_method=order.payment_method,
         invoice_status=order.invoice_status,
+        invoice_handling=invoice_handling(order),
+        invoice_issue_after=order.invoice_issue_after,
         invoice_number=(order.invoice.invoice_number if order.invoice else None),
         invoice_date=(
             _aware(order.invoice.invoice_date)
@@ -514,17 +516,15 @@ def _meal_order_query():
     response_model=list[MealOrderRead],
 )
 async def list_meal_orders(
+    filters: Annotated[OrderHistoryQuery, Query()],
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[MealOrderRead]:
-    orders = list(
-        await session.scalars(
-            _meal_order_query()
-            .where(Order.user_id == user.id)
-            .order_by(Order.created_at.desc(), Order.id.desc())
-        )
-    )
-    return [await _meal_order_read(session, order) for order in orders]
+    orders = await read_order_history(session, user, filters, meal=True)
+    offering_ids = {item.source_meal_offering_id for order in orders for item in order.items
+        if item.source_meal_offering_id is not None}
+    meal_ids = await _meal_ids_for_offerings(session, offering_ids)
+    return [await _meal_order_read(session, order, offering_meal_ids=meal_ids) for order in orders]
 
 
 @meals_router.get("/v1/admin/meal-events/{event_id}/orders", response_model=list[MealOrderRead])
@@ -799,6 +799,11 @@ async def create_meal_order(
 ) -> MealOrderRead:
     fingerprint_body = body.model_dump(mode="json", exclude={"client_request_id"})
     # Default preferences must preserve fingerprints created before these fields existed.
+    legacy_invoice_handling = "external" if body.payment_method == PaymentMethod.CASH_ON_PICKUP else "on_payment"
+    if body.invoice_handling in {None, legacy_invoice_handling}:
+        fingerprint_body.pop("invoice_handling")
+    if body.contact_phone is None:
+        fingerprint_body.pop("contact_phone")
     if body.pickup_location_id is None:
         fingerprint_body.pop("pickup_location_id")
     if not body.needs_utensils:
@@ -834,7 +839,7 @@ async def create_meal_order(
     quote_by_offering = {item.offering_id: item for item in quote.items}
     now = datetime.now(timezone.utc)
     order_id = new_id()
-    order_number = make_meal_order_number(order_id, now)
+    order_number = await allocate_order_number(session, "M", now)
     pickup_code = await _unique_pickup_code(session)
     order = Order(
         id=order_id,
@@ -879,7 +884,9 @@ async def create_meal_order(
         ),
         payment_status=PaymentStatus.PENDING,
         payment_method=body.payment_method,
-        invoice_status=InvoiceStatus.EXTERNAL if body.payment_method == PaymentMethod.CASH_ON_PICKUP else InvoiceStatus.NOT_ELIGIBLE,
+        invoice_handling=body.invoice_handling or ("external" if body.payment_method == PaymentMethod.CASH_ON_PICKUP else "on_payment"),
+        invoice_issue_after=pickup_invoice_due(quote.pickup_at) if body.invoice_handling == "pickup_day" else None,
+        invoice_status=InvoiceStatus.EXTERNAL if (body.invoice_handling == "external" or (body.invoice_handling is None and body.payment_method == PaymentMethod.CASH_ON_PICKUP)) else InvoiceStatus.NOT_ELIGIBLE,
         fulfillment_status=FulfillmentStatus.PENDING_CONFIRMATION,
         items=[
             OrderItem(
@@ -932,6 +939,16 @@ async def create_meal_order(
         if existing is not None:
             return existing
         raise
+    if body.contact_phone:
+        try:
+            cipher = pii_cipher_from_settings(settings)
+            order.fulfillment.recipient_phone_encrypted = cipher.encrypt_text(
+                body.contact_phone,
+                associated_data=f"order-fulfillment:{order.fulfillment.id}:recipient_phone",
+            )
+            order.fulfillment.encryption_key_version = cipher.current_version
+        except IntegrationError as exc:
+            raise HTTPException(status_code=503, detail="聯絡電話目前無法安全儲存，請稍後再試") from exc
     qr_token = _pickup_qr_payload(order)
     order.fulfillment.pickup_qr_token_hash = hashlib.sha256(
         qr_token.encode("utf-8")
@@ -1094,6 +1111,7 @@ async def _cancel_approved_meal_order(
         order.payment_status = PaymentStatus.EXPIRED
     order.cancelled_at = now
     order.cancellation_reason = request.reason
+    await cancel_unissued_invoice_jobs(session, order)
     order.fulfillment_status = FulfillmentStatus.CANCELLED
     order.fulfillment.status = FulfillmentState.CANCELLED
     await enqueue_cancellation_print(session, order, settings)
@@ -1637,6 +1655,7 @@ async def cancel_meal_event(
             order.payment_status = PaymentStatus.EXPIRED
         order.cancelled_at = now
         order.cancellation_reason = body.reason
+        await cancel_unissued_invoice_jobs(session, order)
         order.fulfillment_status = FulfillmentStatus.CANCELLED
         if order.fulfillment is not None:
             order.fulfillment.status = FulfillmentState.CANCELLED

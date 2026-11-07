@@ -6,6 +6,9 @@ import vm from "node:vm";
 const ts = createRequire(new URL("../../web/package.json", import.meta.url))("typescript");
 
 async function loadApi(fetcher) {
+  const storageSource = await readFile(new URL("../../web/src/lib/browser-storage.ts", import.meta.url), "utf8");
+  const storageExports = {};
+  vm.runInNewContext(ts.transpileModule(storageSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, { exports: storageExports });
   const source = await readFile(new URL("../../web/src/lib/api.ts", import.meta.url), "utf8");
   const compiled = ts.transpileModule(
     source.replace("import.meta.env.VITE_API_BASE_URL", '""'),
@@ -16,6 +19,7 @@ async function loadApi(fetcher) {
     exports,
     Headers,
     require(name) {
+      if (name === "./browser-storage") return storageExports;
       assert.equal(name, "./http");
       return {
         fetchWithTimeout: fetcher,
@@ -25,6 +29,22 @@ async function loadApi(fetcher) {
   });
   return exports;
 }
+
+test("付款交接身分守衛允許同帳號續期，但拒登出後重登或切換帳號", async () => {
+  const api = await loadApi(async () => { throw new Error("No HTTP needed"); });
+  assert.equal(api.captureSessionIdentityGuard()(), false);
+  const user = { id: "buyer-a", user_role: "customer", membership_type: "nonmember" };
+  api.saveSession({ access_token: "first-token", user });
+  const guard = api.captureSessionIdentityGuard();
+  api.saveSession({ access_token: "refreshed-token", user: { ...user } });
+  assert.equal(guard(), true);
+  api.clearSession();
+  api.saveSession({ access_token: "logged-in-again", user });
+  assert.equal(guard(), false);
+  const reloggedGuard = api.captureSessionIdentityGuard();
+  api.saveSession({ access_token: "other-token", user: { ...user, id: "buyer-b" } });
+  assert.equal(reloggedGuard(), false);
+});
 
 test("暫時性服務失敗不得與沒有登入工作階段混為一談", async () => {
   const exports = await loadApi(async () => new Response("Service unavailable", { status: 503 }));

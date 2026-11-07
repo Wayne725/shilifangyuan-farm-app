@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,21 +13,91 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..domain import member_sale_is_tax_exempt
 from ..integrations.common import (
     IntegrationConfigurationError,
     IntegrationError,
 )
 from ..integrations.invoice_service import (
     InvoiceApplicationError,
+    enqueue_invoice_issue,
     invoice_adapter_from_settings,
     reconcile_order_invoice,
 )
 from ..integrations.invoice_void import InvoiceVoidError, void_refunded_order_invoice
-from ..models import AdminAudit, Invoice, InvoiceStatus, User
+from ..models import AdminAudit, Invoice, InvoiceStatus, PaymentStatus, SalesChannel, User
+from ..invoice_timing import invoice_handling, pickup_invoice_due, cancel_unissued_invoice_jobs
+from ..schemas import InvoicePreferenceInput
 from ..rate_limit import INVOICE_QUERY_RULE, client_key, enforce
 
 
 invoices_router = APIRouter(tags=["invoices"])
+
+
+class AdminInvoiceIssueRequest(BaseModel):
+    handling: Literal["on_payment", "pickup_day"]
+    reason: str = Field(min_length=1, max_length=500)
+    confirm_not_invoiced_elsewhere: bool
+    preferences: Optional[InvoicePreferenceInput] = None
+
+    @field_validator("reason")
+    @classmethod
+    def nonempty_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("請填寫開票原因")
+        return value.strip()
+
+
+@invoices_router.post("/v1/admin/orders/{order_id}/invoice/issue")
+async def arrange_order_invoice(
+    order_id: UUID,
+    body: AdminInvoiceIssueRequest,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    from .orders import load_order
+    order = await load_order(session, str(order_id), lock=True, refresh=True)
+    if not body.confirm_not_invoiced_elsewhere:
+        raise HTTPException(422, "請確認此筆未由其他系統開立發票")
+    if order.payment_status != PaymentStatus.PAID or order.cancelled_at is not None:
+        raise HTTPException(409, "只有已收款且未取消的訂單可以安排開票")
+    if order.invoice is not None or order.invoice_status in {InvoiceStatus.ISSUED, InvoiceStatus.VOID_PENDING, InvoiceStatus.VOIDED}:
+        raise HTTPException(409, "已有開票紀錄，請查詢原發票，不可重新開立")
+    due = None
+    if body.handling == "pickup_day":
+        if (order.sales_channel != SalesChannel.MEAL_PREORDER and getattr(order, "customer_kind", "account") != "walk_in") or order.fulfillment is None or order.fulfillment.pickup_at is None:
+            raise HTTPException(422, "取餐日開票需要便當或現場交易的取餐時間")
+        due = pickup_invoice_due(order.fulfillment.pickup_at)
+    changed = invoice_handling(order) != body.handling
+    preference_data = {name: getattr(order, name) for name in InvoicePreferenceInput.model_fields}
+    if body.preferences is not None:
+        if member_sale_is_tax_exempt(order.membership_type_snapshot, body.preferences.invoice_buyer_type) != order.member_tax_exempt_snapshot:
+            raise HTTPException(409, "此變更會改變訂單原有稅別，請先更正訂單再安排開票")
+        preference_data.update(body.preferences.model_dump())
+    notification_email = preference_data["invoice_buyer_email"] or order.contact_email
+    if not notification_email:
+        raise HTTPException(422, "請先補齊客人的有效發票 Email，再安排系統開票")
+    try:
+        InvoicePreferenceInput.model_validate({**preference_data, "invoice_buyer_email": notification_email})
+    except ValidationError as exc:
+        raise HTTPException(422, "請先補齊有效的發票 Email、統編與載具資料，再安排開票") from exc
+    if body.preferences is not None:
+        for name, value in body.preferences.model_dump().items():
+            if getattr(order, name) != value:
+                changed = True
+                setattr(order, name, value)
+    if changed or order.invoice_status != InvoiceStatus.PENDING:
+        await cancel_unissued_invoice_jobs(session, order)
+        order.invoice_handling = body.handling
+        order.invoice_issue_after = due
+        order.invoice_status = InvoiceStatus.NOT_ELIGIBLE
+        enqueue_invoice_issue(session, order, trigger="admin_requested")
+        session.add(AdminAudit(actor_id=admin.id, action="invoice.arranged", aggregate_type="order",
+            aggregate_id=order.id, reason=body.reason,
+            data={"handling": body.handling, "issue_after": due.isoformat() if due else None}))
+        await session.commit()
+    return {"order_id": order.id, "invoice_status": order.invoice_status.value,
+        "invoice_handling": invoice_handling(order), "invoice_issue_after": order.invoice_issue_after}
 
 
 class MobileBarcodeValidationRequest(BaseModel):

@@ -247,7 +247,9 @@ test('手機放大字級仍可鍵盤預覽與返回，不溢出也不提交訂�
   const show = dialog.getByRole('button', { name: '查看修改後金額', exact: true }); await show.focus(); await show.press('Enter');
   await page.getByRole('dialog', { name: '確認數量與金額', exact: true }).waitFor();
   assert.equal(await page.getByRole('dialog').evaluate(node => { const rect = node.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.height <= innerHeight; }), true);
-  await page.keyboard.press('Escape'); await trigger.waitFor(); assert.equal(await trigger.evaluate(node => document.activeElement === node), true);
+  await page.keyboard.press('Escape'); await trigger.waitFor();
+  await page.waitForFunction(node => document.activeElement === node, await trigger.elementHandle());
+  assert.equal(await trigger.evaluate(node => document.activeElement === node), true);
   assert.deepEqual(state.writes, []); assert.equal(state.quotes.length, 1); await assertClean(page, state);
 });
 

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { useAuth } from "../context/AuthContext";
-import { apiFetch } from "../lib/api";
+import { useAdminPanelAccess } from "../lib/admin-panel-access";
 import { financePeriodPreset } from "../lib/meal-finance";
 import {
   orderSummaryChannelLabels,
@@ -18,12 +18,14 @@ import { OrderSummaryPrint } from "./OrderSummaryPrint";
 import "./AdminOrderSummary.css";
 
 const pageSize = 25;
+const privateQueryKeys = [["admin-order-summary"]] as const;
 const periodLabels = { today: "今天", week: "本週", month: "本月" } as const;
 const formatCount = (value: number) => new Intl.NumberFormat("zh-TW").format(value);
 
 export function AdminOrderSummary() {
   const { user } = useAuth();
   const isAdmin = user?.user_role === "admin";
+  const access = useAdminPanelAccess(privateQueryKeys);
   const [draft, setDraft] = useState<OrderSummaryFilters>(() => ({
     ...financePeriodPreset("month"), dateBasis: "pickup", salesChannel: "all", orderCategory: "meal", status: "active", category: "", search: "",
   }));
@@ -38,8 +40,9 @@ export function AdminOrderSummary() {
   });
   const report = useQuery({
     queryKey: ["admin-order-summary", user?.id, filters, offset],
-    queryFn: () => apiFetch<OrderSummaryReport>(`/v1/admin/order-summary?${parameters}`),
-    enabled: isAdmin,
+    queryFn: ({ signal }) => access.request<OrderSummaryReport>(`/v1/admin/order-summary?${parameters}`, { signal }),
+    enabled: isAdmin && !access.denied,
+    retry: (count) => !access.isDenied() && count < 3,
   });
   useEffect(() => {
     if (report.data && offset > 0 && offset >= report.data.products.total) {
@@ -48,6 +51,7 @@ export function AdminOrderSummary() {
   }, [offset, report.data]);
 
   if (!isAdmin) return null;
+  if (access.denied) return <section className="admin-gate"><p role="alert">管理權限已失效或已變更，請重新驗證後再操作。</p><button className="button button-system" type="button" onClick={() => window.location.reload()}>重新驗證管理權限</button></section>;
 
   const categoryOptions = [...new Set([draft.category, ...(report.data?.category_options || [])].filter(Boolean))];
   const showChannelFilter = filters.orderCategory !== "meal";
@@ -104,7 +108,7 @@ export function AdminOrderSummary() {
       <div><p>{filters.dateBasis === "pickup" ? "取餐日期" : "下單日期"}：{filters.startsOn} 至 {filters.endsOn}</p><p>{[orderCategoryLabels[filters.orderCategory], filters.salesChannel !== "all" && orderSummaryChannelLabels[filters.salesChannel], orderSummaryStatusLabels[filters.status], filters.category, filters.search].filter(Boolean).join(" · ")}</p></div>
       <button className="button button-quiet" type="button" disabled={report.isFetching} onClick={() => void report.refetch()}><ArrowClockwise size={18} />{report.isFetching && !report.isPending ? "更新中…" : "更新"}</button>
     </div>
-    <OrderSummaryPrint key={user.id} filters={filters} userId={user.id} disabled={report.isFetching || report.isError || !report.data} />
+    <OrderSummaryPrint key={user.id} access={access} filters={filters} userId={user.id} disabled={report.isFetching || report.isError || !report.data} />
     <div aria-busy={report.isFetching}>
       {report.isPending ? <LoadingLines count={5} /> : report.isError ? <DataState kind="error" title="訂單彙整無法讀取" detail={report.error.message} onAction={() => void report.refetch()} /> : report.data && <>
         <dl className="admin-order-summary-metrics" aria-label="查詢結果統計">

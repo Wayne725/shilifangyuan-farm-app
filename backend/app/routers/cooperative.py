@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-import csv
-import io
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
+from ..point_accounts import point_account
+from ..csv_export import csv_response
 from ..domain import aware
 from ..models import (
     AdminAudit,
@@ -46,6 +47,7 @@ from ..models import (
     SalesChannel,
     SurplusDistribution,
     SurplusLedger,
+    SystemSetting,
     TaxType,
     User,
     Wish,
@@ -76,17 +78,6 @@ def _period(start: date, end: date) -> tuple[datetime, datetime]:
     return (
         datetime.combine(start, time.min, tzinfo=timezone.utc),
         datetime.combine(end, time.max, tzinfo=timezone.utc),
-    )
-
-
-def _csv_response(filename: str, rows: list[list[Any]]) -> StreamingResponse:
-    stream = io.StringIO()
-    writer = csv.writer(stream)
-    writer.writerows(rows)
-    return StreamingResponse(
-        iter(["\ufeff" + stream.getvalue()]),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -198,8 +189,19 @@ async def confirm_surplus(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    lock = insert(SystemSetting).values(key="surplus_confirmation_lock", value={})
+    # The no-op UPSERT holds the database lock through the confirmation commit.
+    await session.execute(lock.on_conflict_do_update(
+        index_elements=[SystemSetting.key], set_={"key": lock.excluded.key},
+    ))
     if await session.scalar(select(FiscalYear).where(FiscalYear.label == body.label)):
         raise HTTPException(status_code=409, detail="此會計年度已確認，不可重複或修改")
+    if await session.scalar(select(FiscalYear.id).where(
+        FiscalYear.starts_on <= body.ends_on,
+        FiscalYear.ends_on >= body.starts_on,
+    ).limit(1)):
+        raise HTTPException(status_code=409, detail="此期間與既有結餘分配期間重疊，不可重複確認")
     result = await _surplus_result(session, body)
     fiscal_year = FiscalYear(
         label=body.label,
@@ -414,20 +416,16 @@ async def export_tax_ledger(
     ends_on: date,
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
-) -> StreamingResponse:
+) -> Response:
     rows = await _tax_rows(session, *_period(starts_on, ends_on))
-    return _csv_response(
+    return csv_response(
         f"tax-ledger-{starts_on}-{ends_on}.csv",
-        [["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"], *rows],
+        ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"], rows,
     )
 
 
 async def _point_account(session: AsyncSession, user_id: str) -> PointAccount:
-    account = await session.scalar(select(PointAccount).where(PointAccount.user_id == user_id))
-    if account is None:
-        account = PointAccount(user_id=user_id)
-        session.add(account)
-        await session.flush()
+    account = await point_account(session, user_id)
     return account
 
 
@@ -530,9 +528,13 @@ async def my_badges(
     for key, name, description, earned, rule in rules:
         definition = await session.scalar(select(BadgeDefinition).where(BadgeDefinition.key == key))
         if definition is None:
-            definition = BadgeDefinition(key=key, name=name, description=description, rule=rule)
-            session.add(definition)
-            await session.flush()
+            insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+            statement = insert(BadgeDefinition).values(key=key, name=name, description=description, rule=rule)
+            definition = await session.scalar(statement.on_conflict_do_nothing(
+                index_elements=[BadgeDefinition.key],
+            ).returning(BadgeDefinition))
+            if definition is None:
+                definition = await session.scalar(select(BadgeDefinition).where(BadgeDefinition.key == key))
         if earned and await session.scalar(select(MemberBadge.id).where(MemberBadge.user_id == user.id, MemberBadge.badge_id == definition.id)) is None:
             session.add(MemberBadge(user_id=user.id, badge_id=definition.id))
     await session.commit()
@@ -649,6 +651,12 @@ async def update_wish_status(
         raise HTTPException(status_code=404, detail="找不到願望")
     if body.status == WishStatus.LAUNCHED and not (body.launched_product_id or body.launched_campaign_id):
         raise HTTPException(status_code=422, detail="成案需關聯正式商品或共同購買")
+    for target_id, model, label in (
+        (body.launched_product_id, Product, "商品"),
+        (body.launched_campaign_id, GroupCampaign, "共同購買"),
+    ):
+        if target_id is not None and await session.scalar(select(model.id).where(model.id == target_id).with_for_update(read=True)) is None:
+            raise HTTPException(status_code=422, detail=f"找不到關聯{label}，請重新選擇")
     first_launch = wish.status != WishStatus.LAUNCHED and body.status == WishStatus.LAUNCHED
     wish.status = body.status
     wish.admin_note = body.admin_note
@@ -856,7 +864,7 @@ async def supplier_orders_csv(
     note: str = "",
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
-) -> StreamingResponse:
+) -> Response:
     start, end = _period(starts_on, ends_on)
     rows = (
         await session.execute(
@@ -877,7 +885,8 @@ async def supplier_orders_csv(
             .order_by(OrderItem.product_name)
         )
     ).all()
-    return _csv_response(
+    return csv_response(
         f"supplier-order-{starts_on}-{ends_on}.csv",
-        [["商品", "數量", "單位", "溫層", "預計到貨日", "備註"], *[[name, int(quantity), unit, temperature.value if temperature else "未設定", expected_arrival_on, note] for name, quantity, unit, temperature in rows]],
+        ["商品", "數量", "單位", "溫層", "預計到貨日", "備註"],
+        [[name, int(quantity), unit, temperature.value if temperature else "未設定", expected_arrival_on, note] for name, quantity, unit, temperature in rows],
     )

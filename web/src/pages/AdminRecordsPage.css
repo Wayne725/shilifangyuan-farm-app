@@ -12,4 +12,10 @@
 .admin-records-totals dd { margin: 10px 0 0; font-size: 1.5rem; }
 .admin-records-form { margin-top: 40px; padding: clamp(20px, 4vw, 48px); border: 1px solid var(--line); display: grid; gap: 24px; background: var(--paper); }
 .admin-records-form h2, .admin-records-form p { margin: 0; }
+.admin-manual-invoice-records { margin-block: 20px; border-block: 1px solid var(--line); }
+.admin-manual-invoice-records > summary { padding-block: 14px; cursor: pointer; font-weight: 600; }
+.admin-manual-invoice-content { padding-bottom: 16px; }
+.admin-manual-invoice-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.admin-manual-invoice-table { max-height: 24rem; }
+.admin-manual-invoice-table th, .admin-manual-invoice-table td { padding: 12px 10px; }
 @media (max-width: 600px) { .admin-records-totals { grid-template-columns: 1fr; } }

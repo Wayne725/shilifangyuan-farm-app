@@ -74,10 +74,12 @@ function InvoiceCarrierFields({
   value,
   onChange,
   sectionNumber,
+  allowSavedCarrier,
 }: {
   value: InvoicePreference;
   onChange: (value: InvoicePreference) => void;
   sectionNumber: string;
+  allowSavedCarrier: boolean;
 }) {
   const { user, saveMobileBarcode } = useAuth();
   const [saveState, setSaveState] = useState({ status: "", error: "" });
@@ -112,7 +114,7 @@ function InvoiceCarrierFields({
         <input
           checked={value.carrierType === "mobile_barcode"}
           name={`invoice-carrier-${sectionNumber}`}
-          onChange={() => onChange({ ...value, carrierType: "mobile_barcode", carrierValue: value.carrierValue || user?.saved_mobile_barcode || "" })}
+          onChange={() => onChange({ ...value, carrierType: "mobile_barcode", carrierValue: value.carrierValue || (allowSavedCarrier ? user?.saved_mobile_barcode : "") || "" })}
           type="radio"
         />
         <span><strong>手機條碼載具</strong></span>
@@ -131,7 +133,7 @@ function InvoiceCarrierFields({
             value={value.carrierValue || ""}
           />
         </label>
-        {user && <div className="invoice-carrier-storage">
+        {allowSavedCarrier && user && <div className="invoice-carrier-storage">
           <label className="invoice-save-carrier">
             <input type="checkbox" checked={value.saveCarrier === true} disabled={saveState.status === "saving"} onChange={event => onChange({ ...value, saveCarrier: event.target.checked })} />
             <span>結帳時儲存此手機條碼供下次使用</span>
@@ -190,11 +192,13 @@ export function InvoicePreferenceFields({
   onChange,
   sectionNumber = "03",
   showHeading = true,
+  allowSavedCarrier = true,
 }: {
   value: InvoicePreference;
   onChange: (value: InvoicePreference) => void;
   sectionNumber?: string;
   showHeading?: boolean;
+  allowSavedCarrier?: boolean;
 }) {
   const { user } = useAuth();
   const emailLimit = invoiceEmailLimit(value);
@@ -296,6 +300,7 @@ export function InvoicePreferenceFields({
           key={user?.id || "guest"}
           onChange={onChange}
           sectionNumber={sectionNumber}
+          allowSavedCarrier={allowSavedCarrier}
           value={value}
         />
       </div>

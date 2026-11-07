@@ -16,6 +16,7 @@ from app.routers import groups, logistics, membership
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
 from tests.support import api_test_context
+from tests.foreign_key_support import unrelated_catalog_sources
 from tests.test_meals_production_configuration import meal_production_settings
 
 
@@ -139,6 +140,8 @@ async def test_payment_rechecks_product_and_order_not_only_initial_creation(prod
     order = await session.scalar(select(Order).where(Order.id == order_id).options(
         selectinload(Order.items), selectinload(Order.fulfillment)))
     item = order.items[0]
+    if case in {"group_source", "meal_source", "group_campaign", "meal_event"}:
+        sources = await unrelated_catalog_sources(session, order.user_id)
     if case == "wrong_id":
         settings.meals_test_product_id = str(uuid4())
     elif case == "wrong_sku":
@@ -170,17 +173,17 @@ async def test_payment_rechecks_product_and_order_not_only_initial_creation(prod
     elif case == "fulfillment_record":
         order.fulfillment.method = FulfillmentMethod.ECPAY_LOGISTICS
     elif case == "group_source":
-        item.source_bundle_id = str(uuid4())
+        item.source_bundle_id = sources.bundle.id
     elif case == "meal_source":
-        item.source_meal_offering_id = str(uuid4())
+        item.source_meal_offering_id = sources.offering.id
     elif case == "old_context":
         order.invoice_provider_context = {**order.invoice_provider_context, "user_id": "OLD-ACCOUNT"}
     elif case == "missing_context":
         order.invoice_provider_context = None
     elif case == "group_campaign":
-        order.group_campaign_id = str(uuid4())
+        order.group_campaign_id = sources.campaign.id
     elif case == "meal_event":
-        order.meal_event_id = str(uuid4())
+        order.meal_event_id = sources.meal_event.id
     elif case == "disabled":
         settings.meals_test_product_id = settings.meals_test_product_sku = ""
     stored_context = order.invoice_provider_context

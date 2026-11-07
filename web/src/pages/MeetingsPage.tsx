@@ -6,6 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { MeetingFilters } from "../components/MeetingTools";
 import { filterMeetings, meetingAccessDenied, meetingCategoryName, meetingCategoryOptions, retryMeetingRead } from "../lib/meetings";
 import { SocialNav } from "../components/SocialNav";
+import { MembershipReadError } from "../components/MembershipReadError";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDateTime } from "../lib/api";
@@ -50,7 +51,7 @@ export function MeetingsPage() {
           <button className="button button-primary" type="button" onClick={openLogin}>登入帳號</button>
         </div>
       ) : membership.isPending ? <LoadingLines count={3} /> : membership.isError ? (
-        <DataState kind="error" title="社員資格暫時無法讀取" detail={membership.error.message} />
+        <MembershipReadError error={membership.error} onRetry={() => void membership.refetch()} />
       ) : !canAccess || denied ? (
         <div className="social-access-card">
           <UsersThree size={38} weight="light" />

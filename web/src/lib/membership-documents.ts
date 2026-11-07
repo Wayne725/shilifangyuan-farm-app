@@ -5,10 +5,11 @@ export function documentExpired(document: MembershipDocument): boolean {
 }
 
 export function documentAvailable(document: MembershipDocument): boolean {
-  return document.status === "confirmed" && !documentExpired(document);
+  return document.is_demo_placeholder !== true && document.status === "confirmed" && !documentExpired(document);
 }
 
 export function documentRetentionLabel(document: MembershipDocument): string {
+  if (document.is_demo_placeholder === true) return "示範資料，無實際檔案";
   if (document.deleted_at || document.status === "deleted") return "證件檔案已刪除";
   if (documentExpired(document)) return document.deletion_error ? "已停止調閱，刪除失敗待重試" : "已到期停止調閱，等待清除";
   if (!document.expires_at) return "舊資料：留存期限待確認";

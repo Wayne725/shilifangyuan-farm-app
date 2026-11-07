@@ -50,6 +50,9 @@ async def test_failed_email_retry_requires_reason_and_cannot_repeat_or_retry_inv
         missing_reason = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer), json={"reason": "  "})
         assert missing_reason.status_code == 422
         retry = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer), json={"reason": "已修正寄信設定"})
+        assert retry.status_code == 409, retry.text
+        retry = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer),
+            json={"reason": "已向供應商查詢並確認重送風險", "confirm_delivery_risk": True})
         assert retry.status_code == 200, retry.text
         assert retry.json()['status'] == 'pending'
         again = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer), json={"reason": "重複按鈕"})
