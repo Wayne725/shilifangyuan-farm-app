@@ -4,8 +4,9 @@
   margin: 32px clamp(24px, 6vw, 96px) 0;
 }
 .admin-operation-nav a {
-  flex: 1 1 0;
-  max-width: 300px;
+  flex: 0 1 auto;
+  max-width: none;
+  white-space: nowrap;
 }
 .admin-operation-page { max-width: none; }
 .admin-operation-page .data-row { grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.9fr) minmax(130px, 0.9fr) minmax(90px, 0.6fr); gap: 16px; font-size: 1rem; }

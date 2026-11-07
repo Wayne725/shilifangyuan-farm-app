@@ -54,7 +54,7 @@ interface AdminOrderPage {
 import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
 import { orderCategoryLabels, type OrderCategory } from "../lib/order-category";
 
-type OperationSection = "orders" | "summary" | "issues" | "suppliers" | "locations";
+type OperationSection = "orders" | "manual-invoice" | "summary" | "issues" | "suppliers" | "locations";
 
 export function AdminPage() {
   const { user, openLogin } = useAuth();
@@ -134,7 +134,6 @@ export function AdminPage() {
   const orderContent = orderAccess.denied
     ? <DataState kind="error" title="管理權限待重新驗證" detail="請重新整理頁面並確認管理者登入狀態。" />
     : <section className="admin-orders-panel">
-    <AdminWalkInSale key={user.id} />
     <OrderCategoryFilter value={orderCategory} onChange={(value) => { setOrderCategory(value); setOrderOffset(0); }} />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
@@ -224,13 +223,14 @@ export function AdminPage() {
   </section>;
 
   const content = section === "orders" ? orderContent
+    : section === "manual-invoice" ? <AdminWalkInSale key={user.id} />
     : section === "summary" ? <AdminOrderSummary />
     : section === "issues" ? <section className="admin-issues-panel"><SectionHeading eyebrow="SYSTEM STATUS / 系統狀態" title="問題回報" /><AdminFailurePanel /></section>
       : section === "suppliers" ? supplierContent : locationContent;
 
   return <>
     <section className="admin-intro admin-operations-intro">
-      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "summary" ? "訂單彙整" : section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
+      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "manual-invoice" ? "手動開票" : section === "summary" ? "訂單彙整" : section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
       <div className="admin-intro-meta"><span>管理者</span><strong>{user.display_name}</strong></div>
     </section>
     <AdminNav />
