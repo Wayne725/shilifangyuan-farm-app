@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import require_admin
 from ..csv_export import csv_response
 from ..database import get_session
+from ..invoice_tax_summary import invoice_tax_summary
 from ..domain import aware
 from ..meal_booking import TAIPEI
 from ..models import AdminAudit, Order, Invoice, InvoiceStatus, User
@@ -22,7 +23,7 @@ async def invoice_rows(session, q, status, start, end, order_category='all'):
     if start: query = query.where(Order.created_at >= datetime.combine(start, time.min, TAIPEI))
     if end: query = query.where(Order.created_at < datetime.combine(end + timedelta(days=1), time.min, TAIPEI))
     orders = list(await session.scalars(query.order_by(Order.created_at.desc(), Order.id)))
-    return [{'order_id': row.id, 'order_number': row.order_number, 'sales_channel': row.sales_channel.value, 'email': row.contact_email, 'created_at': row.created_at, 'invoice_number': row.invoice.invoice_number if row.invoice else None, 'invoice_date': row.invoice.invoice_date if row.invoice else None, 'status': row.invoice_status.value, 'payment_status': row.payment_status.value, 'amount': row.invoice.total_amount if row.invoice else row.amount_total, 'tax_amount': row.invoice.tax_amount if row.invoice else row.tax_amount, 'provider': row.invoice.provider if row.invoice else ''} for row in orders]
+    return [{'order_id': row.id, 'order_number': row.order_number, 'sales_channel': row.sales_channel.value, 'email': row.contact_email, 'created_at': row.created_at, 'invoice_number': row.invoice.invoice_number if row.invoice else None, 'invoice_date': row.invoice.invoice_date if row.invoice else None, 'status': row.invoice_status.value, 'payment_status': row.payment_status.value, 'amount': row.invoice.total_amount if row.invoice else row.amount_total, 'tax_amount': row.invoice.tax_amount if row.invoice else row.tax_amount, 'estimated_tax_amount': row.tax_amount, 'invoice_tax': invoice_tax_summary(row.invoice), 'provider': row.invoice.provider if row.invoice else ''} for row in orders]
 
 @invoice_reports_router.get('/invoice-register')
 async def read_invoice_register(q: str = Query(default='', max_length=120), status: InvoiceStatus | None = None, starts_on: date | None = None, ends_on: date | None = None, order_category: OrderCategory = 'all', limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0), _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):

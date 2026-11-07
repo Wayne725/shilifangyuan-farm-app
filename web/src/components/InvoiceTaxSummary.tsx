@@ -1,13 +1,16 @@
 import { Receipt } from "@phosphor-icons/react";
 
 import { formatMoney } from "../lib/api";
-import { invoiceTaxSummary, type InvoiceTaxItem } from "../lib/invoice-tax";
+import { resolveInvoiceTax, type InvoiceTaxItem } from "../lib/invoice-tax";
+import type { InvoiceTax } from "../lib/types";
 
 interface InvoiceTaxSummaryProps {
   items: ReadonlyArray<InvoiceTaxItem>;
   memberTaxExempt?: boolean;
   shippingFee?: number;
   taxAmount?: number;
+  invoiceTax?: InvoiceTax | null;
+  invoiceStatus?: string | null;
   taxAmountLabel?: string;
   variant?: "rows" | "card";
 }
@@ -17,20 +20,22 @@ export function InvoiceTaxSummary({
   memberTaxExempt,
   shippingFee,
   taxAmount,
-  taxAmountLabel = "稅額",
+  invoiceTax,
+  invoiceStatus,
+  taxAmountLabel = "預估稅額",
   variant = "rows",
 }: InvoiceTaxSummaryProps) {
-  const summary = invoiceTaxSummary({ items, memberTaxExempt, shippingFee });
-  const amount = typeof taxAmount === "number" && !(memberTaxExempt && taxAmount === 0) && <div><dt>{taxAmountLabel}</dt><dd>{formatMoney(taxAmount)}</dd></div>;
+  const summary = resolveInvoiceTax({ items, memberTaxExempt, shippingFee, taxAmount, invoiceTax, invoiceStatus, estimatedAmountLabel: taxAmountLabel });
+  const amount = <div><dt>{summary.amountLabel}</dt><dd>{summary.amount === null ? summary.amountText : formatMoney(summary.amount)}</dd></div>;
   if (variant === "card") {
     return <section className="invoice-summary-card" aria-label="訂單稅別">
       <Receipt size={25} weight="light" />
-      <div><small>發票稅別</small><strong>{summary.label}</strong></div>
+      <div><small>{summary.taxTypeHeading}</small><strong>{summary.taxTypeLabel}</strong></div>
       <dl>{amount}</dl>
     </section>;
   }
   return <>
-    <div><dt>發票稅別</dt><dd>{summary.label}</dd></div>
+    <div><dt>{summary.taxTypeHeading}</dt><dd>{summary.taxTypeLabel}</dd></div>
     {amount}
   </>;
 }

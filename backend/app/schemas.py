@@ -793,6 +793,13 @@ class OrderItemRead(ApiModel):
     tax_type: TaxType
 
 
+class InvoiceTaxRead(ApiModel):
+    status: Literal["external", "not_eligible", "pending", "issued", "failed", "void_pending", "voided", "unknown"]
+    tax_type: Literal["taxable", "tax_exempt", "mixed", "unknown"]
+    amount_semantics: Literal["separately_stated", "included_not_separately_stated", "unknown"]
+    tax_amount: Optional[int] = Field(default=None, ge=0)
+
+
 class InvoiceRead(ApiModel):
     id: str
     provider: str
@@ -860,6 +867,7 @@ class OrderAmendmentRead(ApiModel):
 
 
 class OrderRead(ApiModel):
+    invoice_tax: Optional[InvoiceTaxRead] = None
     customer_kind: Literal["account", "walk_in"] = "account"
     invoice_handling: str = "on_payment"
     invoice_issue_after: Optional[datetime] = None
@@ -1812,6 +1820,7 @@ class MealCancellationRequestRead(ApiModel):
 
 
 class MealOrderRead(ApiModel):
+    invoice_tax: Optional[InvoiceTaxRead] = None
     invoice_handling: str = "on_payment"
     invoice_issue_after: Optional[datetime] = None
     revision: int = 1

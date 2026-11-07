@@ -256,7 +256,7 @@ function OrderWorkspace() {
                 <p><strong>餐具：</strong>{selected.fulfillment.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
               </div>}
 
-              <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} shippingFee={selected.shipment?.shipping_fee} taxAmount={selected.tax_amount} />
+              <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} shippingFee={selected.shipment?.shipping_fee} taxAmount={selected.tax_amount} invoiceTax={selected.invoice_tax} invoiceStatus={selected.invoice_status} />
 
               {selected.invoice_status !== "not_eligible" && (
                 <div className="invoice-summary-card">

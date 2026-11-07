@@ -11,7 +11,9 @@ for (const width of [1440, 390]) {
     t.after(() => browser.close());
     const context = await browser.newContext({viewport: {width, height: 1000}, serviceWorkers: 'block'});
     const reads = [], downloads = [], errors = [], unknown = [];
-    const rows = ['regular', 'group', 'meal_preorder'].map((sales_channel, index) => ({order_id: `${index}`, order_number: `INVOICE-${sales_channel}`, sales_channel, email: 'buyer@example.test', status: 'issued', amount: 200, tax_amount: 0, invoice_number: `AB1234567${index}`, invoice_date: '2030-01-02T04:00:00Z'}));
+    const rows = ['regular', 'group', 'meal_preorder'].map((sales_channel, index) => ({order_id: `${index}`, order_number: `INVOICE-${sales_channel}`, sales_channel, email: 'buyer@example.test', status: index === 2 ? 'pending' : 'issued', amount: 120, tax_amount: index === 0 ? 6 : 0, estimated_tax_amount: 5,
+      invoice_tax: index === 2 ? null : {status: 'issued', tax_type: 'taxable', amount_semantics: index === 0 ? 'separately_stated' : 'included_not_separately_stated', tax_amount: index === 0 ? 6 : null},
+      invoice_number: index === 2 ? null : `AB1234567${index}`, invoice_date: index === 2 ? null : '2030-01-02T04:00:00Z'}));
     await context.route('**/*', async route => {
       const url = new URL(route.request().url()), path = url.pathname;
       if (url.origin !== base) return route.abort();
@@ -31,6 +33,14 @@ for (const width of [1440, 390]) {
     const page = await context.newPage(); page.setDefaultTimeout(7000); page.on('pageerror', error => errors.push(error.message));
     await page.goto(`${base}/admin/invoices`);
     await page.getByText('全部訂單 · 共 3 筆', {exact: true}).waitFor();
+    const regularTax = page.getByRole('row').filter({hasText: 'INVOICE-regular'}).locator('td').nth(5);
+    assert.match(await regularTax.innerText(), /發票稅額\s*\$6/);
+    assert.doesNotMatch(await regularTax.innerText(), /\$5|預估/);
+    const groupTax = page.getByRole('row').filter({hasText: 'INVOICE-group'}).locator('td').nth(5);
+    assert.match(await groupTax.innerText(), /含稅，發票未分列稅額/);
+    assert.doesNotMatch(await groupTax.innerText(), /\$0|免稅/);
+    const mealTax = page.getByRole('row').filter({hasText: 'INVOICE-meal_preorder'}).locator('td').nth(5);
+    assert.match(await mealTax.innerText(), /預估稅額\s*\$5/);
     await page.getByRole('combobox', {name: '訂單分類', exact: true}).selectOption('general');
     await page.getByText('一般訂單 · 共 2 筆', {exact: true}).waitFor();
     await page.getByLabel('訂單編號、發票號碼或 Email').fill('group');

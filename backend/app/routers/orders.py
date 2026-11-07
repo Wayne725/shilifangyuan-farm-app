@@ -16,6 +16,7 @@ from ..auth import (
     membership_type_for_user,
     require_admin,
 )
+from ..invoice_tax_summary import invoice_tax_summary
 from ..database import get_session
 from ..group_review import order_accepts_group_payment, order_has_uncertain_group_payment, order_matches_group_contract
 from ..platform_settings import require_accepting_orders
@@ -109,6 +110,7 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
     if latest and latest.status == "pending":
         actions = [action for action in actions if action != "refund"]
     return OrderRead(
+        invoice_tax=invoice_tax_summary(order.__dict__.get("invoice")),
         customer_kind=order.customer_kind or "account",
         id=order.id,
         revision=order.revision,

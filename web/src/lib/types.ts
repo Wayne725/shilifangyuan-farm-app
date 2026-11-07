@@ -101,6 +101,13 @@ export type InvoiceStatus =
   | "void_pending"
   | "voided";
 
+export interface InvoiceTax {
+  status: string;
+  tax_type: "taxable" | "tax_exempt" | "mixed" | "unknown";
+  amount_semantics: "separately_stated" | "included_not_separately_stated" | "unknown";
+  tax_amount: number | null;
+}
+
 export interface InvoiceRecord {
   id: string;
   provider: string;
@@ -185,6 +192,7 @@ export interface Order {
   invoice_handling?: "on_payment" | "pickup_day" | "external";
   invoice_issue_after?: string | null;
   invoice_status: InvoiceStatus;
+  invoice_tax?: InvoiceTax | null;
   paid_at?: string | null;
   cancelled_at?: string | null;
   created_at: string;
@@ -655,6 +663,7 @@ export interface MealOrder {
   invoice_handling?: "on_payment" | "pickup_day" | "external";
   invoice_issue_after?: string | null;
   invoice_status: string;
+  invoice_tax?: InvoiceTax | null;
   invoice_number?: string | null;
   invoice_date?: string | null;
   fulfillment_status: string;

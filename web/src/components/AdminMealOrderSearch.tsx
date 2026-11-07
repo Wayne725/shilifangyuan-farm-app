@@ -111,7 +111,7 @@ function MealOperationOrder({ item, onReviewOrder }: { item: MealAdminOrderItem;
     <AdminCancelOrder order={order} /><AdminCashPayment order={order} />
     <details><summary>查看餐點、發票與退單明細</summary>
       <ul>{order.items.map((meal, index) => <li key={`${meal.offering_id}-${index}`}>{meal.meal_name} × {meal.quantity} · {formatMoney(meal.subtotal)}{meal.selections.length > 0 && <span>（{meal.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join("、")}）</span>}</li>)}</ul>
-      <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} taxAmount={order.tax_amount} />
+      <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} taxAmount={order.tax_amount} invoiceTax={order.invoice_tax} invoiceStatus={order.invoice_status} />
       {order.invoice_number && <p>發票號碼：{order.invoice_number}{order.invoice_date && ` · ${formatDateTime(order.invoice_date)}`}</p>}
       {order.cancellation_request && <div className="meal-cancellation-reason"><p>退單原因：{order.cancellation_request.reason}</p><p>申請時間：{formatDateTime(order.cancellation_request.requested_at)}</p>{order.cancellation_request.review_reason && <p>審核理由：{order.cancellation_request.review_reason}</p>}</div>}
       <p>下單時間：{formatDateTime(order.created_at)}</p>

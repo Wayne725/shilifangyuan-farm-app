@@ -21,6 +21,7 @@ from ..auth import (
 from ..config import Settings, get_settings
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..integrations.common import IntegrationError
+from ..invoice_tax_summary import invoice_tax_summary
 from ..database import get_session
 from ..order_numbers import allocate_order_number
 from ..order_history import OrderHistoryQuery, read_order_history
@@ -306,6 +307,7 @@ async def _meal_order_read(
             onsite_payment = {"method": attempt.provider_response.get("collection_method", "cash"),
                 "reference": attempt.provider_response.get("reference", ""), "paid_at": _aware(attempt.paid_at).isoformat()}
     return MealOrderRead(
+        invoice_tax=invoice_tax_summary(order.__dict__.get("invoice")),
         kitchen_note=order.kitchen_note,
         onsite_payment=onsite_payment,
         id=order.id,
