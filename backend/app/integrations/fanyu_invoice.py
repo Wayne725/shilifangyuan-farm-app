@@ -381,9 +381,11 @@ class FanyuInvoiceAdapter:
         invoice_date: str,
         reason: str,
         notify_email: str = "",
+        automatic_refund: bool = False,
     ) -> Mapping[str, Any]:
-        if not reason.strip() or len(reason.strip()) > 20:
-            raise ValueError("發票作廢原因必須為 1 至 20 字")
+        cancel_reason = reason.strip() or ("全額退款自動作廢" if automatic_refund else "管理員作廢")
+        if len(cancel_reason) > 20:
+            raise ValueError("發票作廢原因不可超過 20 字")
         return await self._request(
             "/cancelInvoice",
             {
@@ -393,7 +395,7 @@ class FanyuInvoiceAdapter:
                 "buyerID": buyer_tax_id if buyer_type == "company" else "00000000",
                 "invNo": invoice_number,
                 "invDate": invoice_date,
-                "cancelReason": reason.strip(),
+                "cancelReason": cancel_reason,
                 "remark": "",
                 "notifyEmail": notify_email[:80],
             },

@@ -70,7 +70,7 @@ export function MembershipEducationSettings() {
   }
   const wholeNumber = (value: string, max: number) => /^\d+$/.test(value) && Number(value) <= max;
   const valid = draft && wholeNumber(draft.retry_limit, 100)
-    && wholeNumber(draft.retry_interval_minutes, 525600) && draft.reason.trim().length > 0;
+    && wholeNumber(draft.retry_interval_minutes, 525600);
   const conflict = save.error instanceof ApiError && save.error.status === 409;
   const busy = save.isPending || reloading;
   return <form onSubmit={event => { event.preventDefault(); if (valid && draft) save.mutate(draft); }}>
@@ -85,7 +85,7 @@ export function MembershipEducationSettings() {
             <label className="field"><span>額外重考次數（不含首次）</span><input type="number" min={0} max={100} step={1} required value={draft.retry_limit} onChange={event => edit({ retry_limit: event.target.value })} /></label>
             <label className="field"><span>重考間隔（分鐘）</span><input type="number" min={0} max={525600} step={1} required value={draft.retry_interval_minutes} onChange={event => edit({ retry_interval_minutes: event.target.value })} /></label>
           </div>
-          <label className="field"><span>調整原因</span><input required maxLength={1000} value={draft.reason} onChange={event => edit({ reason: event.target.value })} /></label>
+          <label className="field"><span>調整原因</span><input maxLength={1000} value={draft.reason} onChange={event => edit({ reason: event.target.value })} /></label>
         </fieldset>
         {save.isError && <p className="form-error" role="alert">{save.error.message}</p>}
         {save.isSuccess && <p className="form-success" role="status">重考設定已儲存</p>}

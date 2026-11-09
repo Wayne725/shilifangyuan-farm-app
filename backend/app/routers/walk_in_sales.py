@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -75,11 +76,11 @@ class WalkInSaleCreate(BaseModel):
     invoice_handling: Literal["on_payment", "pickup_day", "external"] = "on_payment"
     pickup_date: date | None = None
     preferences: WalkInInvoicePreferenceInput = Field(default_factory=WalkInInvoicePreferenceInput)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: AdminExplanation = Field(default="", max_length=500)
     confirm_received: bool
     confirm_not_invoiced_elsewhere: bool = False
 
-    @field_validator("product_name", "reason", "customer_name")
+    @field_validator("product_name", "customer_name")
     @classmethod
     def trimmed_text(cls, value):
         if value is None:
@@ -149,15 +150,8 @@ async def recover_walk_in_sale(
 class WalkInRefundRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: int = Field(ge=1, strict=True)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: AdminExplanation = Field(default="", max_length=500)
     confirm_returned: Literal[True]
-
-    @field_validator("reason")
-    @classmethod
-    def nonempty_reason(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("請填寫現場退款原因")
-        return value.strip()
 
 
 @walk_in_sales_router.post("/{order_id}/refund")

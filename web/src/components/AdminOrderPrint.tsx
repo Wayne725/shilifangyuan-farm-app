@@ -79,7 +79,7 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
   });
   const send = () => operate(async () => {
     if (!eligible) return;
-    if (!attempt && (!preview?.can_print || reason.trim().length < 2 || (preview.duplicate_risk && !acknowledge))) return;
+    if (!attempt && (!preview?.can_print || (preview.duplicate_risk && !acknowledge))) return;
     const value = attempt || { request_id: crypto.randomUUID(), preview_token: preview!.preview_token, reason: reason.trim(), acknowledge_duplicate: acknowledge };
     // Keep the request across lost responses, dialog closes and page reloads.
     saveAttempt(value);
@@ -129,9 +129,9 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
             <pre aria-label="出單預覽">{preview.preview}</pre>
             {preview.blocked_reason && <p className="form-error" role="status">{preview.blocked_reason}</p>}
             <form onSubmit={event => { event.preventDefault(); void send(); }}>
-              <label className="field"><span>出單原因</span><input required minLength={2} maxLength={200} value={reason} disabled={busy || !preview.can_print} onChange={event => setReason(event.target.value)} /></label>
+              <label className="field"><span>出單原因</span><input maxLength={200} value={reason} disabled={busy || !preview.can_print} onChange={event => setReason(event.target.value)} /></label>
               {preview.duplicate_risk && <label className="admin-order-print-check"><input type="checkbox" required checked={acknowledge} disabled={busy} onChange={event => setAcknowledge(event.target.checked)} />已核對紙本，接受可能重複列印</label>}
-              <button className="button button-primary" disabled={busy || !preview.can_print || reason.trim().length < 2 || (preview.duplicate_risk && !acknowledge)}>{busy ? "送印中…" : preview.mode === "dry_run" ? "確認模擬出單" : "確認送至出單機"}</button>
+              <button className="button button-primary" disabled={busy || !preview.can_print || (preview.duplicate_risk && !acknowledge)}>{busy ? "送印中…" : preview.mode === "dry_run" ? "確認模擬出單" : "確認送至出單機"}</button>
             </form>
           </>}
           {job && <div role="status" className="admin-order-print-result"><strong>已建立出單工作：{statuses[job.status] || job.status}</strong><span>{job.mode === "dry_run" ? "模擬" : "正式"} · {job.kind === "reference" ? "訂單紀錄單／請勿製作" : "便當訂餐單"}</span></div>}

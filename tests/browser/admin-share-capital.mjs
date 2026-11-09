@@ -75,21 +75,20 @@ async function beginRosterEdit(page, claimed = true) {
   return { card, form: card.getByRole('form', { name: '修改股金與股數', exact: true }) };
 }
 
-test('已認領名冊可修正股金股數，必填原因且成功同步重新讀取兩份列表', { timeout: 20000 }, async (t) => {
+test('已認領名冊原因留空仍可修正股籍，成功同步重新讀取兩份列表', { timeout: 20000 }, async (t) => {
   const { page, state } = await fixture(t);
   const { card, form } = await beginRosterEdit(page);
   await form.getByText(/僅修正股籍，不會收款或退款/).waitFor();
   const save = form.getByRole('button', { name: '儲存股籍修正', exact: true });
-  assert.equal(await save.isDisabled(), true);
+  assert.equal(await save.isEnabled(), true);
   await form.getByLabel('股金（元）', { exact: true }).fill('2400');
   await form.getByLabel('股數', { exact: true }).fill('4');
-  await form.getByLabel('修改原因', { exact: true }).fill('  核對合作社股籍紀錄  ');
   const rosterReads = state.reads.filter((path) => path === rosterPath).length;
   const memberReads = state.reads.filter((path) => path === membersPath).length;
   await save.click();
   await card.getByRole('status').getByText('股籍已更新；未收款或退款。', { exact: true }).waitFor();
   await card.getByText('股金 2400 元 · 4 股', { exact: true }).waitFor();
-  assert.deepEqual(state.writes, [{ path: `${rosterPath}/roster-claimed/shares`, payload: { share_capital_amount: 2400, share_count: 4, reason: '核對合作社股籍紀錄', expected_updated_at: originalVersion } }]);
+  assert.deepEqual(state.writes, [{ path: `${rosterPath}/roster-claimed/shares`, payload: { share_capital_amount: 2400, share_count: 4, reason: '', expected_updated_at: originalVersion } }]);
   assert.ok(state.reads.filter((path) => path === rosterPath).length > rosterReads);
   assert.ok(state.reads.filter((path) => path === membersPath).length > memberReads);
   await page.getByRole('tab', { name: '會籍管理', exact: true }).click();

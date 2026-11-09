@@ -26,7 +26,7 @@ async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block', reducedMotion: 'reduce' });
   const state = {
     order: { ...structuredClone(channel === 'meal_preorder' ? meal : regular), sales_channel: channel, payment_status: status },
-    settings: { orders_open: true, closed_message: '暫停接受新訂單', support_phone: phone, printer_brand: '', printer_model: '', printer_connection: 'unknown', kitchen_sound: false },
+    settings: { version: 1, orders_open: true, closed_message: '暫停接受新訂單', support_phone: phone, printer_brand: '', printer_model: '', printer_connection: 'unknown', kitchen_sound: false },
     writes: [], reads: [], unknown: [], errors: [], failure: false, phoneFailure: false,
   };
   await context.route('**/*', route => {
@@ -38,7 +38,7 @@ async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 
     if (path === '/v1/platform') return route.fulfill(state.phoneFailure ? { status: 503, json: { detail: '隔離平台讀取失敗' } } : { json: state.settings });
     if (path === '/v1/admin/membership-education/settings') return route.fulfill({ json: { configured: false, version: 0, retry_limit: 0, retry_interval_minutes: 0, updated_at: null, updated_by_id: null } });
     if (path === '/v1/admin/platform') {
-      if (method === 'PUT') { const body = request.postDataJSON(); state.writes.push({ path, body }); state.settings = { ...state.settings, ...body }; }
+      if (method === 'PUT') { const body = request.postDataJSON(); state.writes.push({ path, body }); assert.equal(body.expected_version, state.settings.version); state.settings = { ...state.settings, ...body, version: state.settings.version + 1 }; }
       return route.fulfill({ json: state.settings });
     }
     if (path === '/v1/orders') return route.fulfill({ json: channel === 'meal_preorder' ? [] : [state.order] });
@@ -137,21 +137,21 @@ test('管理員可設定與清空客服電話，消費者訂單跟隨已存電�
 });
 
 for (const status of ['pending', 'paid']) {
-  test(`管理員商品 ${status} 需填原因並確認才辦理退單`, async t => {
+  test(`管理員商品 ${status} 原因可留空，確認後才辦理退單`, async t => {
     const { page, state } = await fixture(t, { status });
     await page.goto(`${base}/admin`);
     await page.getByRole('button', { name: '辦理退單', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '確認辦理退單', exact: true });
     const confirm = dialog.getByRole('button', { name: '確認退單', exact: true });
-    assert.equal(await confirm.isDisabled(), true);
+    assert.equal(await confirm.isEnabled(), true);
     await dialog.getByLabel('退單原因', { exact: true }).fill('   ');
-    assert.equal(await confirm.isDisabled(), true);
-    await dialog.getByLabel('退單原因', { exact: true }).fill('  顧客來電確認退單  ');
+    assert.equal(await confirm.isEnabled(), true);
+    if (status === 'paid') await dialog.getByLabel('退單原因', { exact: true }).fill('  顧客來電確認退單  ');
     if (status === 'paid' && process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/admin-cancel-desktop.png` });
     assert.deepEqual(state.writes, []);
     await confirm.click();
     await page.locator('.admin-cancel-order [role="status"]').waitFor();
-    assert.deepEqual(state.writes, [{ path: '/v1/orders/regular-order/admin/cancel', body: { reason: '顧客來電確認退單' } }]);
+    assert.deepEqual(state.writes, [{ path: '/v1/orders/regular-order/admin/cancel', body: { reason: status === 'paid' ? '顧客來電確認退單' : '' } }]);
     assert.match(await page.locator('.admin-cancel-order').innerText(), status === 'paid' ? /付款狀態：退款處理中/ : /付款狀態：已取消/);
     assert.equal(await page.getByRole('button', { name: '審核退款', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '辦理退單', exact: true }).count(), 0);
@@ -176,12 +176,12 @@ for (const path of ['/admin', '/admin/meals']) {
     assert.equal(state.writes[0].path, '/v1/admin/meal-orders/meal-order/cancel');
     await page.getByRole('button', { name: '確認現場退款', exact: true }).click();
     await page.getByLabel('實退金額', { exact: true }).fill('120');
-    await page.getByLabel('處理原因', { exact: true }).fill('已退還現金給顧客');
     assert.equal(await page.getByRole('button', { name: '確認已退款', exact: true }).isDisabled(), true);
     await page.getByLabel('已核對款項實際退還給顧客', { exact: true }).check();
     await page.getByRole('button', { name: '確認已退款', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.admin-cash-payment'));
     assert.equal(state.writes[1].path, '/v1/orders/meal-order/admin/cash-refund');
+    assert.equal(state.writes[1].body.reason, '');
     assert.equal(state.order.payment_status, 'refunded');
     assert.match(await page.locator('.admin-cancel-order').innerText(), /付款狀態：已退款/);
     await assertClean(page, state);

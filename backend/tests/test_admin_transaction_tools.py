@@ -33,7 +33,7 @@ async def test_admin_order_search_is_paginated_and_role_protected(database_sessi
         assert invalid.status_code == 422
 
 
-async def test_failed_email_retry_requires_reason_and_cannot_repeat_or_retry_invoice_mail(database_session):
+async def test_failed_email_retry_requires_confirmation_but_optional_reason(database_session):
     buyer, _product, _order = await make_regular_order(database_session)
     buyer.user_role = UserRole.ADMIN
     _order.payment_status = PaymentStatus.PAID
@@ -48,11 +48,11 @@ async def test_failed_email_retry_requires_reason_and_cannot_repeat_or_retry_inv
         assert 'must-not-leak' not in result.text
         assert 'to_email' not in result.text
         missing_reason = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer), json={"reason": "  "})
-        assert missing_reason.status_code == 422
+        assert missing_reason.status_code == 409
         retry = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer), json={"reason": "已修正寄信設定"})
         assert retry.status_code == 409, retry.text
         retry = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer),
-            json={"reason": "已向供應商查詢並確認重送風險", "confirm_delivery_risk": True})
+            json={"reason": "  ", "confirm_delivery_risk": True})
         assert retry.status_code == 200, retry.text
         assert retry.json()['status'] == 'pending'
         again = await client.post(f'/v1/admin/failed-jobs/{event.id}/retry', headers=auth_headers(buyer), json={"reason": "重複按鈕"})
@@ -62,7 +62,7 @@ async def test_failed_email_retry_requires_reason_and_cannot_repeat_or_retry_inv
 
 
 @pytest.mark.parametrize('unavailable', [False, True])
-async def test_admin_payment_query_requires_reason_and_only_calls_supplier_query(database_session, monkeypatch, unavailable):
+async def test_admin_payment_query_accepts_optional_reason_and_only_calls_supplier_query(database_session, monkeypatch, unavailable):
     import app.routers.payments as routes
     from app.integrations.common import HTTPResponse
     from app.integrations.raygate import RayGateAdapter
@@ -91,9 +91,7 @@ async def test_admin_payment_query_requires_reason_and_only_calls_supplier_query
     async with api_test_context(database_session, [routes.payments_router], settings=make_test_settings()) as client:
         denied = await client.post(path, headers=auth_headers(buyer), json={'reason': '查詢'})
         assert denied.status_code == 403
-        missing = await client.post(path, headers=auth_headers(admin), json={'reason': ' '})
-        assert missing.status_code == 422
-        result = await client.post(path, headers=auth_headers(admin), json={'reason': '買家反映付款結果尚未更新'})
+        result = await client.post(path, headers=auth_headers(admin), json={})
         assert result.status_code == (502 if unavailable else 200), result.text
         assert 'not-for-clients' not in result.text
         if not unavailable:

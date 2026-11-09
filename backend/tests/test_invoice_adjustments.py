@@ -2,10 +2,11 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import select
 
 from app.integrations.common import HTTPResponse
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
-from app.models import Invoice, InvoiceBuyerType, InvoiceStatus, PaymentStatus, Refund, RefundStatus, UserRole
+from app.models import AdminAudit, Invoice, InvoiceBuyerType, InvoiceStatus, PaymentStatus, Refund, RefundStatus, UserRole
 from app.routers.invoices import invoices_router
 from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
@@ -50,16 +51,18 @@ async def test_void_after_refund_uses_provider_snapshot_and_never_resubmits_unce
     monkeypatch.setattr(routes, 'invoice_adapter_from_settings', lambda _: adapter)
     async with api_test_context(database_session, [invoices_router], settings=make_test_settings(invoice_provider='fanyu')) as client:
         path = f'/v1/admin/orders/{order.id}/invoice/void'
-        invalid = await client.post(path, headers=auth_headers(admin), json={'reason': ' '})
-        assert invalid.status_code == 422
-        first = await client.post(path, headers=auth_headers(admin), json={'reason': '全額退款'})
+        first = await client.post(path, headers=auth_headers(admin), json={'reason': ' '})
         assert first.status_code in {200, 202}, first.text
         assert first.json()['status'] == ('void_pending' if uncertain else 'voided')
+        await database_session.refresh(invoice)
+        assert invoice.void_reason == ''
+        audit = await database_session.scalar(select(AdminAudit).where(AdminAudit.action == 'invoice.void_requested'))
+        assert audit.reason == '' and audit.actor_id == admin.id
         second = await client.post(path, headers=auth_headers(admin), json={'reason': '再次核對'})
         assert second.status_code in {200, 202}, second.text
         assert len(submitted) == 1
         assert submitted[0] == {'orderID': 'INVTEST', 'process_type': 'B' if buyer_type == InvoiceBuyerType.COMPANY else 'C', 'sellerID': '15989995', 'buyerID': invoice.buyer_tax_id or '00000000',
-                                'invNo': 'AB12345678', 'invDate': '20260905', 'cancelReason': '全額退款', 'remark': '', 'notifyEmail': ''}
+                                'invNo': 'AB12345678', 'invDate': '20260905', 'cancelReason': '管理員作廢', 'remark': '', 'notifyEmail': ''}
 
 
 @pytest.mark.parametrize('case', ['customer', 'unpaid', 'partial_refund', 'wrong_seller', 'wrong_number', 'not_found', 'missing_date', 'status_conflict'])

@@ -121,8 +121,8 @@ for (const width of [390, 1280]) {
       if (payment === 'paid') assert.match(text, /便當訂餐單/);
       else assert.match(text, /訂單紀錄單[\s\S]*請勿製作/);
       const send = dialog.getByRole('button', { name: '確認送至出單機', exact: true });
-      assert.equal(await send.isDisabled(), true);
-      await dialog.getByLabel('出單原因', { exact: true }).fill('  顧客要求核對訂單  ');
+      assert.equal(await send.isEnabled(), true);
+      if (width === 1280) await dialog.getByLabel('出單原因', { exact: true }).fill('  顧客要求核對訂單  ');
       assert.equal(await send.isEnabled(), true);
       assert.deepEqual(state.writes, []);
       if (payment === 'refunded' && process.env.BROWSER_SCREENSHOT_DIR) {
@@ -132,7 +132,7 @@ for (const width of [390, 1280]) {
       await send.click();
       await dialog.getByText('已建立出單工作：等待發送', { exact: true }).waitFor();
       assert.equal(state.writes.length, 1);
-      assert.equal(state.writes[0].body.reason, '顧客要求核對訂單');
+      assert.equal(state.writes[0].body.reason, width === 1280 ? '顧客要求核對訂單' : '');
       assert.equal(state.writes[0].body.preview_token, previewToken);
       assert.match(state.writes[0].body.request_id, /^[0-9a-f-]{36}$/);
       assert.equal(state.writes[0].body.acknowledge_duplicate, false);

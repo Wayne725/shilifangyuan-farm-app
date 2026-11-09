@@ -400,8 +400,7 @@ async def test_summary_manual_resolution_keeps_unseen_unknown_without_resubmissi
     body = {"printed": False, "reason": "已核對目前沒有紙本"}
     assert (await c.client.post(path, json=body)).status_code == 401
     assert (await c.client.post(path, json=body, headers=auth_headers(c.buyer))).status_code == 403
-    assert (await c.client.post(path, json={**body, "reason": "   "}, headers=auth_headers(c.admin))).status_code == 422
-    unseen = await c.client.post(path, json=body, headers=auth_headers(c.admin))
+    unseen = await c.client.post(path, json={**body, "reason": "   "}, headers=auth_headers(c.admin))
     assert unseen.status_code == 200
     assert unseen.json()["pages"][0]["status"] == "unknown"
     assert not await process_print_job(c.settings, factory=c.factory, client=fake,

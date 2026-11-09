@@ -94,7 +94,7 @@ function GroupProposalReview({ proposal, campaign, products, bundles, onDone, on
         {proposal.status === "pending_review" && <><label className="field"><span>投票門檻（人）</span><input min={1} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /></label><label className="field"><span>投票截止（台灣）</span><input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label></>}
 
         {proposal.status === "pending_review" && <label className="field"><span>處理原因</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label>}
-        <div>{proposal.status === "pending_review" && <button type="button" disabled={!deadline || action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />通過並開放投票</button>}{proposal.status === "pending_review" && <button type="button" disabled={!reason.trim() || action.isPending} onClick={() => action.mutate("reject")}>不通過</button>}</div>
+        <div>{proposal.status === "pending_review" && <button type="button" disabled={!deadline || action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />通過並開放投票</button>}{proposal.status === "pending_review" && <button type="button" disabled={action.isPending} onClick={() => action.mutate("reject")}>不通過</button>}</div>
         {action.isError && <p className="form-error">{action.error.message}</p>}
       </div>
         {["pending_review", "voting", "conversion_pending"].includes(proposal.status) && <CampaignCreateForm proposal={proposal} products={products} bundles={bundles} onAccessDenied={onAccessDenied} onDone={onDone} />}

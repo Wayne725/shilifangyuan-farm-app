@@ -100,7 +100,7 @@ async function fillSale(region, { barcode = false } = {}) {
   await product.selectOption({ label: '合成餐盒' });
   await region.getByLabel('含稅單價', { exact: true }).fill('120');
   await region.getByLabel('數量', { exact: true }).fill('2');
-  await region.getByLabel('顧客姓名（選填）', { exact: true }).fill('合成顧客');
+  await region.getByLabel('顧客姓名', { exact: true }).fill('合成顧客');
   await region.getByLabel('發票通知 Email', { exact: true }).fill('customer@example.test');
   if (!barcode) await region.getByRole('radio', { name: 'Email 會員載具', exact: true }).check();
   if (barcode) {

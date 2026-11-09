@@ -247,8 +247,8 @@ def confirm_campaign(
         raise DomainError("付款數量已變更，請重新核對後確認")
     if campaign.paid_quantity <= 0:
         raise DomainError("沒有已付款數量，無法確認成團")
-    if campaign.paid_quantity < campaign.min_paid_quantity and (not allow_below_threshold or not reason.strip()):
-        raise DomainError("未達成團門檻，請勾選例外確認並填寫原因")
+    if campaign.paid_quantity < campaign.min_paid_quantity and not allow_below_threshold:
+        raise DomainError("未達成團門檻，請勾選例外確認")
     if aware(final_pickup_at) < current:
         raise DomainError("最終取貨時間不可早於現在")
     campaign.final_pickup_at = final_pickup_at

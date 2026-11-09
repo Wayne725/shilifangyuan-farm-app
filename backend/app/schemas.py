@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from .admin_explanations import AdminExplanation
 from .contact_phone import normalize_contact_phone
 
 from .models import (
@@ -60,14 +61,7 @@ from .models import (
 
 
 class AdminActionReason(BaseModel):
-    reason: str = Field(min_length=1, max_length=1000)
-
-    @field_validator("reason")
-    @classmethod
-    def nonblank_reason(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("請填寫操作原因")
-        return value.strip()
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class ApiModel(BaseModel):
@@ -383,7 +377,7 @@ class ProposalReview(BaseModel):
 
 
 class ProposalReject(BaseModel):
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class VoteUpsert(BaseModel):
@@ -532,7 +526,7 @@ class CampaignReviewDeadlineUpdate(BaseModel):
     expected_updated_at: datetime
     estimated_pickup_start: Optional[datetime] = None
     estimated_pickup_end: Optional[datetime] = None
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
     @field_validator("confirmation_deadline", "expected_confirmation_deadline", "expected_updated_at", "estimated_pickup_start", "estimated_pickup_end")
     @classmethod
@@ -541,19 +535,12 @@ class CampaignReviewDeadlineUpdate(BaseModel):
             raise ValueError("時間必須包含時區")
         return value
 
-    @field_validator("reason")
-    @classmethod
-    def trim_reason(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("請填寫調整原因")
-        return value.strip()
-
 
 class CampaignDecision(BaseModel):
     final_pickup_at: datetime
     expected_threshold_version: int = Field(ge=0)
     allow_below_threshold: bool = False
-    reason: str = Field(default="", max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
     @field_validator("final_pickup_at")
     @classmethod
@@ -564,14 +551,7 @@ class CampaignDecision(BaseModel):
 
 
 class CampaignReject(BaseModel):
-    reason: str = Field(min_length=1, max_length=1000)
-
-    @field_validator("reason")
-    @classmethod
-    def trim_reason(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("請填寫處理原因")
-        return value.strip()
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class CampaignRead(ApiModel):
@@ -915,7 +895,7 @@ class CancelRequest(BaseModel):
 
 
 class RefundRequest(BaseModel):
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class CashConfirmationRequest(BaseModel):
@@ -923,14 +903,7 @@ class CashConfirmationRequest(BaseModel):
     collection_method: Literal["cash", "pos", "qr"] = "cash"
     reference: str = Field(default="", max_length=100)
     amount: int = Field(gt=0, strict=True)
-    reason: str = Field(min_length=1, max_length=1000)
-
-    @field_validator("reason")
-    @classmethod
-    def validate_reason(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("請填寫確認說明")
-        return value.strip()
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class FulfillmentUpdate(BaseModel):
@@ -990,6 +963,10 @@ class MembershipApplicationSubmit(MembershipProfileInput):
 
 class MembershipApplicationReview(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class AdminMembershipApplicationReview(BaseModel):
+    reason: AdminExplanation = Field(default="", max_length=2000)
 
 
 class MembershipProfileRead(BaseModel):
@@ -1207,7 +1184,7 @@ class ActivityCreate(BaseModel):
 
 
 class ActivityReview(BaseModel):
-    reason: Optional[str] = Field(default=None, max_length=2000)
+    reason: AdminExplanation = Field(default="", max_length=2000)
 
 
 class ActivityRegistrationCreate(BaseModel):
@@ -1231,7 +1208,7 @@ class ActivityRefundReview(BaseModel):
     decision: Literal["approve", "reject"]
     expected_version: int = Field(ge=1)
     expected_amount: int = Field(gt=0)
-    reason: str = Field(min_length=1, max_length=2000)
+    reason: AdminExplanation = Field(default="", max_length=2000)
 
 
 class ActivityCancellationConfirm(ActivityReview):
@@ -1807,7 +1784,11 @@ class MealCancellationRequestCreate(BaseModel):
         return value.strip()
 
 
-class MealCancellationReview(MealCancellationRequestCreate):
+class AdminMealCancellationRequest(BaseModel):
+    reason: AdminExplanation = Field(default="", max_length=2000)
+
+
+class MealCancellationReview(AdminMealCancellationRequest):
     decision: Literal["approve", "reject"]
 
 
@@ -1949,11 +1930,11 @@ class MealPickupRedemptionRead(ApiModel):
 
 
 class MealEventActionRequest(BaseModel):
-    reason: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    reason: AdminExplanation = Field(default="", max_length=2000)
 
 
 class MealEventCancelRequest(BaseModel):
-    reason: str = Field(min_length=1, max_length=2000)
+    reason: AdminExplanation = Field(default="", max_length=2000)
 
 
 class OrderFulfillmentRead(ApiModel):
@@ -2111,9 +2092,9 @@ class SupplierUpdate(BaseModel):
 
 class SupplierAccreditationCreate(BaseModel):
     reviewed_on: date
-    process_notes: str = Field(min_length=1, max_length=10000)
+    process_notes: AdminExplanation = Field(default="", max_length=10000)
     status: SupplierAccreditationStatus
-    result_notes: str = Field(default="", max_length=10000)
+    result_notes: AdminExplanation = Field(default="", max_length=10000)
 
 
 class SupplierAccreditationRead(ApiModel):

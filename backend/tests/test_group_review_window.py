@@ -138,7 +138,7 @@ async def test_confirmation_requires_version_settlement_and_exception(database_s
         response = await client.post(path, headers=auth_headers(admin), json=body)
         if paid_quantity < 4:
             assert response.status_code == 409
-            body.update(allow_below_threshold=True, reason="特殊供貨確認")
+            body.update(allow_below_threshold=True, reason="  ")
             response = await client.post(path, headers=auth_headers(admin), json=body)
         if paid_quantity == 0:
             assert response.status_code == 409
@@ -146,7 +146,7 @@ async def test_confirmation_requires_version_settlement_and_exception(database_s
         assert response.status_code == 200, response.text
         assert response.json()["confirmed_paid_quantity"] == paid_quantity
         assert response.json()["confirmation_exception_reason"] is None
-        assert campaign.confirmation_exception_reason == ("特殊供貨確認" if paid_quantity == 3 else None)
+        assert campaign.confirmation_exception_reason == ("" if paid_quantity == 3 else None)
         assert (await client.post(path, headers=auth_headers(admin), json=body)).status_code == 409
     remove_paid_quantity(campaign, 1, now)
     assert campaign.decision_status == GroupDecisionStatus.CONFIRMED

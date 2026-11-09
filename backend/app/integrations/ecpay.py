@@ -321,8 +321,6 @@ class LocalSandboxRefundAdapter:
     ) -> RefundResult:
         if amount <= 0:
             raise ValueError("Refund amount must be greater than zero")
-        if not reason.strip():
-            raise ValueError("Refund reason is required")
         if not idempotency_key.strip():
             raise ValueError("Refund idempotency key is required")
         digest = hashlib.sha256(

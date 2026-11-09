@@ -106,7 +106,7 @@ export function OrderSummaryPrint({ filters, userId, disabled, access }: { filte
     } catch (failure) { if (mounted.current && !access.isDenied()) setHistoryError(failure instanceof Error ? failure.message : "無法讀取列印紀錄。"); }
   };
   const resolve = (printed: boolean) => operate(async () => {
-    if (!batch || !resolvePage || resolveReason.trim().length < 2) return;
+    if (!batch || !resolvePage) return;
     const value = await access.request<Batch>(`/v1/admin/order-summary/print-jobs/${batch.request_id}/pages/${resolvePage}/resolve`, {
       method: "POST", body: JSON.stringify({ printed, reason: resolveReason.trim() }),
     });
@@ -155,7 +155,7 @@ export function OrderSummaryPrint({ filters, userId, disabled, access }: { filte
             <summary>人工核對紙本</summary>
             <label className="field"><span>核對頁次</span><select aria-label="核對頁次" value={resolvePage} onChange={(event) => setResolvePage(event.target.value)}><option value="">選擇頁次</option>{batch.pages.filter((page) => ["submitted", "unknown"].includes(page.status)).map((page) => <option key={page.id} value={page.id}>第 {page.page} 張 · {labels[page.status]}</option>)}</select></label>
             <label className="field"><span>核對紀錄</span><input value={resolveReason} maxLength={200} onChange={(event) => setResolveReason(event.target.value)} /></label>
-            <div className="summary-print-actions"><button type="button" className="button button-primary" disabled={busy || !resolvePage || resolveReason.trim().length < 2} onClick={() => void resolve(true)}>確認已收到此張</button><button type="button" className="button button-quiet" disabled={busy || !resolvePage || resolveReason.trim().length < 2} onClick={() => void resolve(false)}>記錄尚未收到</button></div>
+            <div className="summary-print-actions"><button type="button" className="button button-primary" disabled={busy || !resolvePage} onClick={() => void resolve(true)}>確認已收到此張</button><button type="button" className="button button-quiet" disabled={busy || !resolvePage} onClick={() => void resolve(false)}>記錄尚未收到</button></div>
           </details>}
           {attempt && !batch && <p role="status">正在核對這筆送印是否已建立。批次 {attempt.request_id}</p>}
           {error && <p className="form-error" role="alert">{error}</p>}

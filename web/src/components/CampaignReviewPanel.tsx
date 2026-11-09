@@ -39,7 +39,7 @@ export function CampaignReviewPanel({ campaign, unit = "份", onDone, onAccessDe
     {campaign.can_edit_review_deadline && !reviewOpen && <ReviewDeadlineForm disabled={otherDecision.isPending} onEditing={setDeadlineOpen} campaign={campaign} onDone={onDone} onAccessDenied={onAccessDenied} />}
     {["recruiting", "pending_confirmation", "confirmed"].includes(campaign.decision_status) && <div className="campaign-rejection">
       <label className="field"><span>取消／拒絕原因</span><input value={reason} maxLength={500} disabled={otherDecision.isPending} onChange={event => setReason(event.target.value)} /></label>
-      <button className="button button-quiet" type="button" disabled={!reason.trim() || otherDecision.isPending || reviewOpen || deadlineOpen} onClick={() => otherDecision.mutate(campaign.decision_status === "pending_confirmation" ? "reject" : "cancel")}>{campaign.decision_status === "pending_confirmation" ? "不成團" : "取消共同購買"}</button>
+      <button className="button button-quiet" type="button" disabled={otherDecision.isPending || reviewOpen || deadlineOpen} onClick={() => otherDecision.mutate(campaign.decision_status === "pending_confirmation" ? "reject" : "cancel")}>{campaign.decision_status === "pending_confirmation" ? "不成團" : "取消共同購買"}</button>
     </div>}
     {otherDecision.isError && <p className="form-error" role="alert">{otherDecision.error.message}</p>}
     {result && <p className="form-success" role="status">{result}</p>}
@@ -60,7 +60,7 @@ function ConfirmationForm({ campaign, unit = "份", onDone, onAccessDenied, onCa
   const below = snapshot.paid_quantity < snapshot.min_paid_quantity;
   const block = campaignConfirmBlockReason(campaign, now) || campaignConfirmBlockReason(snapshot, now);
   const pickupValid = pickup && new Date(`${pickup}:00+08:00`).getTime() > now;
-  const valid = !block && !stale && (!conflict || reloaded && rechecked) && pickupValid && (!below || allowBelow && reason.trim());
+  const valid = !block && !stale && (!conflict || reloaded && rechecked) && pickupValid && (!below || allowBelow);
   const save = useMutation({
     mutationFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaign.id}/admin/confirm`, { method: "POST", body: JSON.stringify({ final_pickup_at: taipeiInputToIso(pickup), expected_threshold_version: snapshot.threshold_version, allow_below_threshold: below && allowBelow, ...(below ? { reason: reason.trim() } : {}) }) }),
     onSuccess: onDone,
@@ -78,7 +78,7 @@ function ConfirmationForm({ campaign, unit = "份", onDone, onAccessDenied, onCa
     <label className="field"><span>最終取貨時間（台灣）</span><input required type="datetime-local" value={pickup} disabled={busy} onChange={event => setPickup(event.target.value)} /></label>
     {below && <>
       <label className="meal-choice"><input type="checkbox" checked={allowBelow} disabled={busy} onChange={event => setAllowBelow(event.target.checked)} /><span>未達原門檻，仍確認成團</span></label>
-      <label className="field"><span>例外成團原因</span><textarea required maxLength={500} value={reason} disabled={busy} onChange={event => setReason(event.target.value)} /></label>
+      <label className="field"><span>例外成團原因</span><textarea maxLength={500} value={reason} disabled={busy} onChange={event => setReason(event.target.value)} /></label>
     </>}
     {!pickupValid && <p className="form-error">最終取貨時間須晚於現在</p>}
     {(conflict || stale) && <div className="campaign-review-conflict"><p className="form-error" role="alert">共同購買資料已變更，輸入已保留。請重新核對付款數量與門檻。</p><button className="button button-quiet" type="button" disabled={busy} onClick={() => reload.mutate()}>重新核對成團資料</button>{reloaded && !stale && <label className="meal-choice"><input type="checkbox" checked={rechecked} disabled={busy} onChange={event => setRechecked(event.target.checked)} /><span>已核對最新付款數量與原門檻</span></label>}</div>}
@@ -104,7 +104,7 @@ function ReviewDeadlineForm({ campaign, onDone, onAccessDenied, onEditing, disab
   const error = campaignScheduleError(campaignDateInput(reference.deadline), deadline, pickupStart, pickupEnd, Date.now(), true);
   const stale = campaign.updated_at !== reference.updated_at;
   const changed = deadline !== campaignDateInput(reference.confirmation_deadline) || pickupStart !== campaignDateInput(reference.estimated_pickup_start) || pickupEnd !== campaignDateInput(reference.estimated_pickup_end);
-  const ready = Boolean(reference.updated_at) && !error && reason.trim() && changed && !stale && (!conflict || latest && rechecked);
+  const ready = Boolean(reference.updated_at) && !error && changed && !stale && (!conflict || latest && rechecked);
   const save = useMutation({
     mutationFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaign.id}/admin/review-deadline`, { method: "PATCH", body: JSON.stringify({ confirmation_deadline: taipeiInputToIso(deadline), expected_confirmation_deadline: reference.confirmation_deadline || null, expected_updated_at: reference.updated_at, reason: reason.trim(), ...(pickupStart !== campaignDateInput(reference.estimated_pickup_start) ? { estimated_pickup_start: taipeiInputToIso(pickupStart) } : {}), ...(pickupEnd !== campaignDateInput(reference.estimated_pickup_end) ? { estimated_pickup_end: taipeiInputToIso(pickupEnd) } : {}) }) }),
     onSuccess: () => { setOpen(false); onEditing(false); setResult("處理提醒日已更新"); onDone(); },
@@ -121,7 +121,7 @@ function ReviewDeadlineForm({ campaign, onDone, onAccessDenied, onEditing, disab
     {result && <p className="form-success" role="status">{result}</p>}
     {open && <form className="social-form" aria-label="調整共同購買處理提醒日" onSubmit={event => { event.preventDefault(); if (ready && !busy) save.mutate(); }}>
       <p>付款截止：{campaignDateTime(reference.deadline)} · 預計取貨開始：{campaignDateTime(reference.estimated_pickup_start)}</p>
-      <div className="field-grid two-columns"><label className="field"><span>管理員處理提醒日（台灣）</span><input required type="datetime-local" value={deadline} disabled={busy} onChange={event => setDeadline(event.target.value)} /></label><label className="field"><span>預計取貨開始（台灣）</span><input required type="datetime-local" value={pickupStart} disabled={busy} onChange={event => setPickupStart(event.target.value)} /></label><label className="field"><span>預計取貨結束（台灣）</span><input required type="datetime-local" value={pickupEnd} disabled={busy} onChange={event => setPickupEnd(event.target.value)} /></label><label className="field"><span>調整原因</span><input required maxLength={500} value={reason} disabled={busy} onChange={event => setReason(event.target.value)} /></label></div>
+      <div className="field-grid two-columns"><label className="field"><span>管理員處理提醒日（台灣）</span><input required type="datetime-local" value={deadline} disabled={busy} onChange={event => setDeadline(event.target.value)} /></label><label className="field"><span>預計取貨開始（台灣）</span><input required type="datetime-local" value={pickupStart} disabled={busy} onChange={event => setPickupStart(event.target.value)} /></label><label className="field"><span>預計取貨結束（台灣）</span><input required type="datetime-local" value={pickupEnd} disabled={busy} onChange={event => setPickupEnd(event.target.value)} /></label><label className="field"><span>調整原因</span><input maxLength={500} value={reason} disabled={busy} onChange={event => setReason(event.target.value)} /></label></div>
       {(conflict || stale) && <div className="campaign-review-conflict"><p className="form-error" role="alert">處理提醒日已變更，輸入已保留。請重新核對。</p><button className="button button-quiet" type="button" disabled={busy} onClick={() => { setConflict(true); reload.mutate(); }}>重新讀取處理提醒日</button>{latest && !stale && <><p>目前處理提醒日：{campaignDateTime(latest.confirmation_deadline)}</p><label className="meal-choice"><input type="checkbox" checked={rechecked} disabled={busy} onChange={event => setRechecked(event.target.checked)} /><span>已核對最新提醒日，確認儲存目前輸入</span></label></>}</div>}
       {(error || save.isError || reload.isError) && <p className="form-error" role="alert">{error || save.error?.message || reload.error?.message}</p>}
       <div className="form-actions"><button className="button button-quiet" type="button" disabled={busy} onClick={() => { setOpen(false); onEditing(false); }}>取消調整</button><button className="button button-primary" disabled={!ready || busy}>{save.isPending ? "儲存中…" : "儲存處理提醒日"}</button></div>

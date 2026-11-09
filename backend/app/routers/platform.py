@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -16,7 +17,7 @@ platform_router = APIRouter(tags=["platform"])
 
 
 class PlatformUpdate(PlatformSettings):
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
     expected_version: int | None = Field(default=None, ge=0)
 
 

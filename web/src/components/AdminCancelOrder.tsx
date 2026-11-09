@@ -20,7 +20,7 @@ export function AdminCancelOrder({ order }: { order: CancelOrder }) {
   const canCancel = order.available_actions.includes("cancel");
   const cancel = useMutation({
     mutationFn: () => {
-      if (!reason.trim() || !canCancel || user?.user_role !== "admin") throw new Error("請確認退單權限並填寫退單原因");
+      if (!canCancel || user?.user_role !== "admin") throw new Error("請確認退單權限與訂單狀態");
       const path = order.sales_channel === "meal_preorder" ? `/v1/admin/meal-orders/${order.id}/cancel` : `/v1/orders/${order.id}/admin/cancel`;
       return apiFetch<Order | MealOrder>(path, { method: "POST", body: JSON.stringify({ reason: reason.trim() }) });
     },
@@ -45,11 +45,11 @@ export function AdminCancelOrder({ order }: { order: CancelOrder }) {
           <Dialog.Title>確認辦理退單</Dialog.Title>
           <Dialog.Description className="order-number">{order.order_number} · {formatMoney(order.amount_total)}</Dialog.Description>
           {order.payment_status === "paid" && <p>{order.payment_method === "cash_on_pickup" ? "退單後待現場退款確認" : "取消整筆訂單並申請退款"} · {formatMoney(order.amount_total)}</p>}
-          <form onSubmit={(event) => { event.preventDefault(); if (reason.trim() && canCancel && !cancel.isPending) cancel.mutate(); }}>
-            <div className="field"><label htmlFor={reasonId}>退單原因</label><textarea id={reasonId} required maxLength={2000} rows={3} value={reason} disabled={cancel.isPending} onChange={(event) => setReason(event.target.value)} /></div>
+          <form onSubmit={(event) => { event.preventDefault(); if (canCancel && !cancel.isPending) cancel.mutate(); }}>
+            <div className="field"><label htmlFor={reasonId}>退單原因</label><textarea id={reasonId} maxLength={2000} rows={3} value={reason} disabled={cancel.isPending} onChange={(event) => setReason(event.target.value)} /></div>
             {cancel.isError && <p className="form-error" role="alert">{cancel.error.message}</p>}
             {!canCancel && <p className="form-error" role="alert">這筆訂單目前無法退單。</p>}
-            <div className="form-actions"><button className="button button-danger" type="submit" disabled={!reason.trim() || !canCancel || cancel.isPending}>{cancel.isPending ? "退單處理中…" : "確認退單"}</button><Dialog.Close asChild><button className="button button-quiet" type="button" disabled={cancel.isPending}>返回</button></Dialog.Close></div>
+            <div className="form-actions"><button className="button button-danger" type="submit" disabled={!canCancel || cancel.isPending}>{cancel.isPending ? "退單處理中…" : "確認退單"}</button><Dialog.Close asChild><button className="button button-quiet" type="button" disabled={cancel.isPending}>返回</button></Dialog.Close></div>
           </form>
           <Dialog.Close asChild><button className="icon-button admin-cancel-close" type="button" disabled={cancel.isPending} aria-label="關閉退單確認"><X size={20} /></button></Dialog.Close>
         </Dialog.Content>

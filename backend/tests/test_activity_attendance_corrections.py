@@ -33,13 +33,13 @@ async def points(session):
 
 
 @pytest.mark.asyncio
-async def test_late_attendance_is_correctable_with_reason_and_append_only_points(attendance_context):
+async def test_late_attendance_is_correctable_with_optional_reason_and_append_only_points(attendance_context):
     c = attendance_context
     client, session, registration = c["client"], c["session"], c["registration"]
     original_revision = registration.revision
     for expected, target, total in [("no_show", "attended", 5), ("attended", "no_show", 0), ("no_show", "attended", 5)]:
         response = await client.post(f"{c['path']}/{target}", headers=auth_headers(c["admin"]), json={
-            "expected_status": expected, "reason": "核對現場簽到紀錄後更正",
+            "expected_status": expected, "reason": "  ",
         })
         assert response.status_code == 200, response.text
         assert response.json()["status"] == target
@@ -50,6 +50,7 @@ async def test_late_attendance_is_correctable_with_reason_and_append_only_points
     assert all(entry.source_type == PointSourceType.ADMIN_ADJUSTMENT for entry in entries)
     audits = list(await session.scalars(select(AdminAudit).where(AdminAudit.action == "activity.attendance_corrected")))
     assert len(audits) == 3
+    assert all(audit.reason == "" for audit in audits)
     assert {entry.reference_id for entry in entries} == {audit.id for audit in audits}
     replay = await client.post(f"{c['path']}/attended", headers=auth_headers(c["admin"]), json={
         "expected_status": "no_show", "reason": "同一次回應遺失的重送",
@@ -99,9 +100,9 @@ async def test_restoring_historical_attendance_restores_original_credit_not_curr
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body,status", [({}, 422), ({"expected_status": "no_show", "reason": "  "}, 422),
+@pytest.mark.parametrize("body,status", [({}, 422), ({"expected_status": "no_show", "reason": "x" * 1001}, 422),
     ({"expected_status": "attended", "reason": "過期畫面"}, 409)])
-async def test_correction_requires_reason_and_current_status(attendance_context, body, status):
+async def test_correction_requires_current_status_and_bounded_reason(attendance_context, body, status):
     c = attendance_context
     rejected = await c["client"].post(f"{c['path']}/attended", headers=auth_headers(c["admin"]), json=body)
     assert rejected.status_code == status

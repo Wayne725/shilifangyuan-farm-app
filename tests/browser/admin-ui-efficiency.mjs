@@ -50,7 +50,7 @@ for (const width of [1280, 816, 390]) test(`${width}px 社務待辦、搜尋、�
   await card.getByRole('button',{name:'取消活動',exact:true}).click();
   assert.equal(writes.length,0);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
-  assert.equal(await card.getByRole('button',{name:'確認送出',exact:true}).isEnabled(),false);
+  assert.equal(await card.getByRole('button',{name:'確認送出',exact:true}).isEnabled(),true);
   const reason = card.getByRole('combobox',{name:'處理原因',exact:true});
   assert.equal(await reason.inputValue(), '');
   await reason.selectOption({label:'場地無法使用'});
@@ -64,7 +64,7 @@ for (const width of [1280, 816, 390]) test(`${width}px 社務待辦、搜尋、�
   fail=false;
   await card.getByRole('button',{name:'取消活動',exact:true}).click();
   await reason.selectOption({label:'其他原因'});
-  assert.equal(await card.getByRole('button',{name:'確認送出',exact:true}).isEnabled(),false);
+  assert.equal(await card.getByRole('button',{name:'確認送出',exact:true}).isEnabled(),true);
   await card.getByLabel('自訂處理原因',{exact:true}).fill('現場臨時停電');
   await card.getByRole('button',{name:'返回',exact:true}).click();
   await card.getByRole('button',{name:'取消活動',exact:true}).click();

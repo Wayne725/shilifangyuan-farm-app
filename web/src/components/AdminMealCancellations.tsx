@@ -83,7 +83,7 @@ function CancellationReviewCard({ item }: { item: MealCancellationQueueItem }) {
     <p>預計取餐：{order.pickup_at ? formatMealDateTime(order.pickup_at) : "未指定，依供餐時段"}</p>
     <ul>{order.items.map((meal, index) => <li key={`${meal.offering_id}-${index}`}>{meal.meal_name} × {meal.quantity}{meal.selections.length > 0 && `（${meal.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join("、")}）`}</li>)}</ul>
     <p><strong>{formatMoney(order.amount_total)}</strong>・{paymentLabels[order.payment_status] || order.payment_status}・發票{invoiceLabels[order.invoice_status] || order.invoice_status}</p>
-    <p className="meal-cancellation-reason">退單原因：{request.reason}</p>
+    {request.reason && <p className="meal-cancellation-reason">退單原因：{request.reason}</p>}
     {request.review_reason && <p className="meal-cancellation-reason">審核理由：{request.review_reason}</p>}
     <details className="admin-extra-actions"><summary>更多訂單資料</summary><p>{item.customer_email}・{order.meal_event_title}</p><p>履約：{order.cancelled_at ? "已取消" : order.fulfillment_status === "preparing" ? "製作中" : order.fulfillment_status === "ready" ? "待取餐" : order.fulfillment_status === "picked_up" ? "已取餐" : order.fulfillment_status === "no_show" ? "逾時未取" : "尚未取餐"}</p><p>申請時間：{formatDateTime(request.requested_at)}</p>{request.reviewed_at && <p>審核時間：{formatDateTime(request.reviewed_at)}</p>}</details>
     {request.status === "pending" && <>
@@ -92,12 +92,12 @@ function CancellationReviewCard({ item }: { item: MealCancellationQueueItem }) {
         <button className="button button-system" type="button" disabled={!item.can_approve || review.isPending} onClick={() => beginReview("approve")}>核准退單</button>
         <button className="button button-quiet" type="button" disabled={review.isPending} onClick={() => beginReview("reject")}>拒絕退單</button>
       </div>}
-      {decision && <form className="meal-cancellation-review" onSubmit={(event) => { event.preventDefault(); if (reason.trim() && !review.isPending && (decision === "reject" || item.can_approve)) review.mutate(); }}>
+      {decision && <form className="meal-cancellation-review" onSubmit={(event) => { event.preventDefault(); if (!review.isPending && (decision === "reject" || item.can_approve)) review.mutate(); }}>
         <strong>{decision === "approve" ? "確認核准這筆退單" : "確認拒絕這筆退單"}</strong>
         <p>{order.order_number} · {decision === "approve" ? `取消整張訂單${order.payment_status === "paid" ? `，申請退款 ${formatMoney(order.amount_total)}` : ""}` : "保留原訂單"}</p>
-        <AdminReasonChoices key={decision} label="審核理由（買家會看到）" value={reason} onChange={setReason} choices={decision === "approve" ? approvalReasons : rejectionReasons} disabled={review.isPending} />
+        <AdminReasonChoices key={decision} label="審核理由" value={reason} onChange={setReason} choices={decision === "approve" ? approvalReasons : rejectionReasons} disabled={review.isPending} />
         <div className="form-actions">
-          <button className="button button-system" type="submit" disabled={!reason.trim() || review.isPending || (decision === "approve" && !item.can_approve)}>{review.isPending ? "處理中…" : decision === "approve" ? "確認核准" : "確認拒絕"}</button>
+          <button className="button button-system" type="submit" disabled={review.isPending || (decision === "approve" && !item.can_approve)}>{review.isPending ? "處理中…" : decision === "approve" ? "確認核准" : "確認拒絕"}</button>
           <button className="button button-quiet" type="button" disabled={review.isPending} onClick={() => setDecision("")}>返回</button>
         </div>
       </form>}

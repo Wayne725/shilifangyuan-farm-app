@@ -128,6 +128,7 @@ async def void_refunded_order_invoice(
                 invoice_number=invoice_number,
                 invoice_date=invoice_date,
                 reason=reason,
+                automatic_refund=trigger == "automatic_refund",
             )
             if str(response.get("invNo", "")) != invoice_number:
                 raise ValueError("作廢回傳票號不符")

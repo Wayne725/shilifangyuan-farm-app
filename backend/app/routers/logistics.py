@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..admin_explanations import AdminExplanation
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
 from ..sales_scope import require_sales_scope_allows
@@ -138,7 +139,7 @@ class LogisticsSelectionRead(BaseModel):
 
 class SandboxShipmentStatusUpdate(BaseModel):
     status: ShipmentStatus
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class ShippingRatePatch(BaseModel):

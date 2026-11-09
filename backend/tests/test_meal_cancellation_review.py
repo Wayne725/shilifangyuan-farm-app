@@ -289,7 +289,7 @@ async def test_permissions_validation_queue_search_and_generic_cancel_bypass(rev
     review_path = f"/v1/admin/meal-cancellation-requests/{request['id']}/review"
     assert (await c.client.post(review_path, json={"decision": "approve", "reason": "自行核准"}, headers=auth_headers(c.buyer))).status_code == 403
     assert (await c.client.get("/v1/admin/meal-cancellation-requests", headers=auth_headers(c.buyer))).status_code == 403
-    assert (await c.client.post(review_path, json={"decision": "approve", "reason": " "}, headers=auth_headers(c.admin))).status_code == 422
+    assert (await c.client.post(review_path, json={"decision": "approve", "reason": "x" * 2001}, headers=auth_headers(c.admin))).status_code == 422
     assert (await c.client.post(f"/v1/orders/{c.order.id}/cancel", json={"reason": "繞過審核"}, headers=auth_headers(c.buyer))).status_code == 403
     await mark_paid(c)
     assert (await c.client.post(f"/v1/orders/{c.order.id}/cancel", json={"reason": "已付款仍不能繞過"}, headers=auth_headers(c.buyer))).status_code == 403
@@ -361,3 +361,21 @@ async def test_payment_arriving_after_unpaid_approval_is_refunded_without_reopen
     await c.session.commit()
     assert c.order.payment_status == PaymentStatus.REFUNDED
     assert c.order.fulfillment.status == FulfillmentState.CANCELLED
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+@pytest.mark.parametrize("note", [{}, {"reason": " \t "}])
+@pytest.mark.asyncio
+async def test_admin_review_optional_note_keeps_customer_reason_and_review_consistency(review_context, decision, note):
+    c = review_context
+    await mark_paid(c)
+    requested = await submit(c, "原顧客退單說明")
+    response = await c.client.post(f"/v1/admin/meal-cancellation-requests/{requested['id']}/review",
+        json={"decision": decision, **note}, headers=auth_headers(c.admin))
+    assert response.status_code == 200, response.text
+    saved = await c.session.get(MealCancellationRequest, requested["id"])
+    assert saved.reason == "原顧客退單說明" and saved.review_reason == ""
+    assert saved.reviewed_by_id == c.admin.id and saved.reviewed_at is not None
+    assert saved.status == ("approved" if decision == "approve" else "rejected")
+    assert c.order.payment_status == (PaymentStatus.REFUND_PENDING if decision == "approve" else PaymentStatus.PAID)
+    assert await count(c, Refund) == int(decision == "approve")

@@ -2,12 +2,13 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import Field, field_validator
+from pydantic import Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..admin_explanations import AdminExplanation
 from ..admin_membership_phone import MembershipPhoneCheck, verify_offline_roster_phone
 from ..auth import membership_type_for_user, require_admin
 from ..config import Settings, get_settings
@@ -27,16 +28,8 @@ admin_users_router = APIRouter(prefix="/v1/admin/users", tags=["admin-users"])
 class OfflineMembershipConfirmation(MembershipPhoneCheck):
     confirmed_offline: bool
     confirmed_on: date
-    reason: str = Field(min_length=2, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
     roster_entry_id: str = Field(min_length=1, max_length=36)
-
-    @field_validator("reason")
-    @classmethod
-    def meaningful_reason(cls, value: str) -> str:
-        value = value.strip()
-        if len(value) < 2:
-            raise ValueError("請填寫線下核對說明")
-        return value
 
 
 def _user_item(user: User) -> dict:

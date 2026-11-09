@@ -192,7 +192,7 @@ for (const width of [1440, 390]) {
     await page.reload(); await page.getByRole('button', { name: '核准退單', exact: true }).click();
     assert.equal(state.writes.length, 0);
     assert.equal(await page.locator('.meal-cancellation-review textarea').count(), 0);
-    assert.equal(await page.getByRole('combobox', { name: '審核理由（買家會看到）', exact: true }).inputValue(), '依買家申請核准退單。');
+    assert.equal(await page.getByRole('combobox', { name: '審核理由', exact: true }).inputValue(), '依買家申請核准退單。');
     await page.locator('.admin-selected-reason').filter({ hasText: '依買家申請核准退單。' }).waitFor();
     if (process.env.ADMIN_QUICK_SCREENSHOTS && width === 1440) await page.screenshot({ path: '/Users/liuweiwei/Documents/farm/outputs/admin-quick-review-verified.png', fullPage: true });
     state.holdReview = true;
@@ -200,7 +200,7 @@ for (const width of [1440, 390]) {
     const pending = page.getByRole('button', { name: '處理中…', exact: true });
     await pending.waitFor();
     assert.equal(await pending.isEnabled(), false);
-    assert.equal(await page.getByRole('combobox', { name: '審核理由（買家會看到）', exact: true }).isEnabled(), false);
+    assert.equal(await page.getByRole('combobox', { name: '審核理由', exact: true }).isEnabled(), false);
     assert.equal(await page.getByRole('button', { name: '返回', exact: true }).isEnabled(), false);
     await pending.dblclick({ force: true });
     assert.equal(state.writes.length, 1);
@@ -210,27 +210,27 @@ for (const width of [1440, 390]) {
     assert.match(state.writes[0].path, /request-A\/review$/);
     await verify(page, state);
   });
-  test(`${width}px 拒絕須選理由，其他原因仍可輸入，衝突不顯示成功或自動重送`, async (t) => {
+  test(`${width}px 拒絕可略過理由，其他原因仍可輸入，衝突保留草稿不重送`, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin/meals?tab=cancellations&q=QUICK-B`);
     await page.getByRole('button', { name: '拒絕退單', exact: true }).click();
-    assert.equal(await page.getByRole('button', { name: '確認拒絕', exact: true }).isEnabled(), false);
-    const reason = page.getByRole('combobox', { name: '審核理由（買家會看到）', exact: true });
+    assert.equal(await page.getByRole('button', { name: '確認拒絕', exact: true }).isEnabled(), true);
+    const reason = page.getByRole('combobox', { name: '審核理由', exact: true });
     assert.equal(await reason.inputValue(), '');
     await reason.selectOption({ label: '已完成取餐' });
     await page.locator('.admin-selected-reason').filter({ hasText: '訂單已完成取餐，無法取消。' }).waitFor();
     assert.equal(state.writes.length, 0);
     await reason.selectOption({ label: '其他原因' });
-    assert.equal(await page.getByRole('button', { name: '確認拒絕', exact: true }).isEnabled(), false);
-    await page.getByLabel('自訂審核理由（買家會看到）', { exact: true }).fill('需要補充確認');
+    assert.equal(await page.getByRole('button', { name: '確認拒絕', exact: true }).isEnabled(), true);
+    await page.getByLabel('自訂審核理由', { exact: true }).fill('需要補充確認');
     state.conflict = true;
     await page.getByRole('button', { name: '確認拒絕', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: '另一位管理員' }).waitFor();
     assert.equal(state.writes.length, 1); assert.equal(state.requests[1].request.status, 'pending');
-    assert.equal(await page.getByLabel('自訂審核理由（買家會看到）', { exact: true }).inputValue(), '需要補充確認');
+    assert.equal(await page.getByLabel('自訂審核理由', { exact: true }).inputValue(), '需要補充確認');
     await verify(page, state);
   });
-  test(`${width}px 付款發票查詢免輸入，退單須填原因並確認才申請退款`, async (t) => {
+  test(`${width}px 付款發票查詢與退單原因可略過，確認才申請退款`, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin`);
     await page.getByText('查詢發票', { exact: true }).click();
@@ -241,7 +241,7 @@ for (const width of [1440, 390]) {
     const dialog = page.getByRole('dialog', {name: '確認辦理退單', exact: true});
     await dialog.waitFor();
     assert.match(await dialog.innerText(), /取消整筆訂單並申請退款.*240/);
-    assert.equal(await dialog.getByRole('button', {name: '確認退單', exact: true}).isEnabled(), false);
+    assert.equal(await dialog.getByRole('button', {name: '確認退單', exact: true}).isEnabled(), true);
     assert.equal(state.writes.length, 2);
     await dialog.getByLabel('退單原因', {exact: true}).fill('商品無法供應，申請退款');
     assert.equal(state.writes.filter(r => r.path.endsWith('/admin/cancel')).length, 0);
@@ -296,7 +296,7 @@ test('自訂查詢原因保留輸入，填寫時不查詢，明確送出一次',
   const payment = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢付款', { exact: true }) });
   await payment.getByText('其他查詢原因', { exact: true }).click();
   const submit = payment.getByRole('button', { name: '重新查詢雷門付款', exact: true });
-  assert.equal(await submit.isEnabled(), false);
+  assert.equal(await submit.isEnabled(), true);
   await payment.getByLabel('金流查詢原因', { exact: true }).fill('核對跨日退款');
   assert.equal(state.writes.length, 0);
   await responseAfter(page, (r) => r.url().endsWith('/payment/query'), () => submit.click());
@@ -311,7 +311,7 @@ test('人工作廢只對已退款訂單顯示，原因選擇不送出，最後�
   state.refunded = true;
   await page.goto(`${base}/admin`);
   await page.getByText('發票作廢處理', { exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: '人工作廢／核對汎宇結果', exact: true }).isEnabled(), false);
+  assert.equal(await page.getByRole('button', { name: '人工作廢／核對汎宇結果', exact: true }).isEnabled(), true);
   await page.getByRole('combobox', { name: '人工處理原因', exact: true }).selectOption({ label: '全額退款' });
   assert.equal(state.writes.length, 0);
   await responseAfter(page, (r) => r.url().endsWith('/invoice/void'), () => page.getByRole('button', { name: '人工作廢／核對汎宇結果', exact: true }).click());

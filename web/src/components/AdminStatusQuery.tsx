@@ -34,7 +34,7 @@ export function AdminStatusQuery({ orderId, kind, disabled = false }: {
   return <details className="admin-extra-actions"><summary>{invoice ? "查詢發票" : "查詢付款"}</summary>
     <form className="operation-invoice-query" aria-label={invoice ? "發票狀態查詢" : "付款狀態查詢"} onSubmit={(event) => {
       event.preventDefault();
-      if (!busy && reason.trim()) query.mutate(reason.trim());
+      if (!busy) query.mutate(reason.trim());
     }}>
       <div className="admin-quick-buttons">
         {choices.map((choice) => <button className="button button-quiet" key={choice.reason} type="button" disabled={busy} onClick={() => query.mutate(choice.reason)}>{choice.label}</button>)}
@@ -43,7 +43,7 @@ export function AdminStatusQuery({ orderId, kind, disabled = false }: {
         <label className="field"><span>{invoice ? "發票查詢原因" : "金流查詢原因"}</span>
           <textarea aria-label={invoice ? "發票查詢原因" : "金流查詢原因"} maxLength={1000} rows={2} value={reason} disabled={busy} onChange={(event) => setReason(event.target.value)} />
         </label>
-        <button className="button button-quiet" type="submit" disabled={busy || !reason.trim()}>{invoice ? "重新查詢電子發票" : "重新查詢雷門付款"}</button>
+        <button className="button button-quiet" type="submit" disabled={busy}>{invoice ? "重新查詢電子發票" : "重新查詢雷門付款"}</button>
       </details>
       {query.isPending && <p className="admin-query-result" role="status">{invoice ? "正在查詢汎宇發票…" : "正在查詢雷門付款／退款…"}</p>}
       {query.isSuccess && <div className="admin-query-result form-success" role="status">

@@ -97,6 +97,7 @@ from ..schemas import (
     MealAdminOrderPage,
     MealCreate,
     MealCancellationQueueRead,
+    AdminMealCancellationRequest,
     MealCancellationRequestCreate,
     MealCancellationRequestRead,
     MealCancellationReview,
@@ -1086,7 +1087,7 @@ async def _cancel_approved_meal_order(
         try:
             refund, refund_queued = await create_provider_aware_refund(
                 session, order=order, amount=order.amount_total,
-                reason=f"管理員核准退單：{request.reason}", requested_by_id=admin.id,
+                reason=f"管理員核准退單：{request.reason}" if request.reason else "", requested_by_id=admin.id,
                 allow_unbound_local_completion=allow_local_refund_without_payment_attempt(settings), now=now,
             )
         except PaymentApplicationError as exc:
@@ -1156,7 +1157,9 @@ async def review_meal_cancellation(
     await _publish_meal_refund_notification(
         session, order,
         title="便當退單申請已核准" if result_status == "approved" else "便當退單申請未核准",
-        body=f"訂單 {order.order_number} 的退單審核結果：{body.reason}。" + ("款項與發票處理進度請查看訂單。" if result_status == "approved" else "原訂單仍依目前狀態處理。"),
+        body=f"訂單 {order.order_number} 的退單申請{'已核准' if result_status == 'approved' else '未核准'}。"
+        + (f"審核說明：{body.reason}。" if body.reason else "")
+        + ("款項與發票處理進度請查看訂單。" if result_status == "approved" else "原訂單仍依目前狀態處理。"),
         data={"order_id": order.id, "request_id": request.id},
         dedupe_key=f"meal-cancellation-review:{request.id}", event_type=f"meal_cancellation_{result_status}",
     )
@@ -1168,7 +1171,7 @@ async def review_meal_cancellation(
 @meals_router.post("/v1/admin/meal-orders/{order_id}/cancel", response_model=MealOrderRead)
 async def admin_cancel_meal_order(
     order_id: str,
-    body: MealCancellationRequestCreate,
+    body: AdminMealCancellationRequest,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -1728,7 +1731,7 @@ async def cancel_meal_event(
                     session,
                     order=order,
                     amount=order.amount_total,
-                    reason=f"便當場次取消：{body.reason}",
+                    reason=f"便當場次取消：{body.reason}" if body.reason else "",
                     requested_by_id=admin.id,
                     allow_unbound_local_completion=(
                         allow_local_refund_without_payment_attempt(settings)

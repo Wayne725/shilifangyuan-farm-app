@@ -115,17 +115,20 @@ async def test_only_new_full_fanyu_refunds_request_auto_void(
     assert event.payload["adjustment"] == ("void" if amount == 200 else "allowance")
 
 
+@pytest.mark.parametrize("reason", ["取消訂單全額退款", ""])
 @pytest.mark.parametrize("already_voided", [False, True])
 @pytest.mark.parametrize("missing_number", [False, True])
 @pytest.mark.parametrize(
     "buyer_type", [InvoiceBuyerType.PERSONAL, InvoiceBuyerType.COMPANY]
 )
 async def test_auto_void_queries_submits_and_confirms_refunded_invoice(
-    database_session, monkeypatch, missing_number, buyer_type, already_voided
+    database_session, monkeypatch, missing_number, buyer_type, already_voided, reason
 ):
     admin, order, invoice, refund, event = await _make_adjustment(
         database_session, buyer_type=buyer_type, missing_number=missing_number
     )
+    refund.reason = reason
+    await database_session.commit()
     order_id, invoice_id, event_id = order.id, invoice.id, event.id
     admin_id, refund_id = admin.id, refund.id
     calls = []
@@ -165,14 +168,16 @@ async def test_auto_void_queries_submits_and_confirms_refunded_invoice(
         )
     )
     assert audit is not None
-    assert audit.actor_id == admin_id
+    assert audit.actor_id == admin_id and audit.reason == reason
     assert audit.data["trigger"] == "automatic_refund"
     assert audit.data["refund_id"] == refund_id
     if already_voided:
         assert [path for path, _ in calls] == ["queryInvoice"]
     else:
         assert [path for path, _ in calls] == ["queryInvoice", "cancelInvoice", "queryInvoice"]
+        assert saved_invoice.void_reason == reason
         cancel_request = calls[1][1]
+        assert cancel_request["cancelReason"] == (reason or "全額退款自動作廢")
         assert cancel_request["orderID"] == "AUTOVOIDTEST"
         assert cancel_request["process_type"] == ("B" if buyer_type == InvoiceBuyerType.COMPANY else "C")
         assert cancel_request["buyerID"] == ("24536806" if buyer_type == InvoiceBuyerType.COMPANY else "00000000")
