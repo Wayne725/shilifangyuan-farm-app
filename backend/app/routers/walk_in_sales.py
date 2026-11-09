@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, PrivateAttr, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,23 +15,58 @@ from ..config import Settings, get_settings
 from ..database import get_session
 from ..domain import aware, included_tax_amount
 from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
+from ..integrations.invoice import is_mobile_barcode_format
 from ..invoice_timing import TAIPEI, pickup_invoice_due
 from ..models import (
-    AdminAudit, FulfillmentMethod, FulfillmentState, FulfillmentStatus, InvoiceStatus,
+    AdminAudit, FulfillmentMethod, FulfillmentState, FulfillmentStatus, InvoiceBuyerType, InvoiceCarrierType, InvoiceStatus,
     MembershipType, Order, OrderFulfillment, OrderItem, OrderKind, PaymentAttempt,
     PaymentMethod, PaymentStatus, Refund, RefundStatus, SalesChannel, TaxType, User, WalkInSale, new_id,
 )
 from ..order_numbers import allocate_order_number
-from ..schemas import InvoicePreferenceInput
+from ..schemas import is_taiwan_tax_id
 
 
 walk_in_sales_router = APIRouter(prefix="/v1/admin/walk-in-sales", tags=["walk-in-sales"])
+
+
+class WalkInInvoicePreferenceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    invoice_buyer_type: InvoiceBuyerType = InvoiceBuyerType.PERSONAL
+    invoice_buyer_tax_id: str | None = Field(default=None, max_length=10)
+    invoice_buyer_name: str | None = Field(default=None, max_length=60)
+    invoice_buyer_email: EmailStr | None = Field(default=None, max_length=80)
+    invoice_carrier_type: InvoiceCarrierType = InvoiceCarrierType.CLOUD
+    invoice_carrier_value: str | None = Field(default=None, max_length=64)
+    _submitted_tax_id: str | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def validate_preference(self):
+        self._submitted_tax_id = self.invoice_buyer_tax_id
+        if self.invoice_buyer_type == InvoiceBuyerType.COMPANY:
+            self.invoice_buyer_tax_id = (self.invoice_buyer_tax_id or "").strip()
+            if not is_taiwan_tax_id(self.invoice_buyer_tax_id):
+                raise ValueError("公司發票統一編號格式不正確")
+            if not (self.invoice_buyer_name or "").strip():
+                raise ValueError("公司發票必須填寫公司名稱")
+        elif any(value and value.strip() for value in (self.invoice_buyer_tax_id, self.invoice_buyer_name)):
+            raise ValueError("個人發票不可帶入公司統編資料")
+        if self.invoice_carrier_type == InvoiceCarrierType.MOBILE_BARCODE:
+            barcode = (self.invoice_carrier_value or "").strip().upper()
+            if not is_mobile_barcode_format(barcode):
+                raise ValueError("手機條碼格式不正確")
+            self.invoice_carrier_value = barcode
+        elif self.invoice_carrier_value:
+            raise ValueError("雲端發票不需要載具號碼")
+        if self.invoice_carrier_type == InvoiceCarrierType.CLOUD and len(str(self.invoice_buyer_email or "")) > 64:
+            raise ValueError("Email 會員載具不可超過 64 字元")
+        return self
 
 
 class WalkInSaleCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     client_request_id: UUID
     product_name: str = Field(min_length=1, max_length=120)
+    sale_category: Literal["meal", "product"] | None = None
     unit_price: int = Field(ge=1, le=1_000_000, strict=True)
     quantity: int = Field(default=1, ge=1, le=999, strict=True)
     tax_type: TaxType = TaxType.TAXABLE
@@ -39,7 +74,7 @@ class WalkInSaleCreate(BaseModel):
     contact_email: EmailStr | None = Field(default=None, max_length=80)
     invoice_handling: Literal["on_payment", "pickup_day", "external"] = "on_payment"
     pickup_date: date | None = None
-    preferences: InvoicePreferenceInput = Field(default_factory=InvoicePreferenceInput)
+    preferences: WalkInInvoicePreferenceInput = Field(default_factory=WalkInInvoicePreferenceInput)
     reason: str = Field(min_length=1, max_length=500)
     confirm_received: bool
     confirm_not_invoiced_elsewhere: bool = False
@@ -60,23 +95,26 @@ class WalkInSaleCreate(BaseModel):
         if self.invoice_handling != "external":
             if not self.confirm_not_invoiced_elsewhere:
                 raise ValueError("請確認此筆未由其他系統開立發票")
-            if not (self.contact_email or self.preferences.invoice_buyer_email):
-                raise ValueError("目前電子開票須提供客人 Email；紙本發票列印尚未啟用")
+            if not (self.contact_email or self.preferences.invoice_buyer_email) and self.preferences.invoice_carrier_type != InvoiceCarrierType.MOBILE_BARCODE:
+                raise ValueError("Email 會員載具須提供客人 Email；紙本發票列印尚未啟用")
         if self.invoice_handling == "pickup_day" and self.pickup_date is None:
             raise ValueError("取餐日開票必須填寫取餐日期")
         if self.invoice_handling != "pickup_day" and self.pickup_date is not None:
             raise ValueError("取餐日期僅供取餐日開票使用")
         email = self.preferences.invoice_buyer_email or self.contact_email
-        self.preferences = InvoicePreferenceInput.model_validate({
+        submitted_tax_id = self.preferences._submitted_tax_id
+        self.preferences = WalkInInvoicePreferenceInput.model_validate({
             **self.preferences.model_dump(), "invoice_buyer_email": email,
             "invoice_carrier_value": self.preferences.invoice_carrier_value.strip().upper() if self.preferences.invoice_carrier_value else None,
         })
+        self.preferences._submitted_tax_id = submitted_tax_id
         return self
 
 
-def walk_in_sale_read(order: Order) -> dict:
+async def walk_in_sale_read(session: AsyncSession, order: Order) -> dict:
     return {
         "order_id": order.id, "order_number": order.order_number,
+        "sale_category": await session.scalar(select(WalkInSale.sale_category).where(WalkInSale.order_id == order.id)),
         "payment_status": order.payment_status.value, "invoice_status": order.invoice_status.value,
         "invoice_handling": order.invoice_handling, "invoice_issue_after": aware(order.invoice_issue_after) if order.invoice_issue_after else None,
         "amount_total": order.amount_total, "tax_amount": order.tax_amount,
@@ -105,7 +143,7 @@ async def recover_walk_in_sale(
     order = await _existing(session, str(client_request_id))
     if order is None:
         raise HTTPException(404, "尚未找到此筆現場交易")
-    return walk_in_sale_read(order)
+    return await walk_in_sale_read(session, order)
 
 
 class WalkInRefundRequest(BaseModel):
@@ -139,7 +177,7 @@ async def refund_walk_in_sale(
         raise HTTPException(409, "現場退款必須等於原交易全額")
     refund = await session.scalar(select(Refund).where(Refund.order_id == order.id, Refund.provider == "onsite"))
     if order.payment_status == PaymentStatus.REFUNDED and refund is not None and refund.status == RefundStatus.COMPLETED:
-        return walk_in_sale_read(order)
+        return await walk_in_sale_read(session, order)
     if order.payment_status not in {PaymentStatus.PAID, PaymentStatus.REFUND_PENDING}:
         raise HTTPException(409, "此現場交易目前不可退款")
     now = datetime.now(timezone.utc)
@@ -157,7 +195,7 @@ async def refund_walk_in_sale(
         await session.commit()
     except PaymentApplicationError as exc:
         raise HTTPException(409, str(exc)) from exc
-    return walk_in_sale_read(order)
+    return await walk_in_sale_read(session, order)
 
 
 @walk_in_sales_router.get("/{order_id}")
@@ -169,7 +207,7 @@ async def get_walk_in_sale(
     order = await session.scalar(select(Order).join(WalkInSale, WalkInSale.order_id == Order.id).where(Order.id == str(order_id)))
     if order is None:
         raise HTTPException(404, "找不到現場交易")
-    return walk_in_sale_read(order)
+    return await walk_in_sale_read(session, order)
 
 
 @walk_in_sales_router.post("", status_code=201)
@@ -180,11 +218,18 @@ async def create_walk_in_sale(
 ):
     response.headers["Cache-Control"] = "no-store"
     request_id = str(body.client_request_id)
-    fingerprint = hashlib.sha256(json.dumps(body.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    fingerprint_data = body.model_dump(mode="json")
+    if "sale_category" not in body.model_fields_set:
+        fingerprint_data.pop("sale_category")
+        # Older clients hashed the submitted tax ID before whitespace normalization.
+        fingerprint_data["preferences"]["invoice_buyer_tax_id"] = body.preferences._submitted_tax_id
+    fingerprint = hashlib.sha256(json.dumps(fingerprint_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     existing = await _existing(session, request_id, fingerprint)
     if existing is not None:
         response.status_code = 200
-        return walk_in_sale_read(existing)
+        return await walk_in_sale_read(session, existing)
+    if body.invoice_handling != "external" and not (body.contact_email or body.preferences.invoice_buyer_email) and settings.invoice_provider != "fanyu":
+        raise HTTPException(422, "目前開票供應商須提供客人 Email")
     now = datetime.now(timezone.utc)
     if body.pickup_date is not None and body.pickup_date < now.astimezone(TAIPEI).date():
         raise HTTPException(422, "取餐日期不可早於今天；發票不能倒填日期")
@@ -219,11 +264,11 @@ async def create_walk_in_sale(
     session.add_all([order, attempt])
     try:
         await session.flush()
-        session.add(WalkInSale(order_id=order.id, client_request_id=request_id, request_fingerprint=fingerprint, operator_id=actor_id))
+        session.add(WalkInSale(order_id=order.id, client_request_id=request_id, request_fingerprint=fingerprint, operator_id=actor_id, sale_category=body.sale_category))
         await session.flush()
         enqueue_invoice_issue(session, order, trigger="walk_in_payment_confirmed")
         session.add(AdminAudit(actor_id=actor_id, action="walk_in_sale.collected", aggregate_type="order", aggregate_id=order.id,
-            reason=body.reason, data={"amount": amount, "tax_type": body.tax_type.value, "invoice_handling": body.invoice_handling}))
+            reason=body.reason, data={"amount": amount, "tax_type": body.tax_type.value, "invoice_handling": body.invoice_handling, "sale_category": body.sale_category}))
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -231,5 +276,5 @@ async def create_walk_in_sale(
         if existing is None:
             raise
         response.status_code = 200
-        return walk_in_sale_read(existing)
-    return walk_in_sale_read(order)
+        return await walk_in_sale_read(session, existing)
+    return await walk_in_sale_read(session, order)

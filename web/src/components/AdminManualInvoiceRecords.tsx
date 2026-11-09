@@ -13,6 +13,7 @@ interface ManualInvoiceRecord {
   recorded_at: string;
   operator_name: string | null;
   action: "invoice.arranged" | "walk_in_sale.collected";
+  sale_category?: "meal" | "product" | null;
   handling: "on_payment" | "pickup_day";
   amount: number;
   reason: string | null;
@@ -54,6 +55,7 @@ function ManualInvoiceRecordsList() {
                   <td>{financeDateTime(row.recorded_at)}<br/>{row.operator_name || "未記錄姓名"}</td>
                   <td><Link className="text-link" to="/admin" search={{ section: "orders", q: row.order_number }}>{row.order_number}</Link><br/>
                     {formatMoney(row.amount)} · {row.action === "walk_in_sale.collected" ? "現場收款開票" : "手動安排開票"}<br/>
+                    {row.action === "walk_in_sale.collected" && <>{row.sale_category === "meal" ? "便當" : row.sale_category === "product" ? "一般商品" : "未分類"}<br/></>}
                     {row.handling === "pickup_day" ? "取餐日開立" : "現在開立"}
                     {row.handling === "pickup_day" && row.requested_issue_after && <><br/>{financeDateTime(row.requested_issue_after)}</>}
                   </td>

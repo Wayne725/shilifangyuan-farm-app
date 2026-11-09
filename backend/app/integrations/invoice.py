@@ -108,12 +108,13 @@ class InvoiceIssueRequest:
     customer_phone: str = ""
     remark: str = ""
 
-    def validate(self) -> None:
+    def validate(self, *, allow_mobile_delivery_without_contact: bool = False) -> None:
         if not re.fullmatch(r"[A-Za-z0-9]{1,30}", self.relate_number):
             raise ValueError(
                 "Invoice RelateNumber must be 1-30 ASCII letters or digits"
             )
-        if not self.customer_email and not self.customer_phone:
+        mobile_delivery = allow_mobile_delivery_without_contact and self.carrier_type == "mobile_barcode" and is_mobile_barcode_format(self.carrier_number)
+        if not self.customer_email and not self.customer_phone and not mobile_delivery:
             raise ValueError("Invoice requires a customer email or phone")
         if self.buyer_type not in {"personal", "company"}:
             raise ValueError("Invoice buyer type must be personal or company")

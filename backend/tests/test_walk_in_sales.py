@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -56,6 +57,7 @@ async def test_guest_collection_is_durable_and_is_not_operator_consumption(walk_
     first = await post(c, body)
     assert first.status_code == 201, first.text
     assert first.headers["cache-control"] == "no-store"
+    assert first.json()["sale_category"] is None
     repeated = await post(c, body)
     assert repeated.status_code == 200 and repeated.json() == first.json()
     recovered = await c.client.get(f"/v1/admin/walk-in-sales/request/{body['client_request_id']}", headers=auth_headers(c.admin))
@@ -78,6 +80,63 @@ async def test_guest_collection_is_durable_and_is_not_operator_consumption(walk_
     assert listing.json()["items"][0]["customer_name"] == "合成現場客人"
     assert listing.json()["items"][0]["customer_kind"] == "walk_in"
     assert listing.json()["items"][0]["available_actions"] == ["refund_walk_in"]
+
+
+@pytest.mark.asyncio
+async def test_source_category_survives_reads_and_cannot_be_changed_by_retry(walk_in_context):
+    c = walk_in_context
+    body = payload(sale_category="meal")
+    created = await post(c, body)
+    assert created.status_code == 201, created.text
+    order = await c.session.get(Order, created.json()["order_id"])
+    sale = await c.session.get(WalkInSale, order.id)
+    assert sale.sale_category == "meal" and order.order_kind.value == "regular" and order.sales_channel.value == "regular"
+    assert (await c.session.scalar(select(AdminAudit))).data["sale_category"] == "meal"
+    recovered = await c.client.get(f"/v1/admin/walk-in-sales/request/{body['client_request_id']}", headers=auth_headers(c.admin))
+    assert recovered.json() == created.json()
+    assert (await post(c, body)).json() == created.json()
+    assert (await post(c, {**body, "sale_category": "product"})).status_code == 409
+    assert (await post(c, payload(sale_category="unknown"))).status_code == 422
+    assert await c.session.scalar(select(func.count()).select_from(Order)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preferences", [{}, {"invoice_buyer_type": "company", "invoice_buyer_tax_id": " 15989995 ", "invoice_buyer_name": "合成公司"}])
+async def test_pre_category_request_fingerprint_remains_recoverable(walk_in_context, preferences):
+    c = walk_in_context
+    body = payload(preferences=preferences)
+    created = await post(c, body)
+    from app.schemas import InvoicePreferenceInput
+    legacy_data = {**body, "tax_type": "taxable", "invoice_handling": "on_payment", "pickup_date": None,
+        "preferences": InvoicePreferenceInput(**preferences, invoice_buyer_email=body["contact_email"]).model_dump(mode="json")}
+    legacy_fingerprint = hashlib.sha256(json.dumps(legacy_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    sale = await c.session.get(WalkInSale, created.json()["order_id"])
+    sale.request_fingerprint = legacy_fingerprint
+    sale.sale_category = None
+    await c.session.commit()
+    assert (await c.client.get(f"/v1/admin/walk-in-sales/request/{body['client_request_id']}", headers=auth_headers(c.admin))).json()["sale_category"] is None
+    assert (await post(c, body)).status_code == 200
+    assert (await post(c, {**body, "sale_category": "meal"})).status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_no_email_requires_fanyu_mobile_and_does_not_relax_website_checkout(walk_in_context):
+    c = walk_in_context
+    mobile = {"invoice_carrier_type": "mobile_barcode", "invoice_carrier_value": "/AB12+-."}
+    assert (await post(c, payload(contact_email=None, preferences=mobile))).status_code == 422
+    c.settings.invoice_provider = "fanyu"
+    for preference in [{}, {**mobile, "invoice_carrier_value": "invalid"}, {**mobile, "invoice_buyer_email": "invalid"},
+        {**mobile, "invoice_buyer_type": "company", "invoice_buyer_tax_id": "11111111", "invoice_buyer_name": "合成公司"},
+        {**mobile, "invoice_buyer_type": "company", "invoice_buyer_tax_id": "15989995"}]:
+        invalid = await post(c, payload(contact_email=None, preferences=preference))
+        assert invalid.status_code == 422, invalid.text
+    from app.schemas import InvoicePreferenceInput, OrderCreate
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="Email"):
+        InvoicePreferenceInput.model_validate({**mobile, "invoice_buyer_type": "company", "invoice_buyer_tax_id": "15989995", "invoice_buyer_name": "合成公司"})
+    with pytest.raises(ValidationError, match="contact_email"):
+        OrderCreate.model_validate({"items": [{"product_id": str(uuid4()), "quantity": 1}], **mobile})
+    assert await c.session.scalar(select(func.count()).select_from(Order)) == 0
 
 
 @pytest.mark.asyncio
@@ -143,7 +202,8 @@ async def test_pickup_day_prevents_early_issue_and_fulfillment_does_not_notify_o
 
 
 @pytest.mark.asyncio
-async def test_guest_invoice_worker_issues_once_with_real_adapter_fake_transport(walk_in_context, monkeypatch):
+@pytest.mark.parametrize("buyer_type,with_email,tax_id", [("personal", True, ""), ("personal", False, ""), ("company", False, "15989995"), ("company", False, " 15989995 ")])
+async def test_guest_invoice_worker_issues_once_with_real_adapter_fake_transport(walk_in_context, monkeypatch, buyer_type, with_email, tax_id):
     c = walk_in_context
     calls = []
     async def transport(url, envelope, *_args):
@@ -153,11 +213,21 @@ async def test_guest_invoice_worker_issues_once_with_real_adapter_fake_transport
         assert envelope["reqData"]["printMark"] == "N"
         assert envelope["reqData"]["carrierID1"] == "/AB12+-."
         assert envelope["reqData"]["totalAmount"] == "210"
+        assert envelope["reqData"]["notifyEmail"] == ("walk-in@example.com" if with_email else "")
+        assert envelope["reqData"]["process_type"] == ("B" if buyer_type == "company" else "C")
+        assert envelope["reqData"]["buyerID"] == ("15989995" if buyer_type == "company" else "0000000000")
         return HTTPResponse(200, json.dumps({"statusCode": "0", "respData": {"invNo": "AB12345678", "invDate": "20261106", "randomNumber": "1234"}}), {})
     adapter = FanyuInvoiceAdapter(fanyu_settings(), transport)
-    created = await post(c, payload(preferences={"invoice_carrier_type": "mobile_barcode", "invoice_carrier_value": "/ab12+-."}))
+    c.settings.invoice_provider = "fanyu"
+    preferences = {"invoice_carrier_type": "mobile_barcode", "invoice_carrier_value": "/ab12+-.", "invoice_buyer_type": buyer_type}
+    if buyer_type == "company":
+        preferences.update(invoice_buyer_tax_id=tax_id, invoice_buyer_name="合成公司")
+    created = await post(c, payload(contact_email="walk-in@example.com" if with_email else None, sale_category="meal", preferences=preferences))
     assert created.status_code == 201, created.text
     order = await c.session.get(Order, created.json()["order_id"])
+    assert created.json()["sale_category"] == "meal" and order.order_kind.value == "regular"
+    if buyer_type == "company":
+        assert order.invoice_buyer_tax_id == "15989995"
     order.invoice_provider_context = adapter.binding_context
     await c.session.commit()
     monkeypatch.setattr("app.jobs.invoice_adapter_from_settings", lambda *_: adapter)
@@ -173,6 +243,7 @@ async def test_guest_invoice_worker_issues_once_with_real_adapter_fake_transport
         json={"amount": 210, "reason": "客人現場退回商品，已退還現金", "confirm_returned": True})
     assert refunded.status_code == 200, refunded.text
     assert refunded.json()["invoice_status"] == "void_pending"
+    assert refunded.json()["sale_category"] == "meal"
     adjustment = await c.session.scalar(select(OutboxEvent).where(OutboxEvent.event_type == "invoice.adjustment_required"))
     assert adjustment.payload["auto_void"] is True
     assert calls == ["queryInvoice", "openInvoice"]

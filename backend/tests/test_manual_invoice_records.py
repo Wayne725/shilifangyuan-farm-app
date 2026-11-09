@@ -8,7 +8,7 @@ from sqlalchemy import event, select, text
 
 from app.models import (
     AdminAudit, Invoice, InvoiceStatus, MembershipType, Order, OrderKind,
-    OutboxEvent, PaymentAttempt, PaymentStatus, User, UserRole,
+    OutboxEvent, PaymentAttempt, PaymentStatus, User, UserRole, WalkInSale,
 )
 from app.routers.invoice_reports import invoice_reports_router
 from tests.support import api_test_context, auth_headers
@@ -62,6 +62,20 @@ async def test_manual_records_require_admin_and_are_not_cacheable(record_context
     assert result.status_code == 200, result.text
     assert result.headers['cache-control'] == 'no-store'
     assert result.json() == {'items': [], 'total': 0}
+
+
+@pytest.mark.asyncio
+async def test_manual_records_read_persisted_counter_category_without_reclassifying_order(record_context):
+    c = record_context
+    order = await add_order(c)
+    c.session.add(WalkInSale(order_id=order.id, client_request_id=str(uuid4()), request_fingerprint='a' * 64,
+        operator_id=c.admin.id, sale_category='meal'))
+    add_record(c, order, action='walk_in_sale.collected', data={'invoice_handling': 'on_payment', 'amount': 315})
+    await c.session.commit()
+    response = await c.client.get(PATH, headers=auth_headers(c.admin))
+    assert response.status_code == 200, response.text
+    assert response.json()['items'][0]['sale_category'] == 'meal'
+    assert order.order_kind == OrderKind.REGULAR
 
 
 @pytest.mark.asyncio
@@ -128,7 +142,7 @@ async def test_history_fields_are_distinct_from_current_order_and_only_safe_fiel
     assert set(rows[arranged.id]) == {
         'id', 'order_id', 'order_number', 'recorded_at', 'operator_name', 'action',
         'handling', 'amount', 'reason', 'invoice_status', 'invoice_number',
-        'invoice_date', 'issue_after', 'requested_issue_after',
+        'invoice_date', 'issue_after', 'requested_issue_after', 'sale_category',
     }
     assert rows[arranged.id] == {
         'id': arranged.id, 'order_id': order.id, 'order_number': order.order_number,
@@ -138,6 +152,7 @@ async def test_history_fields_are_distinct_from_current_order_and_only_safe_fiel
         'invoice_date': NOW.isoformat(),
         'issue_after': current_due.isoformat(),
         'requested_issue_after': requested_due,
+        'sale_category': None,
     }
     assert rows[collected.id]['action'] == 'walk_in_sale.collected'
     assert rows[collected.id]['handling'] == 'on_payment'

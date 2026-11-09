@@ -154,7 +154,7 @@ class FanyuInvoiceAdapter:
     def build_issue_data(
         self, request: InvoiceIssueRequest
     ) -> Dict[str, Any]:
-        request.validate()
+        request.validate(allow_mobile_delivery_without_contact=True)
         company_invoice = request.buyer_type == "company"
         taxable_lines = [item for item in request.items if item.tax_type == "1"]
         exempt_lines = [item for item in request.items if item.tax_type == "3"]

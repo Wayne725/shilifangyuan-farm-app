@@ -10,7 +10,7 @@ from ..database import get_session
 from ..invoice_tax_summary import invoice_tax_summary
 from ..domain import aware
 from ..meal_booking import TAIPEI
-from ..models import AdminAudit, Order, Invoice, InvoiceStatus, User
+from ..models import AdminAudit, Order, Invoice, InvoiceStatus, User, WalkInSale
 from ..order_categories import OrderCategory, order_category_condition
 
 invoice_reports_router = APIRouter(prefix='/v1/admin', tags=['invoice-reports'])
@@ -46,6 +46,7 @@ async def read_manual_invoice_records(
             AdminAudit.created_at.label('recorded_at'),
             User.display_name.label('operator_name'),
             AdminAudit.action,
+            WalkInSale.sale_category,
             case((AdminAudit.action == 'invoice.arranged', arranged_handling), else_=collected_handling).label('handling'),
             case(
                 (AdminAudit.action == 'walk_in_sale.collected', func.coalesce(AdminAudit.data['amount'].as_integer(), Order.amount_total)),
@@ -62,6 +63,7 @@ async def read_manual_invoice_records(
         .join(Order, Order.id == AdminAudit.aggregate_id)
         .outerjoin(User, User.id == AdminAudit.actor_id)
         .outerjoin(Invoice, Invoice.order_id == Order.id)
+        .outerjoin(WalkInSale, WalkInSale.order_id == Order.id)
         .where(manual_record)
         .order_by(AdminAudit.created_at.desc(), AdminAudit.id.desc())
         .limit(limit).offset(offset)

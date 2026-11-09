@@ -16,6 +16,7 @@ async function fixture(t, { width = 1280, role = 'admin', mode = 'records' } = {
     id: `audit-${index}`, order_id: `order-${index}`, order_number: `O203001020${index + 1}`,
     recorded_at: '2030-01-02T01:00:00Z', operator_name: index === 4 ? null : '合成店員',
     action: index % 2 ? 'invoice.arranged' : 'walk_in_sale.collected',
+    sale_category: index % 2 ? null : index === 0 ? 'meal' : 'product',
     handling: index % 2 ? 'pickup_day' : 'on_payment', amount: 120,
     reason: '合成開票原因', invoice_status: ['pending', 'issued', 'failed', 'voided', 'void_pending', 'pending', 'issued'][index],
     invoice_number: index === 1 ? 'AB12345678' : null,
@@ -69,6 +70,8 @@ for (const width of [1280, 390]) {
     assert.match(await records.locator('thead').innerText(), /目前發票狀態/);
     const pending = records.locator('tbody tr').filter({ hasText: 'O2030010201' });
     assert.match(await pending.innerText(), /待開立/);
+    assert.match(await pending.innerText(), /便當/);
+    assert.match(await records.locator('tbody tr').filter({ hasText: 'O2030010203' }).innerText(), /一般商品/);
     assert.doesNotMatch(await pending.innerText(), /已開立|AB12345678/);
     const issued = records.locator('tbody tr').filter({ hasText: 'O2030010202' });
     assert.match(await issued.innerText(), /已開立.*\nAB12345678/);
