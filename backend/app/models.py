@@ -1754,6 +1754,7 @@ class MealEvent(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    booking_policy: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))
@@ -2075,11 +2076,13 @@ class Order(Base):
 
 class WalkInSale(Base):
     __tablename__ = "walk_in_sales"
+    __table_args__ = (CheckConstraint("sale_category IN ('meal', 'product')", name="sale_category_valid"),)
 
     order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), primary_key=True)
     client_request_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     operator_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    sale_category: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

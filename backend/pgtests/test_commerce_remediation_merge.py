@@ -31,7 +31,7 @@ async def test_both_heads_and_live_graph_preserve_orders_at_merged_head(migrated
     before_order = (await table_rows(database, "orders"))[0]
     before_users = await table_rows(database, "users")
     await database.migrate(command.upgrade, "head")
-    assert await version(database) == "0049_merge_commerce_remediation"
+    assert await version(database) == database.head
     after_order = (await table_rows(database, "orders"))[0]
     assert {key: after_order[key] for key in before_order} == before_order
     assert after_order["customer_kind"] == "account"
@@ -39,7 +39,7 @@ async def test_both_heads_and_live_graph_preserve_orders_at_merged_head(migrated
     assert invoice_handling(SimpleNamespace(**after_order)) == "on_payment"
     assert await table_rows(database, "users") == before_users
     def metadata_and_single_head(config, _):
-        assert ScriptDirectory.from_config(config).get_heads() == ["0049_merge_commerce_remediation"]
+        assert ScriptDirectory.from_config(config).get_heads() == [database.head]
         command.check(config)
     await database.migrate(metadata_and_single_head, None)
     await database.migrate(command.upgrade, "head")

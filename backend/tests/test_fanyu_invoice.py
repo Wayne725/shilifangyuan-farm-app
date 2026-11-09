@@ -88,6 +88,28 @@ def test_fanyu_builds_cloud_personal_invoice_without_paper() -> None:
     }
 
 
+@pytest.mark.parametrize("buyer_type", ["personal", "company"])
+def test_fanyu_mobile_carrier_is_delivery_without_email_but_generic_validation_stays_strict(buyer_type):
+    request = InvoiceIssueRequest(relate_number="INVNOEMAIL01", customer_email="", customer_id="COUNTER01",
+        buyer_type=buyer_type, buyer_tax_id="15989995" if buyer_type == "company" else "",
+        buyer_name="合成公司" if buyer_type == "company" else "", carrier_type="mobile_barcode", carrier_number="/AB12+-.",
+        items=[InvoiceLine(name="現場便當", quantity=1, unit_price=105)])
+    with pytest.raises(ValueError, match="email or phone"):
+        request.validate()
+    data = FanyuInvoiceAdapter(fanyu_settings()).build_issue_data(request)
+    assert data["notifyEmail"] == "" and data["printMark"] == "N"
+    assert data["carrierType"] == "3J0002" and data["carrierID1"] == data["carrierID2"] == "/AB12+-."
+    assert data["buyerID"] == ("15989995" if buyer_type == "company" else "0000000000")
+
+
+@pytest.mark.parametrize("carrier_type,barcode", [("cloud", ""), ("mobile_barcode", "/INVALID!")])
+def test_fanyu_no_email_cannot_bypass_carrier_requirements(carrier_type, barcode):
+    request = InvoiceIssueRequest(relate_number="INVINVALID01", customer_email="",
+        carrier_type=carrier_type, carrier_number=barcode, items=[InvoiceLine(name="現場商品", quantity=1, unit_price=105)])
+    with pytest.raises(ValueError):
+        FanyuInvoiceAdapter(fanyu_settings()).build_issue_data(request)
+
+
 def test_fanyu_uses_zero_tax_rate_for_exempt_invoice() -> None:
     adapter = FanyuInvoiceAdapter(fanyu_settings())
     request = InvoiceIssueRequest(

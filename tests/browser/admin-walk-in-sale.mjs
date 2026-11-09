@@ -94,14 +94,15 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
 
 async function fillSale(region, { barcode = false } = {}) {
   const product = region.getByRole('combobox', { name: '品名', exact: true });
-  assert.equal(await product.inputValue(), '餐盒');
+  assert.equal(await product.inputValue(), '');
   assert.equal(await product.evaluate(select => select.required), true);
-  await product.getByRole('option', { name: '合成商品', exact: true }).waitFor({ state: 'attached' });
+  await product.getByRole('option', { name: '合成餐盒', exact: true }).waitFor({ state: 'attached' });
   await product.selectOption({ label: '合成餐盒' });
   await region.getByLabel('含稅單價', { exact: true }).fill('120');
   await region.getByLabel('數量', { exact: true }).fill('2');
   await region.getByLabel('顧客姓名（選填）', { exact: true }).fill('合成顧客');
   await region.getByLabel('發票通知 Email', { exact: true }).fill('customer@example.test');
+  if (!barcode) await region.getByRole('radio', { name: 'Email 會員載具', exact: true }).check();
   if (barcode) {
     await region.getByRole('radio', { name: '手機條碼載具', exact: true }).check();
     assert.equal(await region.getByLabel('手機條碼', { exact: true }).inputValue(), '', '不得帶入店員已儲存的載具');
@@ -174,13 +175,111 @@ test('手機手動開票直接填表後確認，固定即時開票且不帶入�
   const body = state.posts[0].body;
   assertImmediateSale(body);
   assert.deepEqual(body, {
-    client_request_id: body.client_request_id, product_name: '合成餐盒', unit_price: 120, quantity: 2,
+    client_request_id: body.client_request_id, product_name: '合成餐盒', sale_category: 'meal', unit_price: 120, quantity: 2,
     tax_type: 'taxable', customer_name: '合成顧客', contact_email: 'customer@example.test',
     invoice_handling: 'on_payment',
     preferences: { invoice_buyer_type: 'personal', invoice_buyer_email: 'customer@example.test', invoice_carrier_type: 'mobile_barcode', invoice_carrier_value: customerBarcode },
     reason: '現場客人收款', confirm_received: true, confirm_not_invoiced_elsewhere: true,
   });
   assert.equal(state.posts[0].raw.includes(staffBarcode), false);
+  await assertClean(page, state);
+});
+
+for (const width of [390, 1280]) {
+  for (const buyerType of ['personal', 'company']) {
+    test(`${width}px ${buyerType} 手機載具無 Email 可確認，下一筆清空客人資料`, async t => {
+      const { page, region, state } = await fixture(t, { width });
+      assert.equal(await region.getByRole('radio', { name: '手機條碼載具', exact: true }).isChecked(), true);
+      await fillSale(region, { barcode: true });
+      await region.getByLabel('發票通知 Email', { exact: true }).fill('');
+      if (buyerType === 'company') {
+        await region.getByRole('radio', { name: '公司統編發票', exact: true }).click();
+        await region.getByLabel('統一編號', { exact: true }).fill('15989995');
+        await region.getByLabel('公司名稱', { exact: true }).fill('合成公司');
+      }
+      assert.equal(await region.getByLabel('發票通知 Email', { exact: true }).evaluate(input => input.required), false);
+      await assertClean(page, state);
+      await capture(page, `manual-invoice-${width}-${buyerType}-mobile`);
+      await region.getByRole('button', { name: '確認', exact: true }).click();
+      await assertRecorded(region);
+      const body = state.posts[0].body;
+      assert.equal(body.contact_email, null);
+      assert.equal(body.preferences.invoice_buyer_email, null);
+      assert.equal(body.preferences.invoice_buyer_type, buyerType);
+      assert.equal(body.preferences.invoice_carrier_value, customerBarcode);
+      assert.equal(body.sale_category, 'meal');
+      assert.equal(state.posts[0].raw.includes('staff@example.test'), false);
+      assert.equal(state.posts[0].raw.includes(staffBarcode), false);
+      if (buyerType === 'company') assert.equal(body.preferences.invoice_buyer_tax_id, '15989995');
+      await region.getByRole('button', { name: '下一筆現場交易', exact: true }).click();
+      await region.getByLabel('手機條碼', { exact: true }).waitFor();
+      assert.equal(await region.getByLabel('手機條碼', { exact: true }).inputValue(), '');
+      assert.equal(await region.getByLabel('發票通知 Email', { exact: true }).inputValue(), '');
+      assert.equal(await region.getByRole('radio', { name: '個人電子發票', exact: true }).getAttribute('aria-checked'), 'true');
+      assert.equal(await region.getByRole('button', { name: '確認', exact: true }).isDisabled(), true);
+      assert.equal(state.posts.length, 1);
+      await assertClean(page, state);
+    });
+  }
+}
+
+test('手機載具須有效條碼，選填 Email 仍驗格式，Email 會員載具仍必填 Email', async t => {
+  const { page, region, state } = await fixture(t);
+  assert.equal(await region.locator('.invoice-field-error').count(), 0, '初開空白不可報錯');
+  await fillSale(region, { barcode: true });
+  const confirm = region.getByRole('button', { name: '確認', exact: true });
+  const email = region.getByLabel('發票通知 Email', { exact: true });
+  await email.fill('');
+  await region.getByLabel('手機條碼', { exact: true }).fill('/BAD');
+  await region.getByLabel('手機條碼', { exact: true }).press('Tab');
+  await region.getByText('請輸入以 / 開頭的 8 碼手機條碼', { exact: true }).waitFor();
+  assert.equal(await region.getByLabel('手機條碼', { exact: true }).getAttribute('aria-invalid'), 'true');
+  assert.equal(await region.getByLabel('手機條碼', { exact: true }).getAttribute('aria-describedby'), 'walk-in-barcode-error');
+  assert.equal(await confirm.isDisabled(), true);
+  await region.getByLabel('手機條碼', { exact: true }).fill(customerBarcode);
+  await email.fill('invalid');
+  await email.press('Tab');
+  await region.getByText('請輸入正確的 Email 格式', { exact: true }).waitFor();
+  assert.equal(await email.getAttribute('aria-invalid'), 'true');
+  assert.equal(await confirm.isDisabled(), true);
+  await email.fill('');
+  assert.equal(await region.locator('#walk-in-email-error').count(), 0);
+  assert.equal(await region.locator('#walk-in-barcode-error').count(), 0);
+  assert.equal(await confirm.isEnabled(), true);
+  await region.getByRole('radio', { name: 'Email 會員載具', exact: true }).check();
+  assert.equal(await confirm.isDisabled(), true);
+  assert.equal(await email.evaluate(input => input.required), true);
+  await email.fill('customer@example.test');
+  assert.equal(await confirm.isEnabled(), true);
+  await region.getByRole('radio', { name: '公司統編發票', exact: true }).click();
+  assert.equal(await confirm.isDisabled(), true);
+  await region.getByLabel('統一編號', { exact: true }).fill('11111111');
+  await region.getByLabel('統一編號', { exact: true }).press('Tab');
+  await region.getByText('請輸入有效的 8 碼統一編號', { exact: true }).waitFor();
+  assert.equal(await region.getByLabel('統一編號', { exact: true }).getAttribute('aria-invalid'), 'true');
+  await region.getByLabel('公司名稱', { exact: true }).fill('合成公司');
+  assert.equal(await confirm.isDisabled(), true);
+  await region.getByLabel('統一編號', { exact: true }).fill('15989995');
+  assert.equal(await region.locator('#walk-in-tax-id-error').count(), 0);
+  assert.equal(await confirm.isEnabled(), true);
+  assert.equal(state.posts.length, 0);
+  await assertClean(page, state);
+});
+
+test('無 Email 手機載具交易回應不明仍鎖定資料，以原 payload 重試一次', async t => {
+  const { page, region, state } = await fixture(t, { firstResponse: '503' });
+  await fillSale(region, { barcode: true });
+  await region.getByLabel('發票通知 Email', { exact: true }).fill('');
+  await region.getByRole('button', { name: '確認', exact: true }).click();
+  const retry = region.getByRole('button', { name: '重試同一筆交易', exact: true });
+  await retry.waitFor();
+  assert.equal(await region.getByLabel('手機條碼', { exact: true }).isDisabled(), true);
+  assert.equal(await region.getByRole('radio', { name: 'Email 會員載具', exact: true }).isDisabled(), true);
+  await retry.click();
+  await assertRecorded(region);
+  assert.equal(state.posts[0].raw, state.posts[1].raw);
+  assert.equal(state.posts[0].body.preferences.invoice_buyer_email, null);
+  assert.equal(state.sales.size, 1);
   await assertClean(page, state);
 });
 

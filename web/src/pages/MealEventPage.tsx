@@ -158,7 +158,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       if (platform.data?.orders_open === false) throw new Error(platform.data.closed_message);
       if (!user) throw new Error("請先登入");
       if (!contactPhoneReady) throw new Error("請輸入完整手機號碼或含區碼的市話");
-      if (!event.data || !mealOrderingOpen(event.data)) throw new Error("只能提前一天預訂，且須在本場次的開放時間內送出");
+      if (!event.data || !mealOrderingOpen(event.data)) throw new Error(event.data?.new_orders_blocked_reason || "請在本場次的預訂開放時間內送出");
       if (!event.data || !validPickupTime(pickupAt, event.data)) throw new Error("請重新選擇可預訂的半小時取餐時段");
       if (!pickupLocationReady) throw new Error("請選擇可用的取餐點");
       if (paymentMethod === "online") {
@@ -385,7 +385,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}
           {!pickupAt && <p className="meal-selection-notice">請選擇預計取餐時間。</p>}
-          {!orderingOpen && <p className="meal-selection-notice">今天僅可預訂明天的餐點；本場次也須在開放時間內才能送出。</p>}
+          {!orderingOpen && <p className="meal-selection-notice">{mealEvent.new_orders_blocked_reason || "本場次目前不在預訂開放時間內。"}</p>}
           <dl>
             {confirmedQuote ? confirmedQuote.items.map((item) => (
               <div className="meal-quote-line" key={item.offering_id}>
@@ -410,7 +410,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                 {pickupOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
-            {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇明天的餐點。</p>}
+            {!pickupOptions.length && <p className="meal-selection-notice">目前沒有可預訂的取餐時段。請回到便當預訂選擇可預訂的供餐日期。</p>}
             <label className="field"><span id="meal-pickup-location-label">取餐點</span>
               <select aria-labelledby="meal-pickup-location-label" value={pickupLocationId} required={Boolean(activeLocations?.length)} disabled={checkout.isPending || locations.isPending || locations.isError || !activeLocations?.length} onChange={(event) => { setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupLocationId: event.target.value })); }}>
                 <option value="" disabled={Boolean(activeLocations?.length)}>{locations.isPending ? "載入取餐點中…" : locations.isError ? "取餐點暫時無法使用" : activeLocations?.length ? "請選擇取餐點" : mealEvent.location}</option>

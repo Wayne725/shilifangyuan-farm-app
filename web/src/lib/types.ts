@@ -517,6 +517,8 @@ export interface MealOptionSelection {
 
 export interface MealEvent {
   id: string;
+  booking_policy?: "legacy" | "workday" | "special";
+  new_orders_blocked_reason?: string | null;
   can_edit?: boolean;
   service_date?: string | null;
   meal_period?: "lunch" | "dinner" | null;

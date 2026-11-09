@@ -1,0 +1,31 @@
+{
+  "source_url": "https://data.gov.tw/dataset/14718",
+  "retrieved_on": "2026-11-09",
+  "license": "政府資料開放授權條款第1版",
+  "files": [
+    {
+      "year": 2025,
+      "file": "taiwan_workdays_2025.csv",
+      "download_url": "https://www.dgpa.gov.tw/FileConversion?filename=dgpa%2Ffiles%2F202510%2Fb84cb88a-803c-4621-a843-d637b2775615.csv&name=114%E5%B9%B4%E4%B8%AD%E8%8F%AF%E6%B0%91%E5%9C%8B%E6%94%BF%E5%BA%9C%E8%A1%8C%E6%94%BF%E6%A9%9F%E9%97%9C%E8%BE%A6%E5%85%AC%E6%97%A5%E6%9B%86%E8%A1%A8%281141020%E6%9B%B4%E6%96%B0%29.csv&nfix=",
+      "source_sha256": "b4bd40d4d1f4ffc20cb724a07bf3b7c5c1b32a9100e55dcf216f329af3513ca6",
+      "sha256": "bbd6ce6eff16eb6be6409feb1d64d4c82e965bf98fbb1b59096367faccc904b8",
+      "days": 365
+    },
+    {
+      "year": 2026,
+      "file": "taiwan_workdays_2026.csv",
+      "download_url": "https://www.dgpa.gov.tw/FileConversion?filename=dgpa%2Ffiles%2F202506%2Fa52331bd-a189-466b-b0f0-cae3062bbf74.csv&name=115%E5%B9%B4%E4%B8%AD%E8%8F%AF%E6%B0%91%E5%9C%8B%E6%94%BF%E5%BA%9C%E8%A1%8C%E6%94%BF%E6%A9%9F%E9%97%9C%E8%BE%A6%E5%85%AC%E6%97%A5%E6%9B%86%E8%A1%A8.csv&nfix=",
+      "source_sha256": "0edd80d368626eb73caa05b6c33400ec9d87691b46834d03936efb91e6a0f00d",
+      "sha256": "f143b5749664db20d9ae3ee6873f94ae67679fee173f4ed014b6a3202b7502ca",
+      "days": 365
+    },
+    {
+      "year": 2027,
+      "file": "taiwan_workdays_2027.csv",
+      "download_url": "https://www.dgpa.gov.tw/FileConversion?filename=dgpa%2Ffiles%2F202607%2Ff538b1ff-ba60-4c63-9477-10db8e6612d1.csv&name=116%E5%B9%B4%E4%B8%AD%E8%8F%AF%E6%B0%91%E5%9C%8B%E6%94%BF%E5%BA%9C%E8%A1%8C%E6%94%BF%E6%A9%9F%E9%97%9C%E8%BE%A6%E5%85%AC%E6%97%A5%E6%9B%86%E8%A1%A8_utf8bom.csv&nfix=",
+      "source_sha256": "e30df188649bf5347db3ec43fa989af2cc8d93d793fbe5c9891601e6cce4acf3",
+      "sha256": "e12118b261ca669452de6d866b8a275a4648e4609f2b9133c8c3e58c0380953f",
+      "days": 365
+    }
+  ]
+}

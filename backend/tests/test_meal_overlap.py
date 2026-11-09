@@ -20,7 +20,7 @@ def test_confirmed_lunch_and_dinner_overlap_are_valid(period, start, cutoff, end
         pickup_start_time=start, cutoff_time=cutoff, cutoff_days_before=0, pickup_end_time=end,
         offerings=[{"meal_id": "test", "price": 100, "capacity": 20}],
     )
-    assert schedule.weekdays == [0, 1, 2, 3, 4, 5]
+    assert schedule.weekdays == [0, 1, 2, 3, 4]
     MealEventCreate(
         title=period, location="清華大學", ordering_starts_at="2026-09-16T00:00:00+08:00",
         ordering_ends_at=f"2026-09-17T{cutoff}:00+08:00",

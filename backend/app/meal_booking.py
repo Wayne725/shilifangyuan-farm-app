@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .models import MealEvent
@@ -29,6 +29,8 @@ def meal_period(event: MealEvent) -> str:
 
 
 def meal_booking_window(event: MealEvent) -> tuple[datetime, datetime]:
+    if event.booking_policy in {"workday", "special"}:
+        return _aware(event.ordering_starts_at), _aware(event.ordering_ends_at)
     service_date = meal_service_date(event)
     start = datetime.combine(service_date - timedelta(days=1), time.min, TAIPEI)
     end = datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI)
@@ -36,6 +38,47 @@ def meal_booking_window(event: MealEvent) -> tuple[datetime, datetime]:
         max(start.astimezone(timezone.utc), _aware(event.ordering_starts_at)),
         min(end.astimezone(timezone.utc), _aware(event.ordering_ends_at)),
     )
+
+
+def workday_booking_window(service_date: date, ends_at: datetime) -> tuple[datetime, datetime]:
+    from .workday_calendar import is_workday, previous_workday
+
+    if not is_workday(service_date):
+        raise ValueError("此日期不是供餐工作日；如需加開，請選擇特殊日期")
+    end = min(_aware(ends_at), datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
+    start = datetime.combine(previous_workday(service_date), time.min, TAIPEI)
+    if end <= start:
+        local_end = end.astimezone(TAIPEI)
+        opening_date = local_end.date()
+        if local_end.time() == time.min or not is_workday(opening_date):
+            opening_date = previous_workday(opening_date)
+        start = datetime.combine(opening_date, time.min, TAIPEI)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def configured_booking_window(service_date: date, policy: str, starts_at: datetime,
+                              ends_at: datetime) -> tuple[datetime, datetime]:
+    start = _aware(starts_at)
+    end = min(_aware(ends_at), datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
+    if policy == "workday":
+        opening, end = workday_booking_window(service_date, end)
+        start = max(start, opening)
+    if start >= end:
+        raise ValueError("有效訂購截止必須晚於開賣時間，且最晚為取餐前一天 20:00")
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def meal_new_orders_blocked_reason(event: MealEvent) -> str | None:
+    if event.booking_policy != "legacy" or not event.schedule_template_id:
+        return None
+    from .workday_calendar import CalendarUnavailable, is_workday
+
+    try:
+        if not is_workday(meal_service_date(event)):
+            return "本場次非供餐工作日，已停止接受新預訂；既有訂單仍保留"
+    except CalendarUnavailable as exc:
+        return str(exc)
+    return None
 
 
 def meal_pickup_slots(event: MealEvent) -> list[datetime]:
@@ -57,7 +100,7 @@ def meal_pickup_slots(event: MealEvent) -> list[datetime]:
 
 def validate_meal_booking_day(event: MealEvent, now: datetime) -> None:
     current = _aware(now)
-    if meal_service_date(event) != current.astimezone(TAIPEI).date() + timedelta(days=1):
+    if event.booking_policy not in {"workday", "special"} and meal_service_date(event) != current.astimezone(TAIPEI).date() + timedelta(days=1):
         raise ValueError("便當只能提前一天預訂，請選擇明天的取餐日期")
     start, end = meal_booking_window(event)
     if not start <= current < end:
