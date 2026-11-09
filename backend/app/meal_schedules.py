@@ -6,8 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order
-from .meal_booking import TAIPEI, MEAL_ORDER_CUTOFF, _aware
-from .workday_calendar import CalendarUnavailable, is_workday, previous_workday
+from .meal_booking import TAIPEI, _aware, workday_booking_window
+from .workday_calendar import CalendarUnavailable, is_workday
 
 
 async def _convert_unordered_legacy_events(session, template, today, report):
@@ -29,7 +29,8 @@ async def _convert_unordered_legacy_events(session, template, today, report):
             continue
         try:
             workday = is_workday(event.service_date)
-            start = datetime.combine(previous_workday(event.service_date), time.min, TAIPEI) if workday else None
+            if workday:
+                start, end = workday_booking_window(event.service_date, event.ordering_ends_at)
         except CalendarUnavailable:
             report["calendar_unavailable"] += 1
             continue
@@ -37,10 +38,7 @@ async def _convert_unordered_legacy_events(session, template, today, report):
                   "ordering_starts_at": _aware(event.ordering_starts_at).isoformat(),
                   "ordering_ends_at": _aware(event.ordering_ends_at).isoformat()}
         if workday:
-            end = min(_aware(event.ordering_ends_at), datetime.combine(event.service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
-            if start >= end:
-                continue
-            event.ordering_starts_at, event.ordering_ends_at = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+            event.ordering_starts_at, event.ordering_ends_at = start, end
             report["converted"] += 1
         else:
             event.status = MealEventStatus.DRAFT
@@ -111,9 +109,8 @@ async def generate_scheduled_meal_events(
                 time.fromisoformat(template.cutoff_time),
                 TAIPEI,
             )
-            cutoff = min(cutoff, datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
             try:
-                ordering_start = datetime.combine(previous_workday(service_date), time.min, TAIPEI)
+                ordering_start, cutoff = workday_booking_window(service_date, cutoff)
             except CalendarUnavailable:
                 report["calendar_unavailable"] += 1
                 continue
