@@ -16,6 +16,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -41,6 +42,7 @@ NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
 OMIT = object()
 CIPHER = VersionedPIICipher({'v1': b'S' * 32}, 'v1')
 CASES = [
+    ('MealEvent', 'booking_policy', 'legacy', 'workday'),
     ('MealScheduleTemplate', 'cutoff_days_before', 0, 2),
     ('MealScheduleTemplate', 'advance_days', 7, 14),
     ('MealScheduleTemplate', 'enabled', False, True),
@@ -54,7 +56,7 @@ CASES = [
     ('Order', 'tax_amount', 0, 5),
 ]
 STATE = {'original_red_head': '4be705a3b5bdffed0088dc6025082319526222a9', 'scope': 'SQLite-only synthetic schema/default correctness; no app requests or performance claims',
-    'migration_target': '0049_merge_commerce_remediation', 'cases': [], 'stores': [], 'source_changed': False}
+    'migration_target': 'head', 'cases': [], 'stores': [], 'source_changed': False}
 
 
 def value_of(value):
@@ -125,7 +127,7 @@ def store(request, safety_and_evidence):
             if request.param == 'metadata': Base.metadata.create_all(engine)
             with engine.connect() as connection:
                 assert connection.scalar(text('PRAGMA foreign_keys')) == 1
-                if request.param == 'alembic': assert connection.scalar(text('SELECT version_num FROM alembic_version')) == STATE['migration_target']
+                if request.param == 'alembic': assert connection.scalar(text('SELECT version_num FROM alembic_version')) == ScriptDirectory.from_config(migration).get_current_head()
                 record['tables'] = len(inspect(connection).get_table_names())
                 record['foreign_keys'] = 1
             yield SimpleNamespace(engine=engine, path=request.param)
@@ -143,7 +145,11 @@ def new_user(session):
 def build_row(session, owner_name, column, supplied=OMIT):
     owner = new_user(session)
     key = str(uuid4())
-    if owner_name == 'MealScheduleTemplate':
+    if owner_name == 'MealEvent':
+        row = models.MealEvent(id=key, title='合成場次', location='隔離', created_by_id=owner.id,
+            ordering_starts_at=NOW, ordering_ends_at=NOW + timedelta(days=1),
+            pickup_starts_at=NOW + timedelta(days=2), pickup_ends_at=NOW + timedelta(days=2, hours=2))
+    elif owner_name == 'MealScheduleTemplate':
         meal = models.Meal(slug='default-' + uuid4().hex, name='合成餐點', price=100)
         session.add(meal); session.flush()
         row = models.MealScheduleTemplate(id=key, title='合成排程', location='隔離', meal_period='lunch',

@@ -332,6 +332,8 @@ async function scheduleFixture(t, { admin = false } = {}) {
       state.events[0] = { ...state.events[0], ...fields, offerings: state.events[0].offerings.map((offering) => ({ ...offering, ...offerings.find((item) => item.meal_id === offering.meal_id) })) };
       return route.fulfill({ json: state.events[0] });
     }
+    if (method === 'GET' && path === '/v1/admin/meal-calendar') return route.fulfill({ json: { service_date: '2026-09-17', is_workday: true, previous_workday: '2026-09-16', next_workday: '2026-09-18', ordering_starts_at: '2026-09-15T16:00:00Z', ordering_ends_at: '2026-09-16T12:00:00Z' } });
+    if (method === 'GET' && path === '/v1/admin/meal-schedules/calendar-status') return route.fulfill({ json: { available: true, from_date: '2025-01-01', to_date: '2027-12-31', message: '', source_url: 'https://data.gov.tw/dataset/14718' } });
     if (method === 'GET' && path === '/v1/admin/meal-schedules') return route.fulfill({ json: state.schedules });
     if (method === 'POST' && path === '/v1/admin/meal-schedules') {
       const payload = request.postDataJSON();
@@ -383,7 +385,7 @@ async function captureMealScreenshot(page, name) {
   await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/${name}`, fullPage: true });
 }
 
-test('便當僅列台灣明天九個固定半小時時段，不提供今天、任意日期或餐別篩選', { timeout: 25000 }, async (t) => {
+test('便當按已公告供餐日選擇，舊規則僅明日場次提供九個固定時段', { timeout: 25000 }, async (t) => {
   const { page, state } = await scheduleFixture(t);
   state.events.push(scheduledEvent({ id: 'scheduled-today', service_date: '2026-09-16',
     pickup_starts_at: '2026-09-16T03:00:00Z', pickup_ends_at: '2026-09-16T05:30:00Z' }),
@@ -391,9 +393,11 @@ test('便當僅列台灣明天九個固定半小時時段，不提供今天、�
     ordering_ends_at: '2026-09-17T12:00:00Z', pickup_starts_at: '2026-09-18T03:00:00Z', pickup_ends_at: '2026-09-18T05:30:00Z' }));
   await page.goto(`${base}/shop`);
   await page.getByRole('link', { name: '隔離取餐區 11:00 取餐', exact: true }).waitFor();
-  assert.match(await page.locator('.meal-date-summary').innerText(), /明天 9\/17/);
+  assert.equal(await page.getByRole('button', { name: '9/17 週四，可預訂', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.equal(await page.getByRole('group', { name: '餐別', exact: true }).count(), 0);
-  assert.equal(await page.getByRole('group', { name: '取餐日期', exact: true }).count(), 0);
+  const dateChoices = page.getByRole('group', { name: '取餐日期', exact: true });
+  assert.equal(await dateChoices.getByRole('button', { name: /9\/16/ }).count(), 0);
+  assert.equal(await dateChoices.getByRole('button', { name: '9/18 週五，尚未開放', exact: true }).count(), 1);
   const slots = page.locator('.meal-time-selection .meal-pickup-options a');
   assert.deepEqual(await slots.allTextContents(), ['11:00', '11:30', '12:00', '12:30', '13:00', '16:30', '17:00', '17:30', '18:00']);
   const hrefs = await slots.evaluateAll((links) => links.map((link) => link.getAttribute('href')));
@@ -401,7 +405,7 @@ test('便當僅列台灣明天九個固定半小時時段，不提供今天、�
   await captureMealScreenshot(page, 'meal-tomorrow-fixed-slots-mobile.png');
   state.events = [];
   await page.reload();
-  await page.getByText('明天的取餐時段尚未開放', { exact: true }).waitFor();
+  await page.getByText('目前沒有已公告的供餐日期', { exact: true }).waitFor();
   assert.equal(await page.locator('.meal-pickup-options a').count(), 0);
   assert.deepEqual(state.orders, []);
   assert.deepEqual(state.quotes, []);
@@ -445,7 +449,7 @@ test('便當訂單顯示實際選定的取餐時間，舊單不捏造已選時�
   assert.deepEqual(state.unknownApi, []);
 });
 
-test('每日午晚餐排程預設週一至六且停用，須明確啟用及自動發布才開售', { timeout: 30000 }, async (t) => {
+test('每日午晚餐排程預設週一至五且停用，須明確啟用及自動發布才開售', { timeout: 30000 }, async (t) => {
   const { page, state } = await scheduleFixture(t, { admin: true });
   await page.goto(`${base}/admin/meals`);
   await page.getByRole('tab', { name: '每日午晚餐排程', exact: true }).click();
@@ -454,15 +458,16 @@ test('每日午晚餐排程預設週一至六且停用，須明確啟用及自�
   const publish = page.getByLabel('新產生場次自動發布並開放預訂（未勾選僅建立草稿）', { exact: true });
   assert.equal(await enable.isChecked(), false);
   assert.equal(await publish.isChecked(), false);
-  assert.equal(await page.getByLabel('週六', { exact: true }).isChecked(), true);
-  assert.equal(await page.getByLabel('週日', { exact: true }).isChecked(), false);
+  for (const day of ['週一', '週二', '週三', '週四', '週五']) assert.equal(await page.getByLabel(day, { exact: true }).isChecked(), true);
+  assert.equal(await page.getByLabel('週六', { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel('週日', { exact: true }).count(), 0);
   await page.getByLabel('排程／場次名稱', { exact: true }).fill('隔離每日晚餐排程');
   await page.getByLabel('取餐地點', { exact: true }).fill('隔離取餐區');
   await page.getByLabel('排程餐別', { exact: true }).selectOption('dinner');
   await page.getByLabel('每日取餐開始', { exact: true }).fill('16:30');
   await page.getByLabel('每日取餐結束', { exact: true }).fill('18:00');
   await page.getByLabel('每日截單時間', { exact: true }).fill('20:00');
-  assert.equal(await page.getByLabel('取餐前幾天截單（0 為當天）', { exact: true }).inputValue(), '1');
+  assert.equal(await page.getByLabel('取餐前幾天截單', { exact: true }).inputValue(), '1');
   await page.getByRole('checkbox', { name: '隔離每日便當 $120', exact: true }).check();
   await captureMealScreenshot(page, 'meal-weekday-schedule-mobile.png');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
@@ -471,7 +476,7 @@ test('每日午晚餐排程預設週一至六且停用，須明確啟用及自�
   assert.equal(state.writes.length, 1);
   assert.equal(state.writes[0].payload.enabled, false);
   assert.equal(state.writes[0].payload.auto_publish, false);
-  assert.deepEqual(state.writes[0].payload.weekdays, [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(state.writes[0].payload.weekdays, [0, 1, 2, 3, 4]);
   assert.equal(await page.getByRole('button', { name: '立即補齊未來場次', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: '編輯排程', exact: true }).click();
   await enable.check();
@@ -536,9 +541,10 @@ test('便當跨台灣午夜自動改顯示新明天，瀏覽器時區不同也�
     pickup_starts_at: '2026-09-18T03:00:00Z', pickup_ends_at: '2026-09-18T05:30:00Z' }));
   await page.goto(`${base}/shop`);
   await page.getByRole('link', { name: '隔離取餐區 11:00 取餐', exact: true }).waitFor();
-  assert.match(await page.locator('.meal-date-summary').innerText(), /明天 9\/17/);
+  assert.equal(await page.getByRole('button', { name: '9/17 週四，可預訂', exact: true }).getAttribute('aria-pressed'), 'true');
   await page.clock.fastForward(24 * 60 * 60 * 1000);
-  await page.getByText('明天 9/18（週五）', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '9/18 週五，可預訂', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: /9\/17/ }).count(), 0);
   const slots = page.locator('.meal-pickup-options a');
   await page.getByRole('link', { name: '隔離取餐區 11:00 取餐', exact: true }).waitFor();
   assert.deepEqual(await slots.allTextContents(), ['11:00', '11:30', '12:00', '12:30', '13:00']);
@@ -585,9 +591,22 @@ test('今天即使已開放取餐且原場次尚未截止，仍不得新報價�
   await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-16T12%3A30`);
   await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
   const time = page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true });
-  await page.getByText('今天僅可預訂明天的餐點；本場次也須在開放時間內才能送出。', { exact: true }).waitFor();
+  await page.getByText('本場次目前不在預訂開放時間內。', { exact: true }).waitFor();
   assert.equal(await time.isDisabled(), true);
   assert.equal(await time.locator('option:not([value=""])').count(), 0);
+  assert.equal(await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).isDisabled(), true);
+  assert.equal(state.quotes.length, 0);
+  assert.equal(state.orders.length, 0);
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('後端暫停舊假日場次的新訂單，直接連結也不報價或送單', { timeout: 20000 }, async (t) => {
+  const { page, state } = await scheduleFixture(t);
+  state.events[0] = scheduledEvent({ new_orders_blocked_reason: '本場次不開放新的預訂，已成立訂單請至訂單中心查看。' });
+  await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T12%3A30`);
+  await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
+  await page.getByText(state.events[0].new_orders_blocked_reason, { exact: true }).waitFor();
+  assert.equal(await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).isDisabled(), true);
   assert.equal(state.quotes.length, 0);
   assert.equal(state.orders.length, 0);
@@ -605,7 +624,7 @@ test('明日便當在台灣20點準時截單，已選合法時段仍不得再送
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => button.textContent === '預訂並前往線上付款' && !button.disabled));
   const quotesBeforeCutoff = state.quotes.length;
   await page.clock.fastForward(60 * 1000);
-  await page.getByText('今天僅可預訂明天的餐點；本場次也須在開放時間內才能送出。', { exact: true }).waitFor();
+  await page.getByText('本場次目前不在預訂開放時間內。', { exact: true }).waitFor();
   assert.equal(await pay.isDisabled(), true);
   assert.equal(await time.locator('option[value="2026-09-17T12:30"]').count(), 1);
   assert.equal(state.quotes.length, quotesBeforeCutoff);
@@ -623,7 +642,7 @@ test('循環排程預設固定午晚餐與前一天20點截單，不覆寫自訂
   const period = page.getByLabel('排程餐別', { exact: true });
   const times = async () => Promise.all([start.inputValue(), end.inputValue(), cutoff.inputValue()]);
   assert.deepEqual(await times(), ['11:00', '13:00', '20:00']);
-  assert.equal(await page.getByLabel('取餐前幾天截單（0 為當天）', { exact: true }).inputValue(), '1');
+  assert.equal(await page.getByLabel('取餐前幾天截單', { exact: true }).inputValue(), '1');
   await period.selectOption('dinner');
   assert.deepEqual(await times(), ['16:30', '18:00', '20:00']);
   await start.fill('17:00');
@@ -637,7 +656,7 @@ test('循環排程預設固定午晚餐與前一天20點截單，不覆寫自訂
   const save = page.getByRole('button', { name: '儲存每日排程', exact: true });
   assert.equal(await save.isDisabled(), false);
   await end.fill('11:00');
-  await page.getByText('開始與結束時間不可相同，截單時間必須早於取餐結束。', { exact: true }).waitFor();
+  await page.getByText('開始與結束時間不可相同；預訂最晚於取餐前一天 20:00 截止。', { exact: true }).waitFor();
   assert.equal(await save.isDisabled(), true);
   await end.fill('13:00');
   await captureMealScreenshot(page, 'meal-confirmed-lunch-schedule-mobile.png');

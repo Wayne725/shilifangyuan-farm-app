@@ -72,7 +72,9 @@ async def test_enabled_templates_create_drafts_until_explicit_auto_publish(sched
     assert events and all(event.status == MealEventStatus.DRAFT for event in events)
     assert (await client.get("/v1/meal-events")).json() == []
     again = await client.post(f"/v1/admin/meal-schedules/{template_id}/generate", headers=auth_headers(admin))
-    assert again.json() == {"created_count": 0, "created_event_ids": []}
+    assert again.json()["created_count"] == 0
+    assert again.json()["created_event_ids"] == []
+    assert not any(again.json()["conversion"].values())
     assert (await client.put(f"/v1/admin/meal-schedules/{template_id}", json=schedule_body(meal.id, enabled=True), headers=auth_headers(buyer))).status_code == 403
     updated = await client.put(f"/v1/admin/meal-schedules/{template_id}", json=schedule_body(meal.id, enabled=True, auto_publish=True, advance_days=4, weekdays=list(range(7))), headers=auth_headers(admin))
     assert updated.status_code == 200, updated.text
@@ -102,11 +104,11 @@ async def test_generation_uses_taipei_dates_cross_midnight_and_does_not_reopen_c
     now = datetime(2027, 1, 1, 16, 5, tzinfo=timezone.utc)
     created_ids = await generate_scheduled_meal_events(session, now)
     events = list(await session.scalars(select(MealEvent).order_by(MealEvent.pickup_starts_at)))
-    assert len(created_ids) == 3
-    assert events[0].service_date.isoformat() == "2027-01-03"
-    assert events[0].pickup_starts_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-03T23:30:00+08:00"
-    assert events[0].pickup_slot_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-04T00:30:00+08:00"
-    assert events[0].pickup_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-04T01:00:00+08:00"
+    assert len(created_ids) == 2
+    assert events[0].service_date.isoformat() == "2027-01-04"
+    assert events[0].pickup_starts_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-04T23:30:00+08:00"
+    assert events[0].pickup_slot_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-05T00:30:00+08:00"
+    assert events[0].pickup_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-05T01:00:00+08:00"
     events[0].status = MealEventStatus.CANCELLED
     await session.commit()
     assert await generate_scheduled_meal_events(session, now) == []
@@ -117,10 +119,10 @@ async def test_generation_uses_taipei_dates_cross_midnight_and_does_not_reopen_c
 
 
 @pytest.mark.asyncio
-async def test_weekly_schedule_defaults_monday_to_saturday_and_never_drifts(schedule_context):
+async def test_weekly_schedule_defaults_monday_to_friday_and_never_drifts(schedule_context):
     client, session, admin, _buyer, meal = schedule_context
     response = await client.post("/v1/admin/meal-schedules", json=schedule_body(meal.id, advance_days=7), headers=auth_headers(admin))
-    assert response.json()["weekdays"] == [0, 1, 2, 3, 4, 5]
+    assert response.json()["weekdays"] == [0, 1, 2, 3, 4]
     template = await session.get(MealScheduleTemplate, response.json()["id"])
     template.enabled = True
     await session.commit()
@@ -128,9 +130,9 @@ async def test_weekly_schedule_defaults_monday_to_saturday_and_never_drifts(sche
     await generate_scheduled_meal_events(session, monday)
     await generate_scheduled_meal_events(session, monday + timedelta(days=7))
     events = list(await session.scalars(select(MealEvent)))
-    assert len(events) == 12
-    assert all(event.service_date.weekday() != 6 for event in events)
-    assert {event.service_date.weekday() for event in events} == set(range(6))
+    assert len(events) == 10
+    assert all(event.service_date.weekday() < 5 for event in events)
+    assert {event.service_date.weekday() for event in events} == set(range(5))
 
 
 @pytest.mark.asyncio
@@ -143,12 +145,14 @@ async def test_schedule_weekdays_cutoff_inactive_meals_and_reconcile_integration
     template.enabled = True
     await session.commit()
     monday_after_cutoff = datetime(2027, 1, 4, 4, 0, tzinfo=timezone.utc)
-    assert await generate_scheduled_meal_events(session, monday_after_cutoff) == []
+    next_available = await generate_scheduled_meal_events(session, monday_after_cutoff)
+    assert len(next_available) == 1
+    assert (await session.get(MealEvent, next_available[0])).service_date.isoformat() == "2027-01-11"
     monday_before_cutoff = datetime(2027, 1, 4, 1, 0, tzinfo=timezone.utc)
     report = await reconcile_once(session, make_test_settings(), now=monday_before_cutoff)
     assert report.meal_events_created == 1
-    event = await session.scalar(select(MealEvent))
-    assert event.service_date.isoformat() == "2027-01-05"
+    event = await session.scalar(select(MealEvent).where(MealEvent.service_date == datetime(2027, 1, 5).date()))
+    assert event is not None
     meal.is_active = False
     await session.commit()
     assert await generate_scheduled_meal_events(session, monday_before_cutoff + timedelta(days=7)) == []

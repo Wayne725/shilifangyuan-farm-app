@@ -48,7 +48,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
 
 
   if (!isAuthReady) return <section className="orders-page meal-orders-page" aria-label="正在恢復登入"><LoadingLines count={3} /></section>;
-  if (!user) return <section className="account-gate meal-orders-page"><BowlFood size={45} weight="light" /><h1>我的便當訂單</h1><p>登入後可查看餐點明細、付款狀態與取餐碼。</p><button className="button button-primary" type="button" onClick={openLogin}>登入查看訂單</button><Link className="text-link" to="/shop" search={{ tab: "meals" }}>先查看明天的餐點</Link></section>;
+  if (!user) return <section className="account-gate meal-orders-page"><BowlFood size={45} weight="light" /><h1>我的便當訂單</h1><p>登入後可查看餐點明細、付款狀態與取餐碼。</p><button className="button button-primary" type="button" onClick={openLogin}>登入查看訂單</button><Link className="text-link" to="/shop" search={{ tab: "meals" }}>先查看可預訂餐點</Link></section>;
 
   return (
     <section className={embedded ? "meal-orders-embedded" : "orders-page meal-orders-page"}>
@@ -62,7 +62,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       {orders.selectedError && <p className="form-error" role="alert">餐點訂單更新失敗：{orders.selectedError.message}</p>}
       {orders.isSuccess && visibleOrders.length === 0 && (query || payment
         ? <DataState title="沒有符合條件的餐點訂單" detail="請調整關鍵字或付款狀態。" />
-        : <DataState title="目前沒有便當訂單" detail="可先查看明天的餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />)}
+        : <DataState title="目前沒有便當訂單" detail="可先查看可預訂餐點，選餐並完成付款後，訂單會出現在這裡。" actionLabel="我要訂餐" onAction={() => window.location.assign("/shop")} />)}
       {visibleOrders.length > 0 && <div className="orders-layout"><div className="order-index" aria-label="選擇便當訂單">{visibleOrders.map((order) => <button className={order.id === selected?.id ? "selected" : ""} aria-pressed={order.id === selected?.id} key={order.id} type="button" onClick={() => setSelectedId(order.id)}><span>{order.venue_name}</span><strong>{formatMealDate(order.pickup_at || order.pickup_start)}</strong><small className="order-number">訂單編號：{order.order_number}</small><small>{formatMoney(order.amount_total)}</small><i className={`order-state ${order.payment_status}`}>{paymentStatus(order.payment_status)}</i></button>)}</div>{selected ? <article className="order-detail meal-order-detail"><div className="order-detail-head"><div><h2>{formatMealDate(selected.pickup_at || selected.pickup_start)}</h2><span className="order-number">訂單編號：{selected.order_number}</span></div><strong>{formatMoney(selected.amount_total)}</strong></div>
       <div className="meal-pickup-info">
         <div><MapPin size={20} /><span>取餐點</span><strong>{selected.venue_name}{selected.pickup_address && <small>{selected.pickup_address}</small>}</strong></div>

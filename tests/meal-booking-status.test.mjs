@@ -12,7 +12,7 @@ const compiled = ts.transpileModule(source, {
 assert.deepEqual(compiled.diagnostics.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error), []);
 const {
   mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions, mealPickupChoices,
-  validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime,
+  validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime, mealBookingDates,
 } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
 
 const NOW = Date.parse("2026-09-17T12:00:00+08:00");
@@ -194,3 +194,62 @@ for (const status of ["published", "pickup_open"]) {
     assert.equal(mealBookingStatus(event, Date.parse("2026-09-17T20:00:00.001+08:00")), "已截止");
   });
 }
+
+function workdayMeal(date = "2026-11-09", overrides = {}) {
+  return mealEvent({ booking_policy: "workday", service_date: date,
+    booking_starts_at: "2026-11-06T00:00:00+08:00",
+    booking_ends_at: `${shiftMealDate(date, -1)}T20:00:00+08:00`,
+    pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00`,
+    ...overrides });
+}
+
+for (const date of ["2026-11-06", "2026-11-07", "2026-11-08"]) {
+  test(`工作日場次在 ${date} 可預訂週一，不受明天限制`, () => {
+    const now = Date.parse(`${date}T12:00:00+08:00`);
+    const event = workdayMeal();
+    assert.equal(mealBookingStatus(event, now), "可預訂");
+    assert.equal(validPickupTime("2026-11-09T12:00", event, now), true);
+  });
+}
+
+test("週一國定假日後週二場次採後端窗口，週一20:00精確截止", () => {
+  const event = workdayMeal("2026-10-27", { booking_starts_at: "2026-10-23T00:00:00+08:00" });
+  for (const date of ["2026-10-23", "2026-10-24", "2026-10-25", "2026-10-26"]) {
+    assert.equal(mealBookingStatus(event, Date.parse(`${date}T12:00:00+08:00`)), "可預訂");
+  }
+  assert.equal(mealBookingStatus(event, Date.parse("2026-10-26T19:59:59+08:00")), "可預訂");
+  assert.equal(mealBookingStatus(event, Date.parse("2026-10-26T20:00:00+08:00")), "已截止");
+  assert.equal(mealBookingStatus(event, Date.parse("2026-10-27T00:00:00+08:00")), "已截止");
+});
+
+test("特殊週日場次尊重管理員開放時間，未開放與已停止都不能下單", () => {
+  const event = workdayMeal("2026-11-08", { booking_policy: "special", booking_starts_at: "2026-11-05T10:00:00+08:00" });
+  assert.equal(mealBookingStatus(event, Date.parse("2026-11-05T09:59:59+08:00")), "尚未開放");
+  assert.equal(mealBookingStatus(event, Date.parse("2026-11-05T10:00:00+08:00")), "可預訂");
+  assert.equal(mealBookingStatus({ ...event, status: "ordering_closed" }, Date.parse("2026-11-05T12:00:00+08:00")), "已截止");
+});
+
+test("供餐日期依實際公告排序，不虛構週末，保留特殊日期並排除取消草稿", () => {
+  const monday = workdayMeal();
+  const special = workdayMeal("2026-11-07", { booking_policy: "special" });
+  const dates = mealBookingDates([monday, special, { ...monday, id: "dinner" },
+    workdayMeal("2026-11-08", { status: "cancelled" }), workdayMeal("2026-11-10", { status: "draft" })], Date.parse("2026-11-06T12:00:00+08:00"));
+  assert.deepEqual(dates, [{ date: "2026-11-07", status: "可預訂" }, { date: "2026-11-09", status: "可預訂" }]);
+});
+
+test("跨年場次與較晚開放日皆由後端窗口判斷", () => {
+  const event = workdayMeal("2027-01-04", { booking_starts_at: "2026-12-31T00:00:00+08:00" });
+  assert.equal(mealBookingStatus(event, Date.parse("2026-12-30T23:59:59+08:00")), "尚未開放");
+  assert.equal(mealBookingStatus(event, Date.parse("2026-12-31T00:00:00+08:00")), "可預訂");
+  assert.equal(mealBookingStatus(event, Date.parse("2027-01-03T20:00:00+08:00")), "已截止");
+});
+
+test("後端暫停舊假日場次的新訂單時，日期與時段不再供選且不能報價", () => {
+  const blocked = mealEvent({ new_orders_blocked_reason: "本場次不開放新的預訂" });
+  assert.equal(mealOrderingOpen(blocked, NOW), false);
+  assert.equal(mealBookingStatus(blocked, NOW), "暫停預訂");
+  assert.deepEqual(pickupTimeOptions(blocked, NOW), []);
+  assert.deepEqual(mealPickupChoices([blocked], "2026-09-18", NOW), []);
+  assert.deepEqual(mealBookingDates([blocked], NOW), []);
+  assert.deepEqual(mealBookingDates([blocked, mealEvent({ id: "allowed", new_orders_blocked_reason: null })], NOW), [{ date: "2026-09-18", status: "可預訂" }]);
+});

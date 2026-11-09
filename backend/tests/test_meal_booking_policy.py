@@ -1,4 +1,5 @@
 from datetime import datetime, time, timedelta, timezone
+import sys
 
 import pytest
 from sqlalchemy import func, select
@@ -215,7 +216,8 @@ async def test_existing_order_price_and_pickup_snapshots_survive_event_and_menu_
 
 
 @pytest.mark.asyncio
-async def test_new_generated_event_orders_open_only_previous_day_and_last_slot_has_half_hour_to_redeem(booking_context):
+async def test_new_generated_event_workday_window_and_last_slot_has_half_hour_to_redeem(booking_context, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "NOW", datetime(2026, 11, 6, 12, tzinfo=TAIPEI))
     client, session, buyer, admin, old_event, body = booking_context
     template = MealScheduleTemplate(
         title="標準午餐", location="合作社", meal_period="lunch", pickup_start_time="11:00",
@@ -226,11 +228,11 @@ async def test_new_generated_event_orders_open_only_previous_day_and_last_slot_h
     session.add(template)
     await session.commit()
     created_ids = await generate_scheduled_meal_events(session, NOW, template_id=template.id)
-    assert len(created_ids) == 7
+    assert len(created_ids) == 5
     event = await meals._load_event(session, created_ids[0])
-    assert event.service_date.isoformat() == "2030-01-02"
+    assert event.service_date.isoformat() == "2026-11-09"
     assert meal_booking_window(event) == (
-        datetime(2030, 1, 1, 0, tzinfo=TAIPEI), datetime(2030, 1, 1, 20, tzinfo=TAIPEI),
+        datetime(2026, 11, 6, 0, tzinfo=TAIPEI), datetime(2026, 11, 8, 20, tzinfo=TAIPEI),
     )
     assert event.pickup_slot_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).hour == 13
     assert event.pickup_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).strftime("%H:%M") == "13:30"
@@ -238,13 +240,13 @@ async def test_new_generated_event_orders_open_only_previous_day_and_last_slot_h
     assert await generate_scheduled_meal_events(session, NOW, template_id=template.id) == []
     assert old_event.pickup_slot_ends_at is None
     body["items"][0]["offering_id"] = event.offerings[0].id
-    body["pickup_at"] = "2030-01-02T13:00:00+08:00"
+    body["pickup_at"] = "2026-11-09T13:00:00+08:00"
     created = await client.post(f"/v1/meal-events/{event.id}/orders", json=body, headers=auth_headers(buyer))
     assert created.status_code == 201, created.text
     order = await session.get(Order, created.json()["id"])
     order.payment_status = PaymentStatus.PAID
     await session.commit()
-    last_slot = datetime(2030, 1, 2, 13, tzinfo=TAIPEI)
+    last_slot = datetime(2026, 11, 9, 13, tzinfo=TAIPEI)
     await _reconcile_meal_events(session, last_slot, 100)
     assert event.status == MealEventStatus.PICKUP_OPEN
     await _reconcile_meal_events(session, last_slot + timedelta(minutes=29), 100)

@@ -1579,6 +1579,7 @@ class MealOfferingInput(BaseModel):
 
 
 class MealEventCreate(BaseModel):
+    booking_policy: Literal["legacy", "workday", "special"] = "workday"
     allow_cash_payment: bool = False
     title: str = Field(min_length=1, max_length=160)
     location: str = Field(min_length=1, max_length=240)
@@ -1610,7 +1611,7 @@ class MealScheduleInput(BaseModel):
     cutoff_time: time = time(20)
     cutoff_days_before: int = Field(default=1, ge=0, le=29)
     advance_days: int = Field(default=7, ge=1, le=30)
-    weekdays: List[int] = Field(default_factory=lambda: list(range(6)), min_length=1, max_length=7)
+    weekdays: List[int] = Field(default_factory=lambda: list(range(5)), min_length=1, max_length=7)
     enabled: bool = False
     auto_publish: bool = False
     offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
@@ -1679,6 +1680,8 @@ class MealEventSummary(ApiModel):
 
 
 class MealEventRead(MealEventSummary):
+    booking_policy: Literal["legacy", "workday", "special"] = "legacy"
+    new_orders_blocked_reason: Optional[str] = None
     allow_cash_payment: bool = False
     ordering_starts_at: datetime
     ordering_ends_at: datetime

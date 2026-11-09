@@ -91,8 +91,9 @@ def test_online_product_exception_rejects_skus_longer_than_eighty_characters():
 def test_core_release_keeps_one_merged_migration_head():
     backend = Path(__file__).resolve().parents[1]
     migrations = ScriptDirectory(str(backend / "alembic"))
-    assert migrations.get_heads() == ["0049_merge_commerce_remediation"]
-    assert len(list(migrations.walk_revisions())) == 54
+    assert migrations.get_heads() == ["0050_meal_workday_policy"]
+    assert len(list(migrations.walk_revisions())) == 55
+    assert migrations.get_revision("0050_meal_workday_policy").down_revision == "0049_merge_commerce_remediation"
     assert migrations.get_revision("0049_merge_commerce_remediation").down_revision == (
         "0048_merge_remediation_print", "0045_walk_in_sales"
     )

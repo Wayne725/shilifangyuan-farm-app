@@ -39,6 +39,7 @@ async function fixture(t, width) {
       if (path === '/v1/admin/meal-cancellation-summary') return route.fulfill({json:{requests:2,orders:2,pending:2,approved:0,rejected:0,pending_amount:240,approved_amount:0,refund_pending:0,refunded:0,refund_failed:0}});
       state.reads.push({ path, ...Object.fromEntries(url.searchParams) });
       if (path === '/v1/admin/meal-events') return route.fulfill({ json: state.events });
+      if (path === '/v1/admin/meal-calendar') return route.fulfill({ json: { service_date: date, is_workday: true, previous_workday: '2030-01-02', next_workday: '2030-01-04', ordering_starts_at: '2030-01-01T16:00:00Z', ordering_ends_at: '2030-01-02T12:00:00Z' } });
       if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events', '/v1/admin/meals'].includes(path)) return route.fulfill({ json: [] });
       if (path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { today: '2030-01-02', pending_cancellation: 2, refund_attention: 0, invoice_attention: 0, today_pickup: 0 } });
       if (path === '/v1/admin/meal-orders') {

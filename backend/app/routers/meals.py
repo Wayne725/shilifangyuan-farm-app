@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -57,8 +57,9 @@ from ..integrations.payment_service import (
 from ..meal_pricing import price_meal_line
 from ..meal_photos import router as meal_photos_router
 from ..meal_options_admin import router as meal_options_router
-from ..meal_booking import meal_booking_window, meal_pickup_slots, validate_meal_booking_day
+from ..meal_booking import configured_booking_window, meal_booking_window, meal_new_orders_blocked_reason, meal_pickup_slots, validate_meal_booking_day
 from ..meal_schedules import TAIPEI, generate_scheduled_meal_events
+from ..workday_calendar import CalendarUnavailable, calendar_status, is_workday, next_workday, previous_workday
 from ..meal_operations import meal_operations_summary, search_meal_orders
 from ..sales_scope import DEMO_MEAL_EVENT_IDS
 from ..models import (
@@ -179,6 +180,8 @@ def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRe
     booking_start, booking_end = meal_booking_window(event)
     return MealEventRead(
         id=event.id,
+        booking_policy=event.booking_policy,
+        new_orders_blocked_reason=meal_new_orders_blocked_reason(event),
         title=event.title,
         location=event.location,
         ordering_starts_at=_aware(event.ordering_starts_at),
@@ -666,6 +669,8 @@ async def quote_meal_order(
     event = await _load_event(session, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="找不到便當場次")
+    if reason := meal_new_orders_blocked_reason(event):
+        raise HTTPException(status_code=409, detail=reason)
     if body.payment_method == PaymentMethod.CASH_ON_DELIVERY:
         raise HTTPException(status_code=422, detail="便當僅支援線上付款或現場付款")
     if body.payment_method == PaymentMethod.CASH_ON_PICKUP and not event.allow_cash_payment:
@@ -747,7 +752,7 @@ async def quote_meal_order(
     pickup_slots = meal_pickup_slots(event)
     pickup_at = body.pickup_at or (pickup_slots[0] if pickup_slots else None)
     if pickup_at not in pickup_slots:
-        raise HTTPException(status_code=422, detail="請選擇明天午餐 11:00–13:00 或晚餐 16:30–18:00 的半小時取餐時段")
+        raise HTTPException(status_code=422, detail="請選擇本場次午餐 11:00–13:00 或晚餐 16:30–18:00 的半小時取餐時段")
     pickup_at = pickup_at.astimezone(timezone.utc)
     from ..promotions import price_promotion
     promotion, discount = await price_promotion(session, total, body.coupon_code, user.id if user else None, now)
@@ -1212,6 +1217,30 @@ def _schedule_values(body: MealScheduleInput) -> dict[str, Any]:
     return values
 
 
+@meals_router.get("/v1/admin/meal-schedules/calendar-status")
+async def admin_meal_calendar_status(_admin: User = Depends(require_admin)) -> dict:
+    return calendar_status()
+
+
+@meals_router.get("/v1/admin/meal-calendar")
+async def admin_meal_calendar(service_date: date | None = None,
+                              _admin: User = Depends(require_admin)) -> dict:
+    try:
+        selected = service_date or next_workday(datetime.now(TAIPEI).date())
+        previous = previous_workday(selected)
+        working = is_workday(selected)
+        try:
+            following = next_workday(selected).isoformat()
+        except CalendarUnavailable:
+            following = None
+        return {"service_date": selected.isoformat(), "is_workday": working,
+                "previous_workday": previous.isoformat(), "next_workday": following,
+                "ordering_starts_at": datetime.combine(previous, time.min, TAIPEI).astimezone(timezone.utc),
+                "ordering_ends_at": datetime.combine(selected - timedelta(days=1), time(20), TAIPEI).astimezone(timezone.utc)}
+    except CalendarUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
+
+
 @meals_router.get("/v1/admin/meal-schedules", response_model=list[MealScheduleRead])
 async def admin_list_meal_schedules(
     _admin: User = Depends(require_admin),
@@ -1274,8 +1303,9 @@ async def admin_generate_meal_schedule(
     if not template.enabled:
         raise HTTPException(status_code=409, detail="請先啟用每日供餐設定")
     await _validate_schedule_meals(session, MealScheduleRead.model_validate(template))
-    created_ids = await generate_scheduled_meal_events(session, datetime.now(timezone.utc), template_id=template.id)
-    return {"created_count": len(created_ids), "created_event_ids": created_ids}
+    conversion = {}
+    created_ids = await generate_scheduled_meal_events(session, datetime.now(timezone.utc), template_id=template.id, report=conversion)
+    return {"created_count": len(created_ids), "created_event_ids": created_ids, "conversion": conversion}
 
 
 @meals_router.get(
@@ -1382,6 +1412,27 @@ async def admin_list_meal_events(
     ) for event in events]
 
 
+def _configured_event_values(body: MealEventCreate, *, existing: MealEvent | None = None) -> dict:
+    values = body.model_dump(exclude={"offerings"})
+    policy = body.booking_policy
+    if existing is not None and "booking_policy" not in body.model_fields_set:
+        policy = existing.booking_policy
+    values["booking_policy"] = policy
+    if policy == "legacy":
+        if existing is None or existing.booking_policy != "legacy":
+            raise HTTPException(422, "新場次請使用工作日或特殊日期接單規則")
+        return values
+    service_date = _aware(body.pickup_starts_at).astimezone(TAIPEI).date()
+    try:
+        values["ordering_starts_at"], values["ordering_ends_at"] = configured_booking_window(
+            service_date, policy, body.ordering_starts_at, body.ordering_ends_at)
+    except CalendarUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return values
+
+
 @meals_router.post(
     "/v1/admin/meal-events",
     response_model=MealEventRead,
@@ -1392,6 +1443,7 @@ async def admin_create_meal_event(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MealEventRead:
+    values = _configured_event_values(body)
     meal_ids = {offering.meal_id for offering in body.offerings}
     meals = (
         await session.scalars(
@@ -1404,13 +1456,7 @@ async def admin_create_meal_event(
     if len(meals) != len(meal_ids):
         raise HTTPException(status_code=422, detail="場次包含無效餐點")
     event = MealEvent(
-        title=body.title,
-        allow_cash_payment=body.allow_cash_payment,
-        location=body.location,
-        ordering_starts_at=body.ordering_starts_at,
-        ordering_ends_at=body.ordering_ends_at,
-        pickup_starts_at=body.pickup_starts_at,
-        pickup_ends_at=body.pickup_ends_at,
+        **values,
         status=MealEventStatus.DRAFT,
         created_by_id=admin.id,
         offerings=[
@@ -1429,6 +1475,10 @@ async def admin_create_meal_event(
             data={
                 "title": event.title,
                 "offering_count": len(body.offerings),
+                "booking_policy": event.booking_policy,
+                "service_date": _aware(event.pickup_starts_at).astimezone(TAIPEI).date().isoformat(),
+                "ordering_starts_at": _aware(event.ordering_starts_at).isoformat(),
+                "ordering_ends_at": _aware(event.ordering_ends_at).isoformat(),
             },
         )
     )
@@ -1452,10 +1502,11 @@ async def admin_update_meal_event(
         raise HTTPException(status_code=409, detail="僅草稿或尚未截單的開放訂購場次可編輯")
     if await session.scalar(select(Order.id).where(Order.meal_event_id == event_id).limit(1)):
         raise HTTPException(status_code=409, detail="此場次已有訂單，為保留訂購承諾不可修改；請另建場次")
+    values = _configured_event_values(body, existing=event)
     service_date = _aware(body.pickup_starts_at).astimezone(TAIPEI).date()
     if event.schedule_template_id and service_date != event.service_date:
         raise HTTPException(status_code=422, detail="排程場次不可更換供餐日期；請另建手動場次")
-    if event.status == MealEventStatus.PUBLISHED and _aware(body.ordering_ends_at) <= datetime.now(timezone.utc):
+    if event.status == MealEventStatus.PUBLISHED and _aware(values["ordering_ends_at"]) <= datetime.now(timezone.utc):
         raise HTTPException(status_code=422, detail="已發布場次的訂購截止時間不得設為過去")
     meal_ids = {offering.meal_id for offering in body.offerings}
     active_ids = set(await session.scalars(select(Meal.id).where(Meal.id.in_(meal_ids), Meal.is_active.is_(True))))
@@ -1464,12 +1515,18 @@ async def admin_update_meal_event(
     before = _meal_event_read(event).model_dump(mode="json")
     event.offerings.clear()
     await session.flush()
-    for name, value in body.model_dump(exclude={"offerings"}).items():
+    for name, value in values.items():
         setattr(event, name, value)
     event.offerings = [MealEventOffering(**offering.model_dump()) for offering in body.offerings]
     session.add(AdminAudit(
         actor_id=admin.id, action="meal_event.update", aggregate_type="meal_event", aggregate_id=event.id,
-        data={"before": before, "after": body.model_dump(mode="json")},
+        data={"before": before, "after": {
+            **body.model_dump(mode="json"),
+            "booking_policy": event.booking_policy,
+            "service_date": service_date.isoformat(),
+            "ordering_starts_at": _aware(event.ordering_starts_at).isoformat(),
+            "ordering_ends_at": _aware(event.ordering_ends_at).isoformat(),
+        }},
     ))
     await session.commit()
     updated = await _load_event(session, event.id)
@@ -1513,6 +1570,12 @@ async def publish_meal_event(
     event = await _load_event(session, event_id, for_update=True)
     if event is None or event.status != MealEventStatus.DRAFT:
         raise HTTPException(status_code=409, detail="此場次目前不可發布")
+    if event.booking_policy == "workday":
+        try:
+            if not is_workday(_aware(event.pickup_starts_at).astimezone(TAIPEI).date()):
+                raise HTTPException(409, "此日期不是供餐工作日；請先編輯為特殊日期再發布")
+        except CalendarUnavailable as exc:
+            raise HTTPException(503, str(exc)) from None
     if _aware(event.ordering_ends_at) <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="訂購截止時間已過")
     event.status = MealEventStatus.PUBLISHED

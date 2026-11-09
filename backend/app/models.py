@@ -1754,6 +1754,7 @@ class MealEvent(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    booking_policy: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))
