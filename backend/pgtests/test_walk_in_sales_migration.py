@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, Table, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -43,6 +44,10 @@ async def migrated_database(monkeypatch):
     backend = Path(__file__).resolve().parents[1]
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "alembic"))
+    scripts = ScriptDirectory.from_config(config)
+    head = scripts.get_current_head()
+    assert head is not None
+    assert "0049_merge_commerce_remediation" in {revision.revision for revision in scripts.walk_revisions(head=head)}
 
     async def migrate(operation, revision):
         try:
@@ -54,7 +59,7 @@ async def migrated_database(monkeypatch):
     try:
         async with admin_engine.begin() as connection:
             await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-        yield SimpleNamespace(engine=engine, sessions=async_sessionmaker(engine, expire_on_commit=False), migrate=migrate)
+        yield SimpleNamespace(engine=engine, sessions=async_sessionmaker(engine, expire_on_commit=False), migrate=migrate, head=head)
     finally:
         await engine.dispose()
         async with admin_engine.begin() as connection:
@@ -106,7 +111,7 @@ async def test_real_pg_42_to_45_then_merged_head_preserves_account_and_guest_col
 
     # The merged application must run against its complete migration graph.
     await database.migrate(command.upgrade, "head")
-    assert await version(database) == "0049_merge_commerce_remediation"
+    assert await version(database) == database.head
     async with database.sessions() as session:
         admin = await session.get(User, admin_id)
         body = payload()
@@ -134,7 +139,7 @@ async def test_real_pg_42_to_45_then_merged_head_preserves_account_and_guest_col
     before_refused_downgrade = {name: await table_rows(database, name) for name in tables}
     with pytest.raises(RuntimeError, match="已有現場交易"):
         await database.migrate(command.downgrade, "0044_invoice_timing")
-    assert await version(database) == "0049_merge_commerce_remediation"
+    assert await version(database) == database.head
     assert {name: await table_rows(database, name) for name in tables} == before_refused_downgrade
     assert await table_rows(database, "users") == before_users
 

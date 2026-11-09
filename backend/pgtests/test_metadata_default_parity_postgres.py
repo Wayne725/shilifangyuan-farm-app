@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import asyncpg
 from alembic import command
+from alembic.script import ScriptDirectory
 import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -22,7 +23,7 @@ from tests.test_open_proposal_migration import proposal_migration_db
 
 
 pytestmark = pytest.mark.skipif(not os.environ.get("TEST_POSTGRES_URL"), reason="Requires the isolated local PostgreSQL test database")
-STATE = {"migration_target": "0049_merge_commerce_remediation", "cases": [], "owned_schemas": [], "owned_databases": []}
+STATE = {"migration_target": "head", "cases": [], "owned_schemas": [], "owned_databases": []}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -147,10 +148,15 @@ async def test_metadata_raw_omissions_and_orm_controls(default_postgres_sessions
 def test_alembic_merged_head_raw_omissions_and_orm_controls(proposal_migration_db):
     database = proposal_migration_db
     STATE["owned_databases"].append(make_url(database.url).database)
+    scripts = ScriptDirectory.from_config(database.config)
+    head = scripts.get_current_head()
+    assert head is not None
+    assert "0049_merge_commerce_remediation" in {revision.revision for revision in scripts.walk_revisions(head=head)}
+    STATE["resolved_migration_target"] = head
     command.upgrade(database.config, STATE["migration_target"])
     command.check(database.config)
     def verify(connection):
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == STATE["migration_target"]
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == head
         with Session(bind=connection, expire_on_commit=False) as session:
             exercise_contract(session, "alembic")
     database.run(verify)
