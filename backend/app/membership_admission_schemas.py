@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from .admin_explanations import AdminExplanation
+
 
 class AdmissionInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -85,7 +87,7 @@ class AdmissionWithdraw(AdmissionVersionInput):
 
 class AdmissionReviewInput(AdmissionVersionInput):
     decision: Literal["approve", "request_supplement", "reject"]
-    reason: str = Field(min_length=1, max_length=2000)
+    reason: AdminExplanation = Field(default="", max_length=2000)
     decision_reference: str | None = Field(default=None, max_length=200)
     student_verified: bool | None = Field(default=None, strict=True)
 

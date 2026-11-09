@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
+from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -95,7 +96,7 @@ class ReprintRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     request_id: UUID
-    reason: str = Field(min_length=2, max_length=200)
+    reason: AdminExplanation = Field(default="", max_length=200)
     acknowledge_duplicate: bool = False
 
 
@@ -103,7 +104,7 @@ class ResolveRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     printed: bool
-    reason: str = Field(min_length=2, max_length=200)
+    reason: AdminExplanation = Field(default="", max_length=200)
 
 
 @printers_router.post("/jobs/{job_id}/resolve")

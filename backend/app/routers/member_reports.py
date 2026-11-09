@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
+from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..csv_export import csv_response
@@ -240,14 +241,7 @@ async def create_offline_receipt(body: OfflineReceiptCreate, admin: User = Depen
 
 
 class ReceiptVoid(BaseModel):
-    reason: str = Field(min_length=1, max_length=1000)
-
-    @field_validator("reason")
-    @classmethod
-    def trim_reason(cls, value):
-        if not value.strip():
-            raise ValueError("請填寫作廢原因")
-        return value.strip()
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 @member_reports_router.post("/membership-offline-receipts/{receipt_id}/void")

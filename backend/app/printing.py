@@ -101,7 +101,8 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
         add(f"備註：{snapshot['note']}", "BOLD")
     if snapshot.get("kind") == "cancellation":
         add("＊＊ 請停止製作／核對原單 ＊＊", "BOLD")
-        add(f"取消原因：{snapshot.get('cancellation_reason', '')}", "BOLD")
+        if snapshot.get("cancellation_reason", "") and snapshot["cancellation_reason"].strip():
+            add(f"取消原因：{snapshot['cancellation_reason']}", "BOLD")
     add("-" * width)
     for item in snapshot["items"]:
         add(f"{item['quantity']} × {item['name']}", "L", "BOLD")

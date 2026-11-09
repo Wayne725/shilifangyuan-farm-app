@@ -114,7 +114,7 @@ async def test_stale_admin_save_does_not_overwrite_or_audit(education_settings_c
     {"retry_limit": -1}, {"retry_limit": 101}, {"retry_limit": True}, {"retry_limit": 1.0},
     {"retry_interval_minutes": -1}, {"retry_interval_minutes": 525_601},
     {"retry_interval_minutes": False}, {"retry_interval_minutes": "60"},
-    {"expected_version": True}, {"expected_version": -1}, {"reason": "   "},
+    {"expected_version": True}, {"expected_version": -1}, {"reason": "x" * 1001},
     {"configured": True},
 ])
 @pytest.mark.asyncio
@@ -124,3 +124,17 @@ async def test_invalid_configuration_cannot_be_saved(education_settings_context,
     assert response.status_code == 422, response.text
     assert await session.get(SystemSetting, MEMBERSHIP_EDUCATION_KEY) is None
     assert await session.scalar(select(func.count(AdminAudit.id))) == 0
+
+
+@pytest.mark.parametrize("note", [{}, {"reason": ""}, {"reason": " \t "}])
+@pytest.mark.asyncio
+async def test_education_settings_optional_note_preserves_version_and_audit(education_settings_context, note):
+    client, session, admin, _ = education_settings_context
+    body = {key: value for key, value in BODY.items() if key != "reason"} | note
+    result = await client.put(URL, headers=auth_headers(admin), json=body)
+    assert result.status_code == 200, result.text
+    assert result.json()["version"] == 1 and result.json()["retry_limit"] == 2
+    audit = await session.scalar(select(AdminAudit))
+    assert audit.actor_id == admin.id and audit.reason == ""
+    assert (await client.put(URL, headers=auth_headers(admin), json=body)).status_code == 409
+    assert await session.scalar(select(func.count(AdminAudit.id))) == 1

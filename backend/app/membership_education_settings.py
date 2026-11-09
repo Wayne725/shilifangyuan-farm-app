@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .admin_explanations import AdminExplanation
 from .membership_policy import MembershipRetryPolicy
 from .models import AdminAudit, SystemSetting
 
@@ -27,7 +28,7 @@ class MembershipEducationPolicyValues(BaseModel):
 
 class MembershipEducationSettingsUpdate(MembershipEducationPolicyValues):
     expected_version: int = Field(ge=0, strict=True)
-    reason: str = Field(min_length=1, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class MembershipEducationSettingsRead(MembershipEducationPolicyValues):

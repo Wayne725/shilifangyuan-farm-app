@@ -406,8 +406,8 @@ class RayGateAdapter:
             raise ValueError("Unsupported RayGate refund_type")
         if amount <= 0:
             raise ValueError("Refund amount must be greater than zero")
-        if not reason.strip() or not idempotency_key.strip():
-            raise ValueError("Refund reason and idempotency key are required")
+        if not idempotency_key.strip():
+            raise ValueError("Refund idempotency key is required")
         response_payload = await self._post_server_api(
             "refund",
             {

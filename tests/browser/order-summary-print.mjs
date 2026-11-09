@@ -369,7 +369,7 @@ test('結果待確認必須勾選紙本核對與重複列印確認，才可建�
   await verifyIsolated(page, state);
 });
 
-test('人工核對指定頁需填紀錄，確認收到及尚未收到各自保留頁面狀態', { timeout: 25000 }, async (t) => {
+test('人工核對指定頁可略過紀錄，確認收到及尚未收到各自保留頁面狀態', { timeout: 25000 }, async (t) => {
   const { page, state } = await fixture(t);
   await page.goto(`${base}/admin?section=summary`); await waitForReport(page);
   const dialog = await openPreview(page);
@@ -382,11 +382,10 @@ test('人工核對指定頁需填紀錄，確認收到及尚未收到各自保�
   assert.equal(await received.isDisabled(), true);
   const batch = [...state.batches.values()][0];
   await dialog.getByLabel('核對頁次', { exact: true }).selectOption(batch.pages[0].id);
-  assert.equal(await received.isDisabled(), true);
-  await dialog.getByLabel('核對紀錄', { exact: true }).fill('已核對第一張紙本');
+  assert.equal(await received.isEnabled(), true);
   await received.click();
   await dialog.getByText('已確認列印', { exact: true }).waitFor();
-  assert.deepEqual(state.resolutions[0], { requestId: batch.request_id, pageId: batch.pages[0].id, body: { printed: true, reason: '已核對第一張紙本' } });
+  assert.deepEqual(state.resolutions[0], { requestId: batch.request_id, pageId: batch.pages[0].id, body: { printed: true, reason: '' } });
   assert.equal(await dialog.getByLabel('核對頁次', { exact: true }).inputValue(), '');
   assert.equal(await dialog.getByLabel('核對紀錄', { exact: true }).inputValue(), '');
   assert.equal(await dialog.getByLabel('核對頁次', { exact: true }).locator(`option[value="${batch.pages[0].id}"]`).count(), 0);

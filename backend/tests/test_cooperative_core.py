@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import func, select
 
 from app.models import (
+    AdminAudit, PointTransaction,
     Membership,
     MembershipStatus,
     MembershipType,
@@ -196,3 +198,20 @@ async def test_points_and_wish_launch(cooperative_context) -> None:
     assert launched.status_code == 200
     points = await client.get("/v1/me/points", headers=auth_headers(member))
     assert points.json()["balance"] == 120
+
+
+@pytest.mark.parametrize("note", [{}, {"reason": ""}, {"reason": " \t "}])
+@pytest.mark.asyncio
+async def test_admin_point_adjustment_optional_note_preserves_actor_and_amount(cooperative_context, note):
+    c = cooperative_context
+    body = {"user_id": c["member_a"].id, "amount": 5, **note}
+    path = "/v1/admin/points/adjustments"
+    assert (await c["client"].post(path, json=body, headers=auth_headers(c["customer"]))).status_code == 403
+    assert (await c["client"].post(path, json={**body, "amount": 0}, headers=auth_headers(c["admin"]))).status_code == 422
+    result = await c["client"].post(path, json=body, headers=auth_headers(c["admin"]))
+    assert result.status_code == 201, result.text
+    transaction = await c["session"].get(PointTransaction, result.json()["id"])
+    assert transaction.amount == 5 and transaction.note == "" and transaction.created_by_id == c["admin"].id
+    audit = await c["session"].scalar(select(AdminAudit).where(AdminAudit.action == "points.adjusted"))
+    assert audit.reason == "" and audit.aggregate_id == transaction.id
+    assert await c["session"].scalar(select(func.count(PointTransaction.id))) == 1

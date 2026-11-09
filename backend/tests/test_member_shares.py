@@ -143,7 +143,7 @@ async def test_new_claim_reads_previously_corrected_shares(shares_context):
     ("share_capital_amount", -1), ("share_count", -1), ("share_count", True),
     ("share_capital_amount", 5.0), ("share_capital_amount", "5000"), ("share_count", "5"),
     ("share_capital_amount", 2147483648), ("share_count", 2147483648),
-    ("reason", "  "), ("reason", "x" * 1001), ("expected_updated_at", "2026-09-17T11:00:00"),
+    ("reason", "x" * 1001), ("expected_updated_at", "2026-09-17T11:00:00"),
     ("expected_updated_at", 0),
     ("share_paid_on", "2026-09-17"), ("status", "active"),
 ])
@@ -273,3 +273,18 @@ async def test_share_correction_does_not_rewrite_existing_paid_charge_or_members
     assert membership.share_paid_on is None
     assert membership.share_capital_amount == 5000
     assert await ctx["session"].scalar(select(func.count(Refund.id))) == 0
+
+
+@pytest.mark.asyncio
+async def test_share_correction_accepts_omitted_note_but_preserves_version(shares_context):
+    c = shares_context
+    body = change_body(c["roster"])
+    body.pop("reason")
+    path = f"/v1/admin/member-roster/{c['roster']['id']}/shares"
+    response = await c["client"].patch(path, json=body, headers=c["admin_headers"])
+    assert response.status_code == 200, response.text
+    stored = await c["session"].get(MemberRosterEntry, c["roster"]["id"])
+    assert (stored.share_capital_amount, stored.share_count) == (5000, 5)
+    audit = await c["session"].scalar(select(AdminAudit).where(AdminAudit.action == "member_shares.updated"))
+    assert audit.reason == ""
+    assert (await c["client"].patch(path, json=body, headers=c["admin_headers"])).status_code == 409

@@ -5,11 +5,12 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..admin_explanations import AdminExplanation
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -36,16 +37,9 @@ invoices_router = APIRouter(tags=["invoices"])
 
 class AdminInvoiceIssueRequest(BaseModel):
     handling: Literal["on_payment", "pickup_day"]
-    reason: str = Field(min_length=1, max_length=500)
+    reason: AdminExplanation = Field(default="", max_length=500)
     confirm_not_invoiced_elsewhere: bool
     preferences: Optional[InvoicePreferenceInput] = None
-
-    @field_validator("reason")
-    @classmethod
-    def nonempty_reason(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("請填寫開票原因")
-        return value.strip()
 
 
 @invoices_router.post("/v1/admin/orders/{order_id}/invoice/issue")
@@ -112,15 +106,7 @@ class MobileBarcodeValidationResponse(BaseModel):
 
 
 class AdminInvoiceQueryRequest(BaseModel):
-    reason: str = Field(min_length=1, max_length=1000)
-
-    @field_validator("reason")
-    @classmethod
-    def validate_reason(cls, value: str) -> str:
-        reason = value.strip()
-        if not reason:
-            raise ValueError("請填寫查詢原因")
-        return reason
+    reason: AdminExplanation = Field(default="", max_length=1000)
 
 
 class AdminInvoiceQueryResponse(BaseModel):
@@ -134,7 +120,7 @@ class AdminInvoiceQueryResponse(BaseModel):
 
 
 class AdminInvoiceVoidRequest(AdminInvoiceQueryRequest):
-    reason: str = Field(min_length=1, max_length=20)
+    reason: AdminExplanation = Field(default="", max_length=20)
 
 
 @invoices_router.post("/v1/admin/orders/{order_id}/invoice/void")

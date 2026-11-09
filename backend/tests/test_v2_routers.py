@@ -208,7 +208,7 @@ async def v2_context(database_session):
 
 
 @pytest.mark.asyncio
-async def test_admin_invoice_query_requires_reason_and_records_audit(
+async def test_admin_invoice_query_accepts_optional_reason_and_records_audit(
     v2_context,
     monkeypatch,
 ) -> None:
@@ -266,18 +266,12 @@ async def test_admin_invoice_query_requires_reason_and_records_audit(
         lambda _settings: InvoiceAdapter(),
     )
 
-    missing_reason = await client.post(
+    queried = await client.post(
         f"/v1/admin/orders/{order.id}/invoice/query",
         json={"reason": "   "},
         headers=auth_headers(admin),
     )
-    queried = await client.post(
-        f"/v1/admin/orders/{order.id}/invoice/query",
-        json={"reason": "客服確認逾時訂單"},
-        headers=auth_headers(admin),
-    )
 
-    assert missing_reason.status_code == 422
     assert queried.status_code == 200, queried.text
     assert queried.json()["found"] is True
     assert queried.json()["invoice_number"] == "AB12345672"
@@ -294,7 +288,7 @@ async def test_admin_invoice_query_requires_reason_and_records_audit(
     assert invoice.status == InvoiceStatus.ISSUED
     assert audit is not None
     assert audit.actor_id == admin.id
-    assert audit.reason == "客服確認逾時訂單"
+    assert audit.reason == ""
     assert audit.data == {
         "found": True,
         "provider": "fanyu",
@@ -2245,7 +2239,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
 
     invalid_cancel = await client.post(
         f"/v1/admin/meal-events/{event_id}/cancel",
-        json={},
+        json={"reason": "x" * 2001},
         headers=auth_headers(admin),
     )
     assert invalid_cancel.status_code == 422

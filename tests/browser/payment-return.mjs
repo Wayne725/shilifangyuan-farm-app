@@ -111,7 +111,7 @@ test("舊購物車網址轉入新版結帳，不顯示 404", async () => {
   }
 });
 
-test("管理端分頁搜尋、重查及重送必填原因，不使用確認視窗", async () => {
+test("管理端分頁搜尋、重查及重送可略過原因，不使用確認視窗", async () => {
   const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -151,8 +151,7 @@ test("管理端分頁搜尋、重查及重送必填原因，不使用確認視�
     await page.goto(`${base}/admin?section=issues`);
     const retry = page.getByRole('button', { name: '排入重試', exact: true });
     await retry.waitFor();
-    assert.equal(await retry.isDisabled(), true);
-    await page.getByLabel('處理原因', { exact: true }).fill('已修正寄信設定');
+    assert.equal(await retry.isEnabled(), true);
     await retry.click();
     await page.getByText('目前沒有待處理問題。', { exact: true }).waitFor();
     await page.getByRole('navigation', { name: '訂單營運子頁面' }).getByRole('link', { name: '訂單、付款與發票', exact: true }).click();
@@ -164,12 +163,11 @@ test("管理端分頁搜尋、重查及重送必填原因，不使用確認視�
     await page.locator('summary').filter({ hasText: /^查詢付款$/ }).click();
     await page.getByRole('form', { name: '付款狀態查詢' }).locator('summary').filter({ hasText: /^其他查詢原因$/ }).click();
     const query = page.getByRole('button', { name: '重新查詢雷門付款', exact: true });
-    assert.equal(await query.isDisabled(), true);
-    await page.getByLabel('金流查詢原因', { exact: true }).fill('核對付款未更新');
+    assert.equal(await query.isEnabled(), true);
     await query.click();
     await page.getByText('已查詢最新一次付款紀錄', { exact: true }).waitFor();
     assert.equal(dialogs, 0);
-    assert.deepEqual(submissions, [{ reason: '已修正寄信設定' }, { reason: '核對付款未更新' }]);
+    assert.deepEqual(submissions, [{ reason: '' }, { reason: '' }]);
     assert(searches.some((query) => new URLSearchParams(query).get('offset') === '12'));
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   } finally {

@@ -168,9 +168,9 @@ async def test_missing_roster_phone_cannot_create_an_automatic_member_number(use
     assert c.entry.claimed_user_id is None
 
 
-@pytest.mark.parametrize("values", [{"confirmed_offline": False}, {"reason": "  "}, {"confirmed_on": "invalid"}, {"confirmed_on": (datetime.now(TAIPEI).date() + timedelta(days=1)).isoformat()}])
+@pytest.mark.parametrize("values", [{"confirmed_offline": False}, {"reason": "x" * 1001}, {"confirmed_on": "invalid"}, {"confirmed_on": (datetime.now(TAIPEI).date() + timedelta(days=1)).isoformat()}])
 @pytest.mark.asyncio
-async def test_grant_requires_explicit_offline_confirmation_and_valid_reason(users_context, values):
+async def test_grant_requires_explicit_offline_confirmation_and_valid_date(users_context, values):
     c = users_context
     assert (await grant(c, **values)).status_code == 422
     assert await c.session.scalar(select(func.count(Membership.id))) == 0
@@ -380,3 +380,24 @@ async def test_unreadable_roster_does_not_silently_bypass_phone_uniqueness(users
     assert (await check_phone(c)).status_code == 503
     assert (await grant(c)).status_code == 503
     assert await c.session.scalar(select(func.count(Membership.id))) == 0
+
+
+@pytest.mark.parametrize("note", [{}, {"reason": ""}, {"reason": " \t "}, {"reason": None}])
+@pytest.mark.asyncio
+async def test_offline_membership_accepts_optional_note_after_phone_and_confirmation(users_context, note):
+    c = users_context
+    body = confirmation(roster_entry_id=c.entry.id)
+    body.pop("reason")
+    body.update(note)
+    path = f"/v1/admin/users/{c.buyer.id}/offline-membership"
+    assert (await c.client.post(path, json={**body, "confirmed_offline": False}, headers=auth_headers(c.admin))).status_code == 422
+    assert (await c.client.post(path, json={**body, "phone": "0987654321"}, headers=auth_headers(c.admin))).status_code == 409
+    result = await c.client.post(path, json=body, headers=auth_headers(c.admin))
+    assert result.status_code == 200, result.text
+    assert result.json()["member_number"] == c.entry.member_number
+    await c.session.refresh(c.entry)
+    assert c.entry.claimed_user_id == c.buyer.id
+    audit = await c.session.scalar(select(AdminAudit).where(AdminAudit.action == "membership.offline_confirmed"))
+    assert audit.actor_id == c.admin.id and audit.reason == ""
+    for model in (MembershipCharge, PaymentAttempt, Refund):
+        assert await c.session.scalar(select(func.count(model.id))) == 0

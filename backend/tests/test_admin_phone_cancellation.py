@@ -161,8 +161,8 @@ async def test_failed_provider_refund_validation_does_not_create_a_phone_cancell
 
 
 @pytest.mark.parametrize("channel", ["regular", "meal_preorder"])
-@pytest.mark.parametrize("reason", ["", "  ", "字" * 2001])
-async def test_phone_cancellation_requires_a_meaningful_bounded_reason(review_context, channel, reason):
+@pytest.mark.parametrize("reason", ["字" * 2001])
+async def test_phone_cancellation_rejects_oversized_reason(review_context, channel, reason):
     c = review_context
     path = await prepare(c, channel)
     response = await c.client.post(path, json={"reason": reason}, headers=auth_headers(c.admin))
@@ -217,3 +217,28 @@ async def test_phone_cancellation_restores_product_stock_or_campaign_quantity_ex
         assert campaign.threshold_version == (1 if paid else 0)
     assert await count(c, Refund) == int(paid)
     assert await count(c, MealCancellationRequest) == await count(c, AdminAudit) == 1
+
+
+@pytest.mark.parametrize("channel", ["regular", "meal_preorder"])
+@pytest.mark.parametrize("paid", [False, True])
+@pytest.mark.parametrize("body", [{}, {"reason": ""}, {"reason": " \t "}, {"reason": None}])
+async def test_admin_cancellation_optional_reason_preserves_audit_and_money_state(review_context, channel, paid, body):
+    c = review_context
+    path = await prepare(c, channel, paid)
+    response = await c.client.post(path, json=body, headers=auth_headers(c.admin))
+    assert response.status_code == 200, response.text
+    request = await c.session.get(MealCancellationRequest, response.json()["cancellation_request"]["id"])
+    assert request.status == "approved" and request.reason == request.review_reason == ""
+    assert request.reviewed_by_id == c.admin.id and request.reviewed_at is not None
+    assert c.order.cancelled_at and c.order.fulfillment.status == FulfillmentState.CANCELLED
+    assert c.order.payment_status == (PaymentStatus.REFUND_PENDING if paid else PaymentStatus.EXPIRED)
+    audit = await c.session.scalar(select(AdminAudit))
+    assert audit.actor_id == c.admin.id and audit.reason == ""
+    refund = await c.session.scalar(select(Refund))
+    assert (refund is not None) == paid
+    if paid:
+        assert refund.amount == c.order.amount_total and refund.reason == ""
+    repeat = await c.client.post(path, json=body, headers=auth_headers(c.admin))
+    assert repeat.status_code == 200
+    assert await count(c, MealCancellationRequest) == await count(c, AdminAudit) == 1
+    assert await count(c, Refund) == int(paid)

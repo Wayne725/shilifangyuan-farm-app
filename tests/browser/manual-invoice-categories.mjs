@@ -26,13 +26,13 @@ async function fixture(t, { width = 390, meals = true, catalogError = false, unc
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/notifications') return route.fulfill({ json: [] });
     if (path === '/v1/products') return route.fulfill({ json: [
-      { name: '合成一般商品', is_active: true },
-      { name: '合成未上架商品', is_active: true, is_daily_listed: false },
+      { name: '合成一般商品', is_active: true, member_price: 90, nonmember_price: 100, tax_type: 'tax_exempt' },
+      { name: '合成未上架商品', is_active: true, is_daily_listed: false, nonmember_price: 160, tax_type: 'taxable' },
       { name: '合成停用商品', is_active: false },
     ] });
     if (path === '/v1/admin/meals') return route.fulfill(state.catalogError
       ? { status: 503, json: { detail: '隔離品項載入失敗' } }
-      : { json: meals ? [{ name: '合成便當', is_active: true }, { name: '合成停用便當', is_active: false }] : [] });
+      : { json: meals ? [{ name: '合成便當', is_active: true, price: 149, tax_type: 'taxable' }, { name: '合成停用便當', is_active: false }] : [] });
     if (request.method() === 'GET' && path.startsWith('/v1/admin/walk-in-sales/request/')) {
       return route.fulfill({ status: 404, json: { detail: '尚未找到此筆隔離交易' } });
     }
@@ -80,6 +80,12 @@ for (const width of [390, 1280]) {
     assert.deepEqual(await optionNames(region), ['請選擇便當', '合成便當']);
     assert.equal(await categories.getByRole('button', { name: '便當', exact: true }).getAttribute('aria-pressed'), 'true');
     await product.selectOption({ label: '合成便當' });
+    assert.equal(await region.getByLabel('含稅單價', { exact: true }).inputValue(), '149');
+    assert.equal(await region.getByLabel('數量', { exact: true }).inputValue(), '1');
+    assert.match(await region.locator('.admin-walk-in-confirm').innerText(), /149/);
+    await region.getByLabel('含稅單價', { exact: true }).fill('150');
+    await region.getByLabel('數量', { exact: true }).fill('3');
+    assert.match(await region.locator('.admin-walk-in-confirm').innerText(), /450/);
     await completeSale(region);
     await categories.getByRole('button', { name: '一般商品', exact: true }).click();
     assert.equal(await categories.getByRole('button', { name: '一般商品', exact: true }).getAttribute('aria-pressed'), 'true');
@@ -88,7 +94,14 @@ for (const width of [390, 1280]) {
     assert.equal(await region.getByLabel('含稅單價', { exact: true }).inputValue(), '');
     assert.equal(await region.getByRole('button', { name: '確認', exact: true }).isDisabled(), true);
     assert.equal(state.posts.length, 0);
+    await product.selectOption({ label: '合成一般商品' });
+    assert.equal(await region.getByLabel('含稅單價', { exact: true }).inputValue(), '100');
+    assert.equal(await region.getByLabel('數量', { exact: true }).inputValue(), '1');
+    assert.equal(await region.getByLabel('稅別', { exact: true }).inputValue(), 'tax_exempt');
+    await region.getByLabel('含稅單價', { exact: true }).fill('110');
     await product.selectOption({ label: '合成未上架商品' });
+    assert.equal(await region.getByLabel('含稅單價', { exact: true }).inputValue(), '160');
+    assert.equal(await region.getByLabel('稅別', { exact: true }).inputValue(), 'taxable');
     await completeSale(region);
     await region.getByRole('button', { name: '確認', exact: true }).click();
     await region.getByText(/已記錄收款.*O2030010201/).waitFor();

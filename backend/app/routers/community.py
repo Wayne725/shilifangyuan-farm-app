@@ -13,6 +13,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..admin_explanations import AdminExplanation
 from .. import activity_payments as activity_service
 from ..auth import (
     get_current_user,
@@ -78,7 +79,7 @@ community_router = APIRouter(tags=["community"])
 
 
 class ActivityAttendanceUpdate(BaseModel):
-    reason: Optional[str] = Field(default=None, max_length=1000)
+    reason: AdminExplanation = Field(default="", max_length=1000)
     expected_status: Optional[Literal["attended", "no_show"]] = None
 
 
@@ -402,8 +403,6 @@ async def _review_activity(
         or activity.status != ActivityStatus.PENDING_REVIEW
     ):
         raise HTTPException(status_code=409, detail="此活動目前不可審核")
-    if next_status == ActivityStatus.REJECTED and not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫駁回原因")
     activity.status = next_status
     activity.reviewed_by_id = admin.id
     activity.reviewed_at = datetime.now(timezone.utc)
@@ -469,8 +468,6 @@ async def cancel_activity(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRead:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫取消原因")
     activity = await _load_activity(session, activity_id, for_update=True)
     if activity is None or activity.status in {
         ActivityStatus.CANCELLED,
@@ -504,7 +501,7 @@ async def cancel_activity(
                 charge.payment_status = PaymentStatus.EXPIRED
             await activity_service.notify_once(session, user_id=registration.user_id,
                 key=f"activity-cancel:{activity.id}:{registration.id}:{registration.revision}", title="活動已取消",
-                body=f"「{activity.title}」已取消：{body.reason}", email=registration.contact_email, activity_id=activity.id)
+                body=f"「{activity.title}」已取消" + (f"：{body.reason}" if body.reason else "。"), email=registration.contact_email, activity_id=activity.id)
     session.add(
         AdminAudit(
             actor_id=admin.id,
@@ -587,14 +584,14 @@ async def mark_activity_attendance(
         raise HTTPException(status_code=409, detail="此報名無法標記出席")
     previous_status = registration.status
     correction = previous_status != ActivityRegistrationStatus.REGISTERED
-    reason = body.reason.strip() if body and body.reason else None
+    reason = body.reason if body else ""
     if body and body.expected_status is not None and body.expected_status != previous_status.value:
         raise HTTPException(status_code=409, detail="名單狀態已更新，請重新讀取後再更正")
     if correction:
         if body is None:
-            raise HTTPException(status_code=409, detail="更正出席需提供原因及目前狀態")
-        if not reason or body.expected_status is None:
-            raise HTTPException(status_code=422, detail="請填寫更正原因並確認目前出席狀態")
+            raise HTTPException(status_code=409, detail="更正出席需提供目前狀態")
+        if body.expected_status is None:
+            raise HTTPException(status_code=422, detail="請確認目前出席狀態")
         if previous_status == attendance_status:
             raise HTTPException(status_code=409, detail="出席狀態未變更")
     previous_check_in = registration.checked_in_at
@@ -640,7 +637,7 @@ async def mark_activity_attendance(
         await session.flush()
         session.add(PointTransaction(account_id=account.id, amount=points_delta,
             source_type=PointSourceType.ADMIN_ADJUSTMENT, reference_id=audit.id,
-            note=f"活動出席更正：{reason}"[:240], created_by_id=admin.id))
+            note=f"活動出席更正：{reason}"[:240] if reason else "", created_by_id=admin.id))
     await session.commit()
     return ActivityRegistrationRead.model_validate(registration)
 
@@ -1015,8 +1012,6 @@ async def reject_member_proposal(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫駁回原因")
     proposal = await _load_proposal(session, proposal_id, for_update=True)
     if (
         proposal is None
@@ -1051,8 +1046,6 @@ async def close_member_proposal(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MemberProposalRead:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫處理結果")
     proposal = await _load_proposal(session, proposal_id, for_update=True)
     if proposal is None or proposal.status not in {
         MemberProposalStatus.PASSED,

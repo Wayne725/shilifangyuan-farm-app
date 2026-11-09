@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..admin_explanations import AdminExplanation
 from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
 from ..point_accounts import point_account
@@ -558,7 +559,7 @@ async def my_badges(
 class PointAdjustment(BaseModel):
     user_id: str
     amount: int
-    reason: str = Field(min_length=1, max_length=240)
+    reason: AdminExplanation = Field(default="", max_length=240)
 
 
 @cooperative_router.post("/v1/admin/points/adjustments", status_code=status.HTTP_201_CREATED)
@@ -633,7 +634,7 @@ async def support_wish(
 
 class WishStatusUpdate(BaseModel):
     status: WishStatus
-    admin_note: str = ""
+    admin_note: AdminExplanation = Field(default="")
     launched_product_id: Optional[str] = None
     launched_campaign_id: Optional[str] = None
     proposer_points: int = Field(default=100, ge=0)

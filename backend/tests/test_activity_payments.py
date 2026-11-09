@@ -178,13 +178,15 @@ async def test_paid_cancel_requires_review_versions_then_worker_full_refund(data
     request=result.refund_request
     async with api_test_context(database_session,[router,community_router,payments_router],settings=make_test_settings()) as client:
         path=f"/v1/admin/activity-refund-requests/{request.id}/review"
-        body={"decision":"approve","expected_version":request.version,"expected_amount":request.amount,"reason":"核准整筆退款"}
+        body={"decision":"approve","expected_version":request.version,"expected_amount":request.amount,"reason":"  "}
         assert (await client.post(path,json=body,headers=auth_headers(c.buyer))).status_code==403
         bad=await client.post(path,json={**body,"expected_amount":request.amount+1},headers=auth_headers(c.admin)); assert bad.status_code==409
         approved=await client.post(path,json=body,headers=auth_headers(c.admin)); assert approved.status_code==200,approved.text
         assert (await client.post(path,json=body,headers=auth_headers(c.admin))).status_code==409
     refund=await database_session.scalar(select(Refund))
     assert refund.status==RefundStatus.PENDING and refund.amount==attempt.amount and refund.activity_charge_id==first.charge.id
+    reviewed = await database_session.get(ActivityRefundRequest, request.id)
+    assert refund.reason == "" and reviewed.review_reason == ""
     activity=await service.load_activity(database_session,c.activity.id)
     assert next(item for item in activity.registrations if item.user_id==c.second.id).status==RegistrationStatus.PENDING_PAYMENT
     fake=FakeRayGateRefundAdapter(success_payload(attempt))

@@ -382,7 +382,8 @@ async def test_query_identifies_missing_transaction() -> None:
 
 
 @pytest.mark.asyncio
-async def test_refund_uses_original_provider_order_and_payment_type() -> None:
+@pytest.mark.parametrize("reason", ["訂單取消", ""])
+async def test_refund_uses_original_provider_order_and_payment_type(reason) -> None:
     requests = []
 
     async def transport(url, payload, headers, timeout):
@@ -406,7 +407,7 @@ async def test_refund_uses_original_provider_order_and_payment_type() -> None:
         provider_order_id="RG2026090200000001",
         payment_type="linepay",
         amount=450,
-        reason="訂單取消",
+        reason=reason,
         idempotency_key="refund-1",
     )
 
@@ -1431,14 +1432,18 @@ class FakeRayGateRefundAdapter:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["買家取消", ""])
 async def test_refund_job_queries_before_refunding_and_persists_provider_audit(
     database_session,
     monkeypatch,
+    reason,
 ) -> None:
     order, attempt, refund, event = await _make_pending_raygate_refund(
         database_session,
         suffix="01",
     )
+    refund.reason = reason
+    await database_session.commit()
     adapter = FakeRayGateRefundAdapter(
         {
             "MerchantTradeNo": attempt.merchant_trade_no,
@@ -1468,7 +1473,7 @@ async def test_refund_job_queries_before_refunding_and_persists_provider_audit(
         "provider_order_id": attempt.provider_trade_no,
         "payment_type": "linepay",
         "amount": 450,
-        "reason": "買家取消",
+        "reason": reason,
         "idempotency_key": refund.id,
     }
     await database_session.refresh(order)

@@ -330,11 +330,10 @@ async def test_submitted_reference_after_refund_only_queries_without_resending(m
     assert (await stored(c, response.json()["id"])).status == "printed"
 
 
-async def test_reference_legacy_reprint_is_rejected_and_reason_cannot_be_blank(manual_context):
+async def test_reference_reprint_allows_blank_note_but_legacy_route_is_rejected(manual_context):
     c = manual_context
     response, _ = await submit(c, reason="   ")
-    assert response.status_code == 422
-    response, _ = await submit(c)
+    assert response.status_code == 201
     await process_print_job(c.settings, factory=c.factory)
     result = await c.client.post(f"/v1/admin/printers/jobs/{response.json()['id']}/reprint", headers=auth_headers(c.admin),
         json={"request_id": str(uuid4()), "reason": "測試舊補印入口"})

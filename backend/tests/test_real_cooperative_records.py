@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 from sqlalchemy import select
 
-from app.models import Supplier, User, UserRole
+from app.models import Supplier, SupplierAccreditation, User, UserRole
 from app.routers.catalog import catalog_router
 from app.routers.operations import operations_router
 from app.schemas import FulfillmentUpdate
@@ -143,7 +143,6 @@ async def test_supplier_accreditation_and_product_binding(
         f"/v1/admin/suppliers/{supplier_id}/accreditations",
         json={
             "reviewed_on": date(2026, 8, 16).isoformat(),
-            "process_notes": "文件與現場訪查完成。",
             "status": "approved",
             "result_notes": "通過。",
         },
@@ -153,6 +152,8 @@ async def test_supplier_accreditation_and_product_binding(
     assert approved.status_code == 201
     assert approved.json()["supplier_number"] == "SUP-2026-0001"
     assert approved.json()["is_active"] is True
+    accreditation = await session.scalar(select(SupplierAccreditation).where(SupplierAccreditation.supplier_id == supplier_id))
+    assert accreditation.process_notes == ""
 
     product_payload = {
         "product_number": "P-0001",

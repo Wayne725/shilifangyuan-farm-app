@@ -26,7 +26,7 @@ async def test_platform_closure_blocks_new_orders_and_can_reopen(booking_context
     assert (await client.put('/v1/admin/platform', headers=auth_headers(buyer), json={'orders_open': False, 'reason': '暫停'})).status_code == 403
     created = await client.post(f'/v1/meal-events/{event.id}/orders', json=body, headers=auth_headers(buyer))
     assert created.status_code == 201, created.text
-    assert (await client.put('/v1/admin/platform', headers=auth_headers(admin), json={'orders_open': False, 'closed_message': '今日暫停接單', 'reason': '測試關閉'})).status_code == 200
+    assert (await client.put('/v1/admin/platform', headers=auth_headers(admin), json={'orders_open': False, 'closed_message': '今日暫停接單'})).status_code == 200
     blocked = await client.post(f'/v1/meal-events/{event.id}/orders', json=body, headers=auth_headers(buyer))
     assert blocked.status_code == 409 and blocked.json()['detail'] == '今日暫停接單'
     assert (await client.get(f'/v1/meal-orders/{created.json()["id"]}', headers=auth_headers(buyer))).status_code == 200
@@ -113,8 +113,9 @@ async def test_receipts_idempotent_private_and_void_without_financial_side_effec
     exported = await client.get('/v1/admin/membership-payments.csv', headers=headers)
     assert "'=PAYMENT12345" in exported.text
     path = f'/v1/admin/membership-offline-receipts/{stored.id}/void'
-    assert (await client.post(path, headers=headers, json={'reason': '  '})).status_code == 422
-    assert (await client.post(path, headers=headers, json={'reason': '誤登，作廢紀錄'})).status_code == 200
+    assert (await client.post(path, headers=headers, json={'reason': '  '})).status_code == 200
+    await session.refresh(stored)
+    assert stored.void_reason == ''
     assert (await client.get('/v1/admin/membership-payments', headers=headers)).json()['summary']['net'] == 0
     for model in (PaymentAttempt, Refund, Order):
         assert await session.scalar(select(func.count(model.id))) == 0

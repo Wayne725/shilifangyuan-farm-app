@@ -99,7 +99,7 @@ async def test_pending_order_reserves_meal_without_revenue_or_online_payment(cas
 async def test_confirm_payment_is_idempotent_and_pos_owns_invoice(cash_context, method):
     c = cash_context
     order_id = (await create_cash(c)).json()["id"]
-    first = await action(c, order_id, collection_method=method, reference="POS-123")
+    first = await action(c, order_id, collection_method=method, reference="POS-123", reason="  ")
     assert first.status_code == 200, first.text
     assert first.json()["payment_status"] == "paid" and first.json()["invoice_status"] == "external"
     duplicate = await action(c, order_id)
@@ -110,6 +110,7 @@ async def test_confirm_payment_is_idempotent_and_pos_owns_invoice(cash_context, 
     listing = await c.client.get("/v1/admin/meal-orders", headers=auth_headers(c.admin))
     assert listing.json()["items"][0]["order"]["onsite_payment"]["reference"] == "POS-123"
     assert await count(c, PaymentAttempt) == 1 and await count(c, AdminAudit) == 1
+    assert await c.session.scalar(select(AdminAudit.reason)) == ""
     assert await received_total(c) == 120
     assert c.event.offerings[0].paid_quantity == 1 and c.event.offerings[0].reserved_quantity == 0
     assert await c.session.scalar(select(func.count(OutboxEvent.id)).where(OutboxEvent.event_type.startswith("invoice."))) == 0

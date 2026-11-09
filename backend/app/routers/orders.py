@@ -77,7 +77,7 @@ from ..schemas import (
     CancelRequest,
     CashConfirmationRequest,
     MealCancellationReview,
-    MealCancellationRequestCreate,
+    AdminMealCancellationRequest,
     MealCancellationRequestRead,
     FulfillmentUpdate,
     OrderCreate,
@@ -724,7 +724,7 @@ async def review_order_cancellation(
 @orders_router.post("/{order_id}/admin/cancel", response_model=OrderRead)
 async def admin_cancel_order(
     order_id: str,
-    body: MealCancellationRequestCreate,
+    body: AdminMealCancellationRequest,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> OrderRead:

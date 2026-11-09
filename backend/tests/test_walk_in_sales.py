@@ -255,7 +255,7 @@ async def test_walk_in_full_refund_is_audited_and_retry_safe(walk_in_context):
     created = await post(c, payload())
     order_id = created.json()["order_id"]
     endpoint = f"/v1/admin/walk-in-sales/{order_id}/refund"
-    body = {"amount": 210, "reason": "已退還客人全部現金", "confirm_returned": True}
+    body = {"amount": 210, "reason": "  ", "confirm_returned": True}
     assert (await c.client.post(endpoint, headers=auth_headers(c.customer), json=body)).status_code == 403
     assert (await c.client.post(endpoint, headers=auth_headers(c.admin), json={**body, "amount": 200})).status_code == 409
     assert (await c.client.post(endpoint, headers=auth_headers(c.admin), json={**body, "confirm_returned": False})).status_code == 422
@@ -265,6 +265,7 @@ async def test_walk_in_full_refund_is_audited_and_retry_safe(walk_in_context):
         assert refunded.json()["payment_status"] == "refunded"
     assert await c.session.scalar(select(func.count()).select_from(Refund)) == 1
     assert await c.session.scalar(select(Refund.status)) == RefundStatus.COMPLETED
+    assert await c.session.scalar(select(Refund.reason)) == ""
     assert await c.session.scalar(select(PaymentAttempt.status)) == PaymentStatus.REFUNDED
     assert await c.session.scalar(select(func.count()).select_from(AdminAudit).where(AdminAudit.action == "order.cash_refund")) == 1
     job = await c.session.scalar(select(OutboxEvent))
@@ -357,3 +358,20 @@ async def test_database_rejects_guest_identity_and_tax_misclassification(walk_in
     with pytest.raises(IntegrityError):
         async with c.session.begin_nested():
             await c.session.execute(update(Order).where(Order.id == order_id).values(**mutation))
+
+
+@pytest.mark.parametrize("note", [{}, {"reason": ""}, {"reason": " \t "}])
+@pytest.mark.asyncio
+async def test_walk_in_optional_note_does_not_replace_explicit_receipt_confirmations(walk_in_context, note):
+    c = walk_in_context
+    body = payload()
+    body.pop("reason")
+    body.update(note)
+    for field in ("confirm_received", "confirm_not_invoiced_elsewhere"):
+        assert (await post(c, {**body, field: False})).status_code == 422
+    first = await post(c, body)
+    assert first.status_code == 201, first.text
+    assert (await post(c, body)).json() == first.json()
+    audit = await c.session.scalar(select(AdminAudit))
+    assert audit.reason == "" and audit.actor_id == c.admin.id
+    assert await c.session.scalar(select(func.count(PaymentAttempt.id))) == 1

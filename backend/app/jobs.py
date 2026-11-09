@@ -1684,7 +1684,7 @@ async def _process_invoice_void_event(
         session,
         order_id,
         invoice_adapter_from_settings(settings),
-        reason=(refund.reason.strip() or "全額退款自動作廢")[:20],
+        reason=refund.reason.strip()[:20],
         actor_id=refund.requested_by_id,
         trigger="automatic_refund",
         refund_id=refund.id,

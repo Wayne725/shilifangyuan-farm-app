@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -152,7 +153,7 @@ class SummaryResolveRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     printed: bool
-    reason: str = Field(min_length=2, max_length=200)
+    reason: AdminExplanation = Field(default="", max_length=200)
 
 
 @order_summary_router.post("/order-summary/print-jobs/{request_id}/pages/{job_id}/resolve")

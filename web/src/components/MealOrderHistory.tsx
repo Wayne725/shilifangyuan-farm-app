@@ -107,7 +107,7 @@ function MealCancellationStatus({ order }: { order: MealOrder }) {
   const labels = { pending: "退單申請待審核", approved: "退單申請已核准", rejected: "退單申請未核准" };
   return <section className="meal-cancellation-card" aria-label="退單審核進度">
     <h3>{labels[request.status]}</h3>
-    <p>申請原因：{request.reason}</p>
+    {request.reason && <p>申請原因：{request.reason}</p>}
     <p>申請時間：{formatDateTime(request.requested_at)}</p>
     {request.review_reason && <p>管理員回覆：{request.review_reason}</p>}
     {request.reviewed_at && <p>審核時間：{formatDateTime(request.reviewed_at)}</p>}

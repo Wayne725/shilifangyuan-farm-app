@@ -128,12 +128,13 @@ async def test_public_questions_no_answers_and_get_never_creates_admission(admis
 async def test_phase_one_approval_is_not_membership_money_or_notification(admission_context):
     c = admission_context
     row = await submitted(c)
-    response = await review(c, row)
+    response = await review(c, row, reason="  ")
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["status"] == "approved" and not data["can_edit"] and not data["can_withdraw"]
     assert data["decision_reference"] == "TEST-決議-001"
     assert data["reviews"][0]["decision"] == "approve"
+    assert data["reviews"][0]["reason"] == ""
     for model in (Membership, MembershipCharge, MemberProfile, MembershipApplication, Notification, OutboxEvent):
         assert await c["session"].scalar(select(func.count(model.id))) == 0
     owner = await c["session"].get(User, c["owner_id"])

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiFetch, formatMoney } from "../lib/api";
 import { invoicePreferencePayload, type InvoicePreference } from "../lib/commerce";
 import { isTaiwanTaxId } from "./InvoicePreferenceFields";
+import { walkInCatalogItems, type WalkInCatalogSource } from "../lib/walkInCatalog";
 import "./AdminWalkInSale.css";
 
 const requestKey = "slf_admin_walk_in_request_v1";
@@ -53,7 +54,7 @@ function WalkInInvoiceFields({ value, onChange }: { value: InvoicePreference; on
         <label className={!mobile ? "selected" : ""}><input type="radio" name="walk-in-carrier" checked={!mobile} onChange={() => onChange({ ...value, carrierType: "cloud" })}/><strong>Email 會員載具</strong></label>
         {mobile && <label className="invoice-barcode-field">手機條碼<input aria-label="手機條碼" required maxLength={8} autoCapitalize="characters" placeholder="/AB12+-." aria-invalid={barcodeError || undefined} aria-describedby={barcodeError ? "walk-in-barcode-error" : undefined} onBlur={() => setTouched(current => ({ ...current, barcode: true }))} value={value.carrierValue || ""} onChange={event => onChange({ ...value, carrierValue: event.target.value.trim().toUpperCase() })}/>{barcodeError && <span className="invoice-field-error" id="walk-in-barcode-error">請輸入以 / 開頭的 8 碼手機條碼</span>}</label>}
       </div>
-      <div className="invoice-delivery-form"><label className="invoice-email-field">發票通知 Email{mobile ? "（選填）" : ""}<input aria-label="發票通知 Email" type="email" inputMode="email" autoComplete="off" required={!mobile} maxLength={mobile ? 80 : 64} placeholder="name@example.com" aria-invalid={emailError || undefined} aria-describedby={emailError ? "walk-in-email-error" : undefined} onBlur={() => setTouched(current => ({ ...current, email: true }))} value={value.buyerEmail} onChange={event => onChange({ ...value, buyerEmail: event.target.value })}/></label>{emailError && <p className="invoice-field-error" id="walk-in-email-error">請輸入正確的 Email 格式</p>}</div>
+      <div className="invoice-delivery-form"><label className="invoice-email-field">發票通知 Email<input aria-label="發票通知 Email" type="email" inputMode="email" autoComplete="off" required={!mobile} maxLength={mobile ? 80 : 64} placeholder="name@example.com" aria-invalid={emailError || undefined} aria-describedby={emailError ? "walk-in-email-error" : undefined} onBlur={() => setTouched(current => ({ ...current, email: true }))} value={value.buyerEmail} onChange={event => onChange({ ...value, buyerEmail: event.target.value })}/></label>{emailError && <p className="invoice-field-error" id="walk-in-email-error">請輸入正確的 Email 格式</p>}</div>
     </div>
   </div>;
 }
@@ -82,20 +83,23 @@ export function AdminWalkInSale() {
     queryKey: ["admin-walk-in-product-names"],
     queryFn: async ({ signal }) => {
       const lists = await Promise.all([
-        apiFetch<{ name: string; is_active: boolean }[]>("/v1/products", { signal }),
-        apiFetch<{ name: string; is_active: boolean }[]>("/v1/admin/meals", { signal }),
+        apiFetch<WalkInCatalogSource[]>("/v1/products", { signal }),
+        apiFetch<WalkInCatalogSource[]>("/v1/admin/meals", { signal }),
       ]);
-      const activeNames = (items: { name: string; is_active: boolean }[]) =>
-        [...new Set(items.filter(item => item.is_active).map(item => item.name))];
-      return { regular: activeNames(lists[0]), meal: activeNames(lists[1]) };
+      return { regular: walkInCatalogItems(lists[0], "regular"), meal: walkInCatalogItems(lists[1], "meal") };
     },
     retry: false,
   });
-  const availableNames = productNames.data?.[productCategory] || [];
+  const availableItems = productNames.data?.[productCategory] || [];
+  const availableNames = availableItems.map(item => item.name);
   const names = !productName || availableNames.includes(productName) ? availableNames : [...availableNames, productName];
+  const changeProduct = (name: string) => {
+    const item = availableItems.find(item => item.name === name);
+    setProductName(name); setUnitPrice(item?.unitPrice ?? ""); setTaxType(item?.taxType ?? "taxable");
+  };
   const changeCategory = (category: ProductCategory) => {
     if (category === productCategory) return;
-    setProductCategory(category); setProductName(""); setUnitPrice("");
+    setProductCategory(category); setProductName(""); setUnitPrice(""); setQuantity("1"); setTaxType("taxable");
   };
   const recovery = useQuery({
     queryKey: ["admin-walk-in-request", requestId],
@@ -125,7 +129,7 @@ export function AdminWalkInSale() {
     let nextId: string;
     try { nextId = crypto.randomUUID(); sessionStorage.setItem(requestKey, nextId); }
     catch { setStorageError("無法更新交易識別碼，請重新整理後查核交易。"); return; }
-    setRequestId(nextId); setStorageError(""); setResult(null); setPayload(null); setUnitPrice(""); setQuantity("1"); setCustomerName("");
+    setRequestId(nextId); setStorageError(""); setResult(null); setPayload(null); changeProduct(productName); setQuantity("1"); setCustomerName("");
     setPreference(defaultWalkInPreference());
     creation.reset();
   };
@@ -157,11 +161,11 @@ export function AdminWalkInSale() {
               <button type="button" aria-pressed={productCategory === "regular"} onClick={() => changeCategory("regular")}>一般商品</button>
             </div>
             <div className="field-grid two-columns">
-              <label className="field"><span>品名</span><select required value={productName} onChange={event => setProductName(event.target.value)}><option value="" disabled>{productNames.isPending ? "正在載入品項…" : names.length ? `請選擇${productCategory === "meal" ? "便當" : "一般商品"}` : productNames.isError ? "品項載入失敗" : "此分類沒有啟用品項"}</option>{names.map(name => <option key={name} value={name} disabled={name.length > 120}>{name}{availableNames.includes(name) ? "" : "（原選品名）"}</option>)}</select></label>
+              <label className="field"><span>品名</span><select required value={productName} onChange={event => changeProduct(event.target.value)}><option value="" disabled>{productNames.isPending ? "正在載入品項…" : names.length ? `請選擇${productCategory === "meal" ? "便當" : "一般商品"}` : productNames.isError ? "品項載入失敗" : "此分類沒有啟用品項"}</option>{names.map(name => <option key={name} value={name} disabled={name.length > 120}>{name}{availableNames.includes(name) ? "" : "（原選品名）"}</option>)}</select></label>
               <label className="field"><span>含稅單價</span><input required inputMode="numeric" type="number" min={1} max={1_000_000} step={1} value={unitPrice} onChange={event => setUnitPrice(event.target.value)} /></label>
               <label className="field"><span>數量</span><input required type="number" min={1} max={999} step={1} value={quantity} onChange={event => setQuantity(event.target.value)} /></label>
               <label className="field"><span>稅別</span><select aria-label="稅別" value={taxType} onChange={event => setTaxType(event.target.value)}><option value="taxable">應稅</option><option value="tax_exempt">免稅</option></select></label>
-              <label className="field"><span>顧客姓名（選填）</span><input maxLength={80} value={customerName} onChange={event => setCustomerName(event.target.value)} /></label>
+              <label className="field"><span>顧客姓名</span><input maxLength={80} value={customerName} onChange={event => setCustomerName(event.target.value)} /></label>
             </div>
             {productNames.isError && <div role="alert"><span>品名清單無法讀取</span><button className="text-link" type="button" onClick={() => void productNames.refetch()}>重試載入品名</button></div>}
             <WalkInInvoiceFields value={preference} onChange={setPreference} />

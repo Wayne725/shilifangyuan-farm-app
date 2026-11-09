@@ -75,6 +75,7 @@ from ..schemas import (
     MemberDirectoryRead,
     MemberDirectoryUpdate,
     MembershipApplicationRead,
+    AdminMembershipApplicationReview,
     MembershipApplicationReview,
     MembershipApplicationSubmit,
     MembershipChargeRead,
@@ -1175,13 +1176,11 @@ async def list_membership_applications(
 )
 async def request_application_supplement(
     application_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫補件原因")
     application = await session.scalar(
         select(MembershipApplication)
         .where(MembershipApplication.id == application_id)
@@ -1238,7 +1237,7 @@ async def _active_fee_schedule(
 )
 async def approve_membership_application(
     application_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -1267,8 +1266,6 @@ async def approve_membership_application(
         raise HTTPException(status_code=409, detail="申請人基本資料尚未齊全，請先要求補件")
     membership = await _ensure_membership_charges(session, application)
     if membership.status == MembershipStatus.SUSPENDED:
-        if not body.reason or not body.reason.strip():
-            raise HTTPException(status_code=422, detail="請填寫恢復社員資格的審核原因")
         membership.status = MembershipStatus.ACTIVE
         membership.suspended_at = None
         membership.status_reason = body.reason
@@ -1306,13 +1303,11 @@ async def approve_membership_application(
 )
 async def reject_membership_application(
     application_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MembershipApplicationRead:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫駁回原因")
     application = await session.scalar(
         select(MembershipApplication)
         .where(MembershipApplication.id == application_id)
@@ -1352,7 +1347,7 @@ async def reject_membership_application(
     ):
         membership.status = MembershipStatus.TERMINATED
         membership.ended_at = reviewed_at
-        membership.status_reason = body.reason or "入社申請未通過"
+        membership.status_reason = body.reason
         for charge in membership.charges:
             if charge.status == MembershipChargeStatus.PENDING:
                 charge.status = MembershipChargeStatus.WAIVED
@@ -1676,12 +1671,10 @@ async def list_memberships(
 async def _transition_membership(
     membership_id: str,
     next_status: MembershipStatus,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User,
     session: AsyncSession,
 ) -> MembershipRead:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫處理原因")
     membership = await session.scalar(
         select(Membership)
         .where(Membership.id == membership_id)
@@ -1733,12 +1726,10 @@ async def _transition_membership(
 )
 async def activate_trainee_membership(
     membership_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipRead:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫轉正原因")
     membership_user_id = await session.scalar(
         select(Membership.user_id).where(Membership.id == membership_id)
     )
@@ -1816,7 +1807,7 @@ async def activate_trainee_membership(
 )
 async def suspend_membership(
     membership_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipRead:
@@ -1835,7 +1826,7 @@ async def suspend_membership(
 )
 async def resign_membership(
     membership_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipRead:
@@ -1854,7 +1845,7 @@ async def resign_membership(
 )
 async def terminate_membership(
     membership_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MembershipRead:
@@ -1872,13 +1863,11 @@ async def terminate_membership(
 )
 async def return_share_capital(
     membership_id: str,
-    body: MembershipApplicationReview,
+    body: AdminMembershipApplicationReview,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    if not body.reason:
-        raise HTTPException(status_code=422, detail="請填寫返還原因")
     membership = await session.get(Membership, membership_id)
     if membership is not None:
         await session.scalar(

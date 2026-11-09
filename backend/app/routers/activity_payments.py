@@ -94,8 +94,6 @@ async def refund_requests(activity_id: str | None = None, status: str | None = N
 
 @router.post("/v1/admin/activity-refund-requests/{request_id}/review", response_model=ActivityRefundRequestRead)
 async def review_refund(request_id: str, body: ActivityRefundReview, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    if not body.reason.strip():
-        raise HTTPException(422, "請填寫審核原因")
     charge_id = await session.scalar(select(ActivityRefundRequest.activity_charge_id).where(ActivityRefundRequest.id == request_id))
     if charge_id is None:
         raise HTTPException(404, "找不到退款申請")

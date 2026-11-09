@@ -308,7 +308,7 @@ function OrderWorkspace() {
               <OrderQuantityAmendment key={selected.id} order={selected} disabled={openPayment.isPending || reopenLogistics.isPending || selectedPaymentIsConfirming} />
               {selected.cancellation_request && <section className="order-cancellation-status" aria-label="退單申請狀態">
                 <strong>{selected.cancellation_request.status === "pending" ? "退單待管理員審核，訂單尚未取消" : selected.cancellation_request.status === "approved" ? "退單已核准" : "退單未核准"}</strong>
-                <p>申請原因：{selected.cancellation_request.reason}</p>
+                {selected.cancellation_request.reason && <p>申請原因：{selected.cancellation_request.reason}</p>}
                 {selected.cancellation_request.review_reason && <p>審核原因：{selected.cancellation_request.review_reason}</p>}
               </section>}
               {actionError && <p className="form-error">{actionError.message}</p>}

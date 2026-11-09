@@ -66,7 +66,7 @@ async function verify(page, state) {
 }
 
 for (const width of [390, 1280]) {
-  test(`${width}px 手機核對只預覽，人工確認後沿用名冊社員編號，不傳手填編號`, async t => {
+  test(`${width}px 手機核對只預覽，核對說明留空仍可勾選確認並沿用名冊編號`, async t => {
     const { page, state } = await fixture(t, width);
     const phone = await openForm(page);
     assert.equal(await page.getByRole('button', { name: confirmButton, exact: true }).isEnabled(), false);
@@ -78,7 +78,6 @@ for (const width of [390, 1280]) {
     assert.deepEqual(state.previews, [{ phone: '+886 900-000-000' }]);
     assert.equal(state.grants.length, 0);
     assert.equal(await page.getByRole('button', { name: confirmButton, exact: true }).isEnabled(), false);
-    await page.getByLabel('核對說明／收據參考', { exact: true }).fill('已人工核對線下資料');
     await page.getByLabel(confirmationLabel, { exact: true }).check();
     await verify(page, state);
     await page.getByRole('button', { name: confirmButton, exact: true }).click();
@@ -87,7 +86,7 @@ for (const width of [390, 1280]) {
     assert.deepEqual(state.grants[0], {
       confirmed_offline: true,
       confirmed_on: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei' }).format(new Date()),
-      reason: '已人工核對線下資料', phone: '+886 900-000-000', roster_entry_id: match.roster_entry_id,
+      reason: '', phone: '+886 900-000-000', roster_entry_id: match.roster_entry_id,
     });
     assert.equal(state.status, 'active');
     await verify(page, state);
