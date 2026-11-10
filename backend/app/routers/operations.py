@@ -219,6 +219,7 @@ async def search_admin_orders(
     response: Response,
     q: str = Query(default="", max_length=120),
     cancellation_pending: bool = False,
+    business_unpaid: bool = False,
     order_category: OrderCategory = "all",
     payment_status: Optional[PaymentStatus] = None,
     limit: int = Query(default=12, ge=1, le=100),
@@ -229,6 +230,9 @@ async def search_admin_orders(
 ) -> AdminOrderPage:
     response.headers["Cache-Control"] = "no-store"
     query = select(Order).where(order_category_condition(order_category))
+    if business_unpaid:
+        query = query.where(Order.meal_booking_type == "business", Order.cancelled_at.is_(None),
+            Order.payment_status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
     if payment_status is not None:
         query = query.where(Order.payment_status == payment_status)
     if cancellation_pending:

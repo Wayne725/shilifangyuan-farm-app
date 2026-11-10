@@ -104,6 +104,6 @@
   gap: .75rem 2rem;
   margin: .75rem 0;
 }
-.admin-order-contact > div { display: grid; gap: .25rem; }
+.admin-order-contact > div { display: grid; gap: .25rem; min-width: 0; max-width: 100%; }
 .admin-order-contact dt { color: var(--color-muted, #536055); font-size: .875rem; }
 .admin-order-contact dd { margin: 0; overflow-wrap: anywhere; }

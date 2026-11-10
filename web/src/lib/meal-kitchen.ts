@@ -1,4 +1,8 @@
 export interface KitchenOrder {
+  meal_booking_type?: "standard" | "business";
+  payment_status?: string;
+  invoice_buyer_tax_id?: string | null;
+  invoice_buyer_name?: string | null;
   id: string;
   order_number: string;
   customer_name: string;
@@ -23,6 +27,6 @@ export interface KitchenList {
   limit: number;
   offset: number;
   meal_quantity: number;
-  products: Array<{ name: string; unit: string; quantity: number }>;
+  products: Array<{ name: string; unit: string; quantity: number; meal_booking_type?: "standard" | "business"; payment_status?: string }>;
   items: KitchenOrder[];
 }

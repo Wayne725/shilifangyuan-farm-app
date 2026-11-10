@@ -31,3 +31,4 @@
 .invoice-carrier-storage p {
   margin: 0;
 }
+.invoice-company-field { display: grid; align-content: start; gap: 8px; min-width: 0; }

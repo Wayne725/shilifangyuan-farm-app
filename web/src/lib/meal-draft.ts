@@ -3,6 +3,7 @@ import { sessionStore } from "./browser-storage";
 import type { MealEvent, PickupLocation } from "./types";
 
 export interface MealDraft {
+  mealBookingType?: "business";
   quantities: Record<string, number>;
   selections: Record<string, Record<string, string[]>>;
   pickupAt: string;
@@ -40,6 +41,7 @@ export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraf
         )]),
     );
     return {
+      ...(value.mealBookingType === "business" ? { mealBookingType: "business" } : {}),
       quantities,
       selections,
       pickupAt: typeof value.pickupAt === "string" ? value.pickupAt : "",
@@ -54,11 +56,12 @@ export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraf
 export function writeMealDraft(eventId: string, draft: MealDraft, storage?: DraftStorage): void {
   try {
     const target = storage ?? sessionStore;
-    if (!draft.pickupAt && !draft.pickupLocationId && !draft.needsUtensils && !Object.values(draft.quantities).some((quantity) => quantity > 0)) {
+    if (draft.mealBookingType !== "business" && !draft.pickupAt && !draft.pickupLocationId && !draft.needsUtensils && !Object.values(draft.quantities).some((quantity) => quantity > 0)) {
       target.removeItem(storageKey(eventId));
       return;
     }
     target.setItem(storageKey(eventId), JSON.stringify({
+      ...(draft.mealBookingType === "business" ? { mealBookingType: "business" } : {}),
       quantities: draft.quantities, selections: draft.selections, pickupAt: draft.pickupAt,
       pickupLocationId: draft.pickupLocationId, needsUtensils: draft.needsUtensils,
     }));
@@ -77,6 +80,7 @@ export function clearMealDraft(eventId: string, storage?: DraftStorage): void {
 
 export function reconcileMealDraft(draft: MealDraft, event: MealEvent, now = Date.now(), locations?: PickupLocation[]): MealDraft {
   const next = emptyMealDraft();
+  if (draft.mealBookingType === "business") next.mealBookingType = "business";
   next.needsUtensils = draft.needsUtensils;
   next.pickupLocationId = locations === undefined || locations.some((location) => location.is_active && location.id === draft.pickupLocationId)
     ? draft.pickupLocationId

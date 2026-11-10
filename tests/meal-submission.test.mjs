@@ -48,3 +48,9 @@ test("新增開票時機沿用舊送單識別，真正改開票日期才更換�
     if (paymentMethod === "cash_on_pickup") assert.notEqual(mealSubmissionFingerprint("buyer", { ...legacy, invoiceHandling: "on_payment" }), legacyStored);
   }
 });
+
+test("一般餐點新預設相容舊識別，會餐不會重用一般訂單", () => {
+  const old = mealSubmissionFingerprint("buyer", input);
+  assert.equal(mealSubmissionFingerprint("buyer", { ...input, mealBookingType: "standard" }), old);
+  assert.notEqual(mealSubmissionFingerprint("buyer", { ...input, mealBookingType: "business", invoiceHandling: "pickup_day" }), old);
+});

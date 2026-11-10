@@ -193,16 +193,22 @@ export function InvoicePreferenceFields({
   sectionNumber = "03",
   showHeading = true,
   allowSavedCarrier = true,
+  lockBuyerType = false,
+  deferErrors = false,
+  submitted = false,
 }: {
   value: InvoicePreference;
   onChange: (value: InvoicePreference) => void;
   sectionNumber?: string;
   showHeading?: boolean;
   allowSavedCarrier?: boolean;
+  lockBuyerType?: boolean;
+  deferErrors?: boolean;
+  submitted?: boolean;
 }) {
   const { user } = useAuth();
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const emailLimit = invoiceEmailLimit(value);
-  const emailIsValid = invoiceEmailIsValid(value);
   const emailErrorId = `invoice-email-error-${sectionNumber}`;
   const emailError = !value.buyerEmail.trim()
     ? "請填寫發票通知 Email"
@@ -211,6 +217,9 @@ export function InvoicePreferenceFields({
       : !emailPattern.test(value.buyerEmail.trim())
         ? "請輸入正確的 Email 格式"
         : "";
+  const showEmailError = Boolean(emailError && (!deferErrors || submitted || touched.email));
+  const taxIdError = value.buyerType === "company" && !isTaiwanTaxId(value.buyerTaxId.trim()) && (submitted || touched.taxId);
+  const nameError = value.buyerType === "company" && !value.buyerName.trim() && (submitted || touched.name);
 
   return (
     <div className="invoice-preference">
@@ -218,7 +227,7 @@ export function InvoicePreferenceFields({
         <span>{sectionNumber}</span>
         <div><p className="eyebrow">CLOUD INVOICE / 電子發票</p><h2>電子發票</h2></div>
       </div>}
-      <div className="invoice-type-switch" role="radiogroup" aria-label="發票身分">
+      {lockBuyerType ? <strong>公司統編發票</strong> : <div className="invoice-type-switch" role="radiogroup" aria-label="發票身分">
         <button
           aria-checked={value.buyerType === "personal"}
           className={value.buyerType === "personal" ? "selected" : ""}
@@ -251,29 +260,41 @@ export function InvoicePreferenceFields({
         >
           <strong>公司統編發票</strong>
         </button>
-      </div>
+      </div>}
 
       <div className="invoice-preference-panel">
         {value.buyerType === "company" && (
           <div className="invoice-company-form">
-            <label>
+            <div className="invoice-company-field"><label>
               統一編號
               <input
                 inputMode="numeric"
                 maxLength={8}
+                required={lockBuyerType}
+                aria-invalid={Boolean(taxIdError)}
+                aria-describedby={taxIdError ? `invoice-tax-id-error-${sectionNumber}` : undefined}
+                onBlur={() => setTouched(current => ({ ...current, taxId: true }))}
                 onChange={(event) => onChange({ ...value, buyerTaxId: event.target.value.replace(/\D/g, "") })}
                 placeholder="8 碼統一編號"
                 value={value.buyerTaxId}
               />
             </label>
-            <label>
+            {taxIdError && <p id={`invoice-tax-id-error-${sectionNumber}`} className="invoice-field-error">請填寫有效的 8 碼統一編號</p>}
+            </div><div className="invoice-company-field"><label>
               公司名稱
               <input
+                required={lockBuyerType}
+                maxLength={60}
+                aria-invalid={Boolean(nameError)}
+                aria-describedby={nameError ? `invoice-name-error-${sectionNumber}` : undefined}
+                onBlur={() => setTouched(current => ({ ...current, name: true }))}
                 onChange={(event) => onChange({ ...value, buyerName: event.target.value })}
                 placeholder="發票抬頭"
                 value={value.buyerName}
               />
             </label>
+            {nameError && <p id={`invoice-name-error-${sectionNumber}`} className="invoice-field-error">請填寫公司名稱</p>}
+            </div>
           </div>
         )}
 
@@ -281,8 +302,9 @@ export function InvoicePreferenceFields({
           <label className="invoice-email-field">
             發票通知 Email
             <input
-              aria-describedby={emailError ? emailErrorId : undefined}
-              aria-invalid={!emailIsValid}
+              aria-describedby={showEmailError ? emailErrorId : undefined}
+              aria-invalid={showEmailError}
+              onBlur={() => setTouched(current => ({ ...current, email: true }))}
               autoComplete="email"
               inputMode="email"
               maxLength={emailLimit}
@@ -293,7 +315,7 @@ export function InvoicePreferenceFields({
               value={value.buyerEmail}
             />
           </label>
-          {emailError && <p id={emailErrorId} className="invoice-field-error">{emailError}</p>}
+          {showEmailError && <p id={emailErrorId} className="invoice-field-error">{emailError}</p>}
         </div>
 
         <InvoiceCarrierFields

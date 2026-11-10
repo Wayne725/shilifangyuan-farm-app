@@ -1,6 +1,7 @@
 import { campaignTimestamp } from "../lib/group-campaigns";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
+import { BusinessMealPaymentStatus } from "../components/BusinessMealPaymentStatus";
 import {
   ArrowClockwise,
   Basket,
@@ -331,7 +332,7 @@ function OrderWorkspace() {
                     {reopenLogistics.isPending ? "準備物流頁…" : "繼續選擇物流"}
                   </button>
                 )}
-                {!selected.group_contract_changed && !selected.group_payment_uncertain && !groupPaymentClosed && !selectedPaymentIsConfirming && selected.available_actions.includes("pay") && (
+                {!selected.group_contract_changed && !selected.group_payment_uncertain && !groupPaymentClosed && !selectedPaymentIsConfirming && selected.meal_booking_type !== "business" && selected.available_actions.includes("pay") && (
                   <button
                     className="button button-primary"
                     type="button"
@@ -343,6 +344,7 @@ function OrderWorkspace() {
                   </button>
                 )}
               </div>
+              {!selectedPaymentIsConfirming && selected.meal_booking_type === "business" && <BusinessMealPaymentStatus order={selected} onPay={() => openPayment.mutate(selected.id)} paying={openPayment.isPending} />}
 
               <OrderCancellationContact />
             </article>

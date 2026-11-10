@@ -3,17 +3,18 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings
+from .business_meals import is_business_meal
 from .integrations.common import IntegrationError
 from .integrations.feie import FeieError, configured_region
 from .integrations.pii_crypto import pii_cipher_from_settings
-from .models import FulfillmentStatus, MemberProfile, Order, OrderFulfillment, PaymentAttempt, PaymentMethod, PaymentStatus, PrintJob, User
+from .models import FulfillmentState, FulfillmentStatus, MemberProfile, Order, OrderFulfillment, PaymentAttempt, PaymentMethod, PaymentStatus, PrintJob, User
 
 
 def printer_fingerprint(settings: Settings) -> str:
@@ -64,7 +65,13 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
             lines.append(line)
 
     add("十里方圓 合作社", "C")
-    add(titles.get(snapshot.get("kind", "order"), "便當訂餐單"), "CB")
+    business = snapshot.get("meal_booking_type") == "business"
+    title = "會餐備餐單" if business and snapshot.get("kind", "order") == "order" else titles.get(snapshot.get("kind", "order"), "便當訂餐單")
+    add(title, "CB")
+    if business:
+        add(f"會餐｜{snapshot['payment_status']}", "BOLD")
+        add(f"統編：{snapshot.get('invoice_buyer_tax_id', '')}")
+        add(f"抬頭：{snapshot.get('invoice_buyer_name', '')}")
     if snapshot.get("kind") == "reference":
         add("請勿製作", "CB")
     if snapshot.get("manual"):
@@ -267,7 +274,36 @@ def order_print_snapshot(order: Order, customer_name: str, contact: dict | None 
                   for item in order.items],
     }
     snapshot.update(receipt_contact(contact or {}, order.contact_email))
+    snapshot.update(business_receipt_fields(order))
     return snapshot
+
+
+def business_receipt_fields(order: Order) -> dict:
+    if order is None or not is_business_meal(order):
+        return {}
+    return {"meal_booking_type": "business", "invoice_buyer_tax_id": order.invoice_buyer_tax_id,
+            "invoice_buyer_name": order.invoice_buyer_name}
+
+
+def business_preparation_window_open(order: Order, *, now: datetime | None = None) -> bool:
+    if order is None or not is_business_meal(order):
+        return False
+    fulfillment = order.__dict__.get("fulfillment")
+    pickup_end = fulfillment.pickup_ends_at if fulfillment is not None else None
+    if pickup_end is None:
+        return False
+    current = now or datetime.now(timezone.utc)
+    pickup_end = pickup_end.replace(tzinfo=timezone.utc) if pickup_end.tzinfo is None else pickup_end
+    return bool(order.payment_method == PaymentMethod.ONLINE and order.cancelled_at is None
+        and order.fulfillment_status not in {FulfillmentStatus.CANCELLED, FulfillmentStatus.PICKED_UP}
+        and fulfillment is not None and fulfillment.status in {
+            FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
+        and current < pickup_end)
+
+
+def business_preparation_print_allowed(order: Order, job: PrintJob | None = None, *, now: datetime | None = None) -> bool:
+    return (business_preparation_window_open(order, now=now) and order.payment_status == PaymentStatus.PENDING
+            and (job is None or (not job.snapshot.get("manual") and not job.reprint_of_id)))
 
 
 async def enqueue_order_print(session: AsyncSession, order: Order, user: User, settings: Settings) -> PrintJob | None:
@@ -379,6 +415,7 @@ def job_read(job: PrintJob, settings: Settings | None = None, order: Order | Non
            "printer_region": job_region(job),
            "awaiting_payment": bool(job.status == "pending" and job.kind in {"order", "amendment"}
                                     and order is not None and not confirmed_print_payment(order)
+                                    and not business_preparation_print_allowed(order, job)
                                     and order.cancelled_at is None and order.fulfillment_status != FulfillmentStatus.CANCELLED),
            "can_query": bool(job.vendor_order_id) and job.status in {"submitted", "unknown"}
                         and (settings is None or job_matches_printer(job, settings))}

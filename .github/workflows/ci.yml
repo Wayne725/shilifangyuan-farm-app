@@ -243,6 +243,7 @@ jobs:
           kill -0 "$commerce_preview_pid"
           node --test --test-concurrency=1 --test-timeout=45000 \
             tests/browser/admin-order-contact.mjs \
+            tests/browser/business-meals.mjs \
             tests/browser/admin-walk-in-sale.mjs \
             tests/browser/manual-invoice-categories.mjs \
             tests/browser/admin-manual-invoice-records.mjs \

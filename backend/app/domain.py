@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
 from .config import get_settings
@@ -60,6 +61,11 @@ def included_tax_amount(subtotal: int, tax_type: TaxType) -> int:
     if tax_type == TaxType.TAX_EXEMPT:
         return 0
     return subtotal * 5 // 105
+
+
+def company_included_tax_amount(taxable_gross: int) -> int:
+    sales = int((Decimal(taxable_gross) / Decimal('1.05')).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+    return taxable_gross - sales
 
 
 def member_sale_is_tax_exempt(
@@ -262,6 +268,9 @@ def confirm_campaign(
 
 
 def meal_payment_window_open(order: Order, now: datetime) -> bool:
+    from .business_meals import is_business_meal, business_payment_blocked_reason
+    if is_business_meal(order):
+        return business_payment_blocked_reason(order, now) is None
     event = order.__dict__.get("meal_event")
     fulfillment = order.__dict__.get("fulfillment")
     booking_deadline = fulfillment.meal_ordering_ends_at if fulfillment is not None else None
@@ -277,6 +286,15 @@ def meal_cancellation_request_allowed(order: Order, now: Optional[datetime] = No
     current = now or utcnow()
     event = order.__dict__.get("meal_event")
     fulfillment = order.__dict__.get("fulfillment")
+    from .business_meals import is_business_meal
+    if is_business_meal(order) and order.payment_status in {PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}:
+        return (
+            order.cancelled_at is None
+            and order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
+            and fulfillment is not None
+            and fulfillment.status in {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
+            and event is not None and event.status != MealEventStatus.CANCELLED
+        )
     return (
         order.sales_channel == SalesChannel.MEAL_PREORDER
         and order.payment_status in {PaymentStatus.PENDING, PaymentStatus.PAID}
@@ -320,7 +338,8 @@ def order_amendment_blocked_reason(order: Order, now: Optional[datetime] = None)
     if any(request.status == "pending" for request in order.__dict__.get("cancellation_requests", [])):
         return "退單申請審核中，無法修改數量"
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
-        if not meal_payment_window_open(order, current):
+        from .business_meals import is_business_meal
+        if not is_business_meal(order) and not meal_payment_window_open(order, current):
             return "已超過餐點訂購期限，無法修改數量"
         from .meal_booking import validate_meal_booking_day
         try:

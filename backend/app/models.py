@@ -1927,6 +1927,8 @@ class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
         CheckConstraint("amount_total >= 0", name="amount_total_nonnegative"),
+        CheckConstraint("meal_booking_type IN ('standard', 'business')", name="meal_booking_type_valid"),
+        CheckConstraint("meal_booking_type != 'business' OR (sales_channel = 'meal_preorder' AND payment_method = 'online' AND invoice_buyer_type = 'company' AND invoice_handling IS NOT NULL AND invoice_handling = 'pickup_day' AND invoice_issue_after IS NOT NULL AND invoice_buyer_tax_id IS NOT NULL AND invoice_buyer_name IS NOT NULL)", name="business_meal_contract"),
         UniqueConstraint("user_id", "client_request_id", name="uq_orders_user_client_request"),
         CheckConstraint(
             "(customer_kind = 'account' AND user_id IS NOT NULL) OR "
@@ -1942,6 +1944,7 @@ class Order(Base):
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     group_contract_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     kitchen_note: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    meal_booking_type: Mapped[str] = mapped_column(String(16), default="standard", server_default="standard", index=True)
     order_number: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     # Legacy compatibility field; new flows use sales_channel.
     order_kind: Mapped[OrderKind] = mapped_column(

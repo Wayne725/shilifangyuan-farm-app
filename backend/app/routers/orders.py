@@ -109,7 +109,9 @@ def order_read(order: Order, viewer_is_admin: bool) -> OrderRead:
     actions = order_available_actions(order, viewer_is_admin)
     if latest and latest.status == "pending":
         actions = [action for action in actions if action != "refund"]
+    from ..business_meals import business_payment_fields
     return OrderRead(
+        **business_payment_fields(order),
         invoice_tax=invoice_tax_summary(order.__dict__.get("invoice")),
         customer_kind=order.customer_kind or "account",
         id=order.id,

@@ -26,7 +26,7 @@ from ..integrations.invoice_service import (
     reconcile_order_invoice,
 )
 from ..integrations.invoice_void import InvoiceVoidError, void_refunded_order_invoice
-from ..models import AdminAudit, Invoice, InvoiceStatus, PaymentStatus, SalesChannel, User
+from ..models import AdminAudit, Invoice, InvoiceBuyerType, InvoiceStatus, PaymentStatus, SalesChannel, User
 from ..invoice_timing import invoice_handling, pickup_invoice_due, cancel_unissued_invoice_jobs
 from ..schemas import InvoicePreferenceInput
 from ..rate_limit import INVOICE_QUERY_RULE, client_key, enforce
@@ -51,6 +51,10 @@ async def arrange_order_invoice(
 ):
     from .orders import load_order
     order = await load_order(session, str(order_id), lock=True, refresh=True)
+    from ..business_meals import is_business_meal
+    if is_business_meal(order):
+        if body.handling != 'pickup_day' or (body.preferences is not None and body.preferences.invoice_buyer_type != InvoiceBuyerType.COMPANY):
+            raise HTTPException(422, '會餐須以公司發票於取餐日開立')
     if not body.confirm_not_invoiced_elsewhere:
         raise HTTPException(422, "請確認此筆未由其他系統開立發票")
     if order.payment_status != PaymentStatus.PAID or order.cancelled_at is not None:

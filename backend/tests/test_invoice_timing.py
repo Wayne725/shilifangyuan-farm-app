@@ -254,7 +254,7 @@ async def test_predeployment_lost_response_replays_explicit_legacy_policy_withou
     old_body = MealOrderCreate(
         items=[{"offering_id": c.event.offerings[0].id, "quantity": 1}],
         contact_email=c.buyer.email, payment_method=payment_method,
-    ).model_dump(mode="json", exclude={"client_request_id", "pickup_location_id", "needs_utensils", "contact_phone", "invoice_handling"})
+    ).model_dump(mode="json", exclude={"client_request_id", "pickup_location_id", "needs_utensils", "contact_phone", "invoice_handling", "meal_booking_type"})
     order.request_fingerprint = hashlib.sha256(json.dumps({"event_id": c.event.id, "body": old_body}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     await c.session.commit()
     for policy in (legacy_policy, None):

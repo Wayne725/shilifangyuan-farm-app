@@ -1,4 +1,5 @@
 import { OrderQuantityAmendment } from "./OrderQuantityAmendment";
+import { BusinessMealPaymentStatus } from "./BusinessMealPaymentStatus";
 import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, Money, QrCode, Receipt } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -72,6 +73,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
       <section className="meal-order-lines" aria-label="訂單餐點明細"><h3>餐點明細</h3><div className="order-lines">{selected.items.map((item, index) => <div key={item.offering_id}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.meal_name}</strong><small>{item.quantity} 份 × {formatMoney(item.unit_price)} · {taxTypeLabel(item.tax_type)}{item.selections.length > 0 && <em>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</em>}</small><b>{formatMoney(item.subtotal)}</b></div>)}</div></section>
       {selected.kitchen_note && <p className="meal-kitchen-note"><strong>餐點備註：</strong>{selected.kitchen_note}</p>}
       {selected.promotion && <p className="meal-order-discount">{selected.promotion.name} · 已折抵 {formatMoney(selected.promotion.discount)}</p>}
+      {selected.meal_booking_type === "business" && <span className="status-chip">會餐 · 統編報帳</span>}
       <p className="meal-order-payment-status" aria-live="polite">付款狀態：<strong>{paymentStatus(selected.payment_status)}</strong></p>
       <OrderQuantityAmendment key={selected.id} order={selected} disabled={pay.isPending} />
       <MealCancellationStatus order={selected} />
@@ -88,6 +90,9 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
 }
 
 function MealOrderState({ order, onPay, paying }: { order: MealOrder; onPay: () => void; paying: boolean }) {
+  if (order.meal_booking_type === "business" && !order.cancelled_at && ["pending", "failed", "expired"].includes(order.payment_status)) {
+    return <BusinessMealPaymentStatus order={order} onPay={onPay} paying={paying} />;
+  }
   if (order.payment_method === "cash_on_pickup" && order.payment_status === "pending" && !order.cancelled_at && !["picked_up", "no_show", "cancelled"].includes(order.fulfillment_status)) {
     return <div className="credential-pending cash-payment-pending"><Money size={34} weight="light" /><h3>預訂成功・待現場付款</h3><p>已保留餐點，尚未確認收款。應付金額 {formatMoney(order.amount_total)}。</p></div>;
   }
@@ -119,7 +124,7 @@ function MealCancellationStatus({ order }: { order: MealOrder }) {
 
 function MealInvoiceStatus({ order }: { order: MealOrder }) {
   const labels: Record<string, string> = { external: "合作社現場開票", not_eligible: "尚未開立", pending: "開立處理中", issued: "已開立", failed: "開立待處理", void_pending: "作廢處理中", voided: "已作廢" };
-  return <section className="invoice-summary-card" aria-label="電子發票"><Receipt size={27} weight="light" /><div><small>電子發票</small><strong>{labels[order.invoice_status] || "狀態確認中"}</strong>{["pending", "failed"].includes(order.invoice_status) && <span>發票正由系統處理，不影響已付款訂單的取餐資格；請勿為了發票重新付款。</span>}</div><dl>{order.invoice_number && <div><dt>發票號碼</dt><dd className="order-number">{order.invoice_number}</dd></div>}{order.invoice_date && <div><dt>開立時間</dt><dd>{formatDateTime(order.invoice_date)}</dd></div>}</dl></section>;
+  return <section className="invoice-summary-card" aria-label="電子發票"><Receipt size={27} weight="light" /><div><small>電子發票</small><strong>{order.invoice_followup_required ? "發票待合作社處理" : labels[order.invoice_status] || "狀態確認中"}</strong>{order.invoice_followup_required ? <span>請聯絡合作社核對取餐日發票。</span> : ["pending", "failed"].includes(order.invoice_status) && <span>發票正由系統處理，不影響已付款訂單的取餐資格；請勿為了發票重新付款。</span>}</div><dl>{order.invoice_number && <div><dt>發票號碼</dt><dd className="order-number">{order.invoice_number}</dd></div>}{order.invoice_date && <div><dt>開立時間</dt><dd>{formatDateTime(order.invoice_date)}</dd></div>}</dl></section>;
 }
 
 function paymentStatus(status: string) { return { pending: "待付款", paid: "已付款", refunded: "已退款", refund_pending: "退款中", late_paid_refund_required: "付款晚到，退款處理中", expired: "已逾期", failed: "付款失敗" }[status] || status; }

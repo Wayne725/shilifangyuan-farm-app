@@ -10,13 +10,14 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from .domain import aware, included_tax_amount, order_amendment_blocked_reason, order_shipping_tax_type
+from .domain import aware, company_included_tax_amount, included_tax_amount, order_amendment_blocked_reason, order_shipping_tax_type
+from .business_meals import is_business_meal
 from .integrations.payment_service import lock_order_payment_subject, release_attempt_reservations
 from .models import (
     AdminAudit, FulfillmentStatus, GroupBundle, GroupBundleItem, InventoryReservation, MealEventOffering,
     Order, OrderAmendment, OrderFulfillment, OrderItem, PaymentAttempt,
     PaymentMethod, PaymentStatus, PointTransaction, Product, Promotion, Refund,
-    ReservationStatus, SalesChannel, TargetType, UserRole,
+    ReservationStatus, SalesChannel, TargetType, TaxType, UserRole,
 )
 from .platform_settings import platform_settings
 from .promotions import lock_promotions
@@ -48,6 +49,8 @@ def _quantities(order, body):
         raise HTTPException(422, "請提供此訂單全部品項，每個品項限填一次")
     if not any(requested.values()):
         raise HTTPException(422, "訂單至少保留一個品項；整單取消請聯絡管理員")
+    if is_business_meal(order) and sum(requested.values()) < 2:
+        raise HTTPException(422, "會餐至少需訂 2 份")
     maximum = 99 if order.sales_channel == SalesChannel.MEAL_PREORDER else 999
     if any(quantity > maximum for quantity in requested.values()):
         raise HTTPException(422, f"每個品項數量不可超過 {maximum}")
@@ -150,14 +153,14 @@ async def _check_resources(session, order, quantities, now):
                      if isinstance(resource, MealEventOffering) else resource.stock_quantity)
         if requested > remaining + owned[source_id]:
             raise HTTPException(409, "品項剩餘數量不足，請減少數量後重新確認")
-    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP or is_business_meal(order):
         actual = defaultdict(int)
         for row in active:
             if row.payment_attempt_id is not None or aware(row.expires_at) <= now:
-                raise HTTPException(409, "現場付款保留紀錄已過期或不一致")
+                raise HTTPException(409, "餐點保留紀錄已過期或不一致")
             actual[row.source_meal_offering_id] += row.quantity
         if dict(actual) != dict(old_by_source):
-            raise HTTPException(409, "現場付款保留數量不完整，請由管理員查核")
+            raise HTTPException(409, "餐點保留數量不完整，請由管理員查核")
 
 
 async def _promotion_quote(session, order, subtotal, now):
@@ -202,8 +205,14 @@ async def _quote(session, order, quantities, now):
     if subtotal - discount + shipping <= 0:
         raise HTTPException(422, "修改後訂單金額必須大於零，請由管理員處理零元訂單")
     tax_by_id = {item.id: item.tax_type for item in order.items}
-    tax = sum(included_tax_amount(line.subtotal, tax_by_id[line.order_item_id]) for line in lines)
-    tax += included_tax_amount(shipping, order_shipping_tax_type(order))
+    if is_business_meal(order):
+        taxable_gross = sum(line.subtotal for line in lines if tax_by_id[line.order_item_id] == TaxType.TAXABLE)
+        if order_shipping_tax_type(order) == TaxType.TAXABLE:
+            taxable_gross += shipping
+        tax = company_included_tax_amount(taxable_gross)
+    else:
+        tax = sum(included_tax_amount(line.subtotal, tax_by_id[line.order_item_id]) for line in lines)
+        tax += included_tax_amount(shipping, order_shipping_tax_type(order))
     return OrderQuantityAmendmentQuote(order_id=order.id, expected_revision=order.revision,
         previous_total=order.amount_total, amount_total=subtotal - discount + shipping, tax_amount=tax,
         shipping_fee=shipping, discount_amount=discount, items=lines, promotion=promotion)
@@ -256,7 +265,7 @@ async def prepare_quantity_amendment(session, order_id, body, user, settings, *,
         from .sales_scope import require_sales_scope_allows
         require_sales_scope_allows(settings, sales_channel=order.sales_channel,
             fulfillment_method=order.fulfillment_method, meal_event_id=order.meal_event_id)
-    if order.payment_method != PaymentMethod.CASH_ON_PICKUP and any(
+    if order.payment_method != PaymentMethod.CASH_ON_PICKUP and not is_business_meal(order) and any(
         row.status == ReservationStatus.ACTIVE and row.payment_attempt_id is None for row in order.reservations
     ):
         raise HTTPException(409, "訂單庫存保留缺少付款紀錄，請由管理員查核")
@@ -267,12 +276,13 @@ async def prepare_quantity_amendment(session, order_id, body, user, settings, *,
     if body.expected_total != quote.amount_total:
         raise HTTPException(409, detail={"message": "優惠或運費已變動，請重新確認總額", "quote": quote.model_dump(mode="json")})
     before = order_snapshot(order)
-    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP or is_business_meal(order):
         await _adjust_cash_reservations(session, order, quantities, now)
-    else:
+    if order.payment_method != PaymentMethod.CASH_ON_PICKUP:
         for attempt in order.payment_attempts:
             if attempt.superseded_at is None:
-                await release_attempt_reservations(session, attempt)
+                if not is_business_meal(order):
+                    await release_attempt_reservations(session, attempt)
                 attempt.superseded_at = now
                 if attempt.status == PaymentStatus.PENDING:
                     attempt.status = PaymentStatus.EXPIRED

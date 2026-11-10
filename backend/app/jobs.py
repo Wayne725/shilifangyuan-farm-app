@@ -179,7 +179,7 @@ async def reconcile_once(
         ("campaigns", lambda: _reconcile_campaigns(session, active_settings, current, limit)),
         ("member_proposals", lambda: _reconcile_member_proposals(session, current, limit)),
         ("activities", lambda: _reconcile_activities(session, current, limit)),
-        ("meal_events", lambda: _reconcile_meal_events(session, current, limit)),
+        ("meal_events", lambda: _reconcile_meal_operations(session, active_settings, current, limit)),
         ("meal_event_generation", lambda: generate_scheduled_meal_events(session, current, limit=limit)),
         ("outbox", lambda: _process_outbox(session, active_settings, current, limit)),
     ]
@@ -834,6 +834,16 @@ def meal_event_candidates(now: datetime):
     )
 
 
+async def _reconcile_meal_operations(
+    session: AsyncSession, settings: Settings, now: datetime, limit: int,
+) -> int:
+    from .business_meal_reminders import enqueue_business_payment_reminders
+    changed = await _reconcile_meal_events(session, now, limit)
+    await enqueue_business_payment_reminders(session, settings, now, limit)
+    await session.commit()
+    return changed
+
+
 async def _reconcile_meal_events(
     session: AsyncSession,
     now: datetime,
@@ -1093,6 +1103,18 @@ async def _process_outbox(
             await session.commit()
             failed += 1
             continue
+        if event.event_type == "send_email" and event.payload.get("event_type") == "meal.business_payment_reminder":
+            from .business_meal_reminders import queued_reminder_is_current
+            if not await queued_reminder_is_current(session, event.payload, now):
+                event.status = OutboxStatus.COMPLETED
+                event.processed_at = now
+                event.last_error = None
+                event.payload = {**event.payload, "email_delivery": {
+                    "state": "suppressed", "reason": "business_reminder_no_longer_due",
+                }}
+                await session.commit()
+                completed += 1
+                continue
         event.status = OutboxStatus.PROCESSING
         event.attempts += 1
         event.available_at = now

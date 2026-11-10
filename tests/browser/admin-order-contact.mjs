@@ -12,16 +12,16 @@ const order = {
   id: 'contact-order', order_number: 'O2030010201', sales_channel: 'regular', fulfillment_method: 'coop_pickup',
   payment_method: 'online', payment_status: 'paid', invoice_status: 'issued', fulfillment_status: 'pending_confirmation',
   amount_total: 120, tax_amount: 6, created_at: '2030-01-02T01:00:00Z', available_actions: [],
-  customer_name: '隔離聯絡人', contact_phone: '0912345678', contact_phone_status: 'available',
+  customer_name: '隔離聯絡人', contact_phone: '0912345678', contact_phone_status: 'available', contact_email: 'contact@example.test',
   items: [{ id: 'item', product_name: '隔離白米', quantity: 1, unit_label: '袋', unit_price: 120, subtotal: 120, tax_type: 'taxable' }],
 };
 
-async function fixture(t, { width = 1280, channel = 'regular', lateResponse = false } = {}) {
+async function fixture(t, { width = 1280, channel = 'regular', lateResponse = false, contactEmail = order.contact_email } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
   const state = { status: 200, reads: [], unknown: [], errors: [], consoleErrors: [], apiRequests: [], release: null };
-  const payload = { items: [{ ...order, sales_channel: channel }], total: 1, limit: 12, offset: 0 };
+  const payload = { items: [{ ...order, sales_channel: channel, contact_email: contactEmail }], total: 1, limit: 12, offset: 0 };
   if (lateResponse) await context.addInitScript(() => {
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -92,16 +92,18 @@ async function assertNoPrivateContact(page, state, loggedOut = false) {
   }
   assert.equal(await page.getByText(order.customer_name, { exact: true }).count(), 0);
   assert.equal(await page.getByRole('link', { name: order.contact_phone, exact: true }).count(), 0);
+  assert.equal(await page.getByRole('link', { name: order.contact_email, exact: true }).count(), 0);
   assert.equal(await page.getByRole('navigation', { name: '訂單分頁' }).count(), 0);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
 }
 
 for (const [channel, width] of [['regular', 1280], ['meal_preorder', 390]]) {
-  test(`${channel} 後台顯示合成訂購者與電話，窄螢幕不溢出`, async t => {
+  test(`${channel} 後台顯示合成訂購者、電話與 Email，窄螢幕不溢出`, async t => {
     const { page, state } = await fixture(t, { channel, width });
     assert.equal(await page.getByText(order.customer_name, { exact: true }).count(), 1);
     assert.equal(await page.getByRole('link', { name: order.contact_phone, exact: true }).getAttribute('href'), `tel:${order.contact_phone}`);
+    assert.equal(await page.getByRole('link', { name: order.contact_email, exact: true }).getAttribute('href'), `mailto:${order.contact_email}`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     assert.deepEqual(state.errors, []);
     assert.deepEqual(state.unknown, []);
@@ -117,6 +119,17 @@ for (const status of [401, 403]) {
     assert.ok(state.reads.length >= 2);
   });
 }
+
+test('缺少 Email 顯示未提供，長 Email 在手機寬度仍可閱讀', async t => {
+  const empty = await fixture(t, { width: 390, contactEmail: null });
+  assert.equal(await empty.page.locator('.admin-order-contact > div').filter({ has: empty.page.locator('dt', { hasText: /^Email$/ }) }).locator('dd').innerText(), '未提供');
+  const email = `${'a'.repeat(64)}@${'b'.repeat(63)}.example.test`;
+  const long = await fixture(t, { width: 390, contactEmail: email });
+  assert.equal(await long.page.getByRole('link', { name: email, exact: true }).getAttribute('href'), `mailto:${email}`);
+  assert.equal(await long.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(empty.state.errors, []);
+  assert.deepEqual(long.state.errors, []);
+});
 
 test('權限拒絕後，忽略取消的舊 200 回應不能恢復個資', async t => {
   const { page, state } = await fixture(t, { lateResponse: true });
@@ -141,6 +154,7 @@ test('暫時 503 不永久封鎖管理權限，恢復後可重新搜尋', async 
   await focusStaleQuery(page);
   await page.getByRole('heading', { name: '訂單資料無法讀取', exact: true }).waitFor();
   assert.equal(await page.getByRole('link', { name: order.contact_phone, exact: true }).count(), 0);
+  assert.equal(await page.getByRole('link', { name: order.contact_email, exact: true }).count(), 0);
   assert.equal(await page.getByRole('heading', { name: '管理權限待重新驗證', exact: true }).count(), 0);
   state.status = 200;
   await page.getByRole('searchbox', { name: '搜尋訂單', exact: true }).fill('recovered');

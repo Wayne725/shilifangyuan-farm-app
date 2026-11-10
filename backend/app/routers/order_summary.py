@@ -35,7 +35,7 @@ async def get_order_summary(
 
 def _print_pages(report: dict, settings: Settings, request_id: str) -> list[str]:
     if not report["summary"]["order_count"]:
-        raise HTTPException(422, "沒有可列印的已付款訂單")
+        raise HTTPException(422, "沒有可列印的備餐訂單" if report["filters"].get("include_unpaid_business") else "沒有可列印的已付款訂單")
     try:
         return format_summary_pages(report, summary_generated_at(), request_id,
             width=settings.printer_line_width, dry_run=settings.printer_dry_run)

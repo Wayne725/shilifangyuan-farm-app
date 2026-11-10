@@ -162,6 +162,11 @@ export interface OrderQuantityAmendmentQuote {
 }
 
 export interface Order {
+  meal_booking_type?: "standard" | "business";
+  payment_opens_at?: string | null;
+  payment_closes_at?: string | null;
+  payment_followup_required?: boolean;
+  invoice_followup_required?: boolean;
   revision?: number;
   amendment_blocked_reason?: string | null;
   amendments?: OrderAmendment[];
@@ -638,6 +643,11 @@ export interface MealAdminOrderPage {
 }
 
 export interface MealOrder {
+  meal_booking_type?: "standard" | "business";
+  payment_opens_at?: string | null;
+  payment_closes_at?: string | null;
+  payment_followup_required?: boolean;
+  invoice_followup_required?: boolean;
   revision?: number;
   amendment_blocked_reason?: string | null;
   amendments?: OrderAmendment[];
