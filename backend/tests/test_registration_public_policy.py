@@ -74,3 +74,24 @@ def test_incomplete_information_cannot_be_published(field, value):
     data = information(); data[field] = value
     with pytest.raises(ValidationError):
         PublicInformation.model_validate(data)
+
+
+async def test_unpublish_edit_republish_cannot_rebind_old_policy_version(database_session):
+    from app.models import PublicPolicyVersion
+    admin = User(email='policy-admin@example.com', display_name='隔離管理員', password_hash='unused', user_role=UserRole.ADMIN)
+    database_session.add(admin)
+    await database_session.commit()
+    async with api_test_context(database_session, [platform_router], settings=make_test_settings()) as client:
+        async def save(version, value):
+            return await client.put('/v1/admin/platform', headers=auth_headers(admin), json={'expected_version': version, 'public_information': value})
+        original = information()
+        assert (await save(0, original)).status_code == 200
+        draft = dict(original, published=False, privacy='變更的草稿內容')
+        assert (await save(1, draft)).status_code == 200
+        blocked = await save(2, dict(draft, published=True))
+        assert blocked.status_code == 409
+        assert (await database_session.get(PublicPolicyVersion, 'test-v1')).content['privacy'] == original['privacy']
+        v2 = dict(draft, published=True, policy_version='test-v2')
+        assert (await save(2, v2)).status_code == 200
+        assert (await save(3, dict(v2, policy_version='test-v1'))).status_code == 409
+        assert (await client.get('/v1/platform')).json()['public_information']['policy_version'] == 'test-v2'

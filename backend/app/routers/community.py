@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..admin_explanations import AdminExplanation
+from ..catalog_visibility import CatalogVisibilityUpdate, update_catalog_visibility
 from .. import activity_payments as activity_service
 from ..auth import (
     get_current_user,
@@ -153,6 +154,7 @@ def _activity_read(
         None,
     )
     return ActivityRead(
+        is_public=activity.is_public,
         id=activity.id,
         member_price=activity.member_price, non_member_price=activity.non_member_price,
         payment_window_hours=activity.payment_window_hours, updated_at=activity_service.aware(activity.updated_at),
@@ -263,7 +265,7 @@ async def list_activities(
     activities = (
         await session.scalars(
             select(Activity)
-            .where(Activity.status == ActivityStatus.PUBLISHED)
+            .where(Activity.status == ActivityStatus.PUBLISHED, Activity.is_public.is_(True))
             .options(*activity_service.activity_options())
             .order_by(Activity.starts_at)
         )
@@ -281,12 +283,27 @@ async def get_activity(
     session: AsyncSession = Depends(get_session),
 ) -> ActivityRead:
     activity = await _load_activity(session, activity_id)
-    if activity is None or (
-        activity.status != ActivityStatus.PUBLISHED
-        and (user is None or activity.created_by_id != user.id)
-    ):
+    if activity is None:
+        raise HTTPException(status_code=404, detail="找不到活動")
+    privileged = user is not None and (user.user_role == UserRole.ADMIN or activity.created_by_id == user.id)
+    participates = user is not None and any(row.user_id == user.id for row in activity.registrations)
+    if (not activity.is_public and not (privileged or participates)
+        or activity.status != ActivityStatus.PUBLISHED and not (privileged or participates)):
         raise HTTPException(status_code=404, detail="找不到活動")
     return _activity_read(activity, user)
+
+
+@community_router.patch('/v1/admin/activities/{activity_id}/visibility', response_model=ActivityRead)
+async def update_activity_visibility(
+    activity_id: str, body: CatalogVisibilityUpdate,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+) -> ActivityRead:
+    activity = await _load_activity(session, activity_id, for_update=True)
+    if activity is None:
+        raise HTTPException(404, '找不到活動')
+    update_catalog_visibility(session, activity, body, admin, 'activity')
+    await session.commit()
+    return _activity_read(activity, admin)
 
 
 @community_router.post(

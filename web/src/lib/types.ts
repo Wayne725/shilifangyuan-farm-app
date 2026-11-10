@@ -256,6 +256,7 @@ export interface PickupLocation {
 }
 
 export interface Activity {
+  is_public?: boolean;
   id: string;
   created_by_id: string;
   title: string;
@@ -420,6 +421,7 @@ export interface MembershipApplication {
 }
 
 export interface GroupCampaign {
+  is_public?: boolean;
   id: string;
   source_proposal_id?: string | null;
   title: string;

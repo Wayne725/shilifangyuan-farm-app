@@ -1266,6 +1266,7 @@ class GroupCampaign(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     source_proposal_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("vote_proposals.id", ondelete="SET NULL"),
         nullable=True,
@@ -1359,6 +1360,7 @@ class Activity(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     created_by_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
@@ -2844,6 +2846,16 @@ class AdminAudit(Base):
     )
 
     actor: Mapped[User] = relationship()
+
+
+class PublicPolicyVersion(Base):
+    __tablename__ = 'public_policy_versions'
+
+    version: Mapped[str] = mapped_column(String(40), primary_key=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    content: Mapped[dict] = mapped_column(JSON)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_by_id: Mapped[str] = mapped_column(ForeignKey('users.id', ondelete='RESTRICT'))
 
 
 class SystemSetting(Base):

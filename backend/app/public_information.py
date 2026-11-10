@@ -41,3 +41,22 @@ def require_registration_consent(body, information: PublicInformation) -> dict:
     if not body.data_consent or body.policy_version != information.policy_version:
         raise HTTPException(422, '請閱讀並同意目前版本的個資告知與服務條款')
     return {'data_consent_version': information.policy_version, 'data_consented_at': datetime.now(timezone.utc)}
+
+
+async def preserve_published_policy(session, information: PublicInformation, admin_id: str) -> None:
+    if not information.published:
+        return
+    import hashlib
+    import json
+    from fastapi import HTTPException
+    from .models import PublicPolicyVersion
+
+    content = information.model_dump(exclude={'published'})
+    digest = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+    previous = await session.get(PublicPolicyVersion, information.policy_version)
+    if previous is not None:
+        if previous.content_hash != digest:
+            raise HTTPException(409, '此政策版本已公開不同內容，請使用新版本')
+        return
+    session.add(PublicPolicyVersion(version=information.policy_version, content_hash=digest, content=content, published_by_id=admin_id))
+    await session.flush()

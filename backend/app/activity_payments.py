@@ -192,6 +192,8 @@ async def register(session, activity_id, user, contact=None):
             await promote_waitlist(session, activity, now)
         await session.commit()
         return registration_read(existing, activity)
+    if not activity.is_public:
+        raise HTTPException(404, '找不到活動')
     if aware(activity.registration_deadline) <= now:
         raise HTTPException(409, "活動報名已截止")
     name = contact.contact_name.strip() if contact else user.display_name

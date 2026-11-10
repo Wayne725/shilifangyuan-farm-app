@@ -11,6 +11,7 @@ from ..config import Settings, get_settings
 from ..database import get_session
 from ..models import AdminAudit, SystemSetting, User
 from ..platform_settings import PLATFORM_KEY, PlatformSettings, platform_settings
+from ..public_information import PublicInformation, preserve_published_policy
 from ..sales_scope import sales_capabilities
 
 platform_router = APIRouter(tags=["platform"])
@@ -55,13 +56,9 @@ async def update_platform(body: PlatformUpdate, admin: User = Depends(require_ad
     if body.expected_version is not None and body.expected_version != version:
         raise HTTPException(status_code=409, detail="設定已由其他操作更新，請重新讀取後再儲存")
     previous = PlatformSettings.model_validate(row.value).model_dump()
+    await preserve_published_policy(session, PublicInformation.model_validate(previous['public_information']), admin.id)
     if 'public_information' in body.model_fields_set:
-        old_information = previous['public_information']
-        new_information = body.public_information.model_dump()
-        if (old_information['policy_version'] and new_information['published']
-            and {k: v for k, v in old_information.items() if k != 'published'} != {k: v for k, v in new_information.items() if k != 'published'}
-            and old_information['policy_version'] == new_information['policy_version']):
-            raise HTTPException(409, '公開內容已修改，請更新政策版本後再儲存')
+        await preserve_published_policy(session, body.public_information, admin.id)
     row.value = {**body.model_dump(exclude={"reason", "expected_version"}), "_version": version + 1}
     for field in ('support_phone', 'public_information'):
         if field not in body.model_fields_set:

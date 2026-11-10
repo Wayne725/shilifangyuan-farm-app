@@ -559,6 +559,7 @@ class CampaignReject(BaseModel):
 
 
 class CampaignRead(ApiModel):
+    is_public: bool = True
     id: str
     source_proposal_id: Optional[str]
     target_type: TargetType
@@ -1301,6 +1302,7 @@ class AdminActivityRegistrationRead(ActivityRegistrationRead):
 
 
 class ActivityRead(ApiModel):
+    is_public: bool = True
     member_price: int = 0
     non_member_price: int = 0
     payment_window_hours: int = 24

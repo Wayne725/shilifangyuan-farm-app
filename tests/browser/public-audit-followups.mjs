@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const { chromium, webkit } = createRequire(import.meta.url)('playwright');
+const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4197');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || target.pathname !== '/') throw new Error('Use an isolated local origin');
 const base = target.origin;
@@ -11,7 +12,7 @@ const activity = { id: 'synthetic-activity', title: '合成社區走讀', descri
 const product = { id: 'synthetic-product', name: '合成醬油', description: '隔離商品', supplier_name: '隔離供應者', category: '加工品', sku: 'INTERNAL-SKU-PRIVATE', product_number: 'INTERNAL-ITEM-123', member_price: 100, nonmember_price: 120, tax_type: 'taxable', unit: '瓶', is_active: true, daily_sales_enabled: true, image_url: '', stock_quantity: 20 };
 
 async function fixture(t, role = null) {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' });
   const state = { role, writes: [], unknown: [], errors: [] };

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const { chromium, webkit } = createRequire(import.meta.url)('playwright');
+const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4197');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname) || !['http:', 'https:'].includes(target.protocol)
   || target.pathname !== '/' || target.username || target.password || target.search || target.hash) {
@@ -39,7 +40,7 @@ async function fixture(t, width, { conflict = false, score = 80, member = false,
   const viewConfig = structuredClone(config);
   viewConfig.declaration.admission_fee_amount = admissionFee;
   viewConfig.declaration.share_unit_amount = shareUnit;
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block' });
   const state = { round: null, history: [], writes: [], unknown: [], errors: [], reads: 0, conflict, denyReads: false, denyMutation: false };

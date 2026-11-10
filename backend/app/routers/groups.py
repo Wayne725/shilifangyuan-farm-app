@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..auth import (
+    get_optional_user,
     get_current_user,
     membership_type_for_user,
     require_admin,
@@ -62,7 +63,9 @@ from ..models import (
     TaxType,
     TargetType,
     User,
+    UserRole,
 )
+from ..catalog_visibility import CatalogVisibilityUpdate, update_catalog_visibility
 from ..schemas import (
     CampaignCreate,
     CampaignDecision,
@@ -94,6 +97,7 @@ def campaign_read(campaign: GroupCampaign) -> CampaignRead:
     now = datetime.now(timezone.utc)
     blocked_reason = review_blocked_reason(campaign, now)
     return CampaignRead(
+        is_public=campaign.is_public,
         id=campaign.id,
         source_proposal_id=campaign.source_proposal_id,
         target_type=campaign.target_type,
@@ -233,10 +237,17 @@ async def load_campaign(
 
 @groups_router.get("", response_model=List[CampaignRead])
 async def list_campaigns(
+    include_hidden: bool = False,
+    user: Optional[User] = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> List[CampaignRead]:
+    if include_hidden and (user is None or user.user_role != UserRole.ADMIN):
+        raise HTTPException(401 if user is None else 403, '僅管理員可查詢未公開共同購買')
+    query = select(GroupCampaign).order_by(GroupCampaign.created_at.desc(), GroupCampaign.id.desc())
+    if not include_hidden:
+        query = query.where(GroupCampaign.is_public.is_(True))
     campaigns = await session.scalars(
-        select(GroupCampaign).order_by(GroupCampaign.created_at.desc(), GroupCampaign.id.desc())
+        query
     )
     return [campaign_read(campaign) for campaign in campaigns]
 
@@ -244,11 +255,31 @@ async def list_campaigns(
 @groups_router.get("/{campaign_id}", response_model=CampaignRead)
 async def get_campaign(
     campaign_id: str,
+    user: Optional[User] = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
 ) -> CampaignRead:
     campaign = await load_campaign(session, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
+    if not campaign.is_public and (user is None or user.user_role != UserRole.ADMIN):
+        own_order = None if user is None else await session.scalar(
+            select(Order.id).where(Order.group_campaign_id == campaign.id, Order.user_id == user.id).limit(1)
+        )
+        if own_order is None:
+            raise HTTPException(404, '找不到共同購買')
+    return campaign_read(campaign)
+
+
+@groups_router.patch('/{campaign_id}/admin/visibility', response_model=CampaignRead)
+async def update_campaign_visibility(
+    campaign_id: str, body: CatalogVisibilityUpdate,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+) -> CampaignRead:
+    campaign = await load_campaign(session, campaign_id, lock=True)
+    if campaign is None:
+        raise HTTPException(404, '找不到共同購買')
+    update_catalog_visibility(session, campaign, body, admin, 'group_campaign')
+    await session.commit()
     return campaign_read(campaign)
 
 
@@ -430,7 +461,7 @@ async def quote_group_join(
     session: AsyncSession = Depends(get_session),
 ) -> GroupJoinQuoteRead:
     campaign = await load_campaign(session, campaign_id)
-    if campaign is None:
+    if campaign is None or not campaign.is_public:
         raise HTTPException(status_code=404, detail="找不到共同購買")
     return await _group_join_quote(session, campaign, body, user)
 
@@ -571,7 +602,7 @@ async def join_campaign(
     )
     await require_accepting_orders(session)
     campaign = await load_campaign(session, campaign_id, lock=True)
-    if campaign is None:
+    if campaign is None or not campaign.is_public:
         raise HTTPException(status_code=404, detail="找不到共同購買")
     snapshot = await target_order_snapshot(
         session, campaign.target_type, campaign.target_id, lock=True
