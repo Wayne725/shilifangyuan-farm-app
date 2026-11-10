@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.jobs import reconcile_once
 from app.meal_schedules import TAIPEI, generate_scheduled_meal_events
 from app.models import Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User, UserRole
+from app.routers import meals as meals_module
 from app.routers.meals import meals_router
 from app.schemas import MealScheduleInput
 from tests.support import api_test_context, auth_headers, make_test_settings, tomorrow_meal_timeline
@@ -63,7 +64,16 @@ async def test_schedules_require_admin_and_default_to_disabled(schedule_context)
 
 
 @pytest.mark.asyncio
-async def test_enabled_templates_create_drafts_until_explicit_auto_publish(schedule_context):
+async def test_enabled_templates_create_drafts_until_explicit_auto_publish(schedule_context, monkeypatch):
+    # 固定在週一：advance_days 3→4 正好多出一個工作日，不受實際執行日（遇週末會跳過）影響。
+    fixed_now = datetime(2027, 3, 8, 2, 0, tzinfo=timezone.utc)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now.astimezone(tz) if tz else fixed_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(meals_module, "datetime", FixedDatetime)
     client, session, admin, buyer, meal = schedule_context
     created = await client.post("/v1/admin/meal-schedules", json=schedule_body(meal.id, enabled=True, weekdays=list(range(7))), headers=auth_headers(admin))
     assert created.status_code == 201, created.text
