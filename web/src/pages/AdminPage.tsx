@@ -155,6 +155,7 @@ export function AdminPage() {
           <dl className="admin-order-contact" aria-label="訂購者資訊">
             <div><dt>訂購者</dt><dd>{order.customer_name || "未提供"}</dd></div>
             <div><dt>聯絡電話</dt><dd>{order.contact_phone_status === "available" && order.contact_phone ? <a href={`tel:${order.contact_phone}`}>{order.contact_phone}</a> : order.contact_phone_status === "unavailable" ? "暫時無法讀取" : "未提供"}</dd></div>
+            <div><dt>Email</dt><dd>{order.contact_email ? <a href={`mailto:${order.contact_email}`}>{order.contact_email}</a> : "未提供"}</dd></div>
           </dl>
           <div className="operation-state">
             <OrderStatusBadge kind="payment" status={order.payment_status} />
