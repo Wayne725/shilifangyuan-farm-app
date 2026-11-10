@@ -133,7 +133,8 @@ jobs:
 
   browser-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 安裝 WebKit 系統套件在 runner 較慢時可達 5 分鐘以上，測試步驟仍各自保留較短時限。
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
