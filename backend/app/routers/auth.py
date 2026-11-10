@@ -278,7 +278,6 @@ async def register_existing_member(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    consent = require_registration_consent(body, (await platform_settings(session)).public_information)
     await consume_credential_quota(session,
         client_key(
             request,
@@ -287,6 +286,7 @@ async def register_existing_member(
         ),
         REGISTER_RULE, settings,
     )
+    consent = require_registration_consent(body, (await platform_settings(session)).public_information)
     try:
         cipher = pii_cipher_from_settings(settings)
         roster_entry = await verified_roster_entry(
