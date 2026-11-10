@@ -96,3 +96,12 @@
 - 上傳檔：[純文字 PNG](design/line-richmenu-text-only.png)，2500 × 843 px，使用 Heiti TC 字型排版。
 - 可編輯來源：[SVG](design/line-richmenu-text-only.svg)。
 - 儲存證據：`/Users/liuweiwei/.codex/visualizations/2026/10/21/01a15e97-6c04-7be3-9d92-b836ffce1c8b/line-richmenu-text-only-saved.png`。
+
+## 2026-10-26 使用者提供的新圖（最新設定）
+
+使用者要求套用朋友繪製的 `IMG_9027.PNG`。已在@939gjjuy原選單20138677上傳2500×843原圖並儲存；新圖順序為左側非社員、右側社員，因此同步交換A/B動作標籤與網址：
+
+- A左側非社員：`https://shilifangyuan.com/register?intent=nonmember&return_to=%2Fshop&remember_me=true`。
+- B右側社員：`https://shilifangyuan.com/register?intent=existing_member&return_to=%2Fshop&remember_me=true`。
+
+儲存後回一覽的「目前顯示的選單」及詳情核對新圖與兩個連結。沿用原雙區版型、使用期間與預設顯示。手機實際點擊與真人首次OAuth尚待驗收；未發送訊息。本節優先於上方舊的左右位置與圖片記錄。證據：`outputs/LINE新圖選單已儲存.jpg`，完整紀錄：`outputs/LINE新圖選單更新紀錄.md`。
