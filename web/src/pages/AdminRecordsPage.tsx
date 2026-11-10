@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 import { apiFetch, downloadApiFile, formatMoney } from "../lib/api";
 import { financeDateTime } from "../lib/meal-finance";
 import "./AdminRecordsPage.css";
+import { OptionalMark } from "../components/OptionalMark";
 
 type Person = { id: string; source: "membership" | "roster"; member_number: string; legal_name: string; email: string; phone: string; status: string; share_certificate_number?: string; share_count?: number; share_capital_amount?: number; share_paid_on?: string };
 type Receipt = { id: string; source: "online" | "offline"; member_number: string; name: string; kind: string; amount: number; received: number; refunded: number; net: number; status: string; paid_at?: string; receipt_number?: string; payment_method: string; reference?: string };
@@ -46,7 +47,7 @@ export function AdminRecordsPage() {
       </div>{tab !== "points" && total > 30 && <nav className="admin-pagination" aria-label="帳冊分頁"><button className="button button-quiet" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一頁</button><span>{Math.floor(offset / 30) + 1}／{Math.ceil(total / 30)}</span><button className="button button-quiet" disabled={offset + 30 >= total} onClick={() => setOffset(offset + 30)}>下一頁</button></nav>}
     </>}
     {target && <ReceiptForm target={target} onClose={() => setTarget(null)} onSaved={() => {setTarget(null); setTab("payments"); setOffset(0); void client.invalidateQueries({queryKey: ["membership-payments"]});}}/>}
-    {voidTarget && <form className="admin-records-form" onSubmit={event => {event.preventDefault(); voidReceipt.mutate();}}><h2>作廢線下收款紀錄</h2><p>{voidTarget.receipt_number} · {formatMoney(voidTarget.amount)}</p><label className="field"><span>作廢原因</span><input maxLength={1000} value={voidReason} onChange={event => setVoidReason(event.target.value)}/></label>{voidReceipt.isError && <p role="alert">{voidReceipt.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={voidReceipt.isPending}>確認作廢紀錄</button><button type="button" className="button button-quiet" onClick={() => setVoidTarget(null)}>取消</button></div></form>}
+    {voidTarget && <form className="admin-records-form" onSubmit={event => {event.preventDefault(); voidReceipt.mutate();}}><h2>作廢線下收款紀錄</h2><p>{voidTarget.receipt_number} · {formatMoney(voidTarget.amount)}</p><label className="field"><span>作廢原因<OptionalMark /></span><input maxLength={1000} value={voidReason} onChange={event => setVoidReason(event.target.value)}/></label>{voidReceipt.isError && <p role="alert">{voidReceipt.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={voidReceipt.isPending}>確認作廢紀錄</button><button type="button" className="button button-quiet" onClick={() => setVoidTarget(null)}>取消</button></div></form>}
     </div></section>;
 }
 function ReceiptForm({target, onClose, onSaved}: {target: Person; onClose: () => void; onSaved: () => void}) {

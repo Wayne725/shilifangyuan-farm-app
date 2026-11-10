@@ -7,6 +7,7 @@ import { useAdminPanelAccess, type AdminPanelAccess } from "../lib/admin-panel-a
 import { OrderCategoryFilter } from "./OrderCategoryFilter";
 import { AdminReconciliationStatus } from "./AdminReconciliationStatus";
 import { orderCategoryLabels, type IssueOrderCategory } from "../lib/order-category";
+import { OptionalMark } from "./OptionalMark";
 
 interface FailedJob {
   order_category?: IssueOrderCategory;
@@ -93,7 +94,7 @@ function FailedJobRow({ job, onRetry, access }: { job: FailedJob; onRetry: (mess
     </dl>
     {job.order_number && <Link className="button button-quiet" to="/admin" search={{ section: "orders", q: job.order_number }}>查看訂單</Link>}
     {job.retryable && <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); retry.mutate(); }}>
-      <label>處理原因<input maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+      <label>處理原因<OptionalMark /><input maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
       {job.requires_delivery_confirmation && <label className="check-field"><input type="checkbox" required checked={confirmDeliveryRisk}
         onChange={(event) => setConfirmDeliveryRisk(event.target.checked)} />已查詢供應商確認未寄出，並了解重新排入仍可能重寄</label>}
       <button type="submit" className="button button-quiet" disabled={retry.isPending || (job.requires_delivery_confirmation && !confirmDeliveryRisk)}>{retry.isPending ? "排入中…" : "排入重試"}</button>

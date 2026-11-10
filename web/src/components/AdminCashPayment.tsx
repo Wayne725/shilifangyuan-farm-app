@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import type { Order } from "../lib/types";
+import { OptionalMark } from "./OptionalMark";
 
 type CashOrder = Pick<Order, "id" | "order_number" | "amount_total" | "payment_method" | "available_actions" | "invoice_handling"> & { onsite_payment?: { method: string; reference: string; paid_at: string } | null };
 type Operation = "cash-payment" | "cash-unpaid" | "cash-refund";
@@ -49,7 +50,7 @@ export function AdminCashPayment({ order, onDone }: { order: CashOrder; onDone?:
       <strong>{correction ? "更正為未付款" : refund ? "確認現場退款" : "標記已付款"} · <span className="order-number">{order.order_number}</span> · {formatMoney(order.amount_total)}</strong>
       <div className="field-grid two-columns">
         <label className="field"><span>{correction ? "核對訂單金額" : refund ? "實退金額" : "實收金額"}</span><input type="number" min={1} step={1} required value={amount} onChange={event => setAmount(event.target.value)} /></label>
-        <label className="field"><span>處理原因</span><input maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label>
+        <label className="field"><span>處理原因<OptionalMark /></span><input maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label>
         {!correction && !refund && <><label className="field"><span>現場收款方式</span><select aria-label="現場收款方式" value={method} onChange={event => setMethod(event.target.value)}><option value="cash">現金</option><option value="pos">POS 刷卡</option><option value="qr">現場 QR Code</option></select></label><label className="field"><span>POS 單號／收款參考</span><input maxLength={100} value={reference} onChange={event => setReference(event.target.value)} /></label></>}
       </div>
       {!correction && !refund && <label className="field"><span>開票方式</span><select value={invoiceHandling} onChange={event => setInvoiceHandling(event.target.value as typeof invoiceHandling)}><option value="on_payment">收款後由系統開立</option><option value="pickup_day">先記收款，取餐日開立</option><option value="external">由現場 POS 開立</option></select></label>}

@@ -23,6 +23,7 @@ import type {
   Supplier,
   SupplierAccreditationStatus,
 } from "../lib/types";
+import { OptionalMark } from "../components/OptionalMark";
 
 const productCategories = [
   ["當季蔬果", "當季蔬果"],
@@ -393,7 +394,7 @@ function AccreditationForm({ supplier, onDone }: { supplier: Supplier; onDone: (
   const [processNotes, setProcessNotes] = useState("");
   const [resultNotes, setResultNotes] = useState("");
   const save = useMutation({ mutationFn: () => apiFetch<Supplier>(`/v1/admin/suppliers/${supplier.id}/accreditations`, { method: "POST", body: JSON.stringify({ reviewed_on: reviewedOn, status, process_notes: processNotes, result_notes: resultNotes }) }), onSuccess: onDone });
-  return <form className="embedded-admin-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}><h4>供應者審認紀錄</h4><div className="field-grid three-columns"><label className="field"><span>審認日期</span><input type="date" value={reviewedOn} onChange={(event) => setReviewedOn(event.target.value)} /></label><label className="field"><span>結果</span><select value={status} onChange={(event) => setStatus(event.target.value as SupplierAccreditationStatus)}><option value="approved">通過</option><option value="rejected">不通過</option><option value="pending">待確認</option></select></label><label className="field wide"><span>審認過程</span><textarea rows={3} value={processNotes} onChange={(event) => setProcessNotes(event.target.value)} /></label><label className="field wide"><span>結果說明</span><textarea rows={3} value={resultNotes} onChange={(event) => setResultNotes(event.target.value)} /></label></div>{save.isError && <p className="form-error">{save.error.message}</p>}<button className="button button-primary" disabled={save.isPending}>儲存審認</button></form>;
+  return <form className="embedded-admin-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}><h4>供應者審認紀錄</h4><div className="field-grid three-columns"><label className="field"><span>審認日期</span><input type="date" value={reviewedOn} onChange={(event) => setReviewedOn(event.target.value)} /></label><label className="field"><span>結果</span><select value={status} onChange={(event) => setStatus(event.target.value as SupplierAccreditationStatus)}><option value="approved">通過</option><option value="rejected">不通過</option><option value="pending">待確認</option></select></label><label className="field wide"><span>審認過程<OptionalMark /></span><textarea rows={3} value={processNotes} onChange={(event) => setProcessNotes(event.target.value)} /></label><label className="field wide"><span>結果說明<OptionalMark /></span><textarea rows={3} value={resultNotes} onChange={(event) => setResultNotes(event.target.value)} /></label></div>{save.isError && <p className="form-error">{save.error.message}</p>}<button className="button button-primary" disabled={save.isPending}>儲存審認</button></form>;
 }
 
 function LocationCreateForm({ onDone }: { onDone: () => void }) {
