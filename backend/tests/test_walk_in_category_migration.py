@@ -36,7 +36,7 @@ def test_counter_category_backfill_preserves_financial_rows_and_guards_downgrade
         command.upgrade(config, "head")
         command.check(config)
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT * FROM orders")).mappings().one() == before_order
+            assert dict(connection.execute(text("SELECT * FROM orders")).mappings().one()) == {**before_order, "meal_booking_type": "standard"}
             assert dict(connection.execute(text("SELECT * FROM walk_in_sales")).mappings().one()) == {**before_sale, "sale_category": None}
         command.downgrade(config, "0050_meal_workday_policy")
         with engine.connect() as connection:
