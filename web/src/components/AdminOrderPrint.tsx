@@ -7,6 +7,7 @@ import { ApiError } from "../lib/api";
 import { useAdminPanelAccess } from "../lib/admin-panel-access";
 import type { Order } from "../lib/types";
 import "./AdminOrderPrint.css";
+import { OptionalMark } from "./OptionalMark";
 
 const privateQueryKeys = [] as const;
 
@@ -129,7 +130,7 @@ export function AdminOrderPrint({ order }: { order: Pick<Order, "id" | "order_nu
             <pre aria-label="出單預覽">{preview.preview}</pre>
             {preview.blocked_reason && <p className="form-error" role="status">{preview.blocked_reason}</p>}
             <form onSubmit={event => { event.preventDefault(); void send(); }}>
-              <label className="field"><span>出單原因</span><input maxLength={200} value={reason} disabled={busy || !preview.can_print} onChange={event => setReason(event.target.value)} /></label>
+              <label className="field"><span>出單原因<OptionalMark /></span><input maxLength={200} value={reason} disabled={busy || !preview.can_print} onChange={event => setReason(event.target.value)} /></label>
               {preview.duplicate_risk && <label className="admin-order-print-check"><input type="checkbox" required checked={acknowledge} disabled={busy} onChange={event => setAcknowledge(event.target.checked)} />已核對紙本，接受可能重複列印</label>}
               <button className="button button-primary" disabled={busy || !preview.can_print || (preview.duplicate_risk && !acknowledge)}>{busy ? "送印中…" : preview.mode === "dry_run" ? "確認模擬出單" : "確認送至出單機"}</button>
             </form>

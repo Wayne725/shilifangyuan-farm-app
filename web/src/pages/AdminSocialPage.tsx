@@ -20,6 +20,7 @@ import { proposalStatusLabel } from "../lib/labels";
 import { documentAvailable, documentExpired, documentRetentionLabel } from "../lib/membership-documents";
 import type { Activity, Meeting, MembershipApplication, Proposal, Wish } from "../lib/types";
 import "./AdminSocialPage.css";
+import { OptionalMark } from "../components/OptionalMark";
 
 interface ShareholdingRecord {
   id: string;
@@ -253,7 +254,7 @@ function ShareholdingEditor({ record, source }: { record: ShareholdingRecord; so
       <p role="note">僅修正股籍，不會收款或退款。已認領社員的名冊與會籍會同步更新，社員端不顯示股金與股數。</p>
       <label className="field"><span>股金（元）</span><input required type="number" min={0} max={2147483647} step={1} disabled={save.isPending} value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
       <label className="field"><span>股數</span><input required type="number" min={0} max={2147483647} step={1} disabled={save.isPending} value={count} onChange={(event) => setCount(event.target.value)} /></label>
-      <label className="field"><span>修改原因</span><textarea aria-label="修改原因" maxLength={1000} rows={3} disabled={save.isPending} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+      <label className="field"><span>修改原因<OptionalMark /></span><textarea aria-label="修改原因" maxLength={1000} rows={3} disabled={save.isPending} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
       {(!validInteger(amount) || !validInteger(count)) && <p className="form-error">股金與股數須為 0 至 2147483647 的整數。</p>}
       {save.isError && <p className="form-error" role="alert">{save.error.message}</p>}
       {conflict && <div>
@@ -342,7 +343,7 @@ function WishAdminCard({ wish, onDone }: { wish: Wish; onDone: () => void }) {
   const [productId, setProductId] = useState(wish.launched_product_id || "");
   const [campaignId, setCampaignId] = useState(wish.launched_campaign_id || "");
   const save = useMutation({ mutationFn: () => apiFetch(`/v1/admin/wishes/${wish.id}/status`, { method: "PUT", body: JSON.stringify({ status, admin_note: note, launched_product_id: productId || null, launched_campaign_id: campaignId || null, proposer_points: 100 }) }), onSuccess: onDone });
-  return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{wish.support_count} 人支持</span><h3>{wish.name}</h3><p>{wish.description}</p></div><div className="review-card-actions schedule-fields"><label className="field"><span>處理狀態</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="submitted">新提出</option><option value="gathering">募集支持</option><option value="sourcing">尋找供應</option><option value="launched">已成案</option><option value="declined">不採用</option></select></label><label className="field"><span>社員說明</span><input value={note} onChange={(event) => setNote(event.target.value)} /></label>{status === "launched" && <><label className="field"><span>商品 ID</span><input value={productId} onChange={(event) => setProductId(event.target.value)} /></label><label className="field"><span>共同購買 ID</span><input value={campaignId} onChange={(event) => setCampaignId(event.target.value)} /></label></>}<button type="button" disabled={save.isPending || (status === "launched" && !productId && !campaignId)} onClick={() => save.mutate()}>儲存狀態</button>{save.isError && <p className="form-error">{save.error.message}</p>}</div></article>;
+  return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{wish.support_count} 人支持</span><h3>{wish.name}</h3><p>{wish.description}</p></div><div className="review-card-actions schedule-fields"><label className="field"><span>處理狀態</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="submitted">新提出</option><option value="gathering">募集支持</option><option value="sourcing">尋找供應</option><option value="launched">已成案</option><option value="declined">不採用</option></select></label><label className="field"><span>社員說明<OptionalMark /></span><input value={note} onChange={(event) => setNote(event.target.value)} /></label>{status === "launched" && <><label className="field"><span>商品 ID</span><input value={productId} onChange={(event) => setProductId(event.target.value)} /></label><label className="field"><span>共同購買 ID</span><input value={campaignId} onChange={(event) => setCampaignId(event.target.value)} /></label></>}<button type="button" disabled={save.isPending || (status === "launched" && !productId && !campaignId)} onClick={() => save.mutate()}>儲存狀態</button>{save.isError && <p className="form-error">{save.error.message}</p>}</div></article>;
 }
 
 function MeetingAdminCard({ meeting, memberships, proposals, onDone }: { meeting: Meeting; memberships: AdminMembership[]; proposals: Proposal[]; onDone: () => void }) {

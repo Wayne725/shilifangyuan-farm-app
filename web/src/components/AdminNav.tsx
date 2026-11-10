@@ -10,15 +10,12 @@ const groups = [
 
 export function AdminNav() {
   const pathname = useLocation({select: location => location.pathname});
-  const section = useLocation({select: location => (location.search as { section?: string }).section});
-  const isSummary = pathname === "/admin" && section === "summary";
   const current = groups.find(group => group.links.some(link => link.to === pathname)) || groups[0];
   return <div className="admin-navigation">
     <div className="admin-navigation-toolbar">
     <nav className="admin-workspace-links" aria-label="管理工作台分類">
       {groups.map(group => <Link key={group.label} to={group.links[0].to} activeOptions={{exact: true}} className={group === current ? "active" : ""} aria-current={group === current ? "true" : undefined}>{group.label}</Link>)}
     </nav>
-    {!isSummary && <Link className="button button-quiet admin-summary-shortcut" to="/admin" search={{ section: "summary" }}>訂單彙整</Link>}
     </div>
     <nav className="admin-section-links" aria-label={`${current.label}功能`}>
       {current.links.map(link => <Link key={link.to} to={link.to} activeOptions={{exact: true, includeSearch: false}} activeProps={{className: "active", "aria-current": "page"}}>{link.label}</Link>)}

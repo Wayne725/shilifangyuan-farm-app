@@ -6,6 +6,7 @@ import { ApiError, apiFetch } from "../lib/api";
 import { admissionApi, admissionDateTime, admissionStatusLabel, type AdmissionRound } from "../lib/membership-admission";
 import { DataState, LoadingLines } from "./Shared";
 import "./AdminAdmissionInbox.css";
+import { OptionalMark } from "./OptionalMark";
 
 interface AdmissionList {
   items: AdmissionRound[];
@@ -104,7 +105,7 @@ function AdmissionReviewCard({ round, onDone, onDenied }: { round: AdmissionRoun
     <div className="admission-review-actions">
       {current.status === "submitted" && <form aria-label={`${current.profile?.legal_name || "申請人"}第${current.round_number}輪入社審核`} onSubmit={event => { event.preventDefault(); if (!disabled) review.mutate(); }}>
         <fieldset className="admission-review-decisions"><legend>審核結果</legend>{decisions.map(item => <label key={item.value} className={`button button-quiet${decision === item.value ? " selected" : ""}`}><input type="radio" name={`admission-decision-${round.id}`} value={item.value} checked={decision === item.value} disabled={review.isPending} onChange={() => setDecision(item.value)} />{item.label}</label>)}</fieldset>
-        <label className="field"><span>審核原因</span><textarea maxLength={2000} value={reason} disabled={review.isPending} onChange={event => setReason(event.target.value)} /></label>
+        <label className="field"><span>審核原因<OptionalMark /></span><textarea maxLength={2000} value={reason} disabled={review.isPending} onChange={event => setReason(event.target.value)} /></label>
         {decision === "approve" && <><label className="field"><span>理事會決議編號或日期</span><input required maxLength={200} value={reference} disabled={review.isPending} onChange={event => setReference(event.target.value)} /></label>{current.student_claimed && <label className="check-field"><input required type="checkbox" checked={studentVerified} disabled={review.isPending} onChange={event => setStudentVerified(event.target.checked)} />已核驗學生資格</label>}{!qualified && <p className="form-error" role="alert">本輪測驗尚未合格，不能同意入社。</p>}</>}
         {changed && <><p className="form-error" role="alert">申請資料已變更，請重新讀取並核對最新資料；已填內容會保留。</p><button type="button" className="button button-quiet" disabled={reload.isPending} onClick={() => reload.mutate()}>重新讀取最新資料</button></>}
         {(review.isError || reload.isError) && <p className="form-error" role="alert">{reload.error?.message || review.error?.message}</p>}
