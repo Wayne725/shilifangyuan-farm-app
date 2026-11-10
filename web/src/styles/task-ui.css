@@ -103,4 +103,4 @@
 @media print { .reading-menu { display: none; } }
 
 .meal-calendar-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 20px; }
-.optional-mark { margin-left: 0.25em; color: var(--ink-soft); font-weight: 400; }
+.optional-mark::after { content: "（選填）"; margin-left: 0.25em; color: var(--ink-soft); font-weight: 400; }
