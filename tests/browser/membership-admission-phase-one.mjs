@@ -35,7 +35,10 @@ const newRound = () => ({
   student_verified: null, decision_reference: null, created_at: now, updated_at: now, can_edit: true, can_submit: false, can_withdraw: true,
 });
 
-async function fixture(t, width, { conflict = false, score = 80, member = false } = {}) {
+async function fixture(t, width, { conflict = false, score = 80, member = false, hasLegacy = false, admissionFee = 500, shareUnit = 100 } = {}) {
+  const viewConfig = structuredClone(config);
+  viewConfig.declaration.admission_fee_amount = admissionFee;
+  viewConfig.declaration.share_unit_amount = shareUnit;
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block' });
@@ -53,7 +56,7 @@ async function fixture(t, width, { conflict = false, score = 80, member = false 
       state.reads++;
       if (state.denyReads) return route.fulfill({ status: 401, json: { detail: '隔離登入已失效' } });
       const history = [...state.history, ...(state.round ? [state.round] : [])].map(value => ({ id: value.id, round_number: value.round_number, status: value.status, created_at: value.created_at, reviewed_at: value.reviewed_at }));
-      return route.fulfill({ json: { config, current_round: state.round, history, profile_defaults: null, can_start: !state.round || ['withdrawn', 'rejected'].includes(state.round.status), start_blocked_reason: null } });
+      return route.fulfill({ json: { config: viewConfig, current_round: state.round, history, profile_defaults: null, has_legacy_application: hasLegacy, can_start: !state.round || ['withdrawn', 'rejected'].includes(state.round.status), start_blocked_reason: null } });
     }
     if (request.method() === 'GET' && path.startsWith(`${prefix}/rounds/`)) {
       const value = [...state.history, state.round].find(item => item?.id === path.split('/').at(-1));
@@ -227,7 +230,7 @@ test('已載入後GET 401或寫入403均立即遮蔽入社個資與答案', asyn
     await page.getByRole('button', { name: '前往送出申請', exact: true }).click();
     state.denyReads = true;
     await page.getByRole('button', { name: '更新申請進度', exact: true }).click();
-    await page.getByRole('heading', { name: '請重新登入', exact: true }).waitFor();
+    await page.getByRole('button', { name: '登入後開始', exact: true }).waitFor();
     assert.equal(await page.locator('.admission-panel, .admission-history, input[name^="admission_quiz_"]').count(), 0);
     assert.equal(await page.getByText(/正確答案：/).count(), 0);
     verifyState(state);
@@ -264,5 +267,34 @@ test('撤回後即刷新可重新申請，舊輪成績只可唯讀且不帶入�
   assert.equal(state.round.attempts.length, 0);
   assert.equal(state.round.material_completed_at, null);
   assert.equal(state.round.consented_at, null);
+  verifyState(state);
+});
+
+for (const hasLegacy of [false, true]) test(`入社費用讀API並隨股數更新，舊資料入口=${hasLegacy}`, async t => {
+  const { page, state } = await fixture(t, 390, { hasLegacy });
+  const quote = page.locator('dl[aria-label="入社費用估算"]');
+  await quote.getByText('$500', { exact: true }).waitFor();
+  await quote.getByText('$1,500', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('link', { name: '查看舊版入社資料', exact: true }).count(), Number(hasLegacy));
+  assert.deepEqual(state.writes, []);
+  await page.getByRole('button', { name: '開始入社申請', exact: true }).click();
+  await page.getByLabel(/^認購股數/).fill('12');
+  await quote.getByText('$1,700', { exact: true }).waitFor();
+  await page.getByRole('radio', { name: '全職在校學生', exact: true }).check();
+  await quote.getByText('請先填寫有效股數', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '儲存並閱讀教材', exact: true }).isEnabled(), false);
+  await page.getByLabel(/^認購股數/).fill('5');
+  await quote.getByText('$1,000', { exact: true }).waitFor();
+  assert.deepEqual(state.writes.map(item => item.path), [`${prefix}/rounds`]);
+  verifyState(state);
+});
+
+test('費率由API提供，不在瀏覽器寫死入社費或每股金額', async t => {
+  const { page, state } = await fixture(t, 390, { admissionFee: 700, shareUnit: 120 });
+  const quote = page.locator('dl[aria-label="入社費用估算"]');
+  await quote.getByText('$700', { exact: true }).waitFor();
+  await quote.getByText('10 股 × $120 = $1,200', { exact: true }).waitFor();
+  await quote.getByText('$1,900', { exact: true }).waitFor();
+  assert.deepEqual(state.writes, []);
   verifyState(state);
 });

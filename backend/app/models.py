@@ -365,6 +365,8 @@ class User(Base):
     saved_mobile_barcode: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
+    data_consent_version: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    data_consented_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     pending_member_claim: Mapped[bool] = mapped_column(Boolean, default=False)
     user_role: Mapped[UserRole] = mapped_column(
@@ -2134,6 +2136,12 @@ class MealCancellationRequest(Base):
     review_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     order: Mapped["Order"] = relationship(back_populates="cancellation_requests")
     requested_by: Mapped["User"] = relationship(foreign_keys=[requested_by_id])
+    reviewed_by: Mapped[Optional["User"]] = relationship(foreign_keys=[reviewed_by_id], lazy="selectin")
+
+    @property
+    def reviewed_by_name(self) -> Optional[str]:
+        reviewer = self.__dict__.get("reviewed_by")
+        return reviewer.display_name if reviewer is not None else None
 
 
 class OrderItem(Base):

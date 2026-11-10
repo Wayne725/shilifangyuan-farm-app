@@ -25,11 +25,11 @@ test(`${entry} 付款上一頁、下一頁與重整都接續原訂單，不重�
     if (entry === 'checkout') {
       await context.addInitScript(() => {
         if (!sessionStorage.getItem('test_cart_initialized')) {
-          localStorage.setItem('slf_cart', JSON.stringify([{ quantity: 1, product: {
+          localStorage.setItem('slf_cart_v2:user:buyer', JSON.stringify({ items: [{ quantity: 1, product: {
             id: 'product-test', name: '隔離測試商品', slug: 'test', description: '', category: '測試',
             unit: '份', member_price: 10, nonmember_price: 10, stock_quantity: 10,
             tax_type: 'tax_exempt', can_ship: false, allowed_shipping_channels: [], is_active: true,
-          } }]));
+          } }] }));
           sessionStorage.setItem('test_cart_initialized', 'yes');
         }
       });

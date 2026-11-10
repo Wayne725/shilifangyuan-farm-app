@@ -81,7 +81,7 @@ async def test_unknown_current_payment_is_retained_and_rechecked(database_sessio
     assert await jobs._reconcile_expired_payments(session, make_test_settings(), now, 10) == 1
 
 
-async def test_verified_absence_releases_once_then_waits_for_admin(database_session, monkeypatch):
+async def test_verified_absence_releases_once_then_closes_zero_paid_campaign(database_session, monkeypatch):
     session = database_session
     _, campaign, _, _, _, attempt = await group_fixture(session)
     class Adapter:
@@ -94,7 +94,7 @@ async def test_verified_absence_releases_once_then_waits_for_admin(database_sess
     assert campaign.reserved_quantity == 0
     assert attempt.unpaid_verified_at is not None and attempt.status == PaymentStatus.EXPIRED
     await jobs._reconcile_campaigns(session, make_test_settings(), now, 10)
-    assert campaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION and campaign.intake_status == GroupIntakeStatus.CLOSED
+    assert campaign.decision_status == GroupDecisionStatus.FAILED_UNMET and campaign.intake_status == GroupIntakeStatus.CLOSED
     attempt.next_reconcile_at = now - timedelta(seconds=1)
     await session.commit()
     await jobs._reconcile_expired_payments(session, make_test_settings(), now, 10)
@@ -229,7 +229,7 @@ async def test_cancelled_unknown_payment_does_not_block_other_orders_and_late_su
     payload["PaymentDate"] = (attempt.expires_at - timedelta(seconds=1)).isoformat()
     await session.commit()
     await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 10)
-    assert campaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION
+    assert campaign.decision_status == GroupDecisionStatus.FAILED_UNMET
     await SQLAlchemyPaymentCallbackRepository(session).apply_query_result(attempt, payload)
     await session.refresh(campaign)
     assert campaign.paid_quantity == 0 and order.payment_status == PaymentStatus.LATE_PAID_REFUND_REQUIRED
@@ -261,7 +261,7 @@ async def test_reconciliation_rotates_past_limit_without_changing_review_version
     assert first.intake_status == GroupIntakeStatus.SETTLING
     first_version = first.updated_at
     await jobs._reconcile_campaigns(session, make_test_settings(), now + timedelta(seconds=1), 1)
-    assert second.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION
+    assert second.decision_status == GroupDecisionStatus.FAILED_UNMET
     await jobs._reconcile_campaigns(session, make_test_settings(), now + timedelta(seconds=2), 1)
     await session.refresh(first)
     from app.domain import aware
@@ -312,6 +312,7 @@ async def test_new_pending_evidence_revokes_old_unpaid_verification(database_ses
     assert attempt.unpaid_verified_at is None
     await jobs._reconcile_campaigns(session, make_test_settings(), now + timedelta(seconds=1), 10)
     assert campaign.intake_status == GroupIntakeStatus.SETTLING
+    assert campaign.decision_status == GroupDecisionStatus.FAILED_UNMET
 
 
 async def test_unsettled_campaign_notifies_admin_once_without_waiting_for_review_deadline(database_session):
@@ -334,9 +335,14 @@ async def test_provider_query_pending_revokes_unpaid_proof_even_for_duplicate_ev
         await repository.apply_query_result(attempt, payload)
     await jobs._record_group_payment_verification(session, attempt.id, datetime.now(timezone.utc), verified_unpaid=True)
     assert attempt.unpaid_verified_at is not None
+    await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 10)
+    assert campaign.decision_status == GroupDecisionStatus.FAILED_UNMET
     await repository.apply_query_result(attempt, payload)
     assert attempt.unpaid_verified_at is None and attempt.settlement_unknown_since is not None
     assert await campaign_has_unsettled_payments(session, campaign)
+    await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 10)
+    assert campaign.decision_status == GroupDecisionStatus.FAILED_UNMET
+    assert campaign.intake_status == GroupIntakeStatus.SETTLING
 
 
 async def test_verified_ecpay_absence_worker_releases_current_reservation(database_session, monkeypatch):

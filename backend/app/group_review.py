@@ -92,13 +92,24 @@ async def reconcile_campaign_state(session: AsyncSession, campaign: GroupCampaig
     if campaign.decision_status in TERMINAL_DECISIONS:
         if campaign.decision_status == GroupDecisionStatus.CONFIRMED and now >= aware(campaign.deadline):
             campaign.intake_status = GroupIntakeStatus.CLOSED
+        elif campaign.decision_status == GroupDecisionStatus.FAILED_UNMET:
+            campaign.intake_status = (GroupIntakeStatus.SETTLING
+                if await campaign_has_unsettled_payments(session, campaign) else GroupIntakeStatus.CLOSED)
         return
     if now < aware(campaign.deadline):
         return
     if await campaign_has_unsettled_payments(session, campaign):
         campaign.intake_status = GroupIntakeStatus.SETTLING
     else:
-        campaign.decision_status = GroupDecisionStatus.PENDING_CONFIRMATION
+        financial_followup = await session.scalar(select(Order.id).where(
+            Order.group_campaign_id == campaign.id,
+            Order.payment_status.in_({PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.LATE_PAID_REFUND_REQUIRED}),
+        ).limit(1))
+        campaign.decision_status = (
+            GroupDecisionStatus.FAILED_UNMET
+            if campaign.paid_quantity == 0 and financial_followup is None
+            else GroupDecisionStatus.PENDING_CONFIRMATION
+        )
         campaign.intake_status = GroupIntakeStatus.CLOSED
 
 

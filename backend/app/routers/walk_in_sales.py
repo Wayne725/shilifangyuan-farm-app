@@ -14,7 +14,7 @@ from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
-from ..domain import aware, included_tax_amount
+from ..domain import aware, invoice_estimated_tax_amount
 from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
 from ..integrations.invoice import is_mobile_barcode_format
 from ..invoice_timing import TAIPEI, pickup_invoice_due
@@ -238,7 +238,9 @@ async def create_walk_in_sale(
         fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
         membership_type_snapshot=MembershipType.NONMEMBER, member_tax_exempt_snapshot=False,
         contact_email=str(body.contact_email or body.preferences.invoice_buyer_email or ""),
-        amount_total=amount, tax_amount=included_tax_amount(amount, body.tax_type),
+        amount_total=amount, tax_amount=invoice_estimated_tax_amount(
+            [(amount, body.tax_type)], body.preferences.invoice_buyer_type,
+        ),
         payment_method=PaymentMethod.CASH_ON_PICKUP, payment_status=PaymentStatus.PAID, paid_at=now,
         invoice_handling=body.invoice_handling,
         invoice_issue_after=pickup_invoice_due(pickup_at) if pickup_at else None,

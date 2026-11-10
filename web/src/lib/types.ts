@@ -601,6 +601,7 @@ export interface MealCancellationRequest {
   status: "pending" | "approved" | "rejected";
   requested_at: string;
   reviewed_by_id?: string | null;
+  reviewed_by_name?: string | null;
   reviewed_at?: string | null;
   review_reason?: string | null;
 }

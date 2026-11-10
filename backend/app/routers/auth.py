@@ -19,6 +19,8 @@ from ..auth import (
     verify_and_update_password,
 )
 from ..config import Settings, get_settings
+from ..platform_settings import platform_settings
+from ..public_information import require_registration_consent
 from ..credential_rate_limit import consume_credential_quota, reset_credential_quota
 from ..database import get_session
 from ..identity_numbers import next_identity_number
@@ -240,6 +242,7 @@ async def register(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     await consume_credential_quota(session, client_key(request, "register"), REGISTER_RULE, settings)
+    consent = require_registration_consent(body, (await platform_settings(session)).public_information)
     email = body.email.lower()
     existing = await session.scalar(select(User.id).where(User.email == email))
     if existing is not None:
@@ -253,6 +256,7 @@ async def register(
         email=email,
         display_name=body.display_name.strip(),
         password_hash=hash_password(body.password),
+        **consent,
     )
     session.add(user)
     await session.flush()
@@ -274,6 +278,7 @@ async def register_existing_member(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    consent = require_registration_consent(body, (await platform_settings(session)).public_information)
     await consume_credential_quota(session,
         client_key(
             request,
@@ -330,6 +335,7 @@ async def register_existing_member(
         display_name=body.display_name.strip(),
         password_hash=hash_password(body.password),
         pending_member_claim=True,
+        **consent,
     )
     session.add(user)
     await session.flush()

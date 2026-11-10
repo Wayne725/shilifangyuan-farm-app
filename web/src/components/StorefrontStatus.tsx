@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { apiFetch } from "../lib/api";
+import type { PublicInformation } from "../lib/public-information";
 
 export interface StorefrontStatus {
   orders_open: boolean;
   closed_message: string;
   support_phone?: string;
+  public_information?: PublicInformation | null;
   sales_scope?: "all" | "meals_only" | "pickup";
   regular_orders_enabled?: boolean;
   group_orders_enabled?: boolean;

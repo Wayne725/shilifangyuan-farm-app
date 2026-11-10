@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { CancellationReviewDetails } from "./CancellationReviewDetails";
 
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import { formatMealDateTime } from "../lib/meal-time";
@@ -85,7 +86,8 @@ function CancellationReviewCard({ item }: { item: MealCancellationQueueItem }) {
     <p><strong>{formatMoney(order.amount_total)}</strong>・{paymentLabels[order.payment_status] || order.payment_status}・發票{invoiceLabels[order.invoice_status] || order.invoice_status}</p>
     {request.reason && <p className="meal-cancellation-reason">退單原因：{request.reason}</p>}
     {request.review_reason && <p className="meal-cancellation-reason">審核理由：{request.review_reason}</p>}
-    <details className="admin-extra-actions"><summary>更多訂單資料</summary><p>{item.customer_email}・{order.meal_event_title}</p><p>履約：{order.cancelled_at ? "已取消" : order.fulfillment_status === "preparing" ? "製作中" : order.fulfillment_status === "ready" ? "待取餐" : order.fulfillment_status === "picked_up" ? "已取餐" : order.fulfillment_status === "no_show" ? "逾時未取" : "尚未取餐"}</p><p>申請時間：{formatDateTime(request.requested_at)}</p>{request.reviewed_at && <p>審核時間：{formatDateTime(request.reviewed_at)}</p>}</details>
+    <CancellationReviewDetails request={request} />
+    <details className="admin-extra-actions"><summary>更多訂單資料</summary><p>{item.customer_email}・{order.meal_event_title}</p><p>履約：{order.cancelled_at ? "已取消" : order.fulfillment_status === "preparing" ? "製作中" : order.fulfillment_status === "ready" ? "待取餐" : order.fulfillment_status === "picked_up" ? "已取餐" : order.fulfillment_status === "no_show" ? "逾時未取" : "尚未取餐"}</p><p>申請時間：{formatDateTime(request.requested_at)}</p></details>
     {request.status === "pending" && <>
       {!item.can_approve && <p>已取消或已結束履約，無法核准。</p>}
       {!decision && <div className="form-actions">

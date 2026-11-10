@@ -14,6 +14,7 @@ import {
 import { Link, Outlet } from "@tanstack/react-router";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
+import { useStorefrontStatus } from "./StorefrontStatus";
 import { useAuth } from "../context/AuthContext";
 import { useCommerce } from "../context/CommerceContext";
 import { useSocialAccess } from "../lib/social-access";
@@ -29,6 +30,7 @@ const navItems = [
 ];
 
 export function AppShell() {
+  const publicInformation = useStorefrontStatus().data?.public_information;
   const { itemCount } = useCommerce();
   const { user, isAuthReady, sessionError, sessionScope, retrySession, openLogin, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -211,7 +213,13 @@ export function AppShell() {
           <p>把消費、互助與共同治理，放回同一個日常入口。</p>
         </div>
         <div className="footer-meta">
-          <span>新竹・台灣</span>
+          {publicInformation?.published ? <>
+            <span>{publicInformation.legal_name} · 統編 {publicInformation.tax_id}</span>
+            <span>{publicInformation.address}</span>
+            <a href={`tel:${publicInformation.phone.replace(/[^+0-9]/g, '')}`}>{publicInformation.phone}</a>
+            <a href={`mailto:${publicInformation.email}`}>{publicInformation.email}</a>
+            <nav aria-label="網站政策"><Link to="/privacy">隱私權與個資告知</Link> · <Link to="/terms">服務條款</Link> · <Link to="/returns">退換貨與退款政策</Link></nav>
+          </> : <span>新竹・台灣</span>}
           <span>社員共同所有 · 日常共同參與</span>
         </div>
       </footer>

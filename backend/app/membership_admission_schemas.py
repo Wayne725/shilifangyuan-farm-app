@@ -180,6 +180,7 @@ class AdmissionMeRead(BaseModel):
     current_round: AdmissionRoundRead | None
     history: list[AdmissionHistoryRead]
     profile_defaults: AdmissionProfile | None
+    has_legacy_application: bool = False
     can_start: bool
     start_blocked_reason: str | None
 

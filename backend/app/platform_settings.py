@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import SystemSetting
+from .public_information import PublicInformation
 
 PLATFORM_KEY = "storefront_operations"
 
@@ -20,6 +21,7 @@ class PlatformSettings(BaseModel):
     printer_model: str = Field(default="", max_length=80)
     printer_connection: Literal["unknown", "usb", "network", "bluetooth", "browser"] = "unknown"
     kitchen_sound: bool = False
+    public_information: PublicInformation = Field(default_factory=PublicInformation)
 
     @field_validator("support_phone")
     @classmethod

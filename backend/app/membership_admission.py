@@ -25,7 +25,7 @@ from .membership_policy import (
     membership_quiz_eligibility, quote_membership_shares,
 )
 from .models import (
-    AdminAudit, MemberProfile, Membership, MembershipCharge, MembershipStatus,
+    AdminAudit, MemberProfile, Membership, MembershipApplication, MembershipCharge, MembershipStatus,
     MembershipAdmissionQuizAttempt, MembershipAdmissionReview,
     MembershipAdmissionRound, MembershipAdmissionSubmission, User, UserRole, new_id,
 )
@@ -257,6 +257,8 @@ async def read_me(session, user, settings):
         history=[{"id": row.id, "round_number": row.round_number, "status": row.status,
             "created_at": _aware(row.created_at), "reviewed_at": _aware(row.reviewed_at)} for row in rounds],
         profile_defaults=await _profile_defaults(session, user, settings),
+        has_legacy_application=await session.scalar(select(MembershipApplication.id).where(
+            MembershipApplication.user_id == user.id).limit(1)) is not None,
         can_start=blocked is None, start_blocked_reason=blocked)
 
 

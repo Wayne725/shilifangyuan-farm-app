@@ -27,7 +27,7 @@ from ..domain import (
     aware,
     campaign_available_quantity,
     confirm_campaign,
-    included_tax_amount,
+    invoice_estimated_tax_amount,
     member_sale_is_tax_exempt,
     order_fulfillment_is_irreversible,
     price_for_membership,
@@ -494,12 +494,10 @@ async def _group_join_quote(session, campaign, body, user, *, target_snapshot=No
         membership_type, body.invoice_buyer_type
     )
     values = dict(membership_type=membership_type, member_tax_exempt=member_tax_exempt, tax_type=tax_type,
-        tax_amount=(
-            included_tax_amount(product_subtotal, tax_type)
-            + included_tax_amount(
-                shipping_fee,
-                TaxType.TAX_EXEMPT if member_tax_exempt else TaxType.TAXABLE,
-            )
+        tax_amount=invoice_estimated_tax_amount(
+            [(product_subtotal, tax_type),
+             (shipping_fee, TaxType.TAX_EXEMPT if member_tax_exempt else TaxType.TAXABLE)],
+            body.invoice_buyer_type,
         ),
         quantity=body.quantity,
         unit_price=unit_price,
@@ -615,7 +613,7 @@ async def join_campaign(
             membership_type, body.invoice_buyer_type
         ),
         amount_total=unit_price * body.quantity,
-        tax_amount=included_tax_amount(unit_price * body.quantity, tax_type),
+        tax_amount=invoice_estimated_tax_amount([(unit_price * body.quantity, tax_type)], body.invoice_buyer_type),
         contact_email=body.contact_email.lower(),
         invoice_buyer_type=body.invoice_buyer_type,
         invoice_buyer_tax_id=(

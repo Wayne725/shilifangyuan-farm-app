@@ -1,9 +1,10 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
 
-from app.models import AdminAudit, FulfillmentState, MealCancellationRequest, Order, OutboxEvent, Refund, PaymentAttempt, PaymentStatus
+from app.models import AdminAudit, FulfillmentState, MealCancellationRequest, MealEventStatus, Order, OutboxEvent, Refund, PaymentAttempt, PaymentStatus
 from app.routers.meals import meals_router
 from pgtests.test_transaction_concurrency import postgres_sessions
 from tests.support import api_test_context, auth_headers, make_test_settings
@@ -45,9 +46,21 @@ async def test_concurrent_buyer_requests_are_forbidden_without_side_effects(post
 
 
 @pytest.mark.parametrize("paid", [False, True])
+@pytest.mark.parametrize("expired", [False, True])
 @pytest.mark.asyncio
-async def test_concurrent_direct_admin_cancellations_have_one_result(postgres_sessions, paid):
+async def test_concurrent_direct_admin_cancellations_have_one_result(postgres_sessions, paid, expired):
     c = await _seed(postgres_sessions, paid=paid)
+    if expired:
+        async with postgres_sessions() as session:
+            from app.models import MealEvent
+            event = await session.get(MealEvent, c.event.id)
+            now = datetime.now(timezone.utc)
+            event.ordering_starts_at = now - timedelta(hours=3)
+            event.ordering_ends_at = now - timedelta(hours=2)
+            event.pickup_starts_at = now - timedelta(hours=1)
+            event.pickup_ends_at = now - timedelta(seconds=1)
+            event.status = MealEventStatus.COMPLETED
+            await session.commit()
     path = f"/v1/admin/meal-orders/{c.order.id}/cancel"
     results = await asyncio.wait_for(asyncio.gather(*(_post(postgres_sessions, c.admin, path, {"reason": "電話確認退單"}) for _ in range(5))), timeout=15)
     assert all(result.status_code == 200 for result in results), [result.text for result in results]

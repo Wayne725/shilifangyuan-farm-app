@@ -14,7 +14,7 @@ async function fixture(t, { loseResponse = false, blockedStorage = false, loseBe
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: Number(process.env.BROWSER_WIDTH || 390), height: 1000 }, serviceWorkers: 'block' });
   await context.addInitScript(blocked => {
-    if (!localStorage.getItem('slf_cart')) localStorage.setItem('slf_cart', JSON.stringify([{ product: { id: 'other-cart-product', name: '原購物車商品' }, quantity: 3 }]));
+    if (!localStorage.getItem('slf_cart_v2:user:group-buyer')) localStorage.setItem('slf_cart_v2:user:group-buyer', JSON.stringify({ items: [{ product: { id: 'other-cart-product', name: '原購物車商品' }, quantity: 3 }] }));
     window.__groupStorageBlocked = blocked;
     const original = Storage.prototype.setItem;
     Storage.prototype.setItem = function(key, value) {
@@ -117,7 +117,7 @@ for (const hidden of [false, true]) test(`已接受的未知原單在關店/關�
   await page.waitForURL(`${base}/isolated-group-payment`);
   assert.equal(state.orders.size, 1);
   assert.deepEqual(state.creates[1], state.creates[0]);
-  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), [{ product: { id: 'other-cart-product', name: '原購物車商品' }, quantity: 3 }]);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:group-buyer')).items), [{ product: { id: 'other-cart-product', name: '原購物車商品' }, quantity: 3 }]);
 });
 
 test('同總額但campaign契約fingerprint變動也須重新確認新key', async t => {
@@ -242,7 +242,7 @@ test('未知A單不在B登入後的共同購買表單顯示或自動重送，原
   assert.equal(state.creates.length, 1);
   assert.notEqual(await page.evaluate(() => sessionStorage.getItem('slf_group_submission:group-buyer:recovery-group')), null);
   assert.equal(await page.evaluate(() => sessionStorage.getItem('slf_group_submission:other-buyer:recovery-group')), null);
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 3);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:group-buyer')).items[0].quantity), 3);
 });
 
 async function fillShippingInvoice(page) {
@@ -282,7 +282,7 @@ if (process.env.BROWSER_LOGISTICS_TESTS === 'true') {
     if (lose) assert.deepEqual(state.creates[1], state.creates[0]);
     assert.deepEqual(state.logistics, [{ path: '/v1/orders/group-order-1/logistics/selection', body: { channel: 'home_delivery', temperature: 'ambient', recipient_name: '原始收件人', recipient_phone: '0900000000', shipping_address: '原始配送地址一號' } }]);
     assert.equal(state.payments.length, 0);
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 3);
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:group-buyer')).items[0].quantity), 3);
   });
 
   test('shipping unknown恢復已變更契約原單只回Orders，不再送物流或付款', async t => {

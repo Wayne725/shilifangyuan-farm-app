@@ -27,7 +27,7 @@ async function fixture(t, { channel = 'regular', role = 'customer', width = 1280
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 950 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  await context.addInitScript(() => localStorage.setItem('slf_cart', JSON.stringify([{ product: { id: 'separate-cart-product', name: '尚未下單商品', unit: '瓶', member_price: 10, nonmember_price: 10, stock_quantity: 10 }, quantity: 4 }])));
+  await context.addInitScript(() => localStorage.setItem('slf_cart_v2:user:isolated-user', JSON.stringify({ items: [{ product: { id: 'separate-cart-product', name: '尚未下單商品', unit: '瓶', member_price: 10, nonmember_price: 10, stock_quantity: 10 }, quantity: 4 }] })));
   const state = { order: { ...structuredClone(channel === 'meal_preorder' ? meal : regular), sales_channel: channel, payment_method: paymentMethod }, reads: [], quotes: [], writes: [], errors: [], unknown: [], quoteFailure: null, confirmFailure: null, savedResponses: new Map(), lostResponse: false, quoteDelay: 0, confirmDelay: 0 };
   if (channel === 'group') { state.order.amount_total = 220; state.order.shipment = null; }
   await context.route('**/*', async route => {
@@ -115,7 +115,7 @@ for (const channel of ['regular', 'group', 'meal_preorder']) for (const width of
     assert.equal(state.writes.length, 1); assert.equal(state.writes[0].expected_revision, 1); assert.equal(state.writes[0].expected_total, expected);
     assert.match(state.writes[0].client_request_id, /^[0-9a-f-]{36}$/);
     assert.equal(state.order.id, 'isolated-order'); assert.equal(state.order.revision, 2);
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 4, '已成立訂單改量不可改動未下單購物車');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:isolated-user')).items[0].quantity), 4, '已成立訂單改量不可改動未下單購物車');
     assert.match(await page.locator('.order-detail-head').innerText(), new RegExp(String(expected)));
     assert.match(await page.locator('.order-lines').innerText(), /3/);
     await page.getByText('數量修改紀錄（1 次）', { exact: true }).click();

@@ -421,6 +421,9 @@ async def _record_group_payment_verification(session: AsyncSession, attempt_id: 
         else:
             attempt.unpaid_verified_at = None
             attempt.settlement_unknown_since = attempt.settlement_unknown_since or now
+        campaign = await session.get(GroupCampaign, order.group_campaign_id)
+        if campaign is not None and campaign.decision_status == GroupDecisionStatus.FAILED_UNMET:
+            await reconcile_campaign_state(session, campaign, now)
     await session.commit()
     return True
 
@@ -940,9 +943,23 @@ async def _reconcile_campaigns(
     now: datetime,
     limit: int,
 ) -> int:
+    unsettled_closed_campaign = exists().where(
+        Order.group_campaign_id == GroupCampaign.id,
+        Order.cancelled_at.is_(None), Order.fulfillment_status != FulfillmentStatus.CANCELLED,
+        Order.payment_status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+        PaymentAttempt.order_id == Order.id, PaymentAttempt.superseded_at.is_(None),
+        func.coalesce(PaymentAttempt.order_revision, 1) == func.coalesce(Order.revision, 1),
+        PaymentAttempt.amount == Order.amount_total,
+        PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+        PaymentAttempt.unpaid_verified_at.is_(None),
+    ).correlate(GroupCampaign)
     campaigns = list(await session.scalars(select(GroupCampaign).where(
         GroupCampaign.deadline <= now,
-        GroupCampaign.decision_status.in_({GroupDecisionStatus.RECRUITING, GroupDecisionStatus.PENDING_CONFIRMATION, GroupDecisionStatus.CONFIRMED}),
+        or_(
+            GroupCampaign.decision_status.in_({GroupDecisionStatus.RECRUITING, GroupDecisionStatus.PENDING_CONFIRMATION, GroupDecisionStatus.CONFIRMED}),
+            (GroupCampaign.decision_status == GroupDecisionStatus.FAILED_UNMET)
+            & or_(GroupCampaign.intake_status == GroupIntakeStatus.SETTLING, unsettled_closed_campaign),
+        ),
     ).order_by(func.coalesce(GroupCampaign.review_checked_at, GroupCampaign.deadline), GroupCampaign.id).limit(limit)
         .execution_options(populate_existing=True).with_for_update()))
     changed = 0

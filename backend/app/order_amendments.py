@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from .domain import aware, company_included_tax_amount, included_tax_amount, order_amendment_blocked_reason, order_shipping_tax_type
+from .domain import aware, invoice_estimated_tax_amount, order_amendment_blocked_reason, order_shipping_tax_type
 from .business_meals import is_business_meal
 from .integrations.payment_service import lock_order_payment_subject, release_attempt_reservations
 from .models import (
@@ -205,14 +205,10 @@ async def _quote(session, order, quantities, now):
     if subtotal - discount + shipping <= 0:
         raise HTTPException(422, "修改後訂單金額必須大於零，請由管理員處理零元訂單")
     tax_by_id = {item.id: item.tax_type for item in order.items}
-    if is_business_meal(order):
-        taxable_gross = sum(line.subtotal for line in lines if tax_by_id[line.order_item_id] == TaxType.TAXABLE)
-        if order_shipping_tax_type(order) == TaxType.TAXABLE:
-            taxable_gross += shipping
-        tax = company_included_tax_amount(taxable_gross)
-    else:
-        tax = sum(included_tax_amount(line.subtotal, tax_by_id[line.order_item_id]) for line in lines)
-        tax += included_tax_amount(shipping, order_shipping_tax_type(order))
+    tax = invoice_estimated_tax_amount(
+        [(line.subtotal, tax_by_id[line.order_item_id]) for line in lines]
+        + [(shipping, order_shipping_tax_type(order))], order.invoice_buyer_type,
+    )
     return OrderQuantityAmendmentQuote(order_id=order.id, expected_revision=order.revision,
         previous_total=order.amount_total, amount_total=subtotal - discount + shipping, tax_amount=tax,
         shipping_fee=shipping, discount_amount=discount, items=lines, promotion=promotion)

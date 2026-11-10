@@ -98,6 +98,8 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=8, max_length=128)
+    data_consent: bool = False
+    policy_version: Optional[str] = Field(default=None, max_length=40)
 
 
 class ExistingMemberIdentity(BaseModel):
@@ -113,6 +115,8 @@ class ExistingMemberRegistrationRequest(ExistingMemberIdentity):
     email: EmailStr
     phone: Optional[str] = Field(default=None, min_length=8, max_length=24)
     password: str = Field(min_length=8, max_length=128)
+    data_consent: bool = False
+    policy_version: Optional[str] = Field(default=None, max_length=40)
 
 
 class ExistingMemberClaimRequest(BaseModel):
@@ -1813,6 +1817,7 @@ class MealCancellationRequestRead(ApiModel):
     status: Literal["pending", "approved", "rejected"]
     requested_at: datetime
     reviewed_by_id: Optional[str] = None
+    reviewed_by_name: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     review_reason: Optional[str] = None
 

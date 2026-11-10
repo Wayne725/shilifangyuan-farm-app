@@ -120,7 +120,7 @@ async function fixture(t, { payable = false, providerDelay = 1800, shipping = fa
   const context = await browser.newContext({ viewport: { width: 390, height: 1000 }, serviceWorkers: 'block' });
   await context.addInitScript(item => {
     if (!sessionStorage.getItem('recovery-seeded')) {
-      localStorage.setItem('slf_cart', JSON.stringify([{ product: item, quantity: 1 }]));
+      localStorage.setItem('slf_cart_v2:user:recovery-buyer', JSON.stringify({ items: [{ product: item, quantity: 1 }] }));
       sessionStorage.setItem('recovery-seeded', '1');
     }
   }, product);

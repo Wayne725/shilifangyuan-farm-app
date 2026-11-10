@@ -21,7 +21,7 @@ async function fixture(t, { loseResponse = false, holdHandoff = false } = {}) {
   const context = await browser.newContext({ viewport: { width: 390, height: 1000 }, serviceWorkers: 'block' });
   await context.addInitScript(item => {
     if (!sessionStorage.getItem('recovery-seeded')) {
-      localStorage.setItem('slf_cart', JSON.stringify([{ product: item, quantity: 1 }]));
+      localStorage.setItem('slf_cart_v2:user:recovery-buyer', JSON.stringify({ items: [{ product: item, quantity: 1 }] }));
       sessionStorage.setItem('recovery-seeded', '1');
     }
   }, product);
@@ -146,13 +146,13 @@ test('未知建單結果後購物車另加商品，恢復舊單不清除後來�
   const { page, state, pay } = await fixture(t, { loseResponse: true });
   await pay().click();
   await page.getByText('目前無法連上後端服務，請稍後重試。', { exact: true }).waitFor();
-  await page.evaluate(item => localStorage.setItem('slf_cart', JSON.stringify([{ product: item, quantity: 2 }])), product);
+  await page.evaluate(item => localStorage.setItem('slf_cart_v2:user:recovery-buyer', JSON.stringify({ items: [{ product: item, quantity: 2 }] })), product);
   await page.reload();
   await pay().click();
   await paymentPageReady(page);
   assert.equal(state.orders.size, 1);
   assert.equal(state.creates[1].items[0].quantity, 1);
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))[0].quantity), 2);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:recovery-buyer')).items[0].quantity), 2);
 });
 
 test('重整後已關店仍可恢復先前接受的同一單', async t => {

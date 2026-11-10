@@ -220,6 +220,8 @@ function AdmissionWorkspace({ user }: { user: User }) {
   const shareMinimum = draft.student_claimed ? config.declaration.student_min_shares : config.declaration.general_min_shares;
   const shareMaximum = draft.student_claimed ? config.declaration.student_max_shares : config.declaration.general_max_shares;
   const shareValid = /^\d+$/.test(draft.requested_share_count) && Number(draft.requested_share_count) >= shareMinimum && Number(draft.requested_share_count) <= shareMaximum;
+  const admissionFee = typeof config.declaration.admission_fee_amount === "number" && Number.isInteger(config.declaration.admission_fee_amount) && config.declaration.admission_fee_amount >= 0 ? config.declaration.admission_fee_amount : null;
+  const shareCapital = shareValid ? Number(draft.requested_share_count) * config.declaration.share_unit_amount : null;
   const consentValid = draft.declaration_accepted && draft.privacy_accepted && draft.share_rules_understood && draft.payment_notice_understood;
   const canSave = editable && shareValid && consentValid && Boolean(draft.discovery_channel);
   const canAnswer = editable && hasReading && !dirty && Boolean(round?.quiz_eligibility.allowed) && !passed;
@@ -243,12 +245,17 @@ function AdmissionWorkspace({ user }: { user: User }) {
   return <section className="membership-admission">
     <header className="membership-admission-heading">
       <div><p className="eyebrow">MEMBERSHIP APPLICATION / 入社申請</p><h1>入社申請</h1></div>
-      <div className="admission-heading-status">{round && <span className="status-chip">第 {round.round_number} 次申請 · {admissionStatusLabel(round.status)}</span>}<Link className="text-link" to="/membership/legacy">查看舊版入社資料</Link></div>
+      <div className="admission-heading-status">{round && <span className="status-chip">第 {round.round_number} 次申請 · {admissionStatusLabel(round.status)}</span>}{read.data.has_legacy_application && <Link className="text-link" to="/membership/legacy">查看舊版入社資料</Link>}</div>
     </header>
     {conflict && <div className="admission-conflict" role="alert"><p>申請資料已變更。填寫內容仍保留，請先重新讀取最新進度，再確認要儲存的內容。</p><button type="button" className="button button-quiet" disabled={busy} onClick={() => void reload(true)}>重新讀取最新進度</button></div>}
     {reloadError && <p className="form-error" role="alert">{reloadError}</p>}
     {action.isError && !conflict && <p className="form-error" role="alert">{action.error.message}</p>}
     {feedback && <p className="form-success admission-feedback" role="status">{feedback}</p>}
+    {(!round || step === 1) && <dl className="admission-progress-list" aria-label="入社費用估算">
+      <div><dt>入社費</dt><dd>{admissionFee === null ? "待確認" : formatMoney(admissionFee)}</dd></div>
+      <div><dt>認購股金</dt><dd>{shareCapital === null ? "請先填寫有效股數" : `${draft.requested_share_count} 股 × ${formatMoney(config.declaration.share_unit_amount)} = ${formatMoney(shareCapital)}`}</dd></div>
+      <div><dt>預估合計</dt><dd>{admissionFee === null || shareCapital === null ? "待確認" : formatMoney(admissionFee + shareCapital)}</dd></div>
+    </dl>}
 
     {!round ? <div className="admission-panel"><h2>開始你的入社申請</h2><ol>{steps.map(label => <li key={label}>{label}</li>)}</ol>{read.data.can_start ? <div className="admission-actions"><button type="button" className="button button-primary" disabled={busy || conflict} onClick={() => action.mutate({ kind: "start", key: startKey.current })}>{busy ? "建立中…" : "開始入社申請"}</button></div> : <p className="form-error" role="status">{read.data.start_blocked_reason || "目前無法開始新的入社申請，請聯絡合作社確認資格。"}</p>}</div> : <>
       <nav aria-label="入社申請步驟"><ol className="admission-steps">{steps.map((label, index) => { const value = index + 1 as Step; return <li key={label}><button type="button" aria-current={step === value ? "step" : undefined} disabled={busy || !stepAvailable(value)} onClick={() => { setStep(value); setFeedback(""); }}><span>{String(value).padStart(2, "0")}</span><span>{label}</span></button></li>; })}</ol></nav>
@@ -279,7 +286,7 @@ function AdmissionWorkspace({ user }: { user: User }) {
             <label><input type="radio" name="admission_student" checked={!draft.student_claimed} onChange={() => edit({ student_claimed: false })} />一般申請</label>
             <label><input type="radio" name="admission_student" checked={draft.student_claimed} onChange={() => edit({ student_claimed: true })} />全職在校學生</label>
           </div><label className="field"><span>認購股數（{shareMinimum}–{shareMaximum} 股，每股 {formatMoney(config.declaration.share_unit_amount)}）</span><input required type="number" min={shareMinimum} max={shareMaximum} step={1} inputMode="numeric" value={draft.requested_share_count} onChange={event => edit({ requested_share_count: event.target.value })} /></label>{!shareValid && <p className="form-error" role="alert">請填寫 {shareMinimum}–{shareMaximum} 的整數股數。</p>}</fieldset>
-          <div className="field-grid two-columns admission-discovery-fields"><label className="field"><span>如何得知合作社</span><select required value={draft.discovery_channel} onChange={event => edit({ discovery_channel: event.target.value, discovery_other: "" })}><option value="" disabled>請選擇來源</option>{config.discovery_channels.map(channel => <option key={channel} value={channel}>{channel}</option>)}</select></label>{draft.discovery_channel === "其他" && <label className="field"><span>其他來源（選填）</span><input maxLength={500} value={draft.discovery_other} onChange={event => edit({ discovery_other: event.target.value })} /></label>}</div>
+          <div className="field-grid two-columns admission-discovery-fields"><label className="field"><span id="admission-discovery-label">如何得知合作社</span><select required aria-labelledby="admission-discovery-label" value={draft.discovery_channel} onChange={event => edit({ discovery_channel: event.target.value, discovery_other: "" })}><option value="" disabled>請選擇來源</option>{config.discovery_channels.map(channel => <option key={channel} value={channel}>{channel}</option>)}</select></label>{draft.discovery_channel === "其他" && <label className="field"><span>其他來源（選填）</span><input maxLength={500} value={draft.discovery_other} onChange={event => edit({ discovery_other: event.target.value })} /></label>}</div>
           <div className="admission-consents">
             <label className="check-field"><input required type="checkbox" checked={draft.declaration_accepted} onChange={event => edit({ declaration_accepted: event.target.checked })} /><span>我已閱讀並同意上述入社志願書、社員權利與義務。</span></label>
             <label className="check-field"><input required type="checkbox" checked={draft.privacy_accepted} onChange={event => edit({ privacy_accepted: event.target.checked })} /><span>我同意合作社為入社審核與社員管理使用上述資料，並已閱讀<a href={config.declaration.privacy_url} target="_blank" rel="noopener noreferrer">個人資料使用說明</a>。</span></label>

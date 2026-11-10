@@ -244,6 +244,11 @@ jobs:
           node --test --test-concurrency=1 --test-timeout=45000 \
             tests/browser/admin-order-contact.mjs \
             tests/browser/business-meals.mjs \
+            tests/browser/cart-account-isolation.mjs \
+            tests/browser/public-audit-followups.mjs \
+            tests/browser/public-policy.mjs \
+            tests/browser/admin-order-cancellation.mjs \
+            tests/browser/membership-admission-phase-one.mjs \
             tests/browser/admin-walk-in-sale.mjs \
             tests/browser/manual-invoice-categories.mjs \
             tests/browser/admin-manual-invoice-records.mjs \

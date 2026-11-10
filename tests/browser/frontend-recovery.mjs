@@ -191,7 +191,7 @@ test('正常儲存控制組：初次登入還原在商品GET回覆之前完成�
 for (const mode of ['removeItem', 'getItem', 'setItem', 'getter']) test(`storage ${mode}受限仍可瀏覽及同頁購物，不清舊cart/記住的Email`, async t => {
   const { page, state } = await fixture(t, { storage: { content: `(() => {
     const original = window.localStorage, get = Storage.prototype.getItem;
-    original.setItem('slf_cart', ${JSON.stringify(JSON.stringify([{ product: storage_product, quantity: 2 }]))});
+    original.setItem('slf_cart_v2:user:buyer', ${JSON.stringify(JSON.stringify({ items: [{ product: storage_product, quantity: 2 }] }))});
     original.setItem('shilifangyuan.remembered-login-email', 'remembered@example.test');
     window.__auditReadNative = key => get.call(original, key);
     if (${JSON.stringify(mode)} === 'getter') Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Storage blocked', 'SecurityError'); } });
@@ -210,7 +210,7 @@ for (const mode of ['removeItem', 'getItem', 'setItem', 'getter']) test(`storage
   const count = ['getItem', 'getter'].includes(mode) ? 1 : 3;
   await page.getByText(`${storage_product.name}已加入，清單共 ${count} ${storage_product.unit}`, { exact: true }).waitFor();
   await page.getByText('瀏覽器儲存受限，部分資料只在本頁暫存，重整後可能無法保留。', { exact: true }).waitFor();
-  const native = await page.evaluate(() => ({ cart: JSON.parse(window.__auditReadNative('slf_cart')), email: window.__auditReadNative('shilifangyuan.remembered-login-email') }));
+  const native = await page.evaluate(() => ({ cart: JSON.parse(window.__auditReadNative('slf_cart_v2:user:buyer')).items, email: window.__auditReadNative('shilifangyuan.remembered-login-email') }));
   assert.equal(native.cart[0].quantity, mode === 'removeItem' ? 3 : 2);
   assert.equal(native.email, 'remembered@example.test');
   await page.getByRole('button', { name: '開啟導覽', exact: true }).click();

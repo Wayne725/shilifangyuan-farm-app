@@ -21,9 +21,9 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function fixture(t, { width = 1280, authenticated = true } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  await context.addInitScript(initialCart => {
+  await context.addInitScript(({ initialCart, authenticated }) => {
     if (!localStorage.getItem('session_fixture_cart_seeded')) {
-      localStorage.setItem('slf_cart', JSON.stringify(initialCart));
+      localStorage.setItem(authenticated ? 'slf_cart_v2:user:session-a' : 'slf_cart_v2:guest', JSON.stringify({ items: initialCart }));
       localStorage.setItem('session_fixture_cart_seeded', 'true');
     }
     window.__sessionMixes = [];
@@ -32,7 +32,7 @@ async function fixture(t, { width = 1280, authenticated = true } = {}) {
       const hasBData = document.querySelector('main')?.textContent?.includes('隔離乙私密商品');
       if (hasA && hasBData) window.__sessionMixes.push('A header with B order');
     }).observe(document, { childList: true, subtree: true, attributes: true });
-  }, cart);
+  }, { initialCart: cart, authenticated });
   const state = {
     refreshMode: 'same', refreshes: [], requests: [], acceptedOrders: [], payments: [], unknown: [], errors: [],
     failNext: new Map(), expiredToken: null, loggedOut: false, authenticated, nextVersion: 1,
@@ -125,7 +125,7 @@ async function fixture(t, { width = 1280, authenticated = true } = {}) {
   return { page, state, context, hold, visitCheckout, expireAtNextPoll };
 }
 
-const assertCartPreserved = async page => assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), cart);
+const assertCartPreserved = async (page, key = 'slf_cart_v2:user:session-a') => assert.deepEqual(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).items, key), cart);
 const header = (page, id) => page.locator(`a[aria-label="會員中心：${userName(id)}"]`);
 
 test('Email登入失敗可重試，成功返回原結帳頁並完成一次建單付款', async t => {
@@ -138,7 +138,7 @@ test('Email登入失敗可重試，成功返回原結帳頁並完成一次建單
   await page.getByRole('alert').getByText('隔離access token已到期', { exact: true }).waitFor();
   assert.equal(new URL(page.url()).pathname, '/login');
   assert.equal(await header(page, 'a').count(), 0);
-  await assertCartPreserved(page);
+  await assertCartPreserved(page, 'slf_cart_v2:guest');
   await page.getByRole('button', { name: '登入系統', exact: true }).click();
   await page.waitForURL(`${base}/checkout`);
   await header(page, 'a').waitFor({ state: 'attached' });
@@ -151,7 +151,7 @@ test('Email登入失敗可重試，成功返回原結帳頁並完成一次建單
   assert.equal(state.acceptedOrders.length, 1);
   assert.equal(state.acceptedOrders[0].owner, 'a');
   assert.equal(state.payments.length, 1);
-  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), []);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:session-a')).items), []);
 });
 
 test('同帳號access 401續期後GET只安全重試一次，訂單與購物車保留', async t => {
@@ -178,7 +178,7 @@ test('同帳號建單POST遇401可續期重試，僅建一筆訂單並正常進�
   assert.equal(state.acceptedOrders.length, 1);
   assert.equal(state.acceptedOrders[0].owner, 'a');
   assert.equal(state.payments.length, 1);
-  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), []);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:session-a')).items), []);
 });
 
 test('refresh401立即遮蔽舊私人快取及身分，保留未下單購物車', async t => {

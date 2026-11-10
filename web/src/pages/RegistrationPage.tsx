@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
 import { loginReturnTo } from "../lib/login-navigation";
 import { LineLoginButton } from "../components/LineLogin";
+import { useStorefrontStatus } from "../components/StorefrontStatus";
 import { LoadingLines } from "../components/Shared";
 import type { AuthActionResponse } from "../lib/types";
 import "../styles/auth-options.css";
@@ -23,6 +24,8 @@ export function RegisterPage() {
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const information = useStorefrontStatus().data?.public_information;
+  const [dataConsent, setDataConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<AuthActionResponse | null>(null);
@@ -35,10 +38,11 @@ export function RegisterPage() {
   const selectIntent = (value: Intent) => { setIntent(value); setStep(value === "existing_member" ? "identity" : "method"); setError(""); };
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError("");
+    if (information?.published && !dataConsent) { setError("請閱讀並同意個資告知與服務條款"); return; }
     if (password !== confirmation) { setError("兩次輸入的密碼不一致"); return; }
     setBusy(true);
     try {
-      setResult(await apiFetch<AuthActionResponse>(member ? "/v1/auth/register-existing-member" : "/v1/auth/register", { method: "POST", body: JSON.stringify(member ? { ...claim, display_name: claim.legal_name, password } : { display_name: displayName.trim(), email: email.trim(), password }) }));
+      setResult(await apiFetch<AuthActionResponse>(member ? "/v1/auth/register-existing-member" : "/v1/auth/register", { method: "POST", body: JSON.stringify({ ...(member ? { ...claim, display_name: claim.legal_name, password } : { display_name: displayName.trim(), email: email.trim(), password }), ...(information?.published ? { data_consent: dataConsent, policy_version: information.policy_version } : {}) }) }));
     } catch (reason) { setError(reason instanceof Error ? reason.message : "無法完成註冊"); }
     finally { setBusy(false); }
   };
@@ -55,7 +59,7 @@ export function RegisterPage() {
         : step === "identity" ? <form className="auth-form" onSubmit={(event) => { event.preventDefault(); setStep("line"); }}><label className="field"><span>電話號碼</span><input required type="tel" autoComplete="tel" minLength={8} maxLength={24} value={phone} onChange={(event) => setPhone(event.target.value)} /></label><label className="field"><span>Email</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="button button-primary" disabled={phone.replace(/\D/g, "").length < 8 || !email.trim()}>繼續使用 LINE<ArrowRight size={17} /></button><button className="button button-quiet" type="button" onClick={() => setStep("email")}>使用 Email 註冊</button></form>
         : step === "method" ? <div className="registration-methods"><button className="button button-primary" type="button" onClick={() => setStep("line")}>使用 LINE 註冊</button><button className="button button-quiet" type="button" onClick={() => setStep("email")}>使用 Email 註冊</button></div>
         : step === "line" || returning ? <><section className="line-consent-details"><h3>LINE 資料使用說明</h3><p>{returning ? "使用 LINE 識別碼及顯示名稱登入已連結的網站帳號，沿用原帳號的訂單與社員資格。" : <>使用 LINE 識別碼及顯示名稱建立網站帳號。{member ? "電話號碼與 Email 用於核對社員名冊；顯示名稱使用 LINE 名稱，完成原信箱驗證後啟用資格。" : "註冊後建立非社員帳號，通知信箱會於需要時填寫。"}</>}</p><Link to="/line-consent" search={{ return_to: returnTo, remember_me: search.remember_me !== false }}>閱讀完整資料使用說明</Link></section><LineLoginButton key={returning ? "login" : "registration"} intent={member && !returning ? "member" : "nonmember"} returnTo={returnTo} rememberMe={search.remember_me !== false} memberClaim={member && !returning ? lineClaim : undefined} consentLink={false} consentText={returning ? "我已閱讀並同意十里方圓依上述用途使用及保存 LINE 登入資料。" : "我已閱讀並同意 LINE 登入及社員資料的使用說明。"} /></>
-        : <form className="auth-form" onSubmit={submit}>{member ? <><label className="field"><span>姓名</span><input required autoComplete="name" maxLength={80} value={legalName} onChange={(event) => setLegalName(event.target.value)} /></label><label className="field"><span>社員編號</span><input required maxLength={32} value={memberNumber} onChange={(event) => setMemberNumber(event.target.value)} /></label><label className="field"><span>Email</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label></> : <><label className="field"><span>姓名或顯示名稱</span><input required autoComplete="name" maxLength={80} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label><label className="field"><span>Email</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label></>}<label className="field"><span>密碼</span><input required type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} /></label><label className="field"><span>再次輸入密碼</span><input required type="password" autoComplete="new-password" minLength={8} maxLength={128} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="button button-primary" disabled={busy}>{busy ? "建立中…" : "建立帳號"}</button></form>}
+        : <form className="auth-form" onSubmit={submit}>{member ? <><label className="field"><span>姓名</span><input required autoComplete="name" maxLength={80} value={legalName} onChange={(event) => setLegalName(event.target.value)} /></label><label className="field"><span>社員編號</span><input required maxLength={32} value={memberNumber} onChange={(event) => setMemberNumber(event.target.value)} /></label><label className="field"><span>Email</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label></> : <><label className="field"><span>姓名或顯示名稱</span><input required autoComplete="name" maxLength={80} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label><label className="field"><span>Email</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label></>}<label className="field"><span>密碼</span><input required type="password" autoComplete="new-password" minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} /></label><label className="field"><span>再次輸入密碼</span><input required type="password" autoComplete="new-password" minLength={8} maxLength={128} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>{information?.published && <label className="check-field"><input type="checkbox" required checked={dataConsent} onChange={event => setDataConsent(event.target.checked)} /><span>我已閱讀<Link to="/privacy" target="_blank" rel="noopener">個資告知</Link>並同意<Link to="/terms" target="_blank" rel="noopener">服務條款</Link></span></label>}{error && <p className="form-error" role="alert">{error}</p>}<button className="button button-primary" disabled={busy}>{busy ? "建立中…" : "建立帳號"}</button></form>}
       {!result && <p className="auth-switch">已有帳號？<Link className="text-link" to="/login" search={{ return_to: returnTo }}>{returning ? "使用 Email 登入" : "直接登入"}</Link></p>}
     </div></div>
   </section>;
