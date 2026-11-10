@@ -8,6 +8,7 @@ import { apiFetch, formatMoney } from "../lib/api";
 import { adminPaymentStatusLabel, invoiceStatusLabel } from "../lib/labels";
 import type { MealOrder, Order } from "../lib/types";
 import "./OrderCancellation.css";
+import { OptionalMark } from "./OptionalMark";
 
 type CancelOrder = Pick<Order, "id" | "order_number" | "sales_channel" | "payment_method" | "payment_status" | "fulfillment_status" | "amount_total" | "available_actions"> & { invoice_status: string };
 
@@ -46,7 +47,7 @@ export function AdminCancelOrder({ order }: { order: CancelOrder }) {
           <Dialog.Description className="order-number">{order.order_number} · {formatMoney(order.amount_total)}</Dialog.Description>
           {order.payment_status === "paid" && <p>{order.payment_method === "cash_on_pickup" ? "退單後待現場退款確認" : "取消整筆訂單並申請退款"} · {formatMoney(order.amount_total)}</p>}
           <form onSubmit={(event) => { event.preventDefault(); if (canCancel && !cancel.isPending) cancel.mutate(); }}>
-            <div className="field"><label htmlFor={reasonId}>退單原因</label><textarea id={reasonId} maxLength={2000} rows={3} value={reason} disabled={cancel.isPending} onChange={(event) => setReason(event.target.value)} /></div>
+            <div className="field"><label htmlFor={reasonId}>退單原因<OptionalMark /></label><textarea id={reasonId} maxLength={2000} rows={3} value={reason} disabled={cancel.isPending} onChange={(event) => setReason(event.target.value)} /></div>
             {cancel.isError && <p className="form-error" role="alert">{cancel.error.message}</p>}
             {!canCancel && <p className="form-error" role="alert">這筆訂單目前無法退單。</p>}
             <div className="form-actions"><button className="button button-danger" type="submit" disabled={!canCancel || cancel.isPending}>{cancel.isPending ? "退單處理中…" : "確認退單"}</button><Dialog.Close asChild><button className="button button-quiet" type="button" disabled={cancel.isPending}>返回</button></Dialog.Close></div>

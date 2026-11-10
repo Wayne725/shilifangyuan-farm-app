@@ -47,8 +47,6 @@
 .admin-navigation { margin-bottom: 12px; }
 .admin-navigation-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; }
 .admin-navigation-toolbar .admin-workspace-links { min-width: 0; flex: 1 1 480px; margin: 0; }
-.admin-navigation .admin-summary-shortcut { flex: 0 0 auto; min-height: 48px; white-space: nowrap; }
-.admin-navigation .admin-summary-shortcut[aria-current="page"] { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
 .admin-navigation .admin-workspace-links { gap: 4px; padding-block: 8px; border-bottom: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
 .admin-navigation .admin-workspace-links a { flex: 0 0 auto; min-height: 48px; padding: 10px 14px; border: 1px solid transparent; font-size: 1rem; white-space: nowrap; }
 .admin-navigation .admin-workspace-links a.active { color: var(--paper-light); background: var(--moss-dark); border-color: var(--moss-dark); }
@@ -105,3 +103,4 @@
 @media print { .reading-menu { display: none; } }
 
 .meal-calendar-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 20px; }
+.optional-mark::after { content: "（選填）"; margin-left: 0.25em; color: var(--ink-soft); font-weight: 400; }

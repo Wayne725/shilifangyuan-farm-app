@@ -7,6 +7,7 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, formatDateTime } from "../lib/api";
 import "../styles/admin-users.css";
+import { OptionalMark } from "../components/OptionalMark";
 
 interface RegisteredUser {
   id: string; customer_number?: string | null; display_name: string; email: string | null; notification_email?: string | null;
@@ -81,7 +82,7 @@ function RegisteredUserRow({ item }: { item: RegisteredUser }) {
     {removeOpen && <section className="admin-membership-removal" aria-label={`移除 ${item.display_name} 的社員資格`}>
       <h3>確認將 {item.display_name} 改為非社員？</h3>
       <div className="admin-quick-buttons" role="group" aria-label="移除資格原因">{["社員資料誤設", "社員資格異動"].map((value) => <button key={value} className="button button-quiet" type="button" aria-pressed={removeReason === value} onClick={() => setRemoveReason(value)}>{value}</button>)}</div>
-      <label className="field"><span>處理原因</span><input maxLength={1000} value={removeReason} onChange={(event) => setRemoveReason(event.target.value)} /></label>
+      <label className="field"><span>處理原因<OptionalMark /></span><input maxLength={1000} value={removeReason} onChange={(event) => setRemoveReason(event.target.value)} /></label>
       <p>保留帳號、訂單與股金紀錄，不會自動退款。</p>
       {remove.isError && <p className="form-error" role="alert">{remove.error.message}</p>}
       <div className="admin-user-actions"><button className="button button-danger" type="button" disabled={remove.isPending} onClick={() => remove.mutate()}>{remove.isPending ? "處理中…" : "確認改為非社員"}</button><button className="button button-quiet" type="button" disabled={remove.isPending} onClick={() => setRemoveOpen(false)}>取消</button></div>
@@ -100,7 +101,7 @@ function RegisteredUserRow({ item }: { item: RegisteredUser }) {
         <div><dt>社員編號</dt><dd>{phoneMatch.member_number}</dd></div>
         <div><dt>手機</dt><dd>{phoneMatch.phone_masked}</dd></div>
       </dl></section>}
-      <label className="field"><span>核對說明／收據參考</span><textarea maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+      <label className="field"><span>核對說明／收據參考<OptionalMark /></span><textarea maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
       <label className="admin-offline-confirm"><input type="checkbox" required disabled={!phoneMatch || phoneCheck.isPending || grant.isPending} checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>我已核對手機持有人身分及線下入社／繳費資料。</span></label>
       {grant.isError && <p className="form-error" role="alert">{grant.error.message}</p>}
       <button className="button button-primary" disabled={grant.isPending || phoneCheck.isPending || !phoneMatch || !confirmed}>{grant.isPending ? "確認中…" : "確認授予正式社員資格"}</button>

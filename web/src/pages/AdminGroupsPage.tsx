@@ -14,6 +14,7 @@ import { campaignAccessDenied, campaignDateTime, campaignScheduleError, campaign
 import { taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import type { GroupBundle, GroupCampaign, GroupVoteProposal, Product } from "../lib/types";
+import { OptionalMark } from "../components/OptionalMark";
 
 export function AdminGroupsPage() {
   const { user, openLogin } = useAuth();
@@ -93,7 +94,7 @@ function GroupProposalReview({ proposal, campaign, products, bundles, onDone, on
       <div className="review-card-actions schedule-fields">
         {proposal.status === "pending_review" && <><label className="field"><span>投票門檻（人）</span><input min={1} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /></label><label className="field"><span>投票截止（台灣）</span><input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label></>}
 
-        {proposal.status === "pending_review" && <label className="field"><span>處理原因</span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label>}
+        {proposal.status === "pending_review" && <label className="field"><span>處理原因<OptionalMark /></span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label>}
         <div>{proposal.status === "pending_review" && <button type="button" disabled={!deadline || action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />通過並開放投票</button>}{proposal.status === "pending_review" && <button type="button" disabled={action.isPending} onClick={() => action.mutate("reject")}>不通過</button>}</div>
         {action.isError && <p className="form-error">{action.error.message}</p>}
       </div>

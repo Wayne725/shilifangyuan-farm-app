@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataState, LoadingLines } from "./Shared";
 import { ApiError, apiFetch } from "../lib/api";
+import { OptionalMark } from "./OptionalMark";
 
 interface EducationSettings {
   configured: boolean;
@@ -85,7 +86,7 @@ export function MembershipEducationSettings() {
             <label className="field"><span>額外重考次數（不含首次）</span><input type="number" min={0} max={100} step={1} required value={draft.retry_limit} onChange={event => edit({ retry_limit: event.target.value })} /></label>
             <label className="field"><span>重考間隔（分鐘）</span><input type="number" min={0} max={525600} step={1} required value={draft.retry_interval_minutes} onChange={event => edit({ retry_interval_minutes: event.target.value })} /></label>
           </div>
-          <label className="field"><span>調整原因</span><input maxLength={1000} value={draft.reason} onChange={event => edit({ reason: event.target.value })} /></label>
+          <label className="field"><span>調整原因<OptionalMark /></span><input maxLength={1000} value={draft.reason} onChange={event => edit({ reason: event.target.value })} /></label>
         </fieldset>
         {save.isError && <p className="form-error" role="alert">{save.error.message}</p>}
         {save.isSuccess && <p className="form-success" role="status">重考設定已儲存</p>}

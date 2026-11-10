@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 import "./AdminReasonChoices.css";
+import { OptionalMark } from "./OptionalMark";
 
 export function AdminReasonChoices({ label, value, onChange, choices, disabled = false, maxLength = 2000 }: {
   label: string;
@@ -12,7 +13,7 @@ export function AdminReasonChoices({ label, value, onChange, choices, disabled =
   const labelId = useId();
   const [custom, setCustom] = useState(() => Boolean(value && !choices.some(choice => choice.value === value)));
   return <fieldset className="admin-reason-choices" disabled={disabled}>
-    <legend id={labelId}>{label}</legend>
+    <legend id={labelId}>{label}<OptionalMark /></legend>
     <select className="admin-reason-select" aria-labelledby={labelId} value={custom ? "__custom__" : value} onChange={(event) => {
       const isCustom = event.target.value === "__custom__";
       setCustom(isCustom);
