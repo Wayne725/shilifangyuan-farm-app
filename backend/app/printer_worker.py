@@ -7,13 +7,14 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.orm import selectinload
 
 from .config import Settings, get_settings
 from .database import SessionLocal
 from .integrations.feie import FeieClient, FeieError, validate_live_config
 from .models import FulfillmentStatus, Order, PaymentStatus, PrintJob
 from .manual_order_printing import current_manual_snapshot, load_manual_print_order, manual_print_kind, manual_print_status_error
-from .printing import (confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
+from .printing import (business_preparation_print_allowed, business_preparation_window_open, business_receipt_fields, confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
                        receipt_time, render_receipt_snapshot, seal_receipt_content)
 from .summary_printing import summary_job_is_current
 
@@ -41,6 +42,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 PrintJob.kind.in_({"cancellation", "summary", "reference"}),
                 PrintJob.reprint_of_id.is_not(None),
                 and_(PrintJob.kind == "order", PrintJob.snapshot["manual"].as_boolean().is_(True)),
+                and_(Order.meal_booking_type == "business", Order.payment_status == PaymentStatus.PENDING),
                 Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
                 Order.payment_status.in_([PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED]),
                 and_(Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None)),
@@ -50,6 +52,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         if candidate is None:
             return False
         order = (await session.scalar(select(Order).where(Order.id == candidate.order_id)
+                 .options(selectinload(Order.fulfillment))
                  .execution_options(populate_existing=True).with_for_update())) if candidate.order_id else None
         job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id).with_for_update())
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
@@ -75,8 +78,12 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.status, job.last_error = "failed", "order_payment_reversed_before_send"
                 await session.commit()
                 return True
-            if not confirmed_print_payment(order):
-                if job.snapshot.get("manual"):
+            if business_receipt_fields(order) and not business_preparation_window_open(order, now=now):
+                job.status, job.last_error = "failed", "business_preparation_closed_before_send"
+                await session.commit()
+                return True
+            if not confirmed_print_payment(order) and not business_preparation_print_allowed(order, job, now=now):
+                if job.snapshot.get("manual") or business_receipt_fields(order):
                     job.status, job.last_error = "failed", "order_payment_unconfirmed_before_send"
                     await session.commit()
                 return True
@@ -115,7 +122,9 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.status, job.last_error = "failed", "summary_content_missing"
                 await session.commit()
                 return True
-        if job.status == "pending" and job.kind in {"order", "amendment"} and job.content is not None and job.snapshot.get("payment_status") != "已付款":
+        if (job.status == "pending" and job.kind in {"order", "amendment"} and job.content is not None
+                and job.snapshot.get("payment_status") != "已付款" and not business_preparation_print_allowed(order, job, now=now)
+                and not business_receipt_fields(order)):
             job.status, job.last_error = "failed", "unpaid_receipt_snapshot"
             await session.commit()
             return True
@@ -140,8 +149,9 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                     content = format_receipt({**render_receipt_snapshot(snapshot, job.order_id, settings),
                         "reprint": bool(job.reprint_of_id), "dry_run": mode == "dry_run"}, width=settings.printer_line_width)
                     job.content = seal_receipt_content(content, snapshot, job.order_id, settings, force=True)
-                elif content is None:
+                elif content is None or business_receipt_fields(order):
                     snapshot = {key: value for key, value in job.snapshot.items() if key != "customer_phone"}
+                    snapshot.update(business_receipt_fields(order))
                     snapshot.update(await payment_snapshot_from_session(session, order))
                     if not snapshot.get("print_requested_at"):
                         snapshot["print_requested_at"] = receipt_time(now)

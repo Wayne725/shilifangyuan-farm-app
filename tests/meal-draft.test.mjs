@@ -62,6 +62,16 @@ test("離開後重新讀取，保留餐點份數、客製選項與取餐時間",
   assert.deepEqual(restored, selection());
 });
 
+test("會餐草稿重整保留訂餐方式，清空後回到一般且不保存統編資料", () => {
+  const browserStorage = storage();
+  writeMealDraft("lunch", { ...selection(), mealBookingType: "business", buyerTaxId: "15989995" }, browserStorage);
+  const restored = reconcileMealDraft(readMealDraft("lunch", browserStorage), event(), NOW);
+  assert.equal(restored.mealBookingType, "business");
+  assert.equal(Object.hasOwn(restored, "buyerTaxId"), false);
+  clearMealDraft("lunch", browserStorage);
+  assert.equal(readMealDraft("lunch", browserStorage).mealBookingType, undefined);
+});
+
 test("午晚餐及不同日期各自保存，清除一場不影響其他場次", () => {
   const browserStorage = storage();
   writeMealDraft("lunch", selection(), browserStorage);

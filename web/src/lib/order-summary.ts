@@ -19,6 +19,7 @@ export const orderSummaryStatusLabels = {
 } as const;
 
 export interface OrderSummaryFilters {
+  includeUnpaidBusiness?: boolean;
   startsOn: string;
   endsOn: string;
   dateBasis: "order" | "pickup";
@@ -30,6 +31,8 @@ export interface OrderSummaryFilters {
 }
 
 export interface OrderSummaryProduct {
+  meal_booking_type?: "standard" | "business";
+  payment_status?: "all" | "paid" | "pending" | "inactive";
   key: string;
   sales_channel: OrderSummarySalesChannel;
   category: string;
@@ -55,6 +58,7 @@ export interface OrderSummaryReport {
     paid_order_count: number;
     pending_order_count: number;
     inactive_order_count: number;
+    pending_business_order_count?: number;
   };
   categories: Array<{ category: string; order_count: number; quantity: number }>;
   channels: Array<{ sales_channel: OrderSummarySalesChannel; order_count: number; quantity: number }>;
@@ -77,5 +81,6 @@ export function orderSummaryParameters(filters: OrderSummaryFilters) {
     status: filters.status,
     category: filters.category,
     search: filters.search,
+    ...(filters.includeUnpaidBusiness && filters.orderCategory !== "general" ? { include_unpaid_business: "true" } : {}),
   };
 }

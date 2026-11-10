@@ -8,7 +8,7 @@ import "./OrderSummaryPrint.css";
 import { OptionalMark } from "./OptionalMark";
 
 type PrintFilters = ReturnType<typeof orderSummaryParameters>;
-type Totals = { order_count: number; quantity: number; product_count: number };
+type Totals = { order_count: number; quantity: number; product_count: number; paid_order_count?: number; pending_business_order_count?: number };
 type Preview = { fingerprint: string; summary: Totals; pages: string[]; page_count: number; filters: PrintFilters; mode: string };
 type Attempt = { request_id: string; fingerprint: string; filters: PrintFilters };
 type Batch = { request_id: string; fingerprint: string; mode: string; created_at: string; filters: PrintFilters; summary: Totals; pages: Array<{ id: string; page: number; status: string; last_error: string | null }> };
@@ -32,6 +32,7 @@ function BatchResult({ batch }: { batch: Batch }) {
   return <div className="summary-print-result" role="status">
     <strong>{batch.mode === "dry_run" ? "模擬列印" : "彙總單列印紀錄"} · {batch.summary.order_count} 筆訂單 · {batch.pages.length} 張</strong>
     <span>{batch.filters.date_basis === "pickup" ? "取餐" : "下單"} {batch.filters.starts_on} 至 {batch.filters.ends_on}</span>
+    {batch.summary.pending_business_order_count !== undefined && <span>已付款 {batch.summary.paid_order_count || 0} 筆 · 會餐未付款 {batch.summary.pending_business_order_count} 筆</span>}
     <small>批次 {batch.request_id}</small>
     <ul>{batch.pages.map((page) => <li key={page.id}><span>第 {page.page} 張</span><strong>{labels[page.status] || page.status}</strong>{page.last_error && <span className="form-error">{errorLabels[page.last_error] || page.last_error}</span>}</li>)}</ul>
   </div>;
@@ -145,8 +146,9 @@ export function OrderSummaryPrint({ filters, userId, disabled, access }: { filte
         <Dialog.Content className="summary-print-dialog" aria-describedby={undefined} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => { if (busy) event.preventDefault(); }}>
           <Dialog.Title>彙總單列印</Dialog.Title>
           {preview && !attempt && <>
-            <p className="summary-print-scope">{preview.filters.order_category === "meal" ? "便當訂單" : "一般訂單"} · {preview.filters.date_basis === "pickup" ? "取餐日期" : "下單日期"}<br />{preview.filters.starts_on} 至 {preview.filters.ends_on}<br /><strong>只印已付款且未取消</strong></p>
+            <p className="summary-print-scope">{preview.filters.order_category === "meal" ? "便當訂單" : "一般訂單"} · {preview.filters.date_basis === "pickup" ? "取餐日期" : "下單日期"}<br />{preview.filters.starts_on} 至 {preview.filters.ends_on}<br /><strong>{preview.filters.include_unpaid_business ? "已付款訂單及未付款會餐，均須未取消" : "只印已付款且未取消"}</strong></p>
             <p>{preview.summary.order_count} 筆訂單 · {preview.summary.quantity} 份／件 · {preview.summary.product_count} 種品項 · {preview.page_count} 張</p>
+            {preview.summary.pending_business_order_count !== undefined && <p>已付款 {preview.summary.paid_order_count || 0} 筆 · 會餐未付款 {preview.summary.pending_business_order_count} 筆</p>}
             {preview.mode === "dry_run" && <p role="status">目前為模擬模式，不會送到出單機。</p>}
             <div className="summary-print-previews">{preview.pages.map((page, index) => <section key={index} aria-label={`第 ${index + 1} 張預覽`}><h3>第 {index + 1} 張</h3><pre>{page}</pre></section>)}</div>
             <button type="button" className="button button-primary" disabled={busy} onClick={() => void send()}>{busy ? "送印中…" : `${preview.mode === "dry_run" ? "確認模擬" : "確認列印"} ${preview.page_count} 張`}</button>

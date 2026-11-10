@@ -201,7 +201,7 @@ async def test_summary_old_layout_preview_requires_refresh(summary_print_context
     assert response.status_code == 409
     assert await c.session.scalar(select(func.count()).select_from(PrintJob)) == 0
     await create_batch(c)
-    assert all(job.snapshot["format_version"] == 2 for job in await jobs(c))
+    assert all(job.snapshot["format_version"] == 3 for job in await jobs(c))
 
 
 @pytest.mark.parametrize("cancelled", [False, True])

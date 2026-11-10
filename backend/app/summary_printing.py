@@ -11,19 +11,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import Settings
 from .integrations.feie import FeieError, configured_region
 from .models import PrintJob
-from .order_summary import OrderSummaryFilters, build_print_summary
+from .order_summary import OrderSummaryFilters, build_print_summary, print_summary_filters
 from .printing import printer_fingerprint, receipt_time, wrap_text
 
 
 MAX_SUMMARY_PAGES = 50
-SUMMARY_FORMAT_VERSION = 2
+SUMMARY_FORMAT_VERSION = 3
 
 
 def normalized_print_filters(filters: OrderSummaryFilters) -> dict:
-    return filters.model_copy(update={"status": "paid"}).model_dump(mode="json", exclude={"limit", "offset"})
+    return print_summary_filters(filters)
 
 
 def summary_fingerprint(report: dict, settings: Settings, *, format_version: int = SUMMARY_FORMAT_VERSION) -> str:
+    if format_version < 3:
+        report = {**report, "filters": {key: value for key, value in report["filters"].items() if key != "include_unpaid_business"},
+                  "products": [{key: value for key, value in product.items()
+                                if key not in {"meal_booking_type", "payment_status"}} for product in report["products"]]}
+        for product in report["products"]:
+            identity = json.loads(product["key"])
+            product["key"] = json.dumps(identity[:6], ensure_ascii=False, separators=(",", ":"))
     payload = {"report": report, "printer": printer_fingerprint(settings),
                "region": configured_region(settings), "width": settings.printer_line_width,
                "mode": "dry_run" if settings.printer_dry_run else "live"}
@@ -58,7 +65,8 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
         result = [*_lines("十里方圓 合作社", width, "C"), *_lines("訂單彙總", width, "CB")]
         if dry_run:
             result += _lines("＊＊ 模擬列印 ＊＊", width, "BOLD")
-        result += [*_lines(category, width, "BOLD"), *_lines("已付款", width, "BOLD"),
+        payment_label = "已付款＋會餐未付款" if filters.get("include_unpaid_business") else "已付款"
+        result += [*_lines(category, width, "BOLD"), *_lines(payment_label, width, "BOLD"),
                    *_lines(f"{date_basis}（台灣）", width),
                    *_lines(f"{filters['starts_on']} 至 {filters['ends_on']}", width)]
         if filters.get("sales_channel") in {"regular", "group"}:
@@ -70,9 +78,12 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
                    *_lines(f"第 {page}/{total} 張", width, "C"),
                    *_lines(f"全單 {totals['order_count']} 筆訂單", width),
                    *_lines(f"{totals['product_count']} 種品項・總數量 {totals['quantity']}", width), "-" * width]
+        if filters.get("include_unpaid_business"):
+            result += _lines(f"已付款 {totals.get('paid_order_count', 0)} 筆／會餐未付款 {totals.get('pending_business_order_count', 0)} 筆", width)
         return result
 
-    footer = ["-" * width, *_lines("依統計時間之已付款訂單彙總", width, "C"), "", "", ""]
+    footer_label = "備餐彙總含會餐未付款" if filters.get("include_unpaid_business") else "依統計時間之已付款訂單彙總"
+    footer = ["-" * width, *_lines(footer_label, width, "C"), "", "", ""]
     chunks: list[list[str]] = []
     current: list[str] = []
 
@@ -112,7 +123,10 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
         for variant in product["variants"]:
             options = _variant_label(variant["options"])
             details += _lines(f"  {variant['quantity']} {product['unit']} × {options}", width)
-        section(f"{product['quantity']} {product['unit']} × {product['name']}", details)
+        label = product['name']
+        if product.get('meal_booking_type') == 'business':
+            label = f"會餐｜{'未付款' if product.get('payment_status') == 'pending' else '已付款'}｜{label}"
+        section(f"{product['quantity']} {product['unit']} × {label}", details)
     for note in report.get("notes", []):
         details = []
         for item in note["items"]:
@@ -131,7 +145,7 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
 
 async def summary_job_is_current(session: AsyncSession, job: PrintJob, settings: Settings) -> bool:
     format_version = job.snapshot.get("format_version", 1)
-    if format_version not in (1, SUMMARY_FORMAT_VERSION):
+    if format_version not in (1, 2, SUMMARY_FORMAT_VERSION):
         return False
     try:
         report = await build_print_summary(session, OrderSummaryFilters.model_validate(job.snapshot["filters"]))

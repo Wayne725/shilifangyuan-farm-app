@@ -4,14 +4,14 @@ from typing import Annotated, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .meal_schedules import TAIPEI
 from .order_categories import OrderCategory, order_category_condition
 from .models import (
     FulfillmentState, FulfillmentStatus, MealEventOffering, Order, OrderFulfillment,
-    OrderItem, OrderItemOption, PaymentStatus, Product,
+    OrderItem, OrderItemOption, PaymentMethod, PaymentStatus, Product,
 )
 
 
@@ -24,6 +24,7 @@ class OrderSummaryFilters(BaseModel):
     sales_channel: Literal["all", "meal_preorder", "regular", "group"] = "all"
     order_category: OrderCategory = "all"
     status: Literal["active", "paid", "pending", "inactive", "all"] = "active"
+    include_unpaid_business: bool = False
     search: str = Field(default="", max_length=100)
     category: str = Field(default="", max_length=100)
     limit: int = Field(default=25, ge=1, le=100)
@@ -36,6 +37,13 @@ class OrderSummaryFilters(BaseModel):
         if self.date_basis == "pickup" and self.order_category != "meal":
             raise ValueError("取餐日期僅適用便當訂單")
         return self
+
+
+def print_summary_filters(filters: OrderSummaryFilters) -> dict:
+    values = filters.model_copy(update={"status": "paid"}).model_dump(mode="json", exclude={"limit", "offset"})
+    if not values["include_unpaid_business"]:
+        values.pop("include_unpaid_business")
+    return values
 
 
 def _summary_lines(filters: OrderSummaryFilters, *, confirmed_paid: bool = False):
@@ -78,18 +86,25 @@ def _summary_lines(filters: OrderSummaryFilters, *, confirmed_paid: bool = False
         OrderItem.product_name.label("name"), OrderItem.unit_label.label("unit"),
         OrderItem.quantity.label("quantity"), category.label("category"),
         source_kind.label("source_kind"), source_id.label("source_id"), state.label("state"),
+        Order.meal_booking_type.label("meal_booking_type"),
+        case((Order.meal_booking_type == "business", state), else_="all").label("payment_status"),
     ).select_from(OrderItem).join(Order, Order.id == OrderItem.order_id).outerjoin(
         OrderFulfillment, OrderFulfillment.order_id == Order.id,
     ).outerjoin(Product, Product.id == OrderItem.source_product_id).outerjoin(
         MealEventOffering, MealEventOffering.id == OrderItem.source_meal_offering_id,
     ).where(date_column >= start, date_column < end, order_category_condition(filters.order_category))
     if confirmed_paid:
-        query = query.where(active, Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None))
+        payment_allowed = and_(Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None))
+        if filters.include_unpaid_business:
+            payment_allowed = or_(payment_allowed, and_(Order.meal_booking_type == "business",
+                Order.payment_method == PaymentMethod.ONLINE, Order.payment_status == PaymentStatus.PENDING,
+                OrderFulfillment.status.in_([FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP])))
+        query = query.where(active, payment_allowed)
     if filters.sales_channel != "all":
         query = query.where(Order.sales_channel == filters.sales_channel)
     if filters.status == "active":
         query = query.where(active)
-    elif filters.status != "all":
+    elif filters.status != "all" and not (confirmed_paid and filters.include_unpaid_business and filters.status == "paid"):
         query = query.where(state == filters.status)
     if filters.search:
         query = query.where(OrderItem.product_name.icontains(filters.search, autoescape=True))
@@ -111,7 +126,8 @@ async def read_order_summary(session: AsyncSession, filters: OrderSummaryFilters
         *(func.count(func.distinct(case((lines.c.state == state, lines.c.order_id)))).label(f"{state}_order_count")
           for state in ["paid", "pending", "inactive"]),
     ))).one()._mapping)
-    group_columns = [lines.c.sales_channel, lines.c.source_kind, lines.c.source_id, lines.c.name, lines.c.unit, lines.c.category]
+    group_columns = [lines.c.sales_channel, lines.c.source_kind, lines.c.source_id, lines.c.name, lines.c.unit, lines.c.category,
+                     lines.c.meal_booking_type, lines.c.payment_status]
     products = select(
         *group_columns, func.sum(lines.c.quantity).label("quantity"),
         func.count(func.distinct(lines.c.order_id)).label("order_count"),
@@ -123,7 +139,7 @@ async def read_order_summary(session: AsyncSession, filters: OrderSummaryFilters
     ).limit(filters.limit).offset(filters.offset))).mappings()
     items = [
         {"key": json.dumps([row[column.key] for column in group_columns], ensure_ascii=False, separators=(",", ":")),
-         **{field: row[field] for field in ["sales_channel", "category", "name", "unit", "quantity", "order_count"]}}
+         **{field: row[field] for field in ["sales_channel", "category", "name", "unit", "quantity", "order_count", "meal_booking_type", "payment_status"]}}
         for row in product_rows
     ]
     categories = (await session.execute(select(
@@ -145,7 +161,7 @@ async def read_order_summary(session: AsyncSession, filters: OrderSummaryFilters
 
 MAX_PRINT_SUMMARY_ITEMS = 5000
 MAX_PRINT_SUMMARY_OPTIONS = 30000
-_PRODUCT_FIELDS = ("sales_channel", "source_kind", "source_id", "name", "unit", "category")
+_PRODUCT_FIELDS = ("sales_channel", "source_kind", "source_id", "name", "unit", "category", "meal_booking_type", "payment_status")
 
 
 async def build_print_summary(session: AsyncSession, filters: OrderSummaryFilters) -> dict:
@@ -179,6 +195,7 @@ async def build_print_summary(session: AsyncSession, filters: OrderSummaryFilter
         product = products.setdefault(identity, {
             "key": json.dumps(identity, ensure_ascii=False, separators=(",", ":")),
             "name": row["name"], "unit": row["unit"], "quantity": 0, "variants": {},
+            "meal_booking_type": row["meal_booking_type"], "payment_status": row["payment_status"],
         })
         quantity = row["quantity"]
         product["quantity"] += quantity
@@ -200,9 +217,13 @@ async def build_print_summary(session: AsyncSession, filters: OrderSummaryFilter
             {"options": list(options), "quantity": quantity}
             for options, quantity in sorted(product["variants"].items())
         ]})
+    counts = {}
+    if filters.include_unpaid_business:
+        counts = {"paid_order_count": len({row['order_id'] for row in rows if row['state'] == 'paid'}),
+                  "pending_business_order_count": len({row['order_id'] for row in rows if row['meal_booking_type'] == 'business' and row['state'] == 'pending'})}
     return {
-        "filters": filters.model_dump(mode="json", exclude={"limit", "offset"}),
-        "summary": {"order_count": len(versions), "quantity": sum(row["quantity"] for row in rows), "product_count": len(products)},
+        "filters": print_summary_filters(filters),
+        "summary": {"order_count": len(versions), "quantity": sum(row["quantity"] for row in rows), "product_count": len(products), **counts},
         "products": product_rows,
         "notes": [{**note, "items": [
             {"name": name, "quantity": quantity, "unit": unit}

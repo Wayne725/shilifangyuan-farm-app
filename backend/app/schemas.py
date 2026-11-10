@@ -847,6 +847,11 @@ class OrderAmendmentRead(ApiModel):
 
 
 class OrderRead(ApiModel):
+    meal_booking_type: Literal["standard", "business"] = "standard"
+    payment_opens_at: Optional[datetime] = None
+    payment_closes_at: Optional[datetime] = None
+    payment_followup_required: bool = False
+    invoice_followup_required: bool = False
     invoice_tax: Optional[InvoiceTaxRead] = None
     customer_kind: Literal["account", "walk_in"] = "account"
     invoice_handling: str = "on_payment"
@@ -1681,6 +1686,7 @@ class MealOrderLineInput(BaseModel):
 
 
 class MealOrderCreate(InvoicePreferenceInput):
+    meal_booking_type: Literal["standard", "business"] = "standard"
     invoice_handling: Optional[Literal["on_payment", "pickup_day", "external"]] = None
     client_request_id: Optional[UUID] = None
     kitchen_note: Optional[str] = Field(default=None, max_length=500)
@@ -1696,6 +1702,14 @@ class MealOrderCreate(InvoicePreferenceInput):
 
     @model_validator(mode="after")
     def external_invoice_requires_onsite(self):
+        if self.meal_booking_type == "business":
+            if self.invoice_buyer_type != InvoiceBuyerType.COMPANY:
+                raise ValueError("會餐必須填寫公司統編與抬頭")
+            if self.payment_method != PaymentMethod.ONLINE:
+                raise ValueError("會餐僅支援線上付款")
+            if sum(item.quantity for item in self.items) < 2:
+                raise ValueError("會餐至少需訂 2 份")
+            self.invoice_handling = "pickup_day"
         if self.invoice_handling == "external" and self.payment_method != PaymentMethod.CASH_ON_PICKUP:
             raise ValueError("外部 POS 開票僅適用現場付款")
         return self
@@ -1804,6 +1818,11 @@ class MealCancellationRequestRead(ApiModel):
 
 
 class MealOrderRead(ApiModel):
+    meal_booking_type: Literal["standard", "business"] = "standard"
+    payment_opens_at: Optional[datetime] = None
+    payment_closes_at: Optional[datetime] = None
+    payment_followup_required: bool = False
+    invoice_followup_required: bool = False
     invoice_tax: Optional[InvoiceTaxRead] = None
     invoice_handling: str = "on_payment"
     invoice_issue_after: Optional[datetime] = None
@@ -1862,6 +1881,7 @@ class MealCancellationQueueRead(ApiModel):
 
 
 class MealOrderSearchFilters(BaseModel):
+    business_unpaid: bool = False
     search: str = Field(default="", max_length=100)
     date_from: Optional[date] = Field(default=None, ge=date(2, 1, 1), le=date(9998, 12, 31))
     date_to: Optional[date] = Field(default=None, ge=date(2, 1, 1), le=date(9998, 12, 31))

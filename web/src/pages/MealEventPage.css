@@ -45,3 +45,9 @@
   color: var(--ink-soft);
   font-size: 1rem;
 }
+
+.meal-booking-type { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 0 0 24px; padding: 16px 0; border: 0; border-block: 1px solid var(--line); }
+.meal-booking-type legend { padding: 0; font-weight: 600; }
+.meal-booking-type label { display: flex; align-items: center; gap: 10px; min-height: 48px; cursor: pointer; }
+.meal-booking-type label.selected { font-weight: 600; }
+.meal-business-payment, .meal-business-invoice { margin-block: 12px; font-weight: 600; }

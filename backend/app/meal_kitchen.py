@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,8 +11,9 @@ from .domain import aware
 from .meal_schedules import TAIPEI
 from .models import (
     AdminAudit, FulfillmentState, FulfillmentStatus, MealEvent, MealEventStatus,
-    Order, OrderFulfillment, OrderItem, PaymentStatus, SalesChannel, User,
+    Order, OrderFulfillment, OrderItem, PaymentMethod, PaymentStatus, SalesChannel, User,
 )
+from .printing import business_preparation_print_allowed
 
 
 ACTIVE_STATES = {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
@@ -47,6 +48,10 @@ def kitchen_order_read(order):
     return {
         "id": order.id, "order_number": order.order_number, "customer_name": order.user.display_name,
         "kitchen_note": order.kitchen_note,
+        "meal_booking_type": order.meal_booking_type,
+        "payment_status": order.payment_status.value,
+        "invoice_buyer_tax_id": order.invoice_buyer_tax_id if order.meal_booking_type == "business" else None,
+        "invoice_buyer_name": order.invoice_buyer_name if order.meal_booking_type == "business" else None,
         "meal_event_id": order.meal_event_id, "event_title": order.meal_event.title,
         "meal_period": order.meal_event.meal_period,
         "location": order.fulfillment.pickup_location or order.meal_event.location,
@@ -68,7 +73,9 @@ async def meal_kitchen_list(session: AsyncSession, filters: MealKitchenFilters):
     end = start + timedelta(days=1)
     now = datetime.now(timezone.utc)
     query = select(Order).join(OrderFulfillment, OrderFulfillment.order_id == Order.id).join(MealEvent, MealEvent.id == Order.meal_event_id).where(
-        Order.sales_channel == SalesChannel.MEAL_PREORDER, Order.payment_status == PaymentStatus.PAID,
+        Order.sales_channel == SalesChannel.MEAL_PREORDER,
+        or_(Order.payment_status == PaymentStatus.PAID, and_(Order.meal_booking_type == "business",
+            Order.payment_method == PaymentMethod.ONLINE, Order.payment_status == PaymentStatus.PENDING)),
         Order.cancelled_at.is_(None), OrderFulfillment.status.in_(ACTIVE_STATES),
         MealEvent.status.in_(ACTIVE_EVENT_STATES), MealEvent.pickup_ends_at > now,
         _pickup_time() >= start, _pickup_time() < end,
@@ -88,20 +95,23 @@ async def meal_kitchen_list(session: AsyncSession, filters: MealKitchenFilters):
         ))
     total = int(await session.scalar(select(func.count()).select_from(query.subquery())) or 0)
     order_ids = query.with_only_columns(Order.id).subquery()
-    products = (await session.execute(select(OrderItem.product_name, OrderItem.unit_label, func.sum(OrderItem.quantity))
-        .where(OrderItem.order_id.in_(select(order_ids.c.id))).group_by(OrderItem.product_name, OrderItem.unit_label).order_by(OrderItem.product_name))).all()
+    products = (await session.execute(select(OrderItem.product_name, OrderItem.unit_label, func.sum(OrderItem.quantity),
+        Order.meal_booking_type, Order.payment_status).join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.order_id.in_(select(order_ids.c.id))).group_by(OrderItem.product_name, OrderItem.unit_label,
+            Order.meal_booking_type, Order.payment_status).order_by(OrderItem.product_name, Order.meal_booking_type, Order.payment_status))).all()
     orders = list(await session.scalars(query.options(*_load_options()).order_by(_pickup_time(), Order.id).limit(filters.limit).offset(filters.offset)))
     return {
         "service_date": filters.service_date, "meal_period": filters.meal_period, "total": total,
         "limit": filters.limit, "offset": filters.offset, "meal_quantity": sum(int(row[2]) for row in products),
-        "products": [{"name": name, "unit": unit, "quantity": int(quantity)} for name, unit, quantity in products],
+        "products": [{"name": name, "unit": unit, "quantity": int(quantity), "meal_booking_type": booking_type,
+                      "payment_status": payment.value} for name, unit, quantity, booking_type, payment in products],
         "items": [kitchen_order_read(order) for order in orders],
     }
 
 
 def _ensure_kitchen_allowed(order, fulfillment, now):
     event = order.meal_event
-    if order.payment_status != PaymentStatus.PAID or order.cancelled_at or fulfillment is None or fulfillment.status not in ACTIVE_STATES:
+    if (order.payment_status != PaymentStatus.PAID and not business_preparation_print_allowed(order, now=now)) or order.cancelled_at or fulfillment is None or fulfillment.status not in ACTIVE_STATES:
         raise HTTPException(409, "訂單未付款、已取消或已結束取餐，請更新廚房清單")
     if event is None or event.status not in ACTIVE_EVENT_STATES or aware(event.pickup_ends_at) <= now:
         raise HTTPException(409, "供餐已取消或結束，不能變更製作狀態")

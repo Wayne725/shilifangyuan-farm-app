@@ -341,6 +341,7 @@ export type MealCheckoutOutcome =
   | { kind: "resume"; orderId: string; message: string };
 
 export async function beginMealCheckout(input: {
+  mealBookingType?: "standard" | "business";
   clientRequestId?: string;
   kitchenNote?: string;
   couponCode?: string;
@@ -360,9 +361,11 @@ export async function beginMealCheckout(input: {
   contactPhone?: string;
   invoiceHandling?: "on_payment" | "pickup_day" | "external";
 }): Promise<MealCheckoutOutcome> {
-  const paymentMethod = input.paymentMethod || "online";
+  const business = input.mealBookingType === "business";
+  const paymentMethod = business ? "online" : input.paymentMethod || "online";
+  const invoiceHandling = business ? "pickup_day" : input.invoiceHandling;
   const legacyInvoiceHandling = paymentMethod === "cash_on_pickup" ? "external" : "on_payment";
-  const order = await apiFetch<{ id: string; payment_method?: string }>(
+  const order = await apiFetch<{ id: string; payment_method?: string; meal_booking_type?: string }>(
     `/v1/meal-events/${input.eventId}/orders`,
     {
       method: "POST",
@@ -370,6 +373,7 @@ export async function beginMealCheckout(input: {
         ...(input.clientRequestId ? {client_request_id: input.clientRequestId} : {}),
         ...(input.kitchenNote ? {kitchen_note: input.kitchenNote} : {}),
         items: input.items,
+        ...(business ? { meal_booking_type: "business" } : {}),
         ...(input.couponCode ? {coupon_code: input.couponCode} : {}),
         ...(input.expectedTotal !== undefined ? {expected_total: input.expectedTotal} : {}),
         pickup_at: input.pickupAt,
@@ -378,11 +382,16 @@ export async function beginMealCheckout(input: {
         contact_email: input.contactEmail,
         ...(input.contactPhone?.trim() ? { contact_phone: input.contactPhone.trim() } : {}),
         payment_method: paymentMethod,
-        ...(input.invoiceHandling && input.invoiceHandling !== legacyInvoiceHandling ? { invoice_handling: input.invoiceHandling } : {}),
-        ...(paymentMethod === "online" || (input.invoiceHandling && input.invoiceHandling !== "external") ? invoicePreferencePayload(input.invoicePreference) : {}),
+        ...(invoiceHandling && invoiceHandling !== legacyInvoiceHandling ? { invoice_handling: invoiceHandling } : {}),
+        ...(paymentMethod === "online" || (invoiceHandling && invoiceHandling !== "external") ? invoicePreferencePayload(input.invoicePreference) : {}),
       }),
     },
   );
+  if (business) {
+    return order.meal_booking_type === "business"
+      ? { kind: "reserved", orderId: order.id }
+      : { kind: "resume", orderId: order.id, message: "會餐預訂尚未確認，請聯絡合作社核對，勿重複下單。" };
+  }
   if (paymentMethod === "cash_on_pickup") {
     if (order.payment_method !== "cash_on_pickup") {
       return { kind: "resume", orderId: order.id, message: "現場付款預訂尚未確認，請聯絡合作社核對，勿重複下單。" };

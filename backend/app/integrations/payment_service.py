@@ -632,6 +632,33 @@ def payment_attempt_read(
     }
 
 
+async def _business_meal_reservations(session: AsyncSession, order: Order):
+    rows = list(await session.scalars(select(InventoryReservation).where(
+        InventoryReservation.order_id == order.id,
+        InventoryReservation.payment_attempt_id.is_(None),
+        InventoryReservation.status == ReservationStatus.ACTIVE,
+    ).order_by(InventoryReservation.source_meal_offering_id, InventoryReservation.id).with_for_update()))
+    expected, reserved = {}, {}
+    for item in order.items:
+        key = item.source_meal_offering_id
+        expected[key] = expected.get(key, 0) + item.quantity
+    for row in rows:
+        key = row.source_meal_offering_id
+        reserved[key] = reserved.get(key, 0) + row.quantity
+    if not rows or None in expected or expected != reserved:
+        raise PaymentApplicationError('會餐保留份數不完整，請聯絡合作社')
+    offerings = {}
+    for offering_id, quantity in sorted(expected.items()):
+        offering = await session.scalar(select(MealEventOffering).where(
+            MealEventOffering.id == offering_id,
+            MealEventOffering.meal_event_id == order.meal_event_id,
+        ).execution_options(populate_existing=True).with_for_update())
+        if offering is None or offering.reserved_quantity < quantity:
+            raise PaymentApplicationError('會餐保留份數不一致，請聯絡合作社')
+        offerings[offering_id] = offering
+    return [(row, offerings[row.source_meal_offering_id]) for row in rows]
+
+
 async def create_payment_attempt(
     session: AsyncSession,
     order_id: str,
@@ -704,10 +731,14 @@ async def create_payment_attempt(
         }:
             raise PaymentApplicationError("請先完成物流門市或地址選擇")
 
+    from ..business_meals import is_business_meal, business_payment_blocked_reason, business_payment_window
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
         if order.meal_event is None:
             raise PaymentApplicationError("便當訂單缺少場次資料")
-        if not meal_payment_window_open(order, current):
+        if is_business_meal(order):
+            if reason := business_payment_blocked_reason(order, current):
+                raise PaymentApplicationError(reason)
+        elif not meal_payment_window_open(order, current):
             raise PaymentApplicationError("便當目前未開放預購或已截止")
 
     attempts = list(await session.scalars(select(PaymentAttempt)
@@ -744,7 +775,9 @@ async def create_payment_attempt(
     expires_at = current + timedelta(
         minutes=settings.payment_reservation_minutes
     )
-    if (
+    if is_business_meal(order):
+        expires_at = min(expires_at, business_payment_window(order)[1])
+    elif (
         order.sales_channel == SalesChannel.MEAL_PREORDER
         and order.fulfillment is not None
         and order.fulfillment.meal_ordering_ends_at is not None
@@ -762,7 +795,9 @@ async def create_payment_attempt(
     session.add(attempt)
     await session.flush()
 
-    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+    if is_business_meal(order):
+        await _business_meal_reservations(session, order)
+    elif order.sales_channel == SalesChannel.MEAL_PREORDER:
         for item in sorted(order.items, key=lambda item: item.source_meal_offering_id or item.source_product_id or item.id):
             if item.source_meal_offering_id is None:
                 raise PaymentApplicationError("便當訂單品項資料不完整")
@@ -2087,6 +2122,22 @@ class SQLAlchemyPaymentCallbackRepository:
         if order is None or order.meal_event is None:
             return False
         payment_time = _provider_payment_time(payload) or current
+        from ..business_meals import is_business_meal, business_payment_window
+        if is_business_meal(order):
+            window = business_payment_window(order)
+            if window is None or payment_time < window[0]:
+                return False
+            # 已備餐會餐沿用訂單長保留；舊金流頁跨日實收留待發票查核，不自動退款。
+            try:
+                reservations = await _business_meal_reservations(self.session, order)
+            except PaymentApplicationError:
+                return False
+            for reservation, offering in reservations:
+                offering.reserved_quantity -= reservation.quantity
+                offering.paid_quantity += reservation.quantity
+                reservation.status = ReservationStatus.CONSUMED
+                reservation.payment_attempt = attempt
+            return True
         if (
             order.fulfillment is not None
             and order.fulfillment.meal_ordering_ends_at is not None

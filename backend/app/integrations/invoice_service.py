@@ -434,6 +434,8 @@ def _apply_provider_query_result(
         "汎宇回報發票已退回" if provider_status == "3" else None
     )
     if invoice.status == InvoiceStatus.ISSUED:
+        from ..business_meals import business_invoice_date_error
+        invoice.error_message = business_invoice_date_error(order, invoice) or invoice.error_message
         invoice.issued_at = invoice.invoice_date or datetime.now(timezone.utc)
     if invoice.status == InvoiceStatus.VOIDED and invoice.voided_at is None:
         invoice.voided_at = datetime.now(timezone.utc)
@@ -606,11 +608,16 @@ async def issue_paid_order_invoice(
             await session.commit()
             return existing
 
+        from ..business_meals import business_invoice_window_closed
+        if business_invoice_window_closed(order):
+            raise InvoiceApplicationError("會餐已超過取餐開票日，請聯絡合作社處理")
         invoice.provider_request = dict(prepared.provider_request)
         invoice.sales_amount = int(prepared.sales_amount)
         invoice.tax_amount = int(prepared.tax_amount)
         invoice.total_amount = int(prepared.total_amount)
         await session.commit()
+        if business_invoice_window_closed(order):
+            raise InvoiceApplicationError("會餐已超過取餐開票日，請聯絡合作社處理")
         result = await adapter.issue_prepared_invoice(prepared)
         if not result.invoice_number.strip():
             raise InvoiceApplicationError("發票服務成功回應缺少發票號碼")
@@ -620,7 +627,8 @@ async def issue_paid_order_invoice(
         invoice.provider_status = "0"
         invoice.status = InvoiceStatus.ISSUED
         invoice.provider_response = dict(result.raw)
-        invoice.error_message = None
+        from ..business_meals import business_invoice_date_error
+        invoice.error_message = business_invoice_date_error(order, invoice)
         invoice.issued_at = datetime.now(timezone.utc)
         order.invoice_status = InvoiceStatus.ISSUED
         await session.commit()

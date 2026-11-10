@@ -69,11 +69,12 @@ export function AdminPage() {
   const [orderCategory, setOrderCategory] = useState<OrderCategory>("all");
   const [orderPayment, setOrderPayment] = useState("");
   const [cancellationPending, setCancellationPending] = useState(false);
+  const [businessUnpaid, setBusinessUnpaid] = useState(false);
   useEffect(() => {
     setOrderSearchInput(routeSearch.q || "");
     setOrderSearch(routeSearch.q || "");
     setOrderOffset(0);
-    setOrderCategory("all"); setOrderPayment(""); setCancellationPending(false);
+    setOrderCategory("all"); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false);
   }, [routeSearch.q]);
   const [supplierQuery, locationQuery, orderQuery] = useQueries({
     queries: [
@@ -88,8 +89,8 @@ export function AdminPage() {
         enabled: isAdmin && section === "locations",
       },
       {
-        queryKey: ["admin-orders", user?.id, orderSearch, orderOffset, cancellationPending, orderCategory, orderPayment],
-        queryFn: ({ signal }) => orderAccess.request<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}&order_category=${orderCategory}${orderPayment ? `&payment_status=${orderPayment}` : ""}`, { signal }),
+        queryKey: ["admin-orders", user?.id, orderSearch, orderOffset, cancellationPending, orderCategory, orderPayment, businessUnpaid],
+        queryFn: ({ signal }) => orderAccess.request<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}&order_category=${orderCategory}${orderPayment ? `&payment_status=${orderPayment}` : ""}${businessUnpaid ? "&business_unpaid=true" : ""}`, { signal }),
         enabled: isAdmin && !orderAccess.denied && section === "orders",
         retry: (failureCount) => !orderAccess.isDenied() && failureCount < 2,
       },
@@ -134,15 +135,16 @@ export function AdminPage() {
   const orderContent = orderAccess.denied
     ? <DataState kind="error" title="管理權限待重新驗證" detail="請重新整理頁面並確認管理者登入狀態。" />
     : <section className="admin-orders-panel">
-    <OrderCategoryFilter value={orderCategory} onChange={(value) => { setOrderCategory(value); setOrderOffset(0); }} />
+    <OrderCategoryFilter value={orderCategory} onChange={(value) => { setOrderCategory(value); setOrderOffset(0); if (value === "general") setBusinessUnpaid(false); }} />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>
       <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} type="search" placeholder="訂單編號、姓名、Email、商品或統編" maxLength={120} /></label>
       <label className="field"><span>付款狀態</span><select value={orderPayment} onChange={(event) => { setOrderPayment(event.target.value); setOrderOffset(0); }}><option value="">全部狀態</option><option value="pending">待付款</option><option value="paid">已付款</option><option value="refund_pending">退款中</option><option value="refunded">已退款</option><option value="failed">付款失敗</option><option value="expired">已逾期</option><option value="late_paid_refund_required">付款晚到待退款</option></select></label>
       <label className="check-field"><input type="checkbox" checked={cancellationPending} onChange={(event) => { setCancellationPending(event.target.checked); setOrderOffset(0); }} />只看退單待審</label>
+      <label className="check-field"><input type="checkbox" checked={businessUnpaid} onChange={event => { setBusinessUnpaid(event.target.checked); setOrderOffset(0); if (event.target.checked) { setOrderCategory("meal"); setOrderPayment(""); } }} />會餐未付款</label>
       <button className="button button-quiet" type="submit">搜尋</button>
-      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderPayment(""); setCancellationPending(false); setOrderOffset(0); }}>清除查詢</button>
+      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false); setOrderOffset(0); }}>清除查詢</button>
     </form>
     <div className="operations-list">
       {!orderQuery.isError && orderQuery.data?.items.map((order) => (
@@ -158,6 +160,8 @@ export function AdminPage() {
             <div><dt>Email</dt><dd>{order.contact_email ? <a href={`mailto:${order.contact_email}`}>{order.contact_email}</a> : "未提供"}</dd></div>
           </dl>
           <div className="operation-state">
+            {order.meal_booking_type === "business" && <span className="status-chip">會餐{order.payment_followup_required ? " · 未付款待追蹤" : ""}</span>}
+            {order.invoice_followup_required && <span className="status-chip">發票待合作社處理</span>}
             <OrderStatusBadge kind="payment" status={order.payment_status} />
             <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} />
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />

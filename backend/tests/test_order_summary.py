@@ -276,7 +276,7 @@ def test_order_summary_is_registered_in_application_openapi():
         application.include_router(router)
     operation = application.openapi()["paths"]["/v1/admin/order-summary"]["get"]
     parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
-    assert set(parameters) == {"starts_on", "ends_on", "date_basis", "sales_channel", "order_category", "status", "search", "category", "limit", "offset"}
+    assert set(parameters) == {"starts_on", "ends_on", "date_basis", "sales_channel", "order_category", "status", "include_unpaid_business", "search", "category", "limit", "offset"}
     assert parameters["starts_on"]["required"] and parameters["ends_on"]["required"]
     assert parameters["status"]["schema"]["default"] == "active"
     assert parameters["date_basis"]["schema"]["default"] == "order"

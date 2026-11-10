@@ -31,6 +31,7 @@ from ..platform_settings import require_accepting_orders
 from ..domain import (
     DomainError,
     included_tax_amount,
+    company_included_tax_amount,
     member_sale_is_tax_exempt,
     meal_cancellation_request_allowed,
     order_available_actions,
@@ -310,7 +311,9 @@ async def _meal_order_read(
         if attempt is not None:
             onsite_payment = {"method": attempt.provider_response.get("collection_method", "cash"),
                 "reference": attempt.provider_response.get("reference", ""), "paid_at": _aware(attempt.paid_at).isoformat()}
+    from ..business_meals import business_payment_fields
     return MealOrderRead(
+        **business_payment_fields(order),
         invoice_tax=invoice_tax_summary(order.__dict__.get("invoice")),
         kitchen_note=order.kitchen_note,
         onsite_payment=onsite_payment,
@@ -772,7 +775,7 @@ async def quote_meal_order(
         member_tax_exempt=member_sale_is_tax_exempt(
             membership_type, body.invoice_buyer_type
         ),
-        tax_amount=sum(
+        tax_amount=company_included_tax_amount(sum(line['subtotal'] for line in lines if line['tax_type'] == TaxType.TAXABLE)) if body.meal_booking_type == 'business' else sum(
             included_tax_amount(line["subtotal"], line["tax_type"])
             for line in lines
         ),
@@ -804,6 +807,8 @@ async def create_meal_order(
     settings: Settings = Depends(get_settings),
 ) -> MealOrderRead:
     fingerprint_body = body.model_dump(mode="json", exclude={"client_request_id"})
+    if body.meal_booking_type == "standard":
+        fingerprint_body.pop("meal_booking_type")
     # Default preferences must preserve fingerprints created before these fields existed.
     legacy_invoice_handling = "external" if body.payment_method == PaymentMethod.CASH_ON_PICKUP else "on_payment"
     if body.invoice_handling in {None, legacy_invoice_handling}:
@@ -890,6 +895,7 @@ async def create_meal_order(
         ),
         payment_status=PaymentStatus.PENDING,
         payment_method=body.payment_method,
+        meal_booking_type=body.meal_booking_type,
         invoice_handling=body.invoice_handling or ("external" if body.payment_method == PaymentMethod.CASH_ON_PICKUP else "on_payment"),
         invoice_issue_after=pickup_invoice_due(quote.pickup_at) if body.invoice_handling == "pickup_day" else None,
         invoice_status=InvoiceStatus.EXTERNAL if (body.invoice_handling == "external" or (body.invoice_handling is None and body.payment_method == PaymentMethod.CASH_ON_PICKUP)) else InvoiceStatus.NOT_ELIGIBLE,
@@ -959,7 +965,7 @@ async def create_meal_order(
     order.fulfillment.pickup_qr_token_hash = hashlib.sha256(
         qr_token.encode("utf-8")
     ).hexdigest()
-    if body.payment_method == PaymentMethod.CASH_ON_PICKUP:
+    if body.payment_method == PaymentMethod.CASH_ON_PICKUP or body.meal_booking_type == "business":
         from ..cash_payments import reserve_cash_order
         order.meal_event = event
         try:

@@ -153,7 +153,7 @@ async def test_legacy_submission_can_be_replayed_after_preferences_are_added(cas
     assert response.status_code == 201, response.text
     order = await c.session.get(Order, response.json()["id"])
     old_body = MealOrderCreate(**quote_body(c, payment_method="cash_on_pickup")).model_dump(
-        mode="json", exclude={"client_request_id", "pickup_location_id", "needs_utensils", "contact_phone", "invoice_handling"},
+        mode="json", exclude={"client_request_id", "pickup_location_id", "needs_utensils", "contact_phone", "invoice_handling", "meal_booking_type"},
     )
     order.request_fingerprint = hashlib.sha256(json.dumps(
         {"event_id": c.event.id, "body": old_body}, sort_keys=True, ensure_ascii=False,

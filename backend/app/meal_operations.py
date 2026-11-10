@@ -43,6 +43,9 @@ def _work_conditions(now: datetime):
             Order.invoice_status != InvoiceStatus.VOIDED,
             or_(
                 Order.invoice_status == InvoiceStatus.FAILED,
+                and_(Order.meal_booking_type == 'business', Order.payment_status == PaymentStatus.PAID,
+                    Order.cancelled_at.is_(None), _pickup_at() < _date_start(today),
+                    Order.invoice_status != InvoiceStatus.ISSUED),
                 exists().where(Invoice.order_id == Order.id, Invoice.error_message.is_not(None), Invoice.error_message != ""),
                 and_(Order.invoice_status != InvoiceStatus.ISSUED, failed_invoice_job({"invoice.issue", "invoice.issue_requested", "issue_invoice"})),
                 failed_invoice_job({"invoice.adjustment_required"}),
@@ -64,6 +67,9 @@ def _orders_query():
 
 async def search_meal_orders(session: AsyncSession, filters: MealOrderSearchFilters):
     query = _orders_query()
+    if filters.business_unpaid:
+        query = query.where(Order.meal_booking_type == "business", Order.cancelled_at.is_(None),
+            Order.payment_status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
     if filters.search.strip():
         query = query.where(or_(*(column.icontains(filters.search.strip(), autoescape=True) for column in [Order.order_number, Order.contact_email, User.email, User.display_name])))
     if filters.date_from:
