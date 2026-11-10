@@ -103,9 +103,7 @@ async def test_real_pg_42_to_45_then_merged_head_preserves_account_and_guest_col
     after_order = (await table_rows(database, "orders"))[0]
     assert {key: after_order[key] for key in before_order} == before_order
     assert after_order["customer_kind"] == "account" and after_order["invoice_handling"] == "on_payment"
-    assert await table_rows(database, "users") == [
-        {**row, "data_consent_version": None, "data_consented_at": None} for row in before_users
-    ]
+    assert await table_rows(database, "users") == before_users
     async with database.engine.connect() as connection:
         assert await connection.scalar(text("SELECT count(*) FROM orders JOIN users ON users.id=orders.user_id WHERE orders.id=:id"), {"id": old_order_id}) == 1
         columns = await connection.run_sync(lambda sync: inspect(sync).get_columns("orders"))
