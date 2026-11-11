@@ -874,12 +874,15 @@ async def _reconcile_meal_events(
         if _aware(event.pickup_ends_at) > now:
             if _aware(event.pickup_starts_at) <= now:
                 event.status = MealEventStatus.PICKUP_OPEN
+                ready_candidates = select(Order).where(
+                    Order.meal_event_id == event.id,
+                    Order.payment_status == PaymentStatus.PAID,
+                    Order.cancelled_at.is_(None),
+                )
+                if event.same_day_preparation_minutes is not None:
+                    ready_candidates = ready_candidates.where(Order.meal_booking_type == "business")
                 ready_orders = list(await session.scalars(
-                    select(Order).where(
-                        Order.meal_event_id == event.id,
-                        Order.payment_status == PaymentStatus.PAID,
-                        Order.cancelled_at.is_(None),
-                    ).options(selectinload(Order.fulfillment)).with_for_update()
+                    ready_candidates.options(selectinload(Order.fulfillment)).with_for_update()
                 ))
                 for order in ready_orders:
                     if order.fulfillment is not None and order.fulfillment.status in {

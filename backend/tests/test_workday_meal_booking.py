@@ -354,12 +354,32 @@ async def test_same_day_update_preserves_omitted_opt_in_and_allows_explicit_disa
     assert datetime.fromisoformat(disabled.json()["booking_ends_at"]) == datetime(2026, 11, 8, 20, tzinfo=TAIPEI)
 
 
+async def test_same_day_cannot_publish_after_last_preparation_deadline(workday_context):
+    client, _session, admin, _buyer, meal = workday_context
+    headers = auth_headers(admin)
+    created = await client.post(
+        "/v1/admin/meal-events",
+        json=event_body(meal, same_day_preparation_minutes=120, ordering_ends_at="2026-11-09T12:00:00+08:00"),
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    path = f"/v1/admin/meal-events/{created.json()['id']}/publish"
+    with time_machine.travel(datetime(2026, 11, 9, 11, tzinfo=TAIPEI), tick=False):
+        response = await client.post(path, headers=headers)
+    assert response.status_code == 409, response.text
+    assert "已無可預訂的取餐時段" in response.json()["detail"]
+
+
 async def test_same_day_online_checkout_rejects_zero_total_without_creating_order(workday_context):
     client, session, _admin, buyer, meal = workday_context
+    other_meal = Meal(slug="another-workday-lunch", name="另一款便當", price=100)
+    session.add(other_meal)
+    await session.commit()
     event, body = await create_event(
         workday_context, same_day_preparation_minutes=90,
-        offerings=[{"meal_id": meal.id, "price": 0, "capacity": 50}],
+        offerings=[{"meal_id": item.id, "price": 0, "capacity": 50} for item in (meal, other_meal)],
     )
+    body["items"].append({"offering_id": event["offerings"][1]["id"], "quantity": 1})
     with time_machine.travel(datetime(2026, 11, 9, 9, tzinfo=TAIPEI), tick=False):
         for path in ["quote", "orders"]:
             response = await client.post(f"/v1/meal-events/{event['id']}/{path}", json=body, headers=auth_headers(buyer))

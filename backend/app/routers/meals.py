@@ -807,6 +807,8 @@ async def quote_meal_order(
     pickup_at = pickup_at.astimezone(timezone.utc)
     from ..promotions import price_promotion
     promotion, discount = await price_promotion(session, total, body.coupon_code, user.id if user else None, now)
+    if same_day and total - discount <= 0:
+        raise HTTPException(422, "開放當日訂餐的場次須有大於零的應付金額")
     original_total = total
     remaining = discount
     for index, line in enumerate(lines):
@@ -814,8 +816,6 @@ async def quote_meal_order(
         line["subtotal"] -= reduction
         remaining -= reduction
     total -= discount
-    if same_day and total <= 0:
-        raise HTTPException(422, "開放當日訂餐的場次須有大於零的應付金額")
     return MealOrderQuoteRead(
         promotion=promotion, original_amount=original_total, discount_amount=discount,
         sales_channel=SalesChannel.MEAL_PREORDER,
@@ -1669,8 +1669,13 @@ async def publish_meal_event(
                 raise HTTPException(409, "此日期不是供餐工作日；請先編輯為特殊日期再發布")
         except CalendarUnavailable as exc:
             raise HTTPException(503, str(exc)) from None
-    if _aware(event.ordering_ends_at) <= datetime.now(timezone.utc):
+    now = datetime.now(timezone.utc)
+    if _aware(event.ordering_ends_at) <= now:
         raise HTTPException(status_code=409, detail="訂購截止時間已過")
+    if event.same_day_preparation_minutes is not None and not any(
+        now < meal_order_deadline(event, slot) for slot in meal_pickup_slots(event)
+    ):
+        raise HTTPException(409, "本場次已無可預訂的取餐時段")
     event.status = MealEventStatus.PUBLISHED
     has_orders = await session.scalar(select(Order.id).where(Order.meal_event_id == event.id).limit(1))
     session.add(
@@ -1723,15 +1728,15 @@ async def open_meal_pickup(
     if not (_aware(event.pickup_starts_at) <= now < _aware(event.pickup_ends_at)):
         raise HTTPException(status_code=409, detail="目前不在場次取餐時間內")
     event.status = MealEventStatus.PICKUP_OPEN
+    ready_candidates = select(Order).where(
+        Order.meal_event_id == event.id,
+        Order.payment_status == PaymentStatus.PAID,
+    )
+    if event.same_day_preparation_minutes is not None:
+        ready_candidates = ready_candidates.where(Order.meal_booking_type == "business")
     orders = (
         await session.scalars(
-            select(Order)
-            .where(
-                Order.meal_event_id == event.id,
-                Order.payment_status == PaymentStatus.PAID,
-            )
-            .options(selectinload(Order.fulfillment))
-            .with_for_update()
+            ready_candidates.options(selectinload(Order.fulfillment)).with_for_update()
         )
     ).all()
     for order in orders:
