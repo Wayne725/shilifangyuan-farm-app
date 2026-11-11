@@ -30,6 +30,7 @@
 }
 
 .admin-today-arrow {
+  display: flex;
   position: absolute;
   inset: 18px 14px auto auto;
 }

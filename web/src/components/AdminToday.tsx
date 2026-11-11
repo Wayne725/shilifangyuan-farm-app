@@ -52,7 +52,7 @@ export function AdminToday({ adminId }: { adminId: string }) {
         <span>{label}</span>
         <span className="admin-today-count"><strong>{counts.data[key]}</strong> {unit}</span>
         {key === "active_activities" && <small>共 {counts.data.active_activity_registrations} 人次報名</small>}
-        <ArrowRight className="admin-today-arrow" size={20} aria-hidden="true" />
+        <span className="admin-today-arrow" aria-hidden="true"><ArrowRight size={20} /></span>
       </Link>
     </li>)}
   </ul>;
