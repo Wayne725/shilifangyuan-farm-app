@@ -58,6 +58,8 @@ async function fixture(t, { width = 390, calendarStatus = 200, products = [] } =
           return route.fulfill({ json: [event] });
         }
         if (method === 'GET' && url.pathname === '/v1/products') return route.fulfill({ json: products });
+        const selectedProduct = products.find(product => url.pathname === `/v1/products/${product.id}`);
+        if (method === 'GET' && selectedProduct) return route.fulfill({ json: selectedProduct });
         if (method === 'GET' && ['/v1/group-campaigns', '/v1/pickup-locations', '/v1/shipping-rates'].includes(url.pathname)) {
           return route.fulfill({ json: [] });
         }
@@ -260,8 +262,12 @@ test('390px 可用鍵盤搜尋，空結果可清除，篩選後的商品能加�
   await add.press('Enter');
   await page.getByText('隔離商品 13已加入，清單共 1 件', { exact: true }).waitFor();
   assert.equal(await cards.count(), 1);
+  const inventory = page.waitForResponse(response =>
+    new URL(response.url()).pathname === '/v1/products/isolated-product-13' && response.ok()
+  );
   await page.getByRole('link', { name: /查看結帳清單/ }).click();
   await page.waitForURL(`${base}/checkout`);
+  await inventory;
   const item = page.locator('.checkout-item');
   await item.getByRole('heading', { name: '隔離商品 13', exact: true }).waitFor();
   assert.equal(await item.count(), 1);
