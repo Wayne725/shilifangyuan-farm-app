@@ -30,7 +30,7 @@ import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
 import { mealSubmissionFingerprint } from "../lib/meal-submission";
 import "./MealEventPage.css";
 import { clearMealDraft, emptyMealDraft, mealDraftWasAdjusted, readMealDraft, reconcileMealDraft, writeMealDraft } from "../lib/meal-draft";
-import { formatMealDateTime, mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions, shiftMealDate, taipeiDate, taipeiInputToIso, validPickupTime } from "../lib/meal-time";
+import { formatMealDateTime, mealBookingDeadline, mealBookingStatus, mealOrderingOpen, mealPickupDeadline, mealServiceDate, pickupTimeOptions, shiftMealDate, taipeiDate, taipeiInputToIso, validPickupTime } from "../lib/meal-time";
 import type {
   MealEvent,
   MealOptionGroup,
@@ -82,7 +82,13 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const setMealBookingType = (value: "standard" | "business") => setDraft(current => ({ ...current, mealBookingType: value === "business" ? "business" : undefined }));
   const business = mealBookingType === "business";
   const [standardPaymentMethod, setPaymentMethod] = useState<"online" | "cash_on_pickup">("online");
-  const paymentMethod = business ? "online" : standardPaymentMethod;
+  const event = useQuery({
+    queryKey: ["meal-event", eventId],
+    queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
+    refetchInterval: 30000,
+  });
+  const allowCash = Boolean(event.data?.allow_cash_payment && event.data.same_day_preparation_minutes == null);
+  const paymentMethod = business || !allowCash ? "online" : standardPaymentMethod;
   const cashOnPickup = paymentMethod === "cash_on_pickup";
   const [couponInput, setCouponInput] = useState("");
   const [couponCode, setCouponCode] = useState("");
@@ -99,11 +105,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invoicePreference.buyerEmail.trim())
     : invoicePreferenceIsValid(invoicePreference);
   const [editingInvoice, setEditingInvoice] = useState(false);
-  const event = useQuery({
-    queryKey: ["meal-event", eventId],
-    queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
-    refetchInterval: 30000,
-  });
   const locations = useQuery({
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
@@ -117,8 +118,10 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const { quantities, selections, pickupAt, pickupLocationId, needsUtensils } = currentDraft;
   const selectedPickupLocation = activeLocations?.find((location) => location.id === pickupLocationId);
   const pickupLocationReady = !locations.isError && Boolean(activeLocations && (!activeLocations.length || selectedPickupLocation));
-  const pickupReady = Boolean(event.data && validPickupTime(pickupAt, event.data, now));
-  const orderingOpen = Boolean(event.data && mealOrderingOpen(event.data, now));
+  const pickupReady = Boolean(event.data && validPickupTime(pickupAt, event.data, now, mealBookingType));
+  const orderingOpen = Boolean(event.data && mealOrderingOpen(event.data, now, mealBookingType));
+  const businessClosed = business && event.data?.same_day_preparation_minutes != null
+    && now >= mealBookingDeadline(event.data, mealBookingType);
   const activeOfferings = event.data?.offerings.filter((item) => item.is_active) || [];
   const items = useMemo(
     () => activeOfferings
@@ -175,8 +178,11 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       if (!user) throw new Error("請先登入");
       if (!quantityReady) throw new Error("會餐至少需訂 2 份");
       if (!contactPhoneReady) throw new Error("請輸入完整手機號碼或含區碼的市話");
-      if (!event.data || !mealOrderingOpen(event.data)) throw new Error(event.data?.new_orders_blocked_reason || "請在本場次的預訂開放時間內送出");
-      if (!event.data || !validPickupTime(pickupAt, event.data)) throw new Error("請重新選擇可預訂的半小時取餐時段");
+      const submittedAt = Date.now();
+      if (!event.data || !mealOrderingOpen(event.data, submittedAt, mealBookingType)) {
+        throw new Error(event.data?.new_orders_blocked_reason || "請在本場次的預訂開放時間內送出");
+      }
+      if (!validPickupTime(pickupAt, event.data, submittedAt, mealBookingType)) throw new Error("請重新選擇可預訂的半小時取餐時段");
       if (!pickupLocationReady) throw new Error("請選擇可用的取餐點");
       if (paymentMethod === "online") {
         await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
@@ -220,8 +226,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   });
 
   useEffect(() => {
-    if (event.data && !event.data.allow_cash_payment) setPaymentMethod("online");
-  }, [event.data?.allow_cash_payment]);
+    if (!allowCash) setPaymentMethod("online");
+  }, [allowCash]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
@@ -244,8 +250,18 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   }
 
   const mealEvent = event.data;
-  const pickupOptions = pickupTimeOptions(mealEvent, now);
-  const tomorrow = shiftMealDate(taipeiDate(now), 1);
+  const pickupOptions = pickupTimeOptions(mealEvent, now, mealBookingType);
+  const today = taipeiDate(now);
+  const tomorrow = shiftMealDate(today, 1);
+  const serviceDate = mealServiceDate(mealEvent);
+  const dateLabel = serviceDate === today ? "（今天）" : serviceDate === tomorrow ? "（明天）" : "";
+  const deadline = mealEvent.same_day_preparation_minutes == null
+    ? mealEvent.booking_ends_at || mealEvent.ordering_ends_at
+    : new Date(pickupReady
+      ? mealPickupDeadline(mealEvent, Date.parse(taipeiInputToIso(pickupAt)), mealBookingType)
+      : mealBookingDeadline(mealEvent, mealBookingType)).toISOString();
+  const bookingBlockedReason = mealEvent.new_orders_blocked_reason
+    || (businessClosed ? "會餐預訂已截止。" : "本場次目前不在預訂開放時間內。");
   const canOrder =
     orderingOpen &&
     pickupReady &&
@@ -320,7 +336,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         <div className="offer-copy">
           <p className="eyebrow">MEAL PREORDER / 便當預訂</p>
           <h1>選餐點與份數</h1>
-          <div className="meal-booking-meta"><span className="meal-event-status">{mealBookingStatus(mealEvent, now)}</span><p className="meal-booking-deadline">預訂截止：{formatMealDateTime(mealEvent.booking_ends_at || mealEvent.ordering_ends_at)}</p></div>
+          <div className="meal-booking-meta"><span className="meal-event-status">{mealBookingStatus(mealEvent, now, mealBookingType)}</span><p className="meal-booking-deadline">預訂截止：{formatMealDateTime(deadline)}</p></div>
         </div>
       </div>
 
@@ -401,7 +417,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               );
             })}
           </div>
-          {business ? <p className="meal-business-payment">付款方式：線上付款 · 取餐當日付款</p> : <PaymentMethodFields value={paymentMethod} onChange={setPaymentMethod} allowCash={Boolean(mealEvent.allow_cash_payment)} disabled={checkout.isPending} />}
+          {business ? <p className="meal-business-payment">付款方式：線上付款 · 取餐當日付款</p> : <PaymentMethodFields value={paymentMethod} onChange={setPaymentMethod} allowCash={allowCash} disabled={checkout.isPending} />}
           {activeOfferings.length === 0 && <DataState title="菜單待公告" detail="管理員公布餐點後即可選餐，請稍後再查看。" />}
         </div>
 
@@ -412,7 +428,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}
           {!pickupAt && <p className="meal-selection-notice">請選擇預計取餐時間。</p>}
-          {!orderingOpen && <p className="meal-selection-notice">{mealEvent.new_orders_blocked_reason || "本場次目前不在預訂開放時間內。"}</p>}
+          {!orderingOpen && <p className="meal-selection-notice">{bookingBlockedReason}</p>}
           <dl>
             {confirmedQuote ? confirmedQuote.items.map((item) => (
               <div className="meal-quote-line" key={item.offering_id}>
@@ -430,7 +446,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           </dl>
           <section className="meal-pickup-settings" aria-labelledby="meal-pickup-heading">
             <div className="meal-pickup-heading"><h3 id="meal-pickup-heading">取餐安排</h3><Link className="text-link" to="/shop" search={{ tab: "meals" }}>更換取餐日期</Link></div>
-            <p className="meal-pickup-date"><strong>{mealServiceDate(mealEvent).replaceAll("-", "/")}{mealServiceDate(mealEvent) === tomorrow ? "（明天）" : ""}</strong></p>
+            <p className="meal-pickup-date"><strong>{serviceDate.replaceAll("-", "/")}{dateLabel}</strong></p>
             <label className="field"><span>預計取餐時間（台灣時間）</span>
               <select value={pickupReady ? pickupAt : ""} required disabled={!orderingOpen || checkout.isPending || !pickupOptions.length} onChange={(event) => { const value = event.target.value; setDraftAdjusted(false); setDraft((current) => ({ ...current, pickupAt: value })); void navigate({ search: { pickup_at: value }, replace: true }); }}>
                 <option value="" disabled>請選擇取餐時間</option>
@@ -472,7 +488,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           <div className="meal-payment-action">
           <dl className="meal-payment-total"><div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div></dl>
           {!user ? (
-            <button className="button button-primary full-width" type="button" onClick={openLogin}>登入後預訂</button>
+            <button className="button button-primary full-width" type="button" disabled={mealEvent.same_day_preparation_minutes != null && (!orderingOpen || !pickupOptions.length)} onClick={openLogin}>登入後預訂</button>
           ) : (
             <button className="button button-system full-width" type="button" disabled={checkout.isPending || (business ? !orderingOpen || quote.isFetching || quote.isError : !canOrder || !quote.data || quote.isFetching || quote.isError)} onClick={attemptCheckout}>
               {checkout.isPending ? "建立餐點訂單中…" : business ? "送出會餐訂單（取餐當日付款）" : cashOnPickup ? "確認預訂・現場付款" : "預訂並前往線上付款"}

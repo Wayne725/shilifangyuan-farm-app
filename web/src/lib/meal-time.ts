@@ -1,5 +1,7 @@
 import type { MealCalendarEvent, MealEvent, MealEventTiming } from "./types";
 
+type MealBookingType = "standard" | "business";
+
 const taipeiDateParts = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
   hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -44,26 +46,35 @@ export function formatMealDate(value?: string | null): string {
   return value ? taipeiDate(value).replaceAll("-", "/") : "日期待公告";
 }
 
-export function validPickupTime(value: string, event: MealEventTiming, now = Date.now()): boolean {
-  return pickupTimeOptions(event, now).some((option) => option.value === value);
+export function validPickupTime(value: string, event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = "standard"): boolean {
+  return pickupTimeOptions(event, now, bookingType).some((option) => option.value === value);
 }
 
 function usesConfiguredBooking(event: MealEventTiming): boolean {
   return event.booking_policy === "workday" || event.booking_policy === "special";
 }
 
-export function mealBookingDeadline(event: MealEventTiming): number {
-  if (usesConfiguredBooking(event)) return new Date(event.booking_ends_at || event.ordering_ends_at).getTime();
+export function mealBookingDeadline(event: MealEventTiming, bookingType: MealBookingType = "standard"): number {
+  const deadline = new Date(event.booking_ends_at || event.ordering_ends_at).getTime();
+  if (usesConfiguredBooking(event) && (bookingType !== "business" || event.same_day_preparation_minutes == null)) return deadline;
   const cutoff = new Date(`${shiftMealDate(mealServiceDate(event), -1)}T20:00:00+08:00`).getTime();
-  return Math.min(cutoff, new Date(event.booking_ends_at || event.ordering_ends_at).getTime());
+  return Math.min(cutoff, deadline);
 }
 
-export function mealOrderingOpen(event: MealEventTiming, now = Date.now()): boolean {
+export function mealPickupDeadline(event: MealEventTiming, pickupAt: number, bookingType: MealBookingType = "standard"): number {
+  const deadline = mealBookingDeadline(event, bookingType);
+  const preparationMinutes = event.same_day_preparation_minutes;
+  return bookingType === "standard" && preparationMinutes != null
+    ? Math.min(deadline, pickupAt - preparationMinutes * 60_000)
+    : deadline;
+}
+
+export function mealOrderingOpen(event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = "standard"): boolean {
   return ["published", "pickup_open"].includes(event.status)
     && !event.new_orders_blocked_reason
     && (usesConfiguredBooking(event) || mealServiceDate(event) === shiftMealDate(taipeiDate(now), 1))
     && new Date(event.booking_starts_at || event.ordering_starts_at).getTime() <= now
-    && mealBookingDeadline(event) > now;
+    && mealBookingDeadline(event, bookingType) > now;
 }
 
 export function mealMenuAvailability(offerings: MealEvent["offerings"]) {
@@ -73,20 +84,23 @@ export function mealMenuAvailability(offerings: MealEvent["offerings"]) {
   };
 }
 
-export function mealBookingStatus(event: MealEvent | MealCalendarEvent, now = Date.now()): string {
+export function mealBookingStatus(event: MealEvent | MealCalendarEvent, now = Date.now(), bookingType: MealBookingType = "standard"): string {
   if (event.new_orders_blocked_reason) return "暫停預訂";
-  if (mealServiceDate(event) <= taipeiDate(now) || event.status === "ordering_closed"
-    || mealBookingDeadline(event) <= now
+  const today = taipeiDate(now);
+  const serviceDate = mealServiceDate(event);
+  const acceptsSameDay = bookingType === "standard" && event.same_day_preparation_minutes != null;
+  if (serviceDate < today || (serviceDate === today && !acceptsSameDay) || event.status === "ordering_closed"
+    || mealBookingDeadline(event, bookingType) <= now
     || new Date(event.pickup_ends_at).getTime() <= now) return "已截止";
-  if (!mealOrderingOpen(event, now)) return "尚未開放";
+  if (!mealOrderingOpen(event, now, bookingType)) return "尚未開放";
   const menu = "offerings" in event ? mealMenuAvailability(event.offerings) : event;
   if (!menu.has_active_offerings) return "菜單待公告";
   if (!menu.has_available_offerings) return "已售完";
-  if (!pickupTimeOptions(event, now).length) return "已截止";
+  if (!pickupTimeOptions(event, now, bookingType).length) return "已截止";
   return "可預訂";
 }
 
-export function pickupTimeOptions(event: MealEventTiming, now = Date.now()): Array<{ value: string; label: string }> {
+export function pickupTimeOptions(event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = "standard"): Array<{ value: string; label: string }> {
   if (event.new_orders_blocked_reason) return [];
   if (!usesConfiguredBooking(event) && mealServiceDate(event) !== shiftMealDate(taipeiDate(now), 1)) return [];
   const start = new Date(event.pickup_starts_at).getTime();
@@ -102,24 +116,33 @@ export function pickupTimeOptions(event: MealEventTiming, now = Date.now()): Arr
     .filter((value) => {
       const timestamp = new Date(`${value}:00+08:00`).getTime();
       const withinEnd = endInclusive ? timestamp <= end : timestamp < end;
-      return allowed.has(value) && timestamp >= start && timestamp < new Date(event.pickup_ends_at).getTime() && withinEnd && timestamp > now;
+      if (!allowed.has(value) || timestamp < start || timestamp >= new Date(event.pickup_ends_at).getTime() || !withinEnd || timestamp <= now) return false;
+      return bookingType !== "standard" || event.same_day_preparation_minutes == null
+        || now < mealPickupDeadline(event, timestamp, bookingType);
     })
     .sort()
     .map((value) => ({ value, label: value.slice(11) }));
 }
 
 export function mealPickupChoices(events: MealCalendarEvent[], date: string, now = Date.now()) {
+  const today = taipeiDate(now);
   return events.filter((event) => mealServiceDate(event) === date && !["draft", "cancelled", "completed"].includes(event.status))
-    .flatMap((event) => pickupTimeOptions(event, now).map((option) => ({
-      ...option, eventId: event.id, location: event.location, title: event.title,
-      status: mealBookingStatus(event, now),
-    }))).sort((left, right) => left.value.localeCompare(right.value) || left.location.localeCompare(right.location) || left.eventId.localeCompare(right.eventId));
+    .flatMap((event) => {
+      const status = mealBookingStatus(event, now);
+      if (date === today && status !== "可預訂") return [];
+      return pickupTimeOptions(event, now).map((option) => ({
+        ...option, eventId: event.id, location: event.location, title: event.title, status,
+      }));
+    }).sort((left, right) => left.value.localeCompare(right.value) || left.location.localeCompare(right.location) || left.eventId.localeCompare(right.eventId));
 }
 
 export function mealBookingDates(events: MealCalendarEvent[], now = Date.now()) {
-  const upcoming = events.filter((event) => mealServiceDate(event) > taipeiDate(now)
-    && !event.new_orders_blocked_reason
-    && !["draft", "cancelled", "completed"].includes(event.status));
+  const today = taipeiDate(now);
+  const upcoming = events.filter((event) => {
+    if (event.new_orders_blocked_reason || ["draft", "cancelled", "completed"].includes(event.status)) return false;
+    const date = mealServiceDate(event);
+    return date > today || (date === today && mealBookingStatus(event, now) === "可預訂");
+  });
   return [...new Set(upcoming.map(mealServiceDate))].sort().map((date) => {
     const statuses = upcoming.filter((event) => mealServiceDate(event) === date)
       .map((event) => mealBookingStatus(event, now));

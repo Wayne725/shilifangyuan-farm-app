@@ -1768,10 +1768,16 @@ class MealEvent(Base):
             name="ordering_before_pickup_end",
         ),
         UniqueConstraint("schedule_template_id", "service_date", name="uq_meal_event_schedule_date"),
+        CheckConstraint(
+            "same_day_preparation_minutes IS NULL OR (same_day_preparation_minutes BETWEEN 1 AND 1439 "
+            "AND booking_policy IN ('workday', 'special') AND NOT allow_cash_payment)",
+            name="meal_same_day_configuration",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     booking_policy: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
+    same_day_preparation_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))

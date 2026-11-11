@@ -267,3 +267,31 @@ test("後端暫停舊假日場次的新訂單時，日期與時段不再供選�
   assert.deepEqual(mealBookingDates([blocked], NOW), []);
   assert.deepEqual(mealBookingDates([blocked, mealEvent({ id: "allowed", new_orders_blocked_reason: null })], NOW), [{ date: "2026-09-18", status: "可預訂" }]);
 });
+
+test("手動當日訂餐只保留備餐時限前的一般便當時段，會餐沿用前一日截單", () => {
+  const date = "2026-11-07";
+  const at = (clock) => Date.parse(`${date}T${clock}+08:00`);
+  const event = workdayMeal(date, {
+    booking_policy: "special",
+    booking_ends_at: `${date}T11:45:00+08:00`,
+    same_day_preparation_minutes: 60,
+  });
+  const ordinaryEvent = workdayMeal(date, { id: "ordinary" });
+
+  assert.equal(validPickupTime(`${date}T11:30`, event, at("10:29:59")), true);
+  assert.equal(validPickupTime(`${date}T11:30`, event, at("10:30:00")), false);
+  assert.deepEqual(pickupTimeOptions(event, at("10:30:00")).map(({ label }) => label), ["12:00", "12:30", "13:00"]);
+  assert.equal(mealBookingStatus(event, at("10:30:00")), "可預訂");
+  assert.equal(mealOrderingOpen(event, Date.parse("2026-11-06T19:59:59+08:00"), "business"), true);
+  assert.equal(mealOrderingOpen(event, Date.parse("2026-11-06T20:00:00+08:00"), "business"), false);
+  assert.equal(mealBookingStatus(event, at("10:30:00"), "business"), "已截止");
+  assert.deepEqual(mealBookingDates([ordinaryEvent, event], at("10:30:00")), [{ date, status: "可預訂" }]);
+  assert.deepEqual(mealPickupChoices([ordinaryEvent, event], date, at("10:30:00")).map(({ eventId, label }) => [eventId, label]), [
+    [event.id, "12:00"], [event.id, "12:30"], [event.id, "13:00"],
+  ]);
+
+  assert.equal(mealBookingStatus(event, at("11:45:00")), "已截止");
+  assert.deepEqual(pickupTimeOptions(event, at("11:45:00")), []);
+  assert.deepEqual(mealBookingDates([ordinaryEvent, event], at("11:45:00")), []);
+  assert.deepEqual(mealBookingDates([{ ...event, offerings: [{ is_active: true, available_quantity: 0 }] }], at("10:30:00")), []);
+});

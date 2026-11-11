@@ -32,6 +32,9 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
     if (method === 'GET') {
       if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', support_phone: '' } });
       if (url.pathname === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture(events) });
+      const detail = events.find(({ id }) => url.pathname === `/v1/meal-events/${id}`);
+      if (detail) return route.fulfill({ json: detail });
+      if (url.pathname === '/v1/pickup-locations') return route.fulfill({ json: [] });
       if (url.pathname === '/v1/admin/meals') return route.fulfill({ json: [meal] });
       if (url.pathname === '/v1/admin/meal-schedules') return route.fulfill({ json: schedules });
       if (['/v1/products', '/v1/group-campaigns', '/v1/admin/meal-events'].includes(url.pathname)) return route.fulfill({ json: [] });
@@ -135,4 +138,79 @@ test('每日排程預設週一至五，既有週六與當天截單設定顯示�
   await form.getByLabel('週六（需特殊加開）', { exact: true }).uncheck();
   assert.equal(await form.getByLabel('週六（需特殊加開）', { exact: true }).isChecked(), false);
   await noOverflow(page); assert.deepEqual(unknown, []);
+});
+
+test('管理員須明確填入當日截止與備餐時間才建立單場設定', { timeout: 30000 }, async t => {
+  const { page, unknown, created } = await fixture(t, 390, { admin: true });
+  await page.goto(`${base}/admin/meals?tab=events`);
+  const form = page.locator('form').filter({ has: page.getByRole('heading', { name: '建立便當場次', exact: true }) });
+  const sameDay = form.getByRole('checkbox', { name: '開放當日訂餐（僅線上付款）', exact: true });
+  await sameDay.waitFor();
+  assert.equal(await sameDay.isChecked(), false);
+  await form.getByRole('button', { name: '特殊日期加開', exact: true }).click();
+  await form.getByLabel('場次名稱', { exact: true }).fill('當日加開');
+  await form.getByLabel('取餐地點', { exact: true }).fill('隔離取餐點');
+  await form.getByLabel('工作日測試便當').check();
+  await form.getByLabel('取餐開始（台灣時間）', { exact: true }).fill('2026-11-07T11:00');
+  await form.getByLabel('開放預訂（台灣時間）', { exact: true }).fill('2026-11-07T08:00');
+  await sameDay.check();
+  const preparation = form.getByLabel('最短備餐時間（分鐘）', { exact: true });
+  const cutoff = form.getByLabel('預訂截止（台灣時間）', { exact: true });
+  const submit = form.getByRole('button', { name: '建立草稿場次' });
+  assert.equal(await preparation.inputValue(), '');
+  assert.equal(await cutoff.inputValue(), '');
+  await preparation.fill('60');
+  await cutoff.fill('2026-11-06T10:45');
+  await form.getByRole('alert').filter({ hasText: '截止日期須與取餐開始日期相同' }).waitFor();
+  assert.equal(await submit.isDisabled(), true);
+  assert.equal(created.length, 0);
+
+  await cutoff.fill('2026-11-07T11:45');
+  await submit.click();
+  await page.waitForFunction(() => [...document.querySelectorAll('label')].find(e => e.textContent === '場次名稱')?.querySelector('input')?.value === '');
+  assert.equal(created.length, 1);
+  assert.equal(created[0].same_day_preparation_minutes, 60);
+  assert.equal(created[0].ordering_ends_at, '2026-11-07T03:45:00.000Z');
+  assert.equal(created[0].allow_cash_payment, false);
+  assert.equal(await sameDay.isChecked(), false);
+  await noOverflow(page);
+  assert.deepEqual(unknown, []);
+});
+
+test('當日一般便當只顯示來得及備餐的時段，切到會餐後保留選擇並阻擋送單', { timeout: 30000 }, async t => {
+  const date = '2026-11-07';
+  const sameDay = event('same-day', date, {
+    booking_policy: 'special',
+    same_day_preparation_minutes: 60,
+    ordering_starts_at: `${date}T08:00:00+08:00`,
+    booking_starts_at: `${date}T08:00:00+08:00`,
+    ordering_ends_at: `${date}T11:45:00+08:00`,
+    booking_ends_at: `${date}T11:45:00+08:00`,
+    allow_cash_payment: false,
+  });
+  const { page, unknown } = await fixture(t, 390, { now: `${date}T10:30:00+08:00`, events: [sameDay], admin: true });
+  await page.goto(`${base}/shop`);
+  const navigation = page.getByRole('region', { name: '便當日期與取餐時間' });
+  await navigation.getByRole('button', { name: '11/7 週六，可預訂', exact: true }).waitFor();
+  assert.equal(await navigation.getByRole('link', { name: '隔離取餐點 11:30 取餐', exact: true }).count(), 0);
+  await navigation.getByRole('link', { name: '隔離取餐點 12:00 取餐', exact: true }).click();
+  const pickupTime = page.getByLabel('預計取餐時間（台灣時間）', { exact: true });
+  await pickupTime.waitFor();
+  assert.equal(await pickupTime.inputValue(), `${date}T12:00`);
+  assert.deepEqual(await pickupTime.locator('option').evaluateAll(options => options.map(option => option.value)), [
+    '', `${date}T12:00`, `${date}T12:30`, `${date}T13:00`,
+  ]);
+  assert.match(await page.locator('.meal-booking-deadline').innerText(), /11:00/);
+  assert.equal(await page.getByRole('radio', { name: '合作社現場付款', exact: true }).count(), 0);
+
+  const business = page.getByRole('radio', { name: '會餐（統編報帳）', exact: true });
+  await business.check();
+  await page.getByText('會餐預訂已截止。', { exact: true }).waitFor();
+  assert.equal(await business.isChecked(), true);
+  assert.equal(await page.getByRole('button', { name: '送出會餐訂單（取餐當日付款）' }).isDisabled(), true);
+  assert.match(await page.locator('.meal-booking-deadline').innerText(), /20:00/);
+  await page.getByRole('radio', { name: '一般餐點', exact: true }).check();
+  assert.equal(await pickupTime.inputValue(), `${date}T12:00`);
+  await noOverflow(page);
+  assert.deepEqual(unknown, []);
 });

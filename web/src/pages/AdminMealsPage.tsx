@@ -3,7 +3,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { BowlFood, Buildings, CalendarPlus, Copy, QrCode, SealCheck } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import { AdminCancelOrder } from "../components/AdminCancelOrder";
 import { AdminCashPayment } from "../components/AdminCashPayment";
@@ -26,6 +26,7 @@ import { OptionalMark } from "../components/OptionalMark";
 interface EventDraft {
   title: string;
   booking_policy: "legacy" | "workday" | "special";
+  same_day_preparation_minutes?: string | null;
   allow_cash_payment?: boolean;
   location: string;
   ordering_starts_at: string;
@@ -112,6 +113,10 @@ function MealCreateForm({ onDone }: { onDone: () => void }) {
 function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { meals: Meal[]; events?: MealEvent[]; onDone: () => void; initial?: MealEvent; onCancel?: () => void }) {
   const [draft, setDraft] = useState<EventDraft>(() => initial ? eventDraft(initial) : emptyEventDraft());
   const [calendarDate, setCalendarDate] = useState<string>();
+  const cutoffErrorId = useId();
+  const sameDay = draft.same_day_preparation_minutes != null;
+  const pickupDate = draft.pickup_starts_at.slice(0, 10);
+  const cutoffDateInvalid = sameDay && Boolean(draft.ordering_ends_at) && draft.ordering_ends_at.slice(0, 10) !== pickupDate;
   const calendar = useQuery({
     queryKey: ["admin-meal-calendar", calendarDate],
     queryFn: () => apiFetch<{ service_date: string; is_workday: boolean; previous_workday: string; next_workday: string | null; ordering_starts_at: string; ordering_ends_at: string }>(`/v1/admin/meal-calendar?${calendarDate ? `service_date=${calendarDate}` : ""}`),
@@ -123,7 +128,7 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
     setDraft((current) => current.booking_policy !== "workday" ? current : {
       ...current,
       ordering_starts_at: taipeiDateTimeInput(value.ordering_starts_at),
-      ordering_ends_at: taipeiDateTimeInput(value.ordering_ends_at),
+      ...(current.same_day_preparation_minutes == null ? { ordering_ends_at: taipeiDateTimeInput(value.ordering_ends_at) } : {}),
       ...(!calendarDate ? { pickup_starts_at: `${value.service_date}T11:00`, pickup_ends_at: `${value.service_date}T13:30` } : {}),
     });
   }, [calendar.data, calendarDate, initial]);
@@ -132,15 +137,36 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
     const changedDate = date !== draft.pickup_starts_at.slice(0, 10);
     setDraft((current) => ({ ...current, pickup_starts_at: value, ...(changedDate && date ? {
       pickup_ends_at: `${date}T${current.pickup_ends_at.slice(11)}`,
-      ordering_ends_at: `${shiftMealDate(date, -1)}T20:00`,
+      ordering_ends_at: current.same_day_preparation_minutes == null
+        ? priorDayCutoff(date)
+        : current.ordering_ends_at ? `${date}T${current.ordering_ends_at.slice(11)}` : "",
     } : {}) }));
     if (changedDate && date) setCalendarDate(date);
   };
+  const changeBookingPolicy = (policy: EventDraft["booking_policy"]) => {
+    setDraft((current) => ({
+      ...(policy === "legacy" && current.same_day_preparation_minutes != null ? disableSameDay(current) : current),
+      booking_policy: policy,
+    }));
+    if (policy === "workday" && initial) setCalendarDate(pickupDate);
+  };
+  const changeSameDay = (enabled: boolean) => setDraft((current) => enabled ? {
+    ...current,
+    same_day_preparation_minutes: "",
+    ordering_ends_at: current.ordering_ends_at.slice(0, 10) === pickupDate ? current.ordering_ends_at : "",
+  } : disableSameDay(current));
   const activeMeals = meals.filter((meal) => meal.is_active || draft.offerings.some((offering) => offering.meal_id === meal.id));
   const selected = useMemo(() => new Set(draft.offerings.map((item) => item.meal_id)), [draft.offerings]);
   const create = useMutation({
     mutationFn: () => apiFetch<MealEvent>(initial ? `/v1/admin/meal-events/${initial.id}` : "/v1/admin/meal-events", { method: initial ? "PUT" : "POST", body: JSON.stringify(eventPayload(draft)) }),
-    onSuccess: () => { setDraft((current) => ({ ...current, title: "", offerings: [] })); onDone(); },
+    onSuccess: () => {
+      setDraft((current) => ({
+        ...(current.same_day_preparation_minutes != null ? disableSameDay(current) : current),
+        title: "",
+        offerings: [],
+      }));
+      onDone();
+    },
   });
   const conflictNotice = <MealEventConflicts events={events} location={draft.location} startsAt={draft.pickup_starts_at} endsAt={draft.pickup_ends_at} editingId={initial?.id} />;
   const toggleMeal = (meal: Meal) => setDraft((current) => ({
@@ -149,7 +175,33 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
       ? current.offerings.filter((item) => item.meal_id !== meal.id)
       : [...current.offerings, { meal_id: meal.id, price: meal.price, capacity: 20, position: current.offerings.length }],
   }));
-  return <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><div className="form-heading"><div><p className="eyebrow">EVENT SCHEDULE / 供餐排程</p><h2>{initial ? "手動編輯便當場次" : "建立便當場次"}</h2></div></div><fieldset><legend>供餐規則</legend><div className="form-actions" role="group" aria-label="供餐規則">{(initial && (!initial.booking_policy || initial.booking_policy === "legacy") ? ["legacy", "workday", "special"] as const : ["workday", "special"] as const).map((policy) => <button key={policy} type="button" className={`button ${draft.booking_policy === policy ? "button-primary" : "button-quiet"}`} aria-pressed={draft.booking_policy === policy} onClick={() => { setDraft({ ...draft, booking_policy: policy }); if (policy === "workday" && initial) setCalendarDate(draft.pickup_starts_at.slice(0, 10)); }}>{policy === "workday" ? "工作日供餐" : policy === "special" ? "特殊日期加開" : "沿用舊場次規則"}</button>)}</div></fieldset><div className="field-grid two-columns"><label className="field"><span>場次名稱</span><input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label><label className="field"><span>取餐地點</span><input required value={draft.location} onChange={(event) => setDraft({ ...draft, location: event.target.value })} /></label><DateTimeField label="開放預訂" value={draft.ordering_starts_at} onChange={(value) => setDraft({ ...draft, ordering_starts_at: value })} /><DateTimeField label="預訂截止" value={draft.ordering_ends_at} onChange={(value) => setDraft({ ...draft, ordering_ends_at: value })} /><DateTimeField label="取餐開始" value={draft.pickup_starts_at} onChange={changePickupStart} /><DateTimeField label="取餐結束" value={draft.pickup_ends_at} onChange={(value) => setDraft({ ...draft, pickup_ends_at: value })} /></div>{draft.booking_policy === "workday" && calendar.isError && <p className="form-error" role="alert">{calendar.error.message}</p>}{draft.booking_policy === "workday" && calendar.data?.is_workday === false && <p className="form-error" role="alert">這一天不是工作日。{calendar.data.next_workday ? `下一工作日為 ${calendar.data.next_workday}；若需加開，請選「特殊日期加開」。` : "請選其他工作日或特殊加開。"}</p>}{conflictNotice}<div className="meal-choice-grid">{activeMeals.map((meal) => <label key={meal.id} className="meal-choice"><input type="checkbox" checked={selected.has(meal.id)} onChange={() => toggleMeal(meal)} /><span><strong>{meal.name}</strong><small>{formatMoney(meal.price)}</small></span></label>)}</div>{draft.offerings.map((offering) => { const meal = meals.find((item) => item.id === offering.meal_id); return <div className="meal-offering-editor" key={offering.meal_id}><strong>{meal?.name}</strong><label className="field"><span>本場售價</span><input min={0} type="number" value={offering.price} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, price: Number(event.target.value) } : item) })} /></label><label className="field"><span>份數</span><input min={1} type="number" value={offering.capacity} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, capacity: Number(event.target.value) } : item) })} /></label></div>; })}{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || draft.offerings.length === 0 || create.isPending || (draft.booking_policy === "workday" && (calendar.isFetching || calendar.isError || calendar.data?.is_workday === false))}><CalendarPlus size={17} />{initial ? "儲存場次修改" : "建立草稿場次"}</button>{onCancel && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}</div></form>;
+  return <form className="social-form admin-master-form" onSubmit={(event) => {
+    event.preventDefault();
+    if (!cutoffDateInvalid) create.mutate();
+  }}>
+    <div className="form-heading"><div><p className="eyebrow">EVENT SCHEDULE / 供餐排程</p><h2>{initial ? "手動編輯便當場次" : "建立便當場次"}</h2></div></div>
+    <fieldset>
+      <legend>供餐規則</legend>
+      <div className="form-actions" role="group" aria-label="供餐規則">
+        {(initial && (!initial.booking_policy || initial.booking_policy === "legacy") ? ["legacy", "workday", "special"] as const : ["workday", "special"] as const).map((policy) => <button key={policy} type="button" className={`button ${draft.booking_policy === policy ? "button-primary" : "button-quiet"}`} aria-pressed={draft.booking_policy === policy} onClick={() => changeBookingPolicy(policy)}>{policy === "workday" ? "工作日供餐" : policy === "special" ? "特殊日期加開" : "沿用舊場次規則"}</button>)}
+      </div>
+      {draft.booking_policy !== "legacy" && <label className="check-field">
+        <input type="checkbox" checked={sameDay} onChange={(event) => changeSameDay(event.target.checked)} />開放當日訂餐（僅線上付款）
+      </label>}
+    </fieldset>
+    <div className="field-grid two-columns">
+      <label className="field"><span>場次名稱</span><input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
+      <label className="field"><span>取餐地點</span><input required value={draft.location} onChange={(event) => setDraft({ ...draft, location: event.target.value })} /></label>
+      <DateTimeField label="開放預訂" value={draft.ordering_starts_at} onChange={(value) => setDraft({ ...draft, ordering_starts_at: value })} />
+      <DateTimeField label="預訂截止" value={draft.ordering_ends_at} onChange={(value) => setDraft({ ...draft, ordering_ends_at: value })} invalid={cutoffDateInvalid} errorId={cutoffErrorId} />
+      <DateTimeField label="取餐開始" value={draft.pickup_starts_at} onChange={changePickupStart} />
+      <DateTimeField label="取餐結束" value={draft.pickup_ends_at} onChange={(value) => setDraft({ ...draft, pickup_ends_at: value })} />
+      {sameDay && <label className="field"><span>最短備餐時間（分鐘）</span>
+        <input type="number" min={1} max={1439} step={1} required value={draft.same_day_preparation_minutes ?? ""} onChange={(event) => setDraft({ ...draft, same_day_preparation_minutes: event.target.value })} />
+      </label>}
+    </div>
+    {cutoffDateInvalid && <p id={cutoffErrorId} className="form-error" role="alert">當日訂餐的截止日期須與取餐開始日期相同。</p>}
+    {draft.booking_policy === "workday" && calendar.isError && <p className="form-error" role="alert">{calendar.error.message}</p>}{draft.booking_policy === "workday" && calendar.data?.is_workday === false && <p className="form-error" role="alert">這一天不是工作日。{calendar.data.next_workday ? `下一工作日為 ${calendar.data.next_workday}；若需加開，請選「特殊日期加開」。` : "請選其他工作日或特殊加開。"}</p>}{conflictNotice}<div className="meal-choice-grid">{activeMeals.map((meal) => <label key={meal.id} className="meal-choice"><input type="checkbox" checked={selected.has(meal.id)} onChange={() => toggleMeal(meal)} /><span><strong>{meal.name}</strong><small>{formatMoney(meal.price)}</small></span></label>)}</div>{draft.offerings.map((offering) => { const meal = meals.find((item) => item.id === offering.meal_id); return <div className="meal-offering-editor" key={offering.meal_id}><strong>{meal?.name}</strong><label className="field"><span>本場售價</span><input min={0} type="number" value={offering.price} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, price: Number(event.target.value) } : item) })} /></label><label className="field"><span>份數</span><input min={1} type="number" value={offering.capacity} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, capacity: Number(event.target.value) } : item) })} /></label></div>; })}{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || draft.offerings.length === 0 || cutoffDateInvalid || create.isPending || (draft.booking_policy === "workday" && (calendar.isFetching || calendar.isError || calendar.data?.is_workday === false))}><CalendarPlus size={17} />{initial ? "儲存場次修改" : "建立草稿場次"}</button>{onCancel && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}</div></form>;
 }
 
 function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal[]; onDone: () => void }) {
@@ -185,6 +237,7 @@ function MealPaymentOptions({ event, onDone }: { event: MealEvent; onDone: () =>
     mutationFn: (allow: boolean) => apiFetch(`/v1/admin/meal-events/${event.id}/payment-options`, { method: "PATCH", body: JSON.stringify({ allow_cash_payment: allow }) }),
     onSuccess: onDone,
   });
+  if (event.same_day_preparation_minutes != null) return <p className="meal-payment-options">當日訂餐 · 線上付款</p>;
   return <div className="meal-payment-options"><label className="check-field"><input type="checkbox" checked={Boolean(event.allow_cash_payment)} disabled={update.isPending || ["cancelled", "completed"].includes(event.status)} onChange={input => update.mutate(input.target.checked)} />開放合作社現場付款</label>{update.isError && <p className="form-error" role="alert">{update.error.message}</p>}</div>;
 }
 
@@ -220,8 +273,27 @@ function EventPickupOrders({ eventId }: { eventId: string }) {
   </div>;
 }
 
-function DateTimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="field"><span>{label}（台灣時間）</span><input required type="datetime-local" value={value} onChange={(event) => onChange(event.target.value)} /></label>;
+function DateTimeField({ label, value, onChange, invalid, errorId }: {
+  label: string; value: string; onChange: (value: string) => void; invalid?: boolean; errorId?: string;
+}) {
+  return <label className="field"><span>{label}（台灣時間）</span>
+    <input required type="datetime-local" value={value} aria-invalid={invalid || undefined}
+      aria-describedby={invalid ? errorId : undefined} onChange={(event) => onChange(event.target.value)} />
+  </label>;
+}
+
+function priorDayCutoff(serviceDate: string): string {
+  return serviceDate ? `${shiftMealDate(serviceDate, -1)}T20:00` : "";
+}
+
+function disableSameDay(draft: EventDraft): EventDraft {
+  const cutoff = priorDayCutoff(draft.pickup_starts_at.slice(0, 10));
+  return {
+    ...draft,
+    same_day_preparation_minutes: null,
+    ordering_ends_at: cutoff,
+    ordering_starts_at: cutoff && draft.ordering_starts_at >= cutoff ? `${cutoff.slice(0, 10)}T00:00` : draft.ordering_starts_at,
+  };
 }
 
 function emptyEventDraft(): EventDraft {
@@ -233,6 +305,8 @@ function emptyEventDraft(): EventDraft {
 function eventDraft(event: MealEvent): EventDraft {
   return {
     title: event.title, booking_policy: event.booking_policy || "legacy", location: event.location,
+    same_day_preparation_minutes: event.same_day_preparation_minutes == null ? undefined : String(event.same_day_preparation_minutes),
+    allow_cash_payment: event.allow_cash_payment,
     ordering_starts_at: taipeiDateTimeInput(event.ordering_starts_at),
     ordering_ends_at: taipeiDateTimeInput(event.ordering_ends_at),
     pickup_starts_at: taipeiDateTimeInput(event.pickup_starts_at),
@@ -243,11 +317,27 @@ function eventDraft(event: MealEvent): EventDraft {
 
 function shiftEvent(event: MealEvent): EventDraft {
   const shift = (value: string) => localInput(new Date(value).getTime() + 86400000);
-  return { title: event.title.replace(/(?:（隔日）)+$/u, ""), booking_policy: event.booking_policy === "special" ? "special" : "workday", allow_cash_payment: Boolean(event.allow_cash_payment), location: event.location, ordering_starts_at: shift(event.ordering_starts_at), ordering_ends_at: shift(event.ordering_ends_at), pickup_starts_at: shift(event.pickup_starts_at), pickup_ends_at: shift(event.pickup_ends_at), offerings: event.offerings.map((item) => ({ meal_id: item.meal_id, price: item.price, capacity: item.capacity, position: item.position })) };
+  const shifted: EventDraft = {
+    ...eventDraft(event), title: event.title.replace(/(?:（隔日）)+$/u, ""),
+    booking_policy: event.booking_policy === "special" ? "special" : "workday",
+    allow_cash_payment: Boolean(event.allow_cash_payment),
+    ordering_starts_at: shift(event.ordering_starts_at), ordering_ends_at: shift(event.ordering_ends_at),
+    pickup_starts_at: shift(event.pickup_starts_at), pickup_ends_at: shift(event.pickup_ends_at),
+  };
+  return shifted.same_day_preparation_minutes != null ? disableSameDay(shifted) : shifted;
 }
 
 function eventPayload(draft: EventDraft) {
-  return { ...draft, ordering_starts_at: taipeiInputToIso(draft.ordering_starts_at), ordering_ends_at: taipeiInputToIso(draft.ordering_ends_at), pickup_starts_at: taipeiInputToIso(draft.pickup_starts_at), pickup_ends_at: taipeiInputToIso(draft.pickup_ends_at) };
+  const preparation = draft.same_day_preparation_minutes;
+  return {
+    ...draft,
+    same_day_preparation_minutes: preparation == null ? preparation : Number(preparation),
+    ...(preparation != null ? { allow_cash_payment: false } : {}),
+    ordering_starts_at: taipeiInputToIso(draft.ordering_starts_at),
+    ordering_ends_at: taipeiInputToIso(draft.ordering_ends_at),
+    pickup_starts_at: taipeiInputToIso(draft.pickup_starts_at),
+    pickup_ends_at: taipeiInputToIso(draft.pickup_ends_at),
+  };
 }
 
 function localDateTime(days: number, hours = 0) { return localInput(Date.now() + (days * 24 + hours) * 3600000); }

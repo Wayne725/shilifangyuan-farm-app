@@ -61,6 +61,7 @@ from ..meal_booking import (
     configured_booking_window,
     meal_booking_window,
     meal_new_orders_blocked_reason,
+    meal_order_deadline,
     meal_period,
     meal_pickup_slots,
     meal_service_date,
@@ -190,6 +191,7 @@ def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
     return {
         "id": event.id,
         "booking_policy": event.booking_policy,
+        "same_day_preparation_minutes": event.same_day_preparation_minutes,
         "new_orders_blocked_reason": meal_new_orders_blocked_reason(event),
         "title": event.title,
         "location": event.location,
@@ -712,7 +714,9 @@ async def quote_meal_order(
         raise HTTPException(status_code=409, detail=reason)
     if body.payment_method == PaymentMethod.CASH_ON_DELIVERY:
         raise HTTPException(status_code=422, detail="便當僅支援線上付款或現場付款")
-    if body.payment_method == PaymentMethod.CASH_ON_PICKUP and not event.allow_cash_payment:
+    same_day = event.same_day_preparation_minutes is not None
+    business = body.meal_booking_type == "business"
+    if body.payment_method == PaymentMethod.CASH_ON_PICKUP and (same_day or not event.allow_cash_payment):
         raise HTTPException(status_code=422, detail="此場次未開放現場付款")
     pickup_location = None
     if body.pickup_location_id is not None:
@@ -749,7 +753,7 @@ async def quote_meal_order(
         except DomainError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
-            validate_meal_booking_day(event, now)
+            validate_meal_booking_day(event, now, business=business)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
@@ -789,9 +793,17 @@ async def quote_meal_order(
     if body.payment_method == PaymentMethod.CASH_ON_PICKUP and total <= 0:
         raise HTTPException(status_code=422, detail="現場付款金額必須大於零")
     pickup_slots = meal_pickup_slots(event)
-    pickup_at = body.pickup_at or (pickup_slots[0] if pickup_slots else None)
+    pickup_at = body.pickup_at
+    if same_day and not business and pickup_at is None:
+        pickup_at = next((slot for slot in pickup_slots if now < meal_order_deadline(event, slot)), None)
+        if pickup_at is None:
+            raise HTTPException(409, "本場次已無可預訂的取餐時段")
+    elif pickup_at is None and pickup_slots:
+        pickup_at = pickup_slots[0]
     if pickup_at not in pickup_slots:
         raise HTTPException(status_code=422, detail="請選擇本場次午餐 11:00–13:00 或晚餐 16:30–18:00 的半小時取餐時段")
+    if same_day and not business and now >= meal_order_deadline(event, pickup_at):
+        raise HTTPException(409, "此取餐時段已截止，請重新選擇")
     pickup_at = pickup_at.astimezone(timezone.utc)
     from ..promotions import price_promotion
     promotion, discount = await price_promotion(session, total, body.coupon_code, user.id if user else None, now)
@@ -802,6 +814,8 @@ async def quote_meal_order(
         line["subtotal"] -= reduction
         remaining -= reduction
     total -= discount
+    if same_day and total <= 0:
+        raise HTTPException(422, "開放當日訂餐的場次須有大於零的應付金額")
     return MealOrderQuoteRead(
         promotion=promotion, original_amount=original_total, discount_amount=discount,
         sales_channel=SalesChannel.MEAL_PREORDER,
@@ -888,6 +902,9 @@ async def create_meal_order(
     order_id = new_id()
     order_number = await allocate_order_number(session, "M", now)
     pickup_code = await _unique_pickup_code(session)
+    deadline = meal_order_deadline(event, quote.pickup_at, business=body.meal_booking_type == "business")
+    if event.same_day_preparation_minutes is not None and datetime.now(timezone.utc) >= deadline:
+        raise HTTPException(409, "此取餐時段已截止，請重新選擇")
     order = Order(
         id=order_id,
         client_request_id=str(body.client_request_id) if body.client_request_id else None,
@@ -973,7 +990,7 @@ async def create_meal_order(
             pickup_starts_at=event.pickup_starts_at,
             pickup_ends_at=event.pickup_ends_at,
             pickup_at=quote.pickup_at,
-            meal_ordering_ends_at=meal_booking_window(event)[1],
+            meal_ordering_ends_at=deadline,
             pickup_code=pickup_code,
         ),
     )
@@ -1472,18 +1489,38 @@ def _configured_event_values(body: MealEventCreate, *, existing: MealEvent | Non
     if existing is not None and "booking_policy" not in body.model_fields_set:
         policy = existing.booking_policy
     values["booking_policy"] = policy
+    if existing is not None and "same_day_preparation_minutes" not in body.model_fields_set:
+        values["same_day_preparation_minutes"] = existing.same_day_preparation_minutes
+    same_day = values["same_day_preparation_minutes"] is not None
     if policy == "legacy":
+        if same_day:
+            raise HTTPException(422, "請選擇工作日或特殊日期規則以開放當日訂餐")
         if existing is None or existing.booking_policy != "legacy":
             raise HTTPException(422, "新場次請使用工作日或特殊日期接單規則")
         return values
-    service_date = _aware(body.pickup_starts_at).astimezone(TAIPEI).date()
+    if same_day and body.allow_cash_payment:
+        raise HTTPException(422, "開放當日訂餐的場次僅支援線上付款")
+    service_date = values["pickup_starts_at"].astimezone(TAIPEI).date()
     try:
         values["ordering_starts_at"], values["ordering_ends_at"] = configured_booking_window(
-            service_date, policy, body.ordering_starts_at, body.ordering_ends_at)
+            service_date, policy, body.ordering_starts_at, body.ordering_ends_at, same_day=same_day,
+        )
     except CalendarUnavailable as exc:
         raise HTTPException(503, str(exc)) from None
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+    if same_day:
+        candidate = MealEvent(
+            **values,
+            service_date=service_date,
+            meal_period=existing.meal_period if existing is not None else None,
+            pickup_slot_ends_at=existing.pickup_slot_ends_at if existing is not None else None,
+        )
+        same_day_start = max(
+            values["ordering_starts_at"], datetime.combine(service_date, time.min, TAIPEI),
+        )
+        if not any(same_day_start < meal_order_deadline(candidate, slot) for slot in meal_pickup_slots(candidate)):
+            raise HTTPException(422, "當日沒有可預訂的取餐時段，請調整截止或最短備餐時間")
     return values
 
 
@@ -1530,6 +1567,7 @@ async def admin_create_meal_event(
                 "title": event.title,
                 "offering_count": len(body.offerings),
                 "booking_policy": event.booking_policy,
+                "same_day_preparation_minutes": event.same_day_preparation_minutes,
                 "service_date": _aware(event.pickup_starts_at).astimezone(TAIPEI).date().isoformat(),
                 "ordering_starts_at": _aware(event.ordering_starts_at).isoformat(),
                 "ordering_ends_at": _aware(event.ordering_ends_at).isoformat(),
@@ -1577,6 +1615,7 @@ async def admin_update_meal_event(
         data={"before": before, "after": {
             **body.model_dump(mode="json"),
             "booking_policy": event.booking_policy,
+            "same_day_preparation_minutes": event.same_day_preparation_minutes,
             "service_date": service_date.isoformat(),
             "ordering_starts_at": _aware(event.ordering_starts_at).isoformat(),
             "ordering_ends_at": _aware(event.ordering_ends_at).isoformat(),
@@ -1656,6 +1695,8 @@ async def update_meal_payment_options(
         raise HTTPException(status_code=404, detail="找不到便當場次")
     if event.status in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}:
         raise HTTPException(status_code=409, detail="場次已結束或取消")
+    if body.allow_cash_payment and event.same_day_preparation_minutes is not None:
+        raise HTTPException(422, "開放當日訂餐的場次僅支援線上付款")
     event.allow_cash_payment = body.allow_cash_payment
     session.add(AdminAudit(actor_id=admin.id, action="meal_event.payment_options", aggregate_type="meal_event", aggregate_id=event.id, data={"allow_cash_payment": body.allow_cash_payment}))
     await session.commit()

@@ -787,6 +787,10 @@ async def create_payment_attempt(
 
     from ..business_meals import is_business_meal, business_payment_blocked_reason, business_payment_window
     business_order = is_business_meal(order)
+    same_day_meal = (
+        not business_order and order.sales_channel == SalesChannel.MEAL_PREORDER
+        and order.meal_event is not None and order.meal_event.same_day_preparation_minutes is not None
+    )
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
         if order.meal_event is None:
             raise PaymentApplicationError("便當訂單缺少場次資料")
@@ -808,6 +812,10 @@ async def create_payment_attempt(
         current = now or datetime.now(timezone.utc)
         if reason := business_payment_blocked_reason(order, current):
             raise PaymentApplicationError(reason)
+    elif same_day_meal:
+        current = now or datetime.now(timezone.utc)
+        if not meal_payment_window_open(order, current):
+            raise PaymentApplicationError("已超過便當備餐付款期限")
     for existing in sorted(attempts, key=lambda item: item.created_at, reverse=True):
         if is_obsolete_order_attempt(existing, order):
             continue
@@ -952,6 +960,8 @@ async def create_payment_attempt(
                 )
             )
 
+    if same_day_meal and not meal_payment_window_open(order, now or datetime.now(timezone.utc)):
+        raise PaymentApplicationError("已超過便當備餐付款期限")
     attempt.checkout_payload = _build_checkout_payload(
         settings=settings,
         attempt=attempt,
@@ -2222,12 +2232,16 @@ class SQLAlchemyPaymentCallbackRepository:
                 reservation.status = ReservationStatus.CONSUMED
                 reservation.payment_attempt = attempt
             return True
-        if (
-            order.fulfillment is not None
-            and order.fulfillment.meal_ordering_ends_at is not None
-            and payment_time >= _aware(order.fulfillment.meal_ordering_ends_at)
-        ):
-            return False
+        deadline = order.fulfillment.meal_ordering_ends_at if order.fulfillment is not None else None
+        if deadline is not None:
+            deadline = _aware(deadline)
+            if payment_time >= deadline:
+                return False
+        confirmation_deadline = None
+        if order.meal_event.same_day_preparation_minutes is not None:
+            if deadline is None or datetime.now(timezone.utc) >= deadline:
+                return False
+            confirmation_deadline = deadline
         originally_in_window = payment_time <= _aware(attempt.expires_at)
         if payment_time > _aware(attempt.expires_at):
             await release_attempt_reservations(self.session, attempt)
@@ -2260,6 +2274,8 @@ class SQLAlchemyPaymentCallbackRepository:
                 offering.reserved_quantity += reservation.quantity
                 reservation.status = ReservationStatus.ACTIVE
                 reservation.released_at = None
+        if confirmation_deadline is not None and datetime.now(timezone.utc) >= confirmation_deadline:
+            return False
         for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
             if (
                 reservation.status == ReservationStatus.ACTIVE
