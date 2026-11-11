@@ -1,4 +1,6 @@
+import asyncio
 import base64
+from contextlib import asynccontextmanager
 from datetime import timedelta
 import json
 from unittest.mock import AsyncMock, Mock
@@ -157,11 +159,46 @@ async def test_recovery_workers_stop_before_using_database_or_transport(monkeypa
 def test_recovery_prepare_skips_implicit_migration_and_seeding(monkeypatch, recovery_mode, command, stages):
     settings = make_test_settings(recovery_mode=recovery_mode).model_copy(update={"environment": "preview"})
     monkeypatch.setattr(startup, "get_settings", lambda: settings)
-    monkeypatch.setattr(startup, "check_database_connection", AsyncMock(return_value=False))
     monkeypatch.setattr(type(settings), "validate_runtime_secrets", lambda self: None)
     monkeypatch.setattr("sys.argv", ["startup", command])
     called = []
     monkeypatch.setattr(startup, "migrate_database", lambda: called.append("migrate"))
-    monkeypatch.setattr(startup, "seed_preview_database", lambda: called.append("seed"))
+    monkeypatch.setattr(startup, "seed_preview_database", lambda _timeout: called.append("seed"))
     startup.main()
     assert called == stages
+
+
+@pytest.mark.parametrize("cutover_pending", [False, True])
+def test_preview_probe_seed_and_cleanup_share_event_loop(monkeypatch, cutover_pending):
+    loops = []
+    operations = []
+    isolated_session = object()
+
+    async def probe(timeout):
+        assert timeout == 5
+        loops.append(asyncio.get_running_loop())
+        operations.append("probe")
+        return cutover_pending
+
+    @asynccontextmanager
+    async def session():
+        yield isolated_session
+
+    async def seed(database_session):
+        assert database_session is isolated_session
+        loops.append(asyncio.get_running_loop())
+        operations.append("seed")
+
+    async def dispose():
+        loops.append(asyncio.get_running_loop())
+        operations.append("dispose")
+
+    monkeypatch.setattr(startup, "check_database_connection", probe)
+    monkeypatch.setattr(startup, "SessionLocal", session)
+    monkeypatch.setattr(startup, "seed_demo_data", seed)
+    monkeypatch.setattr(startup, "engine", Mock(dispose=dispose))
+
+    startup.seed_preview_database(5)
+
+    assert operations == (["probe", "dispose"] if cutover_pending else ["probe", "seed", "dispose"])
+    assert len(set(loops)) == 1

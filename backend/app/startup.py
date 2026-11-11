@@ -11,7 +11,7 @@ from alembic import command
 from alembic.config import Config
 
 from .config import get_settings
-from .database import SessionLocal, check_database_connection
+from .database import SessionLocal, check_database_connection, engine
 from .seed import seed_demo_data
 
 
@@ -56,10 +56,16 @@ def migrate_database() -> None:
     command.upgrade(config, "head")
 
 
-def seed_preview_database() -> None:
+def seed_preview_database(database_timeout_seconds: float) -> None:
     async def seed() -> None:
-        async with SessionLocal() as session:
-            await seed_demo_data(session)
+        try:
+            if await check_database_connection(database_timeout_seconds):
+                logger.info("startup_stage=preview_seed status=skipped_recovery_cutover")
+                return
+            async with SessionLocal() as session:
+                await seed_demo_data(session)
+        finally:
+            await engine.dispose()
 
     asyncio.run(seed())
 
@@ -83,11 +89,8 @@ def main() -> None:
         retry_seconds=settings.startup_migration_retry_seconds,
     )
     if args.command == "prepare" and settings.environment == "preview":
-        if asyncio.run(check_database_connection(settings.database_readiness_timeout_seconds)):
-            logger.info("startup_stage=preview_seed status=skipped_recovery_cutover")
-            return
         run_with_retries(
-            seed_preview_database,
+            lambda: seed_preview_database(settings.database_readiness_timeout_seconds),
             attempts=settings.startup_migration_attempts,
             retry_seconds=settings.startup_migration_retry_seconds,
             stage="preview_seed",

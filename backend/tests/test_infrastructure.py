@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app import main
+from app import database, main
 from app.config import (
     DEFAULT_JWT_SECRET,
     DEFAULT_RECONCILE_SECRET,
@@ -963,10 +963,13 @@ async def test_app_lifespan_does_not_create_an_unmigrated_schema(
         f"sqlite+aiosqlite:///{database_path}"
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(database, "SessionLocal", session_factory)
     monkeypatch.setattr(main, "SessionLocal", session_factory)
 
     with pytest.raises(OperationalError):
         async with main.lifespan(FastAPI()):
             pass
 
+    async with engine.connect() as connection:
+        assert not await connection.run_sync(lambda sync: inspect(sync).get_table_names())
     await engine.dispose()
