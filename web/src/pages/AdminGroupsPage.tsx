@@ -10,7 +10,7 @@ import { CampaignReviewPanel } from "../components/CampaignReviewPanel";
 import { CampaignQuantityEditor } from "../components/CampaignQuantityEditor";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
+import { ApiError, apiFetch, captureSessionIdentityGuard, formatDateTime, formatMoney } from "../lib/api";
 import { campaignAccessDenied, campaignDateTime, campaignScheduleError, campaignStatusLabel, campaignTimestamp, defaultReviewDeadline, groupProposalStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
 import { taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
@@ -33,11 +33,16 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
   const now = useDeadlineClock();
   const queryClient = useQueryClient();
   const [revoked, setRevoked] = useState(false);
+  const [sameSession] = useState(captureSessionIdentityGuard);
+  const read = <T,>(path: string) => {
+    if (!sameSession()) throw new ApiError(401, "登入狀態已變更，請重新登入。");
+    return apiFetch<T>(path);
+  };
   const [products, bundles, proposals, campaigns] = useQueries({ queries: [
-    { queryKey: ["admin-products", userId], queryFn: () => apiFetch<Product[]>("/v1/products"), enabled: !revoked && tab !== "wishes", retry: retryCampaignRead },
-    { queryKey: ["group-bundles", userId], queryFn: () => apiFetch<GroupBundle[]>("/v1/group-bundles"), enabled: !revoked && tab !== "wishes", retry: retryCampaignRead },
-    { queryKey: ["group-vote-proposals", userId], queryFn: () => apiFetch<GroupVoteProposal[]>("/v1/vote-proposals"), enabled: !revoked && tab === "proposals", retry: retryCampaignRead },
-    { queryKey: ["group-campaigns", "admin", userId], queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns?include_hidden=true"), enabled: !revoked && (tab === "campaigns" || tab === "proposals"), retry: retryCampaignRead, refetchInterval: revoked ? false : 30000 },
+    { queryKey: ["admin-products", userId], queryFn: () => read<Product[]>("/v1/products"), enabled: !revoked && tab !== "wishes", retry: retryCampaignRead },
+    { queryKey: ["group-bundles", userId], queryFn: () => read<GroupBundle[]>("/v1/group-bundles"), enabled: !revoked && tab !== "wishes", retry: retryCampaignRead },
+    { queryKey: ["group-vote-proposals", userId], queryFn: () => read<GroupVoteProposal[]>("/v1/vote-proposals"), enabled: !revoked && tab === "proposals", retry: retryCampaignRead },
+    { queryKey: ["group-campaigns", "admin", userId], queryFn: () => read<GroupCampaign[]>("/v1/group-campaigns?include_hidden=true"), enabled: !revoked && (tab === "campaigns" || tab === "proposals"), retry: retryCampaignRead, refetchInterval: revoked ? false : 30000 },
   ] });
   const denied = revoked || [products, bundles, proposals, campaigns].some(query => campaignAccessDenied(query.error));
   useEffect(() => { if (denied) setRevoked(true); }, [denied]);
