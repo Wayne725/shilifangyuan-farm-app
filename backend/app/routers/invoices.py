@@ -27,6 +27,7 @@ from ..integrations.invoice_service import (
 )
 from ..integrations.invoice_void import InvoiceVoidError, void_refunded_order_invoice
 from ..models import AdminAudit, Invoice, InvoiceBuyerType, InvoiceStatus, PaymentStatus, SalesChannel, User
+from ..recovery_quarantine import RecoveryHoldActive, require_unheld
 from ..invoice_timing import invoice_handling, pickup_invoice_due, cancel_unissued_invoice_jobs
 from ..schemas import InvoicePreferenceInput
 from ..rate_limit import INVOICE_QUERY_RULE, client_key, enforce
@@ -51,6 +52,7 @@ async def arrange_order_invoice(
 ):
     from .orders import load_order
     order = await load_order(session, str(order_id), lock=True, refresh=True)
+    await require_unheld(session, ("order", order.id))
     from ..business_meals import is_business_meal
     if is_business_meal(order):
         if body.handling != 'pickup_day' or (body.preferences is not None and body.preferences.invoice_buyer_type != InvoiceBuyerType.COMPANY):
@@ -146,6 +148,8 @@ async def void_refunded_invoice(
             reason=body.reason,
             actor_id=actor_id,
         )
+    except RecoveryHoldActive:
+        raise
     except InvoiceVoidError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
     except (IntegrationError, ValueError, TimeoutError) as exc:
@@ -202,6 +206,7 @@ async def query_order_invoice(
 ) -> AdminInvoiceQueryResponse:
     actor_id = admin.id
     order_id_value = str(order_id)
+    await require_unheld(session, ("order", order_id_value))
     enforce(
         client_key(request, "invoice-query", admin.id),
         INVOICE_QUERY_RULE,

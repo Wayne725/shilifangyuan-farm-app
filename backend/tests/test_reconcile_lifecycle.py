@@ -108,6 +108,7 @@ async def test_lifespan_finishes_invoice_and_email_without_browser_traffic(datab
         "reconciliation_interval_seconds": 0.01,
     })
     monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "check_database_connection", AsyncMock(return_value=False))
     monkeypatch.setattr(jobs, "SessionLocal", async_sessionmaker(database_session.bind, expire_on_commit=False))
     monkeypatch.setattr(jobs, "invoice_adapter_from_settings", lambda _: FanyuInvoiceAdapter(fanyu_settings(), transport=transport))
     monkeypatch.setattr(jobs, "email_sender_from_settings", lambda _: Sender())

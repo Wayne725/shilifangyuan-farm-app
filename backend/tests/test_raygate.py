@@ -899,16 +899,17 @@ async def test_browser_return_keeps_query_failure_confirming(
         raise IntegrationResponseError("query unavailable")
 
     monkeypatch.setattr(adapter, "query_order", unavailable)
+    order_id, attempt_id = order.id, attempt.id
 
     response = await client.get(
         "/payments/raygate/result",
-        params={"attempt_id": attempt.id},
+        params={"attempt_id": attempt_id},
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == (
-        f"https://app.example.test/orders?order_id={order.id}"
-        f"&payment=confirming&attempt_id={attempt.id}"
+        f"https://app.example.test/orders?order_id={order_id}"
+        f"&payment=confirming&attempt_id={attempt_id}"
     )
     await session.refresh(attempt)
     assert attempt.status == PaymentStatus.PENDING

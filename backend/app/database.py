@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Optional
 
-from sqlalchemy import MetaData, event, text
+from sqlalchemy import MetaData, event, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -71,14 +71,16 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def check_database_connection(timeout_seconds: float | None = None) -> None:
+async def check_database_connection(timeout_seconds: float | None = None) -> bool:
+    from .recovery_quarantine import cutover_preparing
+
     timeout = timeout_seconds or get_settings().database_readiness_timeout_seconds
 
-    async def execute_probe() -> None:
+    async def execute_probe() -> bool:
         async with SessionLocal() as session:
-            await session.execute(text("SELECT 1"))
+            return bool(await session.scalar(select(cutover_preparing())))
 
-    await asyncio.wait_for(execute_probe(), timeout=timeout)
+    return await asyncio.wait_for(execute_probe(), timeout=timeout)
 
 
 async def create_all(database_engine: Optional[AsyncEngine] = None) -> None:

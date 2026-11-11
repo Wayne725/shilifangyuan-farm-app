@@ -231,9 +231,11 @@ async def create_payment_attempt(session, charge_id, user, settings, *, return_s
         PaymentApplicationError, _build_checkout_payload, browser_return_base, ensure_payment_runtime_enabled,
     )
     from .integrations.ecpay import create_merchant_trade_no
+    from .recovery_quarantine import require_unheld
     charge = await lock_activity_payment_subject(session, charge_id)
     if charge is None or charge.user_id != user.id:
         raise HTTPException(404, "找不到活動繳款")
+    await require_unheld(session, ("activity_charge", charge.id))
     now = datetime.now(timezone.utc)
     if not payable(charge, charge.registration, charge.activity, now):
         raise PaymentApplicationError("此活動款項目前無法付款，請重新查詢報名狀態")

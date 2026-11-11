@@ -18,6 +18,7 @@ from ..models import (
     Refund,
     RefundStatus,
 )
+from ..recovery_quarantine import require_unheld
 from .common import IntegrationError
 from .fanyu_invoice import FanyuInvoiceAdapter
 from .invoice import InvoiceProvider
@@ -40,6 +41,7 @@ async def void_refunded_order_invoice(
     trigger: str = "admin",
     refund_id: str | None = None,
 ) -> Invoice:
+    await require_unheld(session, ("order", order_id))
     audit_context = (
         {"trigger": trigger, "refund_id": refund_id}
         if trigger != "admin" else {}

@@ -743,6 +743,7 @@ async def test_production_lifespan_never_seeds_demo_data(
     seed_demo_data = AsyncMock()
     monkeypatch.setattr(main, "get_settings", lambda: runtime_settings)
     monkeypatch.setattr(main, "seed_demo_data", seed_demo_data)
+    monkeypatch.setattr(main, "check_database_connection", AsyncMock(return_value=False))
 
     async with main.lifespan(FastAPI()):
         pass

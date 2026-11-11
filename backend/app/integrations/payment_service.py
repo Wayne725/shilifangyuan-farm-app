@@ -13,6 +13,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from ..config import Settings
 from ..point_accounts import point_account
+from ..recovery_quarantine import payment_targets, provider_payment_reference, require_unheld
 from ..controlled_product_payments import is_meals_test_product_order
 from ..sales_scope import SalesScopeError, ensure_sales_scope_allows
 from ..domain import (
@@ -451,6 +452,10 @@ async def create_provider_aware_refund(
 ) -> tuple[Refund, bool]:
     if sum(item is not None for item in (order, membership_charge, activity_charge)) != 1:
         raise ValueError("退款必須且只能指定一種付款主體")
+    subjects = tuple((scope, item.id) for scope, item in (
+        ("order", order), ("membership_charge", membership_charge), ("activity_charge", activity_charge),
+    ) if item is not None)
+    await require_unheld(session, *subjects, *(payment_targets(payment_attempt) if payment_attempt else ()))
     if activity_charge is not None:
         if payment_attempt is None or payment_attempt.activity_charge_id != activity_charge.id or payment_attempt.amount != amount:
             raise PaymentApplicationError("活動退款必須綁定正確原付款並整筆退還")
@@ -738,6 +743,7 @@ async def create_payment_attempt(
     )
     if order is None:
         raise PaymentApplicationError("找不到訂單")
+    await require_unheld(session, ("order", order.id))
     if order.payment_method != PaymentMethod.ONLINE:
         raise PaymentApplicationError("現場付款訂單不可使用線上付款")
     await ensure_order_payment_runtime_enabled(session, settings, order)
@@ -988,6 +994,7 @@ async def create_membership_payment_attempt(
     )
     if charge is None:
         raise PaymentApplicationError("找不到入社應繳款")
+    await require_unheld(session, ("membership_charge", charge.id))
     if (
         charge.application.status
         not in {
@@ -1101,6 +1108,7 @@ class SQLAlchemyPaymentCallbackRepository:
         event_key: str,
         payload: Mapping[str, str],
     ) -> str:
+        await require_unheld(self.session, ("provider_payment", provider_payment_reference(provider, payload["MerchantTradeNo"])))
         event_provider = (
             "ecpay_aio" if provider == "ecpay" else "raygate_payment"
         )
@@ -1172,6 +1180,7 @@ class SQLAlchemyPaymentCallbackRepository:
         )
         if attempt is None:
             raise PaymentApplicationError("找不到付款嘗試")
+        await require_unheld(self.session, *payment_targets(attempt))
         if attempt.provider != provider:
             raise PaymentApplicationError("付款服務與付款嘗試不符")
         if attempt.order is not None and attempt.order.payment_method != PaymentMethod.ONLINE:

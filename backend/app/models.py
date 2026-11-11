@@ -2839,6 +2839,33 @@ class OutboxEvent(Base):
     )
 
 
+class RecoveryCutover(Base):
+    __tablename__ = "recovery_cutovers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    checkpoint_sha256: Mapped[str] = mapped_column(String(64))
+    manifest_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    armed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class RecoveryHold(Base):
+    __tablename__ = "recovery_holds"
+    __table_args__ = (
+        Index("ix_recovery_holds_scope_reference_resolved", "scope", "reference", "resolved_at"),
+    )
+
+    cutover_id: Mapped[str] = mapped_column(ForeignKey("recovery_cutovers.id", ondelete="RESTRICT"), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    reference: Mapped[str] = mapped_column(String(128), primary_key=True)
+    evidence_sha256: Mapped[str] = mapped_column(String(64))
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    resolved_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    resolution_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    resolution: Mapped[Optional[str]] = mapped_column(String(24))
+
+
 class ExternalEvent(Base):
     __tablename__ = "external_events"
     __table_args__ = (

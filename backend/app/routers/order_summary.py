@@ -17,6 +17,8 @@ from ..models import AdminAudit, PrintJob, User
 from ..order_summary import OrderSummaryFilters, build_print_summary, read_order_summary
 from ..printer_worker import wake_printer
 from ..printing import printer_fingerprint, receipt_preview, seal_receipt_content
+from ..recovery_quarantine import require_unheld
+from ..recovery_work import SUMMARY_ALL_TARGET, print_job_targets, summary_print_targets
 from ..summary_printing import (SUMMARY_FORMAT_VERSION, format_summary_pages, normalized_print_filters, read_summary_jobs,
                                summary_batch_read, summary_fingerprint, summary_generated_at)
 
@@ -89,6 +91,7 @@ async def create_summary_print_jobs(
     fingerprint = summary_fingerprint(report, settings)
     if fingerprint != body.fingerprint:
         raise HTTPException(409, "訂單資料或出單設備已變更，請重新預覽後列印")
+    await require_unheld(session, SUMMARY_ALL_TARGET, *summary_print_targets({**report, "fingerprint": fingerprint}))
     pages = _print_pages(report, settings, request_id)
     mode = "dry_run" if settings.printer_dry_run else "live"
     jobs = []
@@ -164,6 +167,7 @@ async def resolve_summary_page(
     job = await session.scalar(select(PrintJob).where(PrintJob.id == str(job_id)).with_for_update())
     if job is None or job.kind != "summary" or job.snapshot.get("request_id") != str(request_id):
         raise HTTPException(404, "找不到此批彙總列印工作")
+    await require_unheld(session, SUMMARY_ALL_TARGET, *print_job_targets(job))
     if job.mode != "live" or job.status not in {"submitted", "unknown"}:
         raise HTTPException(409, "僅能人工核對正式模式中結果待確認的工作")
     job.status = "printed" if body.printed else "unknown"

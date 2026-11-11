@@ -20,6 +20,9 @@ from ..printer_worker import wake_printer
 from ..printing import (format_receipt, fresh_receipt_snapshot, job_matches_printer, job_read, job_region,
                         open_receipt_content, payment_snapshot_from_session, printer_fingerprint, receipt_preview,
                         render_receipt_snapshot)
+from ..recovery_quarantine import require_unheld
+from ..recovery_work import order_print_targets, print_job_targets
+
 
 printers_router = APIRouter(prefix="/v1/admin/printers", tags=["printers"])
 
@@ -113,6 +116,7 @@ async def resolve_job(job_id: str, body: ResolveRequest, admin: User = Depends(r
     if job is None:
         raise HTTPException(404, "找不到列印工作")
     _require_order_job(job)
+    await require_unheld(session, *print_job_targets(job))
     if job.mode != "live" or job.status not in {"submitted", "unknown"}:
         raise HTTPException(409, "僅能人工核對正式模式中結果待確認的工作")
     job.status = "printed" if body.printed else "unknown"
@@ -156,6 +160,7 @@ async def reprint_job(job_id: str, body: ReprintRequest, admin: User = Depends(r
         if existing.reprint_of_id != job_id:
             raise HTTPException(409, "補印識別碼已用於其他工作")
         return job_read(existing, settings, order)
+    await require_unheld(session, *print_job_targets(source))
     if source.status in {"pending", "sending"}:
         raise HTTPException(409, "工作仍待發送或正在發送，請先確認結果")
     if source.status in {"submitted", "unknown"} and not body.acknowledge_duplicate:
@@ -192,6 +197,7 @@ async def query_job(job_id: str, _admin: User = Depends(require_admin), session:
     if job is None:
         raise HTTPException(404, "找不到列印工作")
     _require_order_job(job)
+    await require_unheld(session, *print_job_targets(job))
     if job.status not in {"submitted", "unknown"} or not job.vendor_order_id:
         raise HTTPException(409, "此工作沒有可查詢的雲端工作編號；請核對紙本結果")
     if not job_matches_printer(job, settings):
@@ -253,6 +259,7 @@ async def create_order_print(order_id: str, body: OrderPrintRequest, admin: User
         if existing.order_id != order_id:
             raise HTTPException(409, "列印識別碼已用於另一筆訂單")
         return job_read(existing, settings, order)
+    await require_unheld(session, *order_print_targets(order_id))
     jobs = await order_print_jobs(session, order_id)
     if blocked := manual_print_blocked_reason(order, jobs, settings):
         raise HTTPException(409, blocked)

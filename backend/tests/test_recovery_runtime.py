@@ -122,6 +122,7 @@ async def test_recovery_workers_stop_before_using_database_or_transport(monkeypa
 def test_recovery_prepare_skips_implicit_migration_and_seeding(monkeypatch, recovery_mode, command, stages):
     settings = make_test_settings(recovery_mode=recovery_mode).model_copy(update={"environment": "preview"})
     monkeypatch.setattr(startup, "get_settings", lambda: settings)
+    monkeypatch.setattr(startup, "check_database_connection", AsyncMock(return_value=False))
     monkeypatch.setattr(type(settings), "validate_runtime_secrets", lambda self: None)
     monkeypatch.setattr("sys.argv", ["startup", command])
     called = []

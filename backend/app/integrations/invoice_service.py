@@ -26,6 +26,7 @@ from ..models import (
     Refund,
     TaxType,
 )
+from ..recovery_quarantine import require_unheld
 from .invoice import (
     ECPayInvoiceAdapter,
     ECPayInvoiceSettings,
@@ -509,6 +510,7 @@ async def issue_paid_order_invoice(
     order_id: str,
     adapter: InvoiceProvider,
 ) -> InvoiceIssueResult:
+    await require_unheld(session, ("order", order_id))
     order = await session.scalar(
         select(Order)
         .where(Order.id == order_id)

@@ -29,6 +29,7 @@ from .routers.printers import printers_router
 from .printer_worker import periodic_printing
 from .seed import seed_demo_data
 from .request_logging import install_access_log_redaction, redact_request_target
+from .recovery_quarantine import RecoveryHoldActive
 
 
 AUTH_EMAIL_PATHS = {
@@ -50,7 +51,9 @@ RECOVERY_ORDER_PATH = re.compile(r"/v1/orders/[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     install_access_log_redaction()
     settings = get_settings()
-    if settings.recovery_mode:
+    if settings.recovery_mode or await check_database_connection(settings.database_readiness_timeout_seconds):
+        if _app is not None:
+            _app.state.recovery_read_only = True
         logger.info("recovery_mode_started")
         yield
         return
@@ -89,6 +92,7 @@ def create_app() -> FastAPI:
         redoc_url=None if settings.environment.strip().lower() == 'production' else '/redoc',
         openapi_url=None if settings.environment.strip().lower() == 'production' else '/openapi.json',
     )
+    application.state.recovery_read_only = settings.recovery_mode
     application.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -130,7 +134,7 @@ def create_app() -> FastAPI:
         started_at = time.perf_counter()
         try:
             path = request.url.path
-            if settings.recovery_mode and (
+            if application.state.recovery_read_only and (
                 request.method != "GET" or (
                     path not in RECOVERY_READ_PATHS and not RECOVERY_ORDER_PATH.fullmatch(path)
                 )
@@ -195,7 +199,7 @@ def create_app() -> FastAPI:
         tables and can call ECPay — never sits in the user's request path.
         """
         response = await call_next(request)
-        if settings.recovery_mode or not settings.reconciliation_on_request_enabled:
+        if application.state.recovery_read_only or not settings.reconciliation_on_request_enabled:
             return response
         if request.url.path in AUTH_EMAIL_PATHS:
             schedule_background_reconcile(
@@ -214,6 +218,11 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+    @application.exception_handler(RecoveryHoldActive)
+    async def handle_recovery_hold(_request: Request, exc: RecoveryHoldActive) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)},
+                            headers={"X-Error-Code": "recovery_hold_active", "Cache-Control": "no-store"})
+
     @application.get("/health", tags=["system"])
     async def health() -> dict:
         return {
@@ -225,9 +234,7 @@ def create_app() -> FastAPI:
     @application.get("/ready", tags=["system"])
     async def readiness():
         try:
-            await check_database_connection(
-                settings.database_readiness_timeout_seconds
-            )
+            cutover_pending = await check_database_connection(settings.database_readiness_timeout_seconds)
         except Exception:
             logger.exception("database_readiness_failed")
             return JSONResponse(
@@ -237,7 +244,7 @@ def create_app() -> FastAPI:
                     "database": "unavailable",
                 },
             )
-        if settings.recovery_mode:
+        if application.state.recovery_read_only or cutover_pending:
             return JSONResponse(
                 status_code=503,
                 content={"status": "not_ready", "database": "available", "reason": "recovery_mode"},

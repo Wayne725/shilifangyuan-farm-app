@@ -38,6 +38,7 @@ from ..models import (
     User,
     new_id,
 )
+from ..recovery_work import outbox_is_held, outbox_work_held
 from ..schemas import (
     AdminActionReason,
     PickupLocationCreate,
@@ -56,9 +57,13 @@ from ..schemas import (
 operations_router = APIRouter(tags=["operations"])
 
 
-async def job_retry_blocker(session: AsyncSession, event: OutboxEvent) -> str:
+async def job_retry_blocker(session: AsyncSession, event: OutboxEvent, *, recovery_held: bool | None = None) -> str:
     if event.status != OutboxStatus.FAILED:
         return "工作並非失敗狀態，不可重複排入"
+    if recovery_held is None:
+        recovery_held = await outbox_work_held(session, event.id)
+    if recovery_held:
+        return "這筆工作正在進行復原核對，暫停重送"
     if email_delivery_unknown(event) and event.event_type in {"auth.email_verification_requested", "auth.password_reset_requested"}:
         return "驗證或密碼重設信的寄送結果未知，請由本人重新申請，不可直接重送舊憑證"
     if event.event_type == "invoice.issue_requested":
@@ -115,10 +120,11 @@ async def list_failed_jobs(
             job_error_expression().icontains(term, autoescape=True),
         ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
-    rows = (await session.execute(query.order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc()).limit(limit).offset(offset))).all()
+    rows = (await session.execute(query.add_columns(outbox_is_held())
+        .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc()).limit(limit).offset(offset))).all()
     items = []
-    for event, order in rows:
-        blocker = await job_retry_blocker(session, event)
+    for event, order, recovery_held in rows:
+        blocker = await job_retry_blocker(session, event, recovery_held=recovery_held)
         delivery = event.payload.get("email_delivery")
         delivery = delivery if isinstance(delivery, dict) else {}
         items.append({"id": event.id, "event_type": event.event_type, "aggregate_id": event.aggregate_id,
