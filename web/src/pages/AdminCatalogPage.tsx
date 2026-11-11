@@ -293,7 +293,13 @@ function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product:
       <span className={`status-chip ${product.is_active ? "passed" : ""}`}>{product.is_active ? "可販售" : "不可販售"}</span>
       <h3>{product.name}</h3>
       <p>{product.supplier_name || "未指定供應者"} · {product.sku || product.product_number || "未編號"}</p>
-      <dl><div><dt>社員價</dt><dd>{formatMoney(product.member_price)}</dd></div><div><dt>庫存</dt><dd>{product.stock_quantity} {product.unit}</dd></div><div><dt>日常選購</dt><dd>{product.daily_sales_enabled === false ? "未上架" : "上架"}</dd></div><div><dt>物流</dt><dd>{product.can_ship ? temperatureLabels[product.shipping_temperature || "ambient"] : "僅取貨"}</dd></div></dl>
+      <dl>
+        <div><dt>社員價</dt><dd>{formatMoney(product.member_price)}</dd></div>
+        <div><dt>一般價</dt><dd>{formatMoney(product.nonmember_price)}</dd></div>
+        <div><dt>庫存</dt><dd>{product.stock_quantity} {product.unit}</dd></div>
+        <div><dt>日常選購</dt><dd>{product.daily_sales_enabled === false ? "未上架" : "上架"}</dd></div>
+        <div><dt>物流</dt><dd>{product.can_ship ? temperatureLabels[product.shipping_temperature || "ambient"] : "僅取貨"}</dd></div>
+      </dl>
       <div className="admin-product-actions">
         <button className="button button-quiet" type="button" disabled={sale.isPending} onClick={startEditing}>編輯商品</button>
         <button className="button button-quiet" type="button" disabled={sale.isPending} onClick={() => { if (saleInFlight.current) return; saleInFlight.current = true; sale.mutate(); }}>{sale.isPending ? "更新中…" : product.is_active ? "停止販售" : "恢復販售"}</button>

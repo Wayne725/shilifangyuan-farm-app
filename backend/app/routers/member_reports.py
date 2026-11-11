@@ -46,12 +46,17 @@ def _range(starts_on, ends_on):
     return start, end
 
 
-async def _member_rows(session, settings, *, newest_first=False):
+async def _member_rows(session, settings, *, newest_first=False, member_number=""):
     cipher = _cipher(settings)
-    roster = list(await session.scalars(select(MemberRosterEntry).order_by(MemberRosterEntry.member_number)))
+    roster_query = select(MemberRosterEntry).order_by(MemberRosterEntry.member_number)
+    member_query = (select(Membership, User, MemberProfile).join(User, User.id == Membership.user_id)
+        .outerjoin(MemberProfile, MemberProfile.user_id == User.id).order_by(Membership.member_number, Membership.id))
+    if member_number:
+        roster_query = roster_query.where(MemberRosterEntry.member_number == member_number)
+        member_query = member_query.where(Membership.member_number == member_number)
+    roster = list(await session.scalars(roster_query))
     by_number = {row.member_number: row for row in roster}
-    joined = (await session.execute(select(Membership, User, MemberProfile).join(User, User.id == Membership.user_id)
-        .outerjoin(MemberProfile, MemberProfile.user_id == User.id).order_by(Membership.member_number, Membership.id))).all()
+    joined = (await session.execute(member_query)).all()
     seen, rows = set(), []
     def decrypt(value, aad):
         return cipher.decrypt_text(value, associated_data=aad) if value else ""
@@ -99,16 +104,18 @@ def _filter_members(rows, status, q):
 
 @member_reports_router.get("/member-register")
 async def list_member_register(q: str = Query(default="", max_length=120), status: Literal["active", "all"] = "active",
+    member_number: str = Query(default="", max_length=100),
     limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
-    rows = _filter_members(await _member_rows(session, settings, newest_first=True), status, q)
+    rows = _filter_members(await _member_rows(session, settings, newest_first=True, member_number=member_number), status, q)
     return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset}
 
 
 @member_reports_router.get("/member-register.csv")
 async def export_member_register(q: str = Query(default="", max_length=120), status: Literal["active", "all"] = "active",
+    member_number: str = Query(default="", max_length=100),
     admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
-    rows = _filter_members(await _member_rows(session, settings), status, q)
+    rows = _filter_members(await _member_rows(session, settings, member_number=member_number), status, q)
     session.add(AdminAudit(actor_id=admin.id, action="membership.register_exported", aggregate_type="member_register", aggregate_id=str(uuid4()), data={"count": len(rows), "status": status}))
     await session.commit()
     columns = ["社員編號", "姓名", "Email", "手機", "股號", "股數", "股金", "認股日期", "繳股日期", "會籍狀態", "入社日期", "出生日期", "性別", "籍貫", "職業", "現居地址", "戶籍地址", "通訊地址", "市話", "LINE ID", "緊急聯絡人"]
@@ -116,9 +123,17 @@ async def export_member_register(q: str = Query(default="", max_length=120), sta
     return csv_response("member-register.csv", columns, [[_local(row[key]) if key == "activated_at" else row.get(key) for key in keys] for row in rows])
 
 
-async def _payment_rows(session, settings):
+async def _payment_rows(session, settings, member_number):
     cipher = _cipher(settings)
-    charges = list(await session.scalars(select(MembershipCharge).options(selectinload(MembershipCharge.membership), selectinload(MembershipCharge.user), selectinload(MembershipCharge.payment_attempts), selectinload(MembershipCharge.refunds))))
+    charge_query = select(MembershipCharge).options(
+        selectinload(MembershipCharge.membership), selectinload(MembershipCharge.user),
+        selectinload(MembershipCharge.payment_attempts), selectinload(MembershipCharge.refunds),
+    )
+    receipt_query = select(MembershipOfflineReceipt)
+    if member_number:
+        charge_query = charge_query.where(MembershipCharge.membership.has(Membership.member_number == member_number))
+        receipt_query = receipt_query.where(MembershipOfflineReceipt.member_number == member_number)
+    charges = list(await session.scalars(charge_query))
     rows = []
     for charge in charges:
         payments = sorted([attempt for attempt in charge.payment_attempts if attempt.paid_at], key=lambda attempt: aware(attempt.paid_at), reverse=True)
@@ -130,8 +145,8 @@ async def _payment_rows(session, settings):
             "amount": charge.amount, "received": received, "refunded": refund, "net": received - refund,
             "status": charge.status.value, "paid_at": charge.paid_at, "receipt_number": charge.receipt_number,
             "payment_method": attempt.provider if attempt else "", "reference": attempt.provider_trade_no if attempt else "", "recorded_at": charge.created_at})
-    receipts = list(await session.scalars(select(MembershipOfflineReceipt)))
-    members = {row["member_number"]: row for row in await _member_rows(session, settings)}
+    receipts = list(await session.scalars(receipt_query))
+    members = {row["member_number"]: row for row in await _member_rows(session, settings, member_number=member_number)} if receipts else {}
     for receipt in receipts:
         person = members.get(receipt.member_number, {})
         received = 0 if receipt.voided_at else receipt.amount
@@ -143,10 +158,10 @@ async def _payment_rows(session, settings):
     return rows
 
 
-async def _filtered_payments(session, settings, q, kind, starts_on, ends_on):
+async def _filtered_payments(session, settings, q, kind, starts_on, ends_on, member_number):
     start, end = _range(starts_on, ends_on)
     term = q.strip().lower()
-    rows = await _payment_rows(session, settings)
+    rows = await _payment_rows(session, settings, member_number)
     return sorted([row for row in rows if (kind == "all" or row["kind"] == kind) and
         (not term or any(term in str(row.get(key) or "").lower() for key in ("member_number", "name", "email", "receipt_number", "reference"))) and
         (not start or row["paid_at"] and aware(row["paid_at"]) >= start) and (not end or row["paid_at"] and aware(row["paid_at"]) < end)],
@@ -155,18 +170,20 @@ async def _filtered_payments(session, settings, q, kind, starts_on, ends_on):
 
 @member_reports_router.get("/membership-payments")
 async def list_membership_payments(q: str = Query(default="", max_length=120), kind: Literal["all", "admission_fee", "share_capital"] = "all",
+    member_number: str = Query(default="", max_length=100),
     starts_on: date | None = None, ends_on: date | None = None, limit: int = Query(default=30, ge=1, le=100), offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
-    rows = await _filtered_payments(session, settings, q, kind, starts_on, ends_on)
+    rows = await _filtered_payments(session, settings, q, kind, starts_on, ends_on, member_number)
     return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset,
             "summary": {key: sum(row[key] for row in rows) for key in ("received", "refunded", "net")}}
 
 
 @member_reports_router.get("/membership-payments.csv")
 async def export_membership_payments(q: str = Query(default="", max_length=120), kind: Literal["all", "admission_fee", "share_capital"] = "all",
+    member_number: str = Query(default="", max_length=100),
     starts_on: date | None = None, ends_on: date | None = None,
     admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
-    rows = await _filtered_payments(session, settings, q, kind, starts_on, ends_on)
+    rows = await _filtered_payments(session, settings, q, kind, starts_on, ends_on, member_number)
     session.add(AdminAudit(actor_id=admin.id, action="membership.payments_exported", aggregate_type="membership_payments", aggregate_id=str(uuid4()), data={"count": len(rows)}))
     await session.commit()
     return csv_response("membership-payments.csv", ["收據編號", "社員編號", "姓名", "Email", "款項", "應收金額", "實收", "已退款", "淨收款", "狀態", "收款日期", "收款方式", "收款資訊", "來源", "登錄時間"],
@@ -257,23 +274,27 @@ async def void_offline_receipt(receipt_id: str, body: ReceiptVoid, admin: User =
     return {"id": receipt.id, "status": "voided"}
 
 
-async def _point_rows(session):
+async def _point_rows(session, member_number=""):
     balance = select(PointTransaction.account_id, func.sum(PointTransaction.amount).label("balance")).group_by(PointTransaction.account_id).subquery()
-    rows = (await session.execute(select(User, Membership, func.coalesce(balance.c.balance, 0)).outerjoin(Membership, Membership.user_id == User.id)
-        .outerjoin(PointAccount, PointAccount.user_id == User.id).outerjoin(balance, balance.c.account_id == PointAccount.id)
-        .where(Membership.status == MembershipStatus.ACTIVE).order_by(User.display_name, User.id))).all()
+    statement = select(User, Membership, func.coalesce(balance.c.balance, 0)).outerjoin(Membership, Membership.user_id == User.id)
+    statement = (statement.outerjoin(PointAccount, PointAccount.user_id == User.id)
+        .outerjoin(balance, balance.c.account_id == PointAccount.id)
+        .where(Membership.status == MembershipStatus.ACTIVE).order_by(User.display_name, User.id))
+    if member_number:
+        statement = statement.where(Membership.member_number == member_number)
+    rows = (await session.execute(statement)).all()
     return [{"user_id": user.id, "name": user.display_name, "email": user.email or user.notification_email or "", "member_number": membership.member_number, "balance": int(points)} for user, membership, points in rows]
 
 
 @member_reports_router.get("/points-ledger")
-async def list_point_balances(_admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    rows = await _point_rows(session)
+async def list_point_balances(member_number: str = Query(default="", max_length=100), _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    rows = await _point_rows(session, member_number)
     return {"items": rows, "total": len(rows), "purchase_rule": "正式社員每筆已確認付款消費滿 100 元累積 1 點；退款依原訂單扣回"}
 
 
 @member_reports_router.get("/points-ledger.csv")
-async def export_point_balances(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    rows = await _point_rows(session)
+async def export_point_balances(member_number: str = Query(default="", max_length=100), admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    rows = await _point_rows(session, member_number)
     session.add(AdminAudit(actor_id=admin.id, action="points.exported", aggregate_type="point_account", aggregate_id=str(uuid4()), data={"count": len(rows)}))
     await session.commit()
     return csv_response("member-points.csv", ["社員編號", "姓名", "Email", "累積點數"], [[row[key] for key in ("member_number", "name", "email", "balance")] for row in rows])

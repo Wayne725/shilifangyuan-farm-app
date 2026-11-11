@@ -133,7 +133,7 @@ async function verify_summary(page, expected) {
 for (const width of [882, 390]) {
   test(`${width}px 訂單營運可進入匯總，篩選與分頁共用完整統計，大字表格獨立橫捲`, { timeout: 40000 }, async (t) => {
     const { page, state } = await fixture(t, { width });
-    await page.goto(`${base}/admin`);
+    await page.goto(`${base}/admin?section=orders`);
     await page.getByRole('heading', { name: '訂單、付款與發票', exact: true }).waitFor();
     await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
     assert.equal(state.reads.includes('/v1/admin/order-search'), true);
@@ -349,7 +349,7 @@ test('便當預設依取餐日期，切換下單日期重查；一般訂單不�
 
 test('管理員訂單及問題回報保留查詢與分類，手機無溢出', { timeout: 30000 }, async (t) => {
   const { page, state } = await fixture(t, { width: 390 });
-  await page.goto(`${base}/admin`);
+  await page.goto(`${base}/admin?section=orders`);
   await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
   await page.getByRole('combobox', { name: '訂單分類', exact: true }).selectOption('meal');
   await page.getByLabel('搜尋訂單', { exact: true }).fill('隔離買家');
@@ -384,7 +384,7 @@ for (const width of [1440, 390]) {
       items: [{ product_name: index === 12 ? '共同購買白米' : index >= 13 ? '蔬食便當' : '日常白米', quantity: 1, unit_label: '份', subtotal: 100, unit_price: 100, tax_type: 'tax_exempt' }],
     }));
     const { page, state } = await fixture(t, { width, orderRows });
-    await page.goto(`${base}/admin`);
+    await page.goto(`${base}/admin?section=orders`);
     const pagination = page.getByRole('navigation', { name: '訂單分頁', exact: true });
     await pagination.getByText('共 15 筆 · 第 1 頁', { exact: true }).waitFor();
     await pagination.getByRole('button', { name: '下一頁', exact: true }).click();

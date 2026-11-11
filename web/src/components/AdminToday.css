@@ -1,0 +1,35 @@
+.admin-today-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.admin-today-card {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 100%;
+  padding: 16px 42px 16px 16px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--paper-light);
+  text-decoration: none;
+}
+
+.admin-today-card:hover {
+  border-color: var(--moss-dark);
+}
+
+.admin-today-count strong {
+  font-size: 1.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-today-arrow {
+  position: absolute;
+  inset: 18px 14px auto auto;
+}

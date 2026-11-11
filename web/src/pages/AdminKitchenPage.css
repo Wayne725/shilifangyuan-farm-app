@@ -23,7 +23,13 @@
 .meal-kitchen-meals li { border-bottom: 1px solid var(--line); padding: 12px 0; }
 .meal-kitchen-meals p { font-size: 1.125rem; margin: 4px 0; }
 .meal-kitchen-warning { padding: 16px; background: var(--paper-deep); border-left: 4px solid var(--clay); }
-.meal-kitchen-printer-note { font-size: 1rem; margin-top: 32px; }
+.kitchen-device-settings { border-block: 1px solid var(--line); margin: 24px 0; }
+.kitchen-device-settings > summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
+.kitchen-device-settings > summary:focus-visible { outline: 3px solid var(--moss); outline-offset: 4px; }
+.kitchen-device-settings form { padding: 8px 0 24px; }
+.kitchen-device-settings fieldset { border: 0; display: grid; gap: 16px; margin: 0; min-width: 0; padding: 0; }
+.kitchen-device-settings p { margin: 0; }
+.meal-kitchen-page .kitchen-device-settings input[type="checkbox"] { min-height: 0; }
 .meal-kitchen-print-dialog { position: fixed; z-index: 80; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: 90dvh; width: min(560px, calc(100vw - 32px)); overflow: auto; background: var(--paper-light); padding: 24px; font-size: 1.125rem; }
 .meal-kitchen-print-controls > .icon-button { float: right; }
 .meal-kitchen-reprint { display: flex; align-items: center; gap: 12px; margin: 20px 0; }

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminNav } from "../components/AdminNav";
 import { DataState, LoadingLines } from "../components/Shared";
@@ -14,25 +15,38 @@ type Point = { user_id: string; member_number: string; name: string; email: stri
 const statuses: Record<string, string> = { active: "正式社員", inactive: "未啟用", suspended: "已移除會籍", trainee: "見習社員", pending: "待繳款", paid: "已收款", refund_pending: "退款處理中", refunded: "已退款", voided: "已作廢", failed: "未完成" };
 const methods: Record<string, string> = { cash: "現金", bank_transfer: "轉帳", other: "其他", ecpay: "綠界", sandbox: "測試金流" };
 export function AdminRecordsPage() {
+  const { tab = "members", member } = useSearch({ from: "/admin/records" });
+  return <AdminRecordsWorkspace key={member || "all"} tab={tab} member={member} />;
+}
+
+function AdminRecordsWorkspace({ tab, member }: { tab: "members" | "payments" | "points"; member?: string }) {
   const { user, openLogin } = useAuth();
-  const [tab, setTab] = useState<"members" | "payments" | "points">("members"), [q, setQ] = useState(""), [search, setSearch] = useState("");
-  const [status, setStatus] = useState("active"), [kind, setKind] = useState("all"), [start, setStart] = useState(""), [end, setEnd] = useState(""), [offset, setOffset] = useState(0);
+  const navigate = useNavigate({ from: "/admin/records" });
+  const [q, setQ] = useState(""), [search, setSearch] = useState("");
+  const [status, setStatus] = useState(member ? "all" : "active"), [kind, setKind] = useState("all"), [start, setStart] = useState(""), [end, setEnd] = useState(""), [offset, setOffset] = useState(0);
+  useEffect(() => { setQ(""); setSearch(""); setOffset(0); }, [tab]);
   const [target, setTarget] = useState<Person | null>(null), [voidTarget, setVoidTarget] = useState<Receipt | null>(null), [voidReason, setVoidReason] = useState("");
   const client = useQueryClient(), admin = user?.user_role === "admin";
   const params = new URLSearchParams({ q: search, limit: "30", offset: String(offset) });
+  const pointParams = new URLSearchParams();
+  if (member) {
+    params.set("member_number", member);
+    pointParams.set("member_number", member);
+  }
   if (tab === "members") params.set("status", status);
   if (tab === "payments") { params.set("kind", kind); if (start) params.set("starts_on", start); if (end) params.set("ends_on", end); }
-  const members = useQuery({ queryKey: ["member-register", params.toString()], queryFn: () => apiFetch<{items: Person[]; total: number}>(`/v1/admin/member-register?${params}`), enabled: admin && tab === "members" });
-  const payments = useQuery({ queryKey: ["membership-payments", params.toString()], queryFn: () => apiFetch<{items: Receipt[]; total: number; summary: {received: number; refunded: number; net: number}}>(`/v1/admin/membership-payments?${params}`), enabled: admin && tab === "payments" });
-  const points = useQuery({ queryKey: ["points-ledger"], queryFn: () => apiFetch<{items: Point[]; total: number}>("/v1/admin/points-ledger"), enabled: admin && tab === "points" });
-  const download = useMutation({ mutationFn: () => { return tab === "members" ? downloadApiFile(`/v1/admin/member-register.csv?${params}`, "社員股籍名冊.csv") : tab === "payments" ? downloadApiFile(`/v1/admin/membership-payments.csv?${params}`, "入社收款紀錄.csv") : downloadApiFile("/v1/admin/points-ledger.csv", "社員點數.csv"); } });
+  const members = useQuery({ queryKey: ["member-register", user?.id, params.toString()], queryFn: () => apiFetch<{items: Person[]; total: number}>(`/v1/admin/member-register?${params}`), enabled: admin && tab === "members" });
+  const payments = useQuery({ queryKey: ["membership-payments", user?.id, params.toString()], queryFn: () => apiFetch<{items: Receipt[]; total: number; summary: {received: number; refunded: number; net: number}}>(`/v1/admin/membership-payments?${params}`), enabled: admin && tab === "payments" });
+  const points = useQuery({ queryKey: ["points-ledger", user?.id, member], queryFn: () => apiFetch<{items: Point[]; total: number}>(`/v1/admin/points-ledger?${pointParams}`), enabled: admin && tab === "points" });
+  const download = useMutation({ mutationFn: () => { return tab === "members" ? downloadApiFile(`/v1/admin/member-register.csv?${params}`, "社員股籍名冊.csv") : tab === "payments" ? downloadApiFile(`/v1/admin/membership-payments.csv?${params}`, "入社收款紀錄.csv") : downloadApiFile(`/v1/admin/points-ledger.csv?${pointParams}`, "社員點數.csv"); } });
   const voidReceipt = useMutation({ mutationFn: () => apiFetch(`/v1/admin/membership-offline-receipts/${voidTarget?.id}/void`, {method: "POST", body: JSON.stringify({reason: voidReason})}), onSuccess: () => { setVoidTarget(null); setVoidReason(""); void client.invalidateQueries({queryKey: ["membership-payments"]}); } });
   if (!admin) return <section className="admin-gate"><h1>社員帳冊</h1>{!user && <button className="button button-primary" onClick={openLogin}>管理員登入</button>}</section>;
   const current = tab === "members" ? members : tab === "payments" ? payments : points;
   const total = current.data?.total || 0;
   const pointRows = points.data?.items.filter(row => `${row.member_number} ${row.name} ${row.email}`.toLowerCase().includes(search.toLowerCase())) || [];
   return <section className="admin-module-page admin-records-page"><header className="workspace-heading"><div><p className="eyebrow">MEMBER RECORDS / 社員帳冊</p><h1>社員與收款紀錄</h1></div></header><AdminNav />
-    <div className="admin-records-content"><nav className="admin-quick-buttons" aria-label="社員帳冊分類">{([ ["members", "社員股籍"], ["payments", "入社費與股金"], ["points", "累積點數"] ] as const).map(([value, label]) => <button className="button button-quiet" aria-pressed={tab === value} key={value} onClick={() => {setTab(value); setOffset(0); setQ(""); setSearch("");}}>{label}</button>)}</nav>
+    <div className="admin-records-content"><nav className="admin-quick-buttons" aria-label="社員帳冊分類">{([ ["members", "社員股籍"], ["payments", "入社費與股金"], ["points", "累積點數"] ] as const).map(([value, label]) => <button className="button button-quiet" aria-pressed={tab === value} key={value} onClick={() => void navigate({ search: { tab: value, member } })}>{label}</button>)}</nav>
+    {member && <div className="admin-quick-buttons"><span>社員編號 {member}</span><Link className="text-link" to="/admin/records" search={{ tab }}>清除社員篩選</Link></div>}
     <form className="admin-records-filters" onSubmit={event => {event.preventDefault(); setSearch(q); setOffset(0);}}><label className="field"><span>姓名、Email、社員編號或股號</span><input value={q} onChange={event => setQ(event.target.value)} maxLength={120}/></label>
     {tab === "members" && <label className="field"><span>會籍狀態</span><select value={status} onChange={event => {setStatus(event.target.value); setOffset(0);}}><option value="active">正式社員</option><option value="all">全部名冊</option></select></label>}
     {tab === "payments" && <><label className="field"><span>款項</span><select value={kind} onChange={event => {setKind(event.target.value); setOffset(0);}}><option value="all">入社費與股金</option><option value="admission_fee">入社費</option><option value="share_capital">股金</option></select></label><label className="field"><span>收款日起</span><input type="date" value={start} onChange={event => {setStart(event.target.value); setOffset(0);}}/></label><label className="field"><span>收款日迄</span><input type="date" value={end} min={start} onChange={event => {setEnd(event.target.value); setOffset(0);}}/></label></>}
@@ -46,7 +60,7 @@ export function AdminRecordsPage() {
       {tab === "points" && <table><thead><tr><th>社員編號</th><th>姓名</th><th>Email</th><th>累積點數</th></tr></thead><tbody>{pointRows.map(row => <tr key={row.user_id}><td>{row.member_number}</td><td>{row.name}</td><td>{row.email}</td><td>{row.balance}</td></tr>)}</tbody></table>}
       </div>{tab !== "points" && total > 30 && <nav className="admin-pagination" aria-label="帳冊分頁"><button className="button button-quiet" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一頁</button><span>{Math.floor(offset / 30) + 1}／{Math.ceil(total / 30)}</span><button className="button button-quiet" disabled={offset + 30 >= total} onClick={() => setOffset(offset + 30)}>下一頁</button></nav>}
     </>}
-    {target && <ReceiptForm target={target} onClose={() => setTarget(null)} onSaved={() => {setTarget(null); setTab("payments"); setOffset(0); void client.invalidateQueries({queryKey: ["membership-payments"]});}}/>}
+    {target && <ReceiptForm target={target} onClose={() => setTarget(null)} onSaved={() => {setTarget(null); void navigate({ search: { tab: "payments", member } }); void client.invalidateQueries({queryKey: ["membership-payments"]});}}/>}
     {voidTarget && <form className="admin-records-form" onSubmit={event => {event.preventDefault(); voidReceipt.mutate();}}><h2>作廢線下收款紀錄</h2><p>{voidTarget.receipt_number} · {formatMoney(voidTarget.amount)}</p><label className="field"><span>作廢原因<OptionalMark /></span><input maxLength={1000} value={voidReason} onChange={event => setVoidReason(event.target.value)}/></label>{voidReceipt.isError && <p role="alert">{voidReceipt.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={voidReceipt.isPending}>確認作廢紀錄</button><button type="button" className="button button-quiet" onClick={() => setVoidTarget(null)}>取消</button></div></form>}
     </div></section>;
 }

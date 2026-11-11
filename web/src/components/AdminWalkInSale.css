@@ -4,7 +4,6 @@
   margin-inline: auto;
 }
 
-.admin-walk-in-toolbar { display: flex; justify-content: flex-end; margin-bottom: 1.25rem; }
 .admin-walk-in-sale fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .admin-walk-in-sale legend { width: 100%; padding: 0 0 1rem; font-size: 1.125rem; font-weight: 600; }
 .admin-walk-in-categories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }

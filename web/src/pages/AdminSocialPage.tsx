@@ -1,14 +1,15 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { CalendarBlank, CheckCircle, HandHeart, IdentificationCard, NotePencil, UsersThree } from "@phosphor-icons/react";
+import { CalendarBlank, CheckCircle, IdentificationCard, NotePencil, UsersThree } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { type FormEvent, useEffect, useState } from "react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { SocialActionButton } from "../components/SocialActionButton";
 import { AdminActivityCard, ActivityRefundInbox } from "../components/AdminActivityPayments";
 import { AdminAdmissionInbox } from "../components/AdminAdmissionInbox";
-import { activityAccessDenied, retryActivityRead, type ActivityRefundRequest } from "../lib/activities";
+import { MembershipEducationSettings } from "../components/MembershipEducationSettings";
+import { activityAccessDenied, activityTime, retryActivityRead } from "../lib/activities";
 import { AdminNav } from "../components/AdminNav";
 import { MeetingFilters, MeetingSetup } from "../components/MeetingTools";
 import { filterMeetings, meetingAccessDenied, meetingCategoryName, meetingCategoryOptions, retryMeetingRead } from "../lib/meetings";
@@ -18,7 +19,8 @@ import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, formatDateTime } from "../lib/api";
 import { proposalStatusLabel } from "../lib/labels";
 import { documentAvailable, documentExpired, documentRetentionLabel } from "../lib/membership-documents";
-import type { Activity, Meeting, MembershipApplication, Proposal, Wish } from "../lib/types";
+import { useDeadlineClock } from "../lib/use-deadline-clock";
+import type { Activity, Meeting, MembershipApplication, Proposal } from "../lib/types";
 import "./AdminSocialPage.css";
 import { OptionalMark } from "../components/OptionalMark";
 
@@ -48,43 +50,73 @@ interface MemberRosterEntry extends ShareholdingRecord {
   claimed_at?: string | null;
 }
 
+const socialTabs = [
+  { value: "reviews", label: "審核工作" },
+  { value: "activities", label: "活動管理" },
+  { value: "proposals", label: "社員提案" },
+  { value: "meetings", label: "會議管理" },
+  { value: "members", label: "會籍管理" },
+  { value: "roster", label: "社員名冊" },
+  { value: "education", label: "入社教育" },
+] as const;
+
+type WorkScope = "current" | "history" | "all";
+const workScopeOptions = [
+  { value: "current", label: "進行中" },
+  { value: "history", label: "歷史紀錄" },
+  { value: "all", label: "全部" },
+] as const;
+const activityScopeOptions = [...workScopeOptions, { value: "active", label: "已發布進行中" }] as const;
+const proposalScopeOptions = [...workScopeOptions, { value: "voting", label: "表決中" }] as const;
+const filterWork = <T,>(items: T[] | undefined, scope: WorkScope, current: (item: T) => boolean) =>
+  (items || []).filter(item => scope === "all" || (scope === "current" ? current(item) : !current(item)));
+
 export function AdminSocialPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
+  const { tab = "reviews", view, q } = useSearch({ from: "/admin/social" });
+  const navigate = useNavigate({ from: "/admin/social" });
+  const refundView = view === "refunds";
+  const activeActivityView = view === "active";
+  const votingView = view === "voting";
+  const now = useDeadlineClock();
   const platform = useStorefrontStatus();
   const [activityAccessRevoked, setActivityAccessRevoked] = useState(false);
   const [reviewScope, setReviewScope] = useState("pending");
-  const [memberSearch, setMemberSearch] = useState("");
+  const [activityScope, setActivityScope] = useState<WorkScope>("current");
+  const [proposalScope, setProposalScope] = useState<WorkScope>("current");
+  const [memberSearch, setMemberSearch] = useState(q ?? "");
+  useEffect(() => setMemberSearch(q ?? ""), [q]);
   const [memberStatus, setMemberStatus] = useState("");
   const [meetingCategory, setMeetingCategory] = useState("");
   const [meetingKeyword, setMeetingKeyword] = useState("");
   const [meetingAccessRevoked, setMeetingAccessRevoked] = useState(false);
   const queryClient = useQueryClient();
-  const [activities, proposals, applications, wishes, meetings, memberships, roster, activityRefunds] = useQueries({ queries: [
-    { queryKey: ["admin-activities", user?.id], queryFn: () => apiFetch<Activity[]>("/v1/admin/activities"), enabled: isAdmin && !activityAccessRevoked, retry: retryActivityRead },
-    { queryKey: ["admin-member-proposals"], queryFn: () => apiFetch<Proposal[]>("/v1/admin/member-proposals"), enabled: isAdmin },
-    { queryKey: ["admin-membership-applications"], queryFn: () => apiFetch<MembershipApplication[]>("/v1/admin/membership-applications"), enabled: isAdmin },
-    { queryKey: ["wishes"], queryFn: () => apiFetch<Wish[]>("/v1/wishes"), enabled: isAdmin },
-    { queryKey: ["admin-meetings"], queryFn: () => apiFetch<Meeting[]>("/v1/admin/meetings"), enabled: isAdmin, retry: retryMeetingRead },
-    { queryKey: ["admin-members"], queryFn: () => apiFetch<AdminMembership[]>("/v1/admin/members"), enabled: isAdmin },
-    { queryKey: ["admin-member-roster"], queryFn: () => apiFetch<MemberRosterEntry[]>("/v1/admin/member-roster"), enabled: isAdmin },
-    { queryKey: ["admin-activity-refunds", user?.id, "pending_review"], queryFn: () => apiFetch<ActivityRefundRequest[]>("/v1/admin/activity-refund-requests?status=pending_review"), enabled: isAdmin && !activityAccessRevoked, retry: retryActivityRead },
+  const [activities, proposals, applications, meetings, memberships, roster] = useQueries({ queries: [
+    { queryKey: ["admin-activities", user?.id], queryFn: () => apiFetch<Activity[]>("/v1/admin/activities"), enabled: isAdmin && tab === "activities" && !refundView && !activityAccessRevoked, retry: retryActivityRead },
+    { queryKey: ["admin-member-proposals"], queryFn: () => apiFetch<Proposal[]>("/v1/admin/member-proposals"), enabled: isAdmin && (tab === "proposals" || tab === "meetings") },
+    { queryKey: ["admin-membership-applications"], queryFn: () => apiFetch<MembershipApplication[]>("/v1/admin/membership-applications"), enabled: isAdmin && tab === "reviews" },
+    { queryKey: ["admin-meetings"], queryFn: () => apiFetch<Meeting[]>("/v1/admin/meetings"), enabled: isAdmin && tab === "meetings", retry: retryMeetingRead },
+    { queryKey: ["admin-members"], queryFn: () => apiFetch<AdminMembership[]>("/v1/admin/members"), enabled: isAdmin && ["reviews", "meetings", "members", "roster"].includes(tab) },
+    { queryKey: ["admin-member-roster"], queryFn: () => apiFetch<MemberRosterEntry[]>("/v1/admin/member-roster"), enabled: isAdmin && (tab === "roster" || tab === "members") },
   ] });
 
   if (!isAdmin) {
     return <section className="admin-gate"><div className="admin-gate-mark"><UsersThree size={38} weight="light" /></div><p className="eyebrow">SOCIAL OPERATIONS / 社務管理</p><h1>社務管理只向管理者開放。</h1><p>請使用管理者帳號登入。</p>{!user ? <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button> : <Link className="button button-quiet" to="/social">返回社務系統</Link>}</section>;
   }
 
-  const activityDenied = activityAccessRevoked || activityAccessDenied(activities.error) || activityAccessDenied(activityRefunds.error);
-  const pendingActivities = activities.data?.filter((item) => item.status === "pending_review") || [];
-  const pendingProposals = proposals.data?.filter((item) => item.status === "pending_review") || [];
+  const activityDenied = activityAccessRevoked || (!refundView && activityAccessDenied(activities.error));
   const pendingApplications = applications.data?.filter((item) => ["submitted", "needs_supplement"].includes(item.status)) || [];
   const traineeMemberships = memberships.data?.filter((item) => item.status === "trainee") || [];
 
-  const filterReviews = <T,>(items: T[] | undefined, pending: (item: T) => boolean) => (items || []).filter(item => reviewScope === "all" || (reviewScope === "pending" ? pending(item) : !pending(item)));
-  const visibleActivities = filterReviews(activities.data, item => item.status === "pending_review");
-  const visibleProposals = filterReviews(proposals.data, item => item.status === "pending_review");
-  const visibleApplications = filterReviews(applications.data, item => ["submitted", "needs_supplement"].includes(item.status));
+  const publishedActive = (item: Activity) => item.status === "published" && item.is_public !== false && activityTime(item.ends_at) > now;
+  const visibleActivities = activeActivityView ? (activities.data || []).filter(publishedActive) :
+    filterWork(activities.data, activityScope, item => item.status === "pending_review" || publishedActive(item));
+  const voting = (item: Proposal) => item.status === "voting" && activityTime(item.voting_ends_at) > now;
+  const visibleProposals = votingView ? (proposals.data || []).filter(voting) : filterWork(proposals.data, proposalScope, item =>
+    item.status === "pending_review" || voting(item) || (item.status === "discussion" && activityTime(item.voting_ends_at) > now));
+  const visibleApplications = reviewScope === "pending" ? pendingApplications : (applications.data || []).filter(item =>
+    reviewScope === "all" || !["submitted", "needs_supplement"].includes(item.status));
   const visibleTrainees = reviewScope === "done" ? [] : traineeMemberships;
   const admissionApprovalBlockedReason = platform.isPending
     ? "正在確認入社核准是否開放。"
@@ -93,45 +125,80 @@ export function AdminSocialPage() {
       : platform.data.sales_scope !== "all"
         ? "完整入社流程尚未開放，暫不能核准或建立繳費通知；仍可要求補件或駁回。"
         : "";
-  const visibleMembers = (memberships.data || []).map(item => ({...item, display_name: roster.data?.find(entry => entry.member_number === item.member_number)?.legal_name ?? item.display_name})).filter(item => (!memberStatus || item.status === memberStatus) && `${item.display_name || ""} ${item.member_number || ""} ${item.trainee_number || ""} ${item.user_id}`.toLowerCase().includes(memberSearch.trim().toLowerCase()));
+  const visibleMembers = (memberships.data || []).map(item => ({...item, display_name: roster.data?.find(entry => entry.member_number === item.member_number)?.legal_name ?? item.display_name})).filter(item => (!memberStatus || item.status === memberStatus) && `${item.display_name || ""} ${item.member_number || ""} ${item.trainee_number || ""} ${item.id} ${item.user_id}`.toLowerCase().includes(memberSearch.trim().toLowerCase()));
 
   const visibleMeetings = filterMeetings(meetings.data || [], meetingCategory, meetingKeyword);
   const refreshMeetings = () => { void queryClient.invalidateQueries({ queryKey: ["admin-meetings"] }); void queryClient.invalidateQueries({ queryKey: ["meetings"] }); };
+  const refreshActivities = () => {
+    for (const key of ["admin-activities", "admin-activity-registrations", "admin-activity-refunds", "admin-activity-charge", "activity-finance", "activities", "activity-registrations", "activity-charges"]) {
+      void queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  };
+  const revokeActivityAccess = () => setActivityAccessRevoked(true);
 
   return (
     <section className="admin-social-page">
       <header className="workspace-heading">
         <div><p className="eyebrow">SOCIAL OPERATIONS / 社務管理</p><h1>審核、排程與社員服務</h1></div>
-        <p>{[activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending) ? "讀取其他及舊版待辦中…" : [activities, proposals, applications, memberships, activityRefunds].some(query => query.isError) ? "其他及舊版待辦未完整載入" : `其他及舊版待辦 ${pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0)} 件`}</p>
       </header>
       <AdminNav />
 
-      <Tabs.Root className="admin-social-tabs" defaultValue="reviews">
+      <Tabs.Root className="admin-social-tabs" value={tab} onValueChange={value => {
+        const next = socialTabs.find(item => item.value === value);
+        if (next) void navigate({ search: { tab: next.value }, resetScroll: false });
+      }}>
         <Tabs.List className="tab-list" aria-label="社務管理分類">
-          <Tabs.Trigger value="reviews">審核工作</Tabs.Trigger>
-          <Tabs.Trigger value="wishes">願望管理</Tabs.Trigger>
-          <Tabs.Trigger value="meetings">會議管理</Tabs.Trigger>
-          <Tabs.Trigger value="members">會籍管理</Tabs.Trigger>
-          <Tabs.Trigger value="roster">社員名冊</Tabs.Trigger>
+          {socialTabs.map(item => <Tabs.Trigger key={item.value} value={item.value}>{item.label}</Tabs.Trigger>)}
         </Tabs.List>
 
         <Tabs.Content className="tab-content" value="reviews">
           <AdminAdmissionInbox />
           <label className="field social-review-scope"><span>審核範圍</span><select value={reviewScope} onChange={(event) => setReviewScope(event.target.value)}><option value="pending">待處理</option><option value="all">全部</option><option value="done">已處理</option></select></label>
-          {activityDenied ? <p role="alert">活動管理權限已失效，請重新登入。</p> : <><ActivityRefundInbox onDenied={()=>setActivityAccessRevoked(true)}/>{(reviewScope !== "pending" || visibleActivities.length > 0 || activities.isPending || activities.isError) && <AdminReviewSection icon={CalendarBlank} title="活動管理" count={visibleActivities.length} pending={activities.isPending} error={activities.error?.message} empty="沒有符合條件的活動">
-            {visibleActivities.map((activity) => <AdminActivityCard key={`${user?.id}:${activity.id}`} activity={activity} onDone={() => { for (const key of ["admin-activities", "admin-activity-registrations", "admin-activity-refunds", "admin-activity-charge", "activity-finance", "activities", "activity-registrations", "activity-charges"]) void queryClient.invalidateQueries({ queryKey: [key] }); }} onDenied={()=>setActivityAccessRevoked(true)} />)}
-          </AdminReviewSection>}</>}
-          {(reviewScope !== "pending" || visibleProposals.length > 0 || proposals.isPending || proposals.isError) && <AdminReviewSection icon={NotePencil} title="提案管理" count={visibleProposals.length} pending={proposals.isPending} error={proposals.error?.message} empty="沒有符合條件的提案">
-            {visibleProposals.map((proposal) => <ProposalReviewCard key={proposal.id} proposal={proposal} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-proposals"] })} />)}
-          </AdminReviewSection>}
-          {(reviewScope !== "pending" || visibleApplications.length > 0 || applications.isPending || applications.isError) && <AdminReviewSection icon={IdentificationCard} title="舊版入社資料" count={visibleApplications.length} pending={applications.isPending} error={applications.error?.message} empty="沒有符合條件的舊版申請">
+          {(reviewScope !== "pending" || visibleApplications.length > 0) && <AdminReviewSection icon={IdentificationCard} title="舊版入社資料" count={visibleApplications.length} pending={applications.isPending} error={applications.error?.message} empty="沒有符合條件的舊版申請">
             {admissionApprovalBlockedReason && visibleApplications.some(application => application.status === "submitted") && <p className="form-error" role="status">{admissionApprovalBlockedReason}</p>}
             {visibleApplications.map((application) => <MembershipReviewCard key={application.id} application={application} approvalBlockedReason={admissionApprovalBlockedReason} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-membership-applications"] })} />)}
           </AdminReviewSection>}
 
-          {reviewScope === "pending" && ![activities, proposals, applications, memberships, activityRefunds].some(query => query.isPending || query.isError) && pendingActivities.length + pendingProposals.length + pendingApplications.length + traineeMemberships.length + (activityRefunds.data?.length || 0) === 0 && <p role="status">其他及舊版審核目前沒有待處理事項</p>}
+          {reviewScope === "pending" && visibleApplications.length === 0 && applications.isError && <p role="alert">舊版申請無法讀取：{applications.error.message}</p>}
           {memberships.isError && <p role="alert" className="form-error">會籍待辦無法讀取：{memberships.error.message}</p>}
           {visibleTrainees.length > 0 && <AdminReviewSection icon={UsersThree} title="待轉正式社員" count={visibleTrainees.length} pending={memberships.isPending} empty="沒有待轉正式社員">{visibleTrainees.map(membership => <MembershipStatusCard key={membership.id} membership={membership} onDone={() => queryClient.invalidateQueries({queryKey: ["admin-members"]})} />)}</AdminReviewSection>}
+        </Tabs.Content>
+
+        <Tabs.Content className="tab-content" value="activities">
+          {activityDenied ? <p role="alert">活動管理權限已失效，請重新登入。</p> : <>
+            <div className="admin-quick-buttons">
+              <Link className="button button-quiet" to="/admin/social" search={{ tab: "activities", view: refundView ? undefined : "refunds" }}>
+                {refundView ? "活動清單" : "活動退款"}
+              </Link>
+            </div>
+            {refundView ? <ActivityRefundInbox onDenied={revokeActivityAccess} /> : <>
+              <WorkScopeSelect label="活動範圍" value={activeActivityView ? "active" : activityScope} options={activityScopeOptions} onChange={scope => {
+                if (scope === "active") {
+                  void navigate({ search: { tab: "activities", view: "active" }, resetScroll: false });
+                } else {
+                  setActivityScope(scope);
+                  if (activeActivityView) void navigate({ search: { tab: "activities" }, resetScroll: false });
+                }
+              }} />
+              <AdminReviewSection icon={CalendarBlank} title="活動管理" count={visibleActivities.length} pending={activities.isPending} error={activities.error?.message} empty="沒有符合條件的活動">
+                {visibleActivities.map(activity => <AdminActivityCard key={`${user?.id}:${activity.id}`} activity={activity} onDone={refreshActivities} onDenied={revokeActivityAccess} />)}
+              </AdminReviewSection>
+            </>}
+          </>}
+        </Tabs.Content>
+
+        <Tabs.Content className="tab-content" value="proposals">
+          <WorkScopeSelect label="提案範圍" value={votingView ? "voting" : proposalScope} options={proposalScopeOptions} onChange={scope => {
+            if (scope === "voting") {
+              void navigate({ search: { tab: "proposals", view: "voting" }, resetScroll: false });
+            } else {
+              setProposalScope(scope);
+              if (votingView) void navigate({ search: { tab: "proposals" }, resetScroll: false });
+            }
+          }} />
+          <AdminReviewSection icon={NotePencil} title="社員提案" count={visibleProposals.length} pending={proposals.isPending} error={proposals.error?.message} empty="沒有符合條件的提案">
+            {visibleProposals.map(proposal => <ProposalReviewCard key={proposal.id} proposal={proposal} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-member-proposals"] })} />)}
+          </AdminReviewSection>
         </Tabs.Content>
 
         <Tabs.Content className="tab-content" value="members">
@@ -140,12 +207,6 @@ export function AdminSocialPage() {
             {visibleMembers.map((membership) => <MembershipStatusCard key={membership.id} membership={membership} onDone={() => queryClient.invalidateQueries({ queryKey: ["admin-members"] })} />)}
           </AdminReviewSection>
         </Tabs.Content>
-        <Tabs.Content className="tab-content" value="wishes">
-          <AdminReviewSection icon={HandHeart} title="社員願望" count={wishes.data?.length || 0} pending={wishes.isPending} error={wishes.error?.message} empty="目前沒有社員願望">
-            {wishes.data?.map((wish) => <WishAdminCard key={wish.id} wish={wish} onDone={() => queryClient.invalidateQueries({ queryKey: ["wishes"] })} />)}
-          </AdminReviewSection>
-        </Tabs.Content>
-
         <Tabs.Content className="tab-content" value="meetings">
           {meetingAccessRevoked || meetingAccessDenied(meetings.error) ? <DataState kind="error" title="會議管理權限已失效" detail="請重新登入管理員帳號" /> : <>
           <MeetingSetup key={user?.id} onDone={refreshMeetings} onAccessDenied={() => setMeetingAccessRevoked(true)} />
@@ -162,9 +223,21 @@ export function AdminSocialPage() {
             {roster.data?.map((entry) => <RosterEntryCard key={entry.id} entry={entry} />)}
           </AdminReviewSection>
         </Tabs.Content>
+        <Tabs.Content className="tab-content" value="education">
+          <MembershipEducationSettings />
+        </Tabs.Content>
       </Tabs.Root>
     </section>
   );
+}
+
+function WorkScopeSelect<Scope extends string>({ label, value, options, onChange }: { label: string; value: Scope; options: readonly { value: Scope; label: string }[]; onChange: (value: Scope) => void }) {
+  return <label className="field social-review-scope"><span>{label}</span><select value={value} onChange={event => {
+    const option = options.find(item => item.value === event.target.value);
+    if (option) onChange(option.value);
+  }}>
+    {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+  </select></label>;
 }
 
 function AdminReviewSection({ icon: Icon, title, count, pending, error, empty, children }: { icon: typeof CalendarBlank; title: string; count: number; pending: boolean; error?: string; empty: string; children: React.ReactNode }) {
@@ -335,15 +408,6 @@ function MembershipStatusCard({ membership, onDone }: { membership: AdminMembers
     onSuccess: onDone,
   });
   return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{membershipStatusLabel(membership.status)}</span><h3>{membership.display_name && `${membership.display_name} · `}{membership.member_number || membership.trainee_number || "待編號"}</h3><p>股金 {membership.share_capital_amount} 元 · {membership.share_count} 股</p><details><summary>會籍詳細資料</summary><small>會籍 ID {membership.id}</small></details></div><div className="review-card-actions"><div>{membership.status === "trainee" && <SocialActionButton disabled={action.isPending} action="activate" showReason={true} onConfirm={reason => action.mutate({nextAction: "activate", reason})}><CheckCircle size={16} />轉為正式社員</SocialActionButton>}{membership.status === "active" && <SocialActionButton disabled={action.isPending} action="suspend" showReason={true} onConfirm={reason => action.mutate({nextAction: "suspend", reason})}>暫停會籍</SocialActionButton>}{["active", "suspended"].includes(membership.status) && <SocialActionButton disabled={action.isPending} action="resign" showReason={true} onConfirm={reason => action.mutate({nextAction: "resign", reason})}>辦理退社</SocialActionButton>}{["trainee", "active", "suspended", "resigned"].includes(membership.status) && <SocialActionButton disabled={action.isPending} action="terminate" showReason={true} onConfirm={reason => action.mutate({nextAction: "terminate", reason})}>終止會籍</SocialActionButton>}{membership.status === "resigned" && <SocialActionButton disabled={action.isPending} action="share-capital-return" showReason={true} onConfirm={reason => action.mutate({nextAction: "share-capital-return", reason})}>返還股金</SocialActionButton>}</div>{action.isSuccess && <p role="status">處理完成</p>}{action.isError && <p className="form-error" role="alert">{action.error.message}</p>}<ShareholdingEditor record={membership} source="membership" /></div></article>;
-}
-
-function WishAdminCard({ wish, onDone }: { wish: Wish; onDone: () => void }) {
-  const [status, setStatus] = useState(wish.status);
-  const [note, setNote] = useState(wish.admin_note || "");
-  const [productId, setProductId] = useState(wish.launched_product_id || "");
-  const [campaignId, setCampaignId] = useState(wish.launched_campaign_id || "");
-  const save = useMutation({ mutationFn: () => apiFetch(`/v1/admin/wishes/${wish.id}/status`, { method: "PUT", body: JSON.stringify({ status, admin_note: note, launched_product_id: productId || null, launched_campaign_id: campaignId || null, proposer_points: 100 }) }), onSuccess: onDone });
-  return <article className="admin-review-card"><div className="review-card-copy"><span className="status-chip">{wish.support_count} 人支持</span><h3>{wish.name}</h3><p>{wish.description}</p></div><div className="review-card-actions schedule-fields"><label className="field"><span>處理狀態</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="submitted">新提出</option><option value="gathering">募集支持</option><option value="sourcing">尋找供應</option><option value="launched">已成案</option><option value="declined">不採用</option></select></label><label className="field"><span>社員說明<OptionalMark /></span><input value={note} onChange={(event) => setNote(event.target.value)} /></label>{status === "launched" && <><label className="field"><span>商品 ID</span><input value={productId} onChange={(event) => setProductId(event.target.value)} /></label><label className="field"><span>共同購買 ID</span><input value={campaignId} onChange={(event) => setCampaignId(event.target.value)} /></label></>}<button type="button" disabled={save.isPending || (status === "launched" && !productId && !campaignId)} onClick={() => save.mutate()}>儲存狀態</button>{save.isError && <p className="form-error">{save.error.message}</p>}</div></article>;
 }
 
 function MeetingAdminCard({ meeting, memberships, proposals, onDone }: { meeting: Meeting; memberships: AdminMembership[]; proposals: Proposal[]; onDone: () => void }) {

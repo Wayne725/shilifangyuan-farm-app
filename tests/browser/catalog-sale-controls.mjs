@@ -30,6 +30,7 @@ async function fixture(t, width, { role = 'admin', patchError = '', deferPatch =
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'admin', display_name: '隔離管理員', user_role: role, membership_type: 'nonmember' } } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: false } });
+    if (path === '/v1/platform' && request.method() === 'GET') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/products' && request.method() === 'GET') {
       state.reads++;
       return route.fulfill({ json: structuredClone(state.items) });
@@ -81,6 +82,10 @@ for (const width of [390, 1280]) {
     const search = page.getByLabel('搜尋商品', { exact: true });
     await search.waitFor();
     assert.equal(await search.getAttribute('placeholder'), '商品名稱、SKU、產品編號或供應者');
+    const prices = card(page).locator('dl');
+    await prices.getByText('社員價', { exact: true }).waitFor();
+    assert.equal(await prices.locator('dt:text-is("社員價") + dd').innerText(), '$100');
+    assert.equal(await prices.locator('dt:text-is("一般價") + dd').innerText(), '$120');
     for (const term of [' 果醬 ', ' sku-NEW ', 'p-new', '山城農場']) {
       await search.fill(term);
       await card(page).waitFor();

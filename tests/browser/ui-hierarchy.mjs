@@ -126,7 +126,7 @@ test('缺少 Email 時直接展開發票設定，輸入有效後仍留在原欄�
 
 for (const width of [1280, 390]) test(`${width}px 後台首屏可處理、主分類不換行、狀態與文字對比清楚`, async t => {
   const { page, state } = await fixture(t, width);
-  await page.goto(`${base}/admin`);
+  await page.goto(`${base}/admin?section=orders`);
   await page.getByText('SLF-UI-001', { exact: true }).waitFor();
   if (width === 1280) assert.ok((await page.locator('.operation-state').first().boundingBox()).y < 650);
   const nav = page.getByRole('navigation', { name: '管理工作台分類', exact: true });

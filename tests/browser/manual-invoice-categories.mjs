@@ -33,6 +33,9 @@ async function fixture(t, { width = 390, meals = true, catalogError = false, unc
     if (path === '/v1/admin/meals') return route.fulfill(state.catalogError
       ? { status: 503, json: { detail: '隔離品項載入失敗' } }
       : { json: meals ? [{ name: '合成便當', is_active: true, price: 149, tax_type: 'taxable' }, { name: '合成停用便當', is_active: false }] : [] });
+    if (request.method() === 'GET' && path === '/v1/admin/manual-invoice-records') {
+      return route.fulfill({ json: { items: [], total: 0 } });
+    }
     if (request.method() === 'GET' && path.startsWith('/v1/admin/walk-in-sales/request/')) {
       return route.fulfill({ status: 404, json: { detail: '尚未找到此筆隔離交易' } });
     }

@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiFetch, formatMoney } from "../lib/api";
 import { invoicePreferencePayload, type InvoicePreference } from "../lib/commerce";
 import { isTaiwanTaxId } from "./InvoicePreferenceFields";
 import { walkInCatalogItems, type WalkInCatalogSource } from "../lib/walkInCatalog";
+import { RecentManualInvoiceRecords } from "./AdminManualInvoiceRecords";
 import "./AdminWalkInSale.css";
 
 const requestKey = "slf_admin_walk_in_request_v1";
@@ -148,7 +148,6 @@ export function AdminWalkInSale() {
     setPayload(body); creation.mutate(body);
   };
   return <section className="admin-walk-in-sale" aria-label="現場收款與開票">
-      <div className="admin-walk-in-toolbar"><Link className="text-link" to="/admin/invoices">手動開票紀錄</Link></div>
       {storageError && <p className="form-error" role="alert">{storageError}</p>}
       {recovery.isPending && requestId && <p role="status">正在查核交易紀錄…</p>}
       {recovery.isError && <div role="alert"><p>{recovery.error.message}</p><button type="button" onClick={() => void recovery.refetch()}>重新查核交易</button></div>}
@@ -173,5 +172,6 @@ export function AdminWalkInSale() {
           {creation.isError && <p className="form-error" role="alert">{creation.error.message}</p>}
           <div className="admin-walk-in-confirm"><p>實收金額 <strong>{formatMoney(Number.isSafeInteger(price * count) ? price * count : 0)}</strong></p><div className="form-actions"><button type="submit" className="button button-system" disabled={creation.isPending || (!payload && !valid)}>{creation.isPending ? "記錄中…" : payload ? "重試同一筆交易" : "確認"}</button>{payload && <button type="button" className="button button-quiet" disabled={creation.isPending} onClick={() => void recovery.refetch()}>查核交易結果</button>}</div></div>
         </form>}
+      <RecentManualInvoiceRecords />
   </section>;
 }

@@ -109,13 +109,75 @@ for (const background of [true, false]) test(`平台設定${background ? '背景
   assert.equal(await page.getByRole('button', { name: '儲存平台設定', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: '重新讀取最新設定', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('input[type=tel]')?.value === '0912345678');
-  assert.equal(await page.getByRole('textbox', { name: '印表機型號', exact: true }).inputValue(), '另一管理員的新設備');
+  assert.equal(await page.getByRole('textbox', { name: '印表機型號', exact: true }).count(), 0);
   await phone.fill('0999999999');
   await page.getByRole('button', { name: '儲存平台設定', exact: true }).click();
   await page.getByText('設定已儲存', { exact: true }).waitFor();
   assert.equal(current.support_phone, '0999999999');
   assert.equal(current.printer_model, '另一管理員的新設備');
   assert.equal(current.version, 2);
+});
+
+test('廚房與平台各自儲存同一版本的設定，保留另一頁的欄位', async t => {
+  const public_information = { published: false, legal_name: '隔離合作社', tax_id: '', address: '', phone: '', email: '', policy_version: '', privacy: '', terms: '', returns: '' };
+  let current = {
+    ...platform,
+    orders_open: false,
+    printer_brand: '飛鵝',
+    printer_model: 'FP-V58-W',
+    printer_connection: 'network',
+    invoice_provider: 'ecpay',
+    public_information,
+  };
+  const { page, state } = await fixture(t, { admin: true, handler: async (route, url, request) => {
+    const path = url.pathname;
+    if (path === '/v1/admin/meal-kitchen') { await route.fulfill({ json: { items: [], total: 0, meal_quantity: 0, products: [] } }); return true; }
+    if (path === '/v1/admin/printers/status') { await route.fulfill({ json: { status: 'disabled' } }); return true; }
+    if (path === '/v1/admin/printers/jobs') { await route.fulfill({ json: { items: [], total: 0 } }); return true; }
+    if (path !== '/v1/admin/platform') return false;
+    if (request.method() === 'GET') { await route.fulfill({ json: current }); return true; }
+    const { expected_version, reason: _reason, ...fields } = request.postDataJSON();
+    if (expected_version !== current.version) { await route.fulfill({ status: 409, json: { detail: '隔離設定版本已更新' } }); return true; }
+    const saved = { ...fields, version: current.version + 1, sales_scope: current.sales_scope };
+    current = { ...saved, invoice_provider: current.invoice_provider };
+    await route.fulfill({ json: saved });
+    return true;
+  } });
+  await page.goto(`${base}/admin/kitchen`);
+  await page.getByText('印表機與提示音', { exact: true }).click();
+  const model = page.getByRole('textbox', { name: '印表機型號', exact: true });
+  await model.waitFor();
+  assert.equal(await model.inputValue(), 'FP-V58-W');
+  assert.equal(await page.getByLabel('連接方式', { exact: true }).inputValue(), 'network');
+  await model.fill('隔離更新型號');
+  await page.getByRole('checkbox', { name: '啟用廚房新訂單提示音', exact: true }).check();
+  assert.equal(await page.getByRole('button', { name: '開啟本頁新訂單提示音', exact: true }).count(), 0);
+  await page.getByRole('button', { name: '儲存出單設定', exact: true }).click();
+  await page.getByText('出單設定已儲存', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '開啟本頁新訂單提示音', exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.equal(current.orders_open, false);
+  assert.equal(current.support_phone, platform.support_phone);
+  assert.equal(current.closed_message, platform.closed_message);
+  assert.deepEqual(current.public_information, public_information);
+
+  await page.goto(`${base}/admin/settings`);
+  await page.getByText('綠界科技電子發票', { exact: true }).waitFor();
+  assert.equal(await page.getByText('印表機與提示音', { exact: true }).count(), 0);
+  assert.equal(await page.getByRole('heading', { name: '測驗重考設定', exact: true }).count(), 0);
+  await page.getByRole('textbox', { name: '客服電話（退單聯絡）', exact: true }).fill('0999999999');
+  await page.getByRole('button', { name: '儲存平台設定', exact: true }).click();
+  await page.getByText('設定已儲存', { exact: true }).waitFor();
+  await page.getByText('綠界科技電子發票', { exact: true }).waitFor();
+  assert.equal(current.printer_brand, '飛鵝');
+  assert.equal(current.printer_model, '隔離更新型號');
+  assert.equal(current.printer_connection, 'network');
+  assert.equal(current.kitchen_sound, true);
+  assert.deepEqual(current.public_information, public_information);
+  assert.deepEqual(state.writes.filter(write => write.path !== '/v1/auth/refresh').map(write => [write.method, write.path, write.body.expected_version]), [
+    ['PUT', '/v1/admin/platform', 0],
+    ['PUT', '/v1/admin/platform', 1],
+  ]);
 });
 
 for (const failure of ['submit-503', 'submit-response-lost', 'create-response-lost']) test(`提案${failure}重試/重整沿用同一request及草稿，正常送審只有一案`, async t => {

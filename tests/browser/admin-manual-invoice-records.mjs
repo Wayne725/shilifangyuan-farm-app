@@ -8,7 +8,7 @@ const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4327');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('Use isolated local fixtures only');
 const base = target.origin;
 
-async function fixture(t, { width = 1280, role = 'admin', mode = 'records' } = {}) {
+async function fixture(t, { width = 1280, role = 'admin', mode = 'records', path = '/admin/invoices' } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium && process.env.BROWSER_EXECUTABLE ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 960 }, serviceWorkers: 'block', timezoneId: 'Asia/Taipei' });
@@ -36,6 +36,10 @@ async function fixture(t, { width = 1280, role = 'admin', mode = 'records' } = {
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true } });
     if (path === '/v1/notifications') return route.fulfill({ json: [] });
+    if (path === '/v1/products' || path === '/v1/admin/meals') return route.fulfill({ json: [] });
+    if (request.method() === 'GET' && path.startsWith('/v1/admin/walk-in-sales/request/')) {
+      return route.fulfill({ status: 404, json: { detail: '尚未找到此筆隔離交易' } });
+    }
     if (path === '/v1/admin/invoice-register') return route.fulfill({ json: { items: [], total: 0 } });
     if (path === '/v1/admin/manual-invoice-records') {
       state.reads.push(Object.fromEntries(url.searchParams));
@@ -50,7 +54,7 @@ async function fixture(t, { width = 1280, role = 'admin', mode = 'records' } = {
   const page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on('pageerror', error => state.errors.push(error.message));
-  await page.goto(`${base}/admin/invoices`);
+  await page.goto(`${base}${path}`);
   const records = page.locator('details.admin-manual-invoice-records');
   return { page, records, state };
 }
@@ -102,6 +106,28 @@ for (const width of [1280, 390]) {
     assert.deepEqual(state.errors, []);
   });
 }
+
+test('手動開票直接顯示最近五筆，完整紀錄入口可接續查閱舊資料', async t => {
+  const { page, records, state } = await fixture(t, { width: 390, path: '/admin?section=manual-invoice' });
+  const recent = page.getByRole('region', { name: '近期開票紀錄', exact: true });
+  await recent.getByRole('link', { name: 'O2030010201', exact: true }).waitFor();
+  assert.deepEqual(state.reads, [{ limit: '5', offset: '0' }]);
+  assert.equal(await recent.locator('tbody tr').count(), 5);
+  assert.equal(await recent.getByRole('navigation', { name: '手動開票紀錄分頁' }).count(), 0);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  const history = recent.getByRole('link', { name: '查看完整紀錄', exact: true });
+  assert.equal(await history.getAttribute('href'), '/admin/invoices#manual-invoice-records');
+  await history.click();
+  await records.getByRole('link', { name: 'O2030010201', exact: true }).waitFor();
+  await records.getByRole('button', { name: '下一頁', exact: true }).click();
+  await records.getByRole('link', { name: 'O2030010207', exact: true }).waitFor();
+  assert.deepEqual(state.reads.at(-1), { limit: '5', offset: '5' });
+  await records.locator('summary').click();
+  await records.locator('table').waitFor({ state: 'detached' });
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.unknown, []);
+  assert.deepEqual(state.errors, []);
+});
 
 test('手動開票紀錄空白與讀取失敗可更新恢復，不觸發開票或收款', async t => {
   const { records, state } = await fixture(t, { mode: 'empty' });

@@ -1,0 +1,4 @@
+.membership-education-settings { max-width: 1040px; margin: 36px auto; }
+.membership-education-settings > section { padding-block: 32px; border-bottom: 1px solid var(--line); display: grid; gap: 22px; }
+.membership-education-settings :is(h2, p) { margin: 0; }
+.membership-education-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 22px; }

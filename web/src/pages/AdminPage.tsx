@@ -1,13 +1,8 @@
 import { AdminWalkInSale } from "../components/AdminWalkInSale";
 import { AdminInvoiceIssue } from "../components/AdminInvoiceIssue";
 import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
-import {
-  Buildings,
-  MapPin,
-  Package,
-  Truck,
-} from "@phosphor-icons/react";
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { Buildings, Package, Truck } from "@phosphor-icons/react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -15,6 +10,7 @@ import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminCashPayment } from "../components/AdminCashPayment";
 import { AdminNav } from "../components/AdminNav";
 import { AdminOperationsNav } from "../components/AdminOperationsNav";
+import { AdminToday } from "../components/AdminToday";
 import { AdminOrderSummary } from "../components/AdminOrderSummary";
 import { AdminOrderCancellationReview } from "../components/AdminOrderCancellationReview";
 import { AdminFailurePanel } from "../components/AdminFailurePanel";
@@ -26,18 +22,14 @@ import { OrderStatusBadge } from "../components/OrderStatusBadge";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import "./AdminOrderOperations.css";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch, formatDate, formatMoney } from "../lib/api";
+import { formatDate, formatMoney } from "../lib/api";
 import { useAdminOrderAccess } from "../lib/admin-order-access";
 import { shippingChannelLabels } from "../lib/commerce";
 import {
   adminPaymentStatusLabel,
   shipmentStatusLabel,
 } from "../lib/labels";
-import type {
-  Order,
-  PickupLocation,
-  Supplier,
-} from "../lib/types";
+import type { Order } from "../lib/types";
 
 interface AdminOrder extends Order {
   customer_name: string;
@@ -55,47 +47,77 @@ interface AdminOrderPage {
 import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
 import { orderCategoryLabels, type OrderCategory } from "../lib/order-category";
 
-type OperationSection = "orders" | "manual-invoice" | "summary" | "issues" | "suppliers" | "locations";
+const operationTitles = {
+  today: "今日待辦",
+  orders: "訂單、付款與發票",
+  "manual-invoice": "手動開票",
+  summary: "訂單彙整",
+  issues: "問題回報",
+};
 
 export function AdminPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
-  const queryClient = useQueryClient();
   const orderAccess = useAdminOrderAccess();
   const routeSearch = useSearch({ from: "/admin" });
-  const section: OperationSection = routeSearch.section || "orders";
-  const [orderSearchInput, setOrderSearchInput] = useState(routeSearch.q || "");
-  const [orderSearch, setOrderSearch] = useState(routeSearch.q || "");
+  const { q, queue } = routeSearch;
+  const section = routeSearch.section === "suppliers" || routeSearch.section === "locations"
+    ? "today" : routeSearch.section ?? (q || queue ? "orders" : "today");
+  if (!isAdmin) {
+    return (
+      <section className="admin-gate">
+        <div className="admin-gate-mark"><Buildings size={38} weight="light" /></div>
+        <h1>管理工作台</h1>
+        {!user && <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button>}
+        {user && <Link className="button button-quiet" to="/social">返回社務系統</Link>}
+      </section>
+    );
+  }
+
+  const content = section === "today" ? <AdminToday adminId={user.id} />
+    : section === "orders" ? <AdminOrdersPanel key={JSON.stringify([user.id, q, queue])} adminId={user.id} q={q} queue={queue} orderAccess={orderAccess} />
+    : section === "manual-invoice" ? <AdminWalkInSale key={user.id} />
+    : section === "summary" ? <AdminOrderSummary />
+    : <section className="admin-issues-panel"><SectionHeading eyebrow="SYSTEM STATUS / 系統狀態" title="問題回報" /><AdminFailurePanel /></section>;
+
+  return <>
+    <section className="admin-intro admin-operations-intro">
+      <div><p className="eyebrow">{section === "today" ? "管理工作台" : "ORDER OPERATIONS / 訂單營運"}</p><h1>{operationTitles[section]}</h1></div>
+      <div className="admin-intro-meta"><span>管理者</span><strong>{user.display_name}</strong></div>
+    </section>
+    <AdminNav />
+    {section !== "today" && <AdminOperationsNav section={section} />}
+    <section className="admin-operation-page content-section">{content}</section>
+  </>;
+}
+
+function AdminOrdersPanel({ adminId, q, queue, orderAccess }: {
+  adminId: string;
+  q?: string;
+  queue?: "refunds" | "business-unpaid" | "invoice";
+  orderAccess: ReturnType<typeof useAdminOrderAccess>;
+}) {
+  const queryClient = useQueryClient();
+  const [orderSearchInput, setOrderSearchInput] = useState(q || "");
+  const [orderSearch, setOrderSearch] = useState(q || "");
   const [orderOffset, setOrderOffset] = useState(0);
-  const [orderCategory, setOrderCategory] = useState<OrderCategory>("all");
+  const [orderCategory, setOrderCategory] = useState<OrderCategory>(queue === "business-unpaid" || queue === "invoice" ? "meal" : "all");
   const [orderPayment, setOrderPayment] = useState("");
-  const [cancellationPending, setCancellationPending] = useState(false);
-  const [businessUnpaid, setBusinessUnpaid] = useState(false);
-  useEffect(() => {
-    setOrderSearchInput(routeSearch.q || "");
-    setOrderSearch(routeSearch.q || "");
-    setOrderOffset(0);
-    setOrderCategory("all"); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false);
-  }, [routeSearch.q]);
-  const [supplierQuery, locationQuery, orderQuery] = useQueries({
-    queries: [
-      {
-        queryKey: ["admin-suppliers"],
-        queryFn: () => apiFetch<Supplier[]>("/v1/admin/suppliers"),
-        enabled: isAdmin && section === "suppliers",
-      },
-      {
-        queryKey: ["admin-pickup-locations"],
-        queryFn: () => apiFetch<PickupLocation[]>("/v1/admin/pickup-locations"),
-        enabled: isAdmin && section === "locations",
-      },
-      {
-        queryKey: ["admin-orders", user?.id, orderSearch, orderOffset, cancellationPending, orderCategory, orderPayment, businessUnpaid],
-        queryFn: ({ signal }) => orderAccess.request<AdminOrderPage>(`/v1/admin/order-search?q=${encodeURIComponent(orderSearch)}&offset=${orderOffset}&limit=12&cancellation_pending=${cancellationPending}&order_category=${orderCategory}${orderPayment ? `&payment_status=${orderPayment}` : ""}${businessUnpaid ? "&business_unpaid=true" : ""}`, { signal }),
-        enabled: isAdmin && !orderAccess.denied && section === "orders",
-        retry: (failureCount) => !orderAccess.isDenied() && failureCount < 2,
-      },
-    ],
+  const [cancellationPending, setCancellationPending] = useState(queue === "refunds");
+  const [businessUnpaid, setBusinessUnpaid] = useState(queue === "business-unpaid");
+  const [invoiceFollowup, setInvoiceFollowup] = useState(queue === "invoice");
+  const params = new URLSearchParams({
+    q: orderSearch, offset: String(orderOffset), limit: "12",
+    cancellation_pending: String(cancellationPending), order_category: orderCategory,
+  });
+  if (orderPayment) params.set("payment_status", orderPayment);
+  if (businessUnpaid) params.set("business_unpaid", "true");
+  if (invoiceFollowup) params.set("invoice_followup", "true");
+  const orderQuery = useQuery({
+    queryKey: ["admin-orders", adminId, params.toString()],
+    queryFn: ({ signal }) => orderAccess.request<AdminOrderPage>(`/v1/admin/order-search?${params}`, { signal }),
+    enabled: !orderAccess.denied,
+    retry: (failureCount) => !orderAccess.isDenied() && failureCount < 2,
   });
   useEffect(() => {
     if (orderQuery.data && orderOffset > 0 && orderOffset >= orderQuery.data.total) setOrderOffset(Math.max(0, Math.floor((orderQuery.data.total - 1) / 12) * 12));
@@ -122,30 +144,24 @@ export function AdminPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
 
-  if (!isAdmin) {
-    return (
-      <section className="admin-gate">
-        <div className="admin-gate-mark"><Buildings size={38} weight="light" /></div>
-        <h1>管理工作台</h1>
-        {!user && <button className="button button-primary" type="button" onClick={openLogin}>管理者登入</button>}
-        {user && <Link className="button button-quiet" to="/social">返回社務系統</Link>}
-      </section>
-    );
-  }
-
-  const orderContent = orderAccess.denied
+  return orderAccess.denied
     ? <DataState kind="error" title="管理權限待重新驗證" detail="請重新整理頁面並確認管理者登入狀態。" />
     : <section className="admin-orders-panel">
-    <OrderCategoryFilter value={orderCategory} onChange={(value) => { setOrderCategory(value); setOrderOffset(0); if (value === "general") setBusinessUnpaid(false); }} />
+    <OrderCategoryFilter value={orderCategory} onChange={(value) => {
+      setOrderCategory(value);
+      setOrderOffset(0);
+      if (value === "general") { setBusinessUnpaid(false); setInvoiceFollowup(false); }
+    }} />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
     <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>
       <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} type="search" placeholder="訂單編號、姓名、Email、商品或統編" maxLength={120} /></label>
       <label className="field"><span>付款狀態</span><select value={orderPayment} onChange={(event) => { setOrderPayment(event.target.value); setOrderOffset(0); }}><option value="">全部狀態</option><option value="pending">待付款</option><option value="paid">已付款</option><option value="refund_pending">退款中</option><option value="refunded">已退款</option><option value="failed">付款失敗</option><option value="expired">已逾期</option><option value="late_paid_refund_required">付款晚到待退款</option></select></label>
       <label className="check-field"><input type="checkbox" checked={cancellationPending} onChange={(event) => { setCancellationPending(event.target.checked); setOrderOffset(0); }} />只看退單待審</label>
-      <label className="check-field"><input type="checkbox" checked={businessUnpaid} onChange={event => { setBusinessUnpaid(event.target.checked); setOrderOffset(0); if (event.target.checked) { setOrderCategory("meal"); setOrderPayment(""); } }} />會餐未付款</label>
+      <label className="check-field"><input type="checkbox" checked={businessUnpaid} onChange={event => { setBusinessUnpaid(event.target.checked); setOrderOffset(0); if (event.target.checked) { setOrderCategory("meal"); setOrderPayment(""); setInvoiceFollowup(false); } }} />會餐未付款</label>
+      {invoiceFollowup && <label className="check-field"><input type="checkbox" checked onChange={() => { setInvoiceFollowup(false); setOrderOffset(0); }} />發票待合作社處理</label>}
       <button className="button button-quiet" type="submit">搜尋</button>
-      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false); setOrderOffset(0); }}>清除查詢</button>
+      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false); setInvoiceFollowup(false); setOrderOffset(0); }}>清除查詢</button>
     </form>
     <div className="operations-list">
       {!orderQuery.isError && orderQuery.data?.items.map((order) => (
@@ -159,6 +175,10 @@ export function AdminPage() {
             <div><dt>訂購者</dt><dd>{order.customer_name || "未提供"}</dd></div>
             <div><dt>聯絡電話</dt><dd>{order.contact_phone_status === "available" && order.contact_phone ? <a href={`tel:${order.contact_phone}`}>{order.contact_phone}</a> : order.contact_phone_status === "unavailable" ? "暫時無法讀取" : "未提供"}</dd></div>
             <div><dt>Email</dt><dd>{order.contact_email ? <a href={`mailto:${order.contact_email}`}>{order.contact_email}</a> : "未提供"}</dd></div>
+            {order.meal_booking_type === "business" && <>
+              <div><dt>統一編號</dt><dd>{order.invoice_buyer_tax_id || "未提供"}</dd></div>
+              <div><dt>公司名稱</dt><dd>{order.invoice_buyer_name || "未提供"}</dd></div>
+            </>}
           </dl>
           <div className="operation-state">
             {order.meal_booking_type === "business" && <span className="status-chip">會餐{order.payment_followup_required ? " · 未付款待追蹤" : ""}</span>}
@@ -197,52 +217,6 @@ export function AdminPage() {
       <p className="form-error">{(updateFulfillment.error || createLogistics.error || advanceShipment.error)?.message}</p>
     )}
   </section>;
-
-  const supplierContent = <section className="admin-table-panel">
-    <div className="admin-operation-heading"><SectionHeading eyebrow="SUPPLIERS / 供應者" title="供應者與審核狀態" /><Link className="button button-quiet" to="/admin/catalog" search={{ tab: "suppliers" }}>管理供應者</Link></div>
-    {supplierQuery.isPending && <LoadingLines count={4} />}
-    {supplierQuery.isError && <DataState kind="error" title="供應者資料無法讀取" detail={supplierQuery.error.message} />}
-    <div className="data-table" role="table" aria-label="供應者清單">
-      <div className="data-row data-head" role="row"><span>供應者</span><span>編號</span><span>認可日期</span><span>狀態</span></div>
-      {supplierQuery.data?.map((supplier) => (
-        <div className="data-row" role="row" key={supplier.id}>
-          <strong>{supplier.business_name}</strong><span>{supplier.supplier_number || "待審核"}</span>
-          <span>{supplier.accredited_on ? formatDate(supplier.accredited_on) : "—"}</span>
-          <span className={supplier.is_active ? "status-active" : "status-pending"}>{supplier.is_active ? "有效" : "未啟用"}</span>
-        </div>
-      ))}
-    </div>
-  </section>;
-
-  const locationContent = <section className="admin-table-panel">
-    <div className="admin-operation-heading"><SectionHeading eyebrow="PICKUP NETWORK / 取貨網絡" title="取貨點維護" /><Link className="button button-quiet" to="/admin/catalog" search={{ tab: "locations" }}>管理取貨點</Link></div>
-    {locationQuery.isPending && <LoadingLines count={3} />}
-    {locationQuery.isError && <DataState kind="error" title="取貨點資料無法讀取" detail={locationQuery.error.message} />}
-    <div className="location-list">
-      {locationQuery.data?.map((location) => (
-        <article key={location.id}>
-          <MapPin size={19} weight="light" /><div><strong>{location.name}</strong><small>{location.code}</small></div>
-          <span>{location.is_active ? "啟用" : "停用"}</span>
-        </article>
-      ))}
-    </div>
-  </section>;
-
-  const content = section === "orders" ? orderContent
-    : section === "manual-invoice" ? <AdminWalkInSale key={user.id} />
-    : section === "summary" ? <AdminOrderSummary />
-    : section === "issues" ? <section className="admin-issues-panel"><SectionHeading eyebrow="SYSTEM STATUS / 系統狀態" title="問題回報" /><AdminFailurePanel /></section>
-      : section === "suppliers" ? supplierContent : locationContent;
-
-  return <>
-    <section className="admin-intro admin-operations-intro">
-      <div><p className="eyebrow">ORDER OPERATIONS / 訂單營運</p><h1>{section === "manual-invoice" ? "手動開票" : section === "summary" ? "訂單彙整" : section === "issues" ? "問題回報" : section === "suppliers" ? "供應者與審核狀態" : section === "locations" ? "取貨點維護" : "訂單、付款與發票"}</h1></div>
-      <div className="admin-intro-meta"><span>管理者</span><strong>{user.display_name}</strong></div>
-    </section>
-    <AdminNav />
-    <AdminOperationsNav section={section} />
-    <section className="admin-operation-page content-section">{content}</section>
-  </>;
 }
 
 function AdminOrderAction({

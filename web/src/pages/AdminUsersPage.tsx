@@ -76,6 +76,10 @@ function RegisteredUserRow({ item }: { item: RegisteredUser }) {
   const submit = (event: FormEvent) => { event.preventDefault(); if (phoneMatch && confirmed && !grant.isPending) grant.mutate(); };
   return <article className="admin-user-row"><header><div><h2>{item.display_name}</h2><p>{item.email || "LINE登入帳號"}</p>{item.notification_email && <p>通知信箱：{item.notification_email}</p>}</div><strong>{statusLabels[item.membership_status || ""] || "非社員"}</strong></header>
     <p>會員編號：{item.customer_number || "尚未編號"}{item.member_number && `　社員編號：${item.member_number}`}</p>
+    {(item.membership_id || item.member_number) && <nav className="admin-quick-buttons" aria-label={`${item.display_name}的社員資料`}>
+      {item.membership_id && <Link className="button button-quiet" to="/admin/social" search={{ tab: "members", q: item.membership_id }}>會籍異動</Link>}
+      {item.member_number && <Link className="button button-quiet" to="/admin/records" search={{ member: item.member_number }}>社員帳冊</Link>}
+    </nav>}
     <p>註冊時間：{formatDateTime(item.created_at)}　帳號：{item.is_active ? "啟用" : "停用"}</p>
     <p>管理權限：{item.user_role === "admin" ? "管理員，可使用所有管理模組" : "一般使用者"}</p>
     {item.membership_status === "active" && item.membership_id && <button className="button button-quiet" type="button" onClick={() => { setRemoveOpen(!removeOpen); remove.reset(); }}>移除社員資格</button>}
