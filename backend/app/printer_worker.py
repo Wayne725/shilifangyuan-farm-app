@@ -28,7 +28,7 @@ def wake_printer() -> None:
 
 
 async def process_print_job(settings: Settings, *, factory=SessionLocal, client=None, now=None) -> bool:
-    if not settings.printer_enabled:
+    if settings.recovery_mode or not settings.printer_enabled:
         return False
     now = now or datetime.now(timezone.utc)
     # A crashed sender may already have delivered its HTTP request. Never reclaim it for submission.
@@ -204,7 +204,7 @@ def _aware(value: datetime) -> datetime:
 @asynccontextmanager
 async def periodic_printing(settings: Settings):
     global _wake
-    if not settings.printer_enabled or not settings.printer_worker_enabled:
+    if settings.recovery_mode or not settings.printer_enabled or not settings.printer_worker_enabled:
         yield
         return
     event = asyncio.Event()
@@ -238,6 +238,9 @@ async def periodic_printing(settings: Settings):
 
 async def main():
     settings = get_settings().model_copy(update={"printer_worker_enabled": True})
+    if settings.recovery_mode:
+        logger.info("printer_worker_paused_recovery_mode")
+        return
     async with periodic_printing(settings):
         await asyncio.Event().wait()
 

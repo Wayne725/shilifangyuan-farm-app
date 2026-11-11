@@ -197,6 +197,7 @@ class Settings(BaseSettings):
     demo_nonmember_password: str = DEFAULT_DEMO_NONMEMBER_PASSWORD
     demo_reset_confirmation: str = ""
     payment_reservation_minutes: int = 15
+    recovery_mode: bool = False
     reconciliation_enabled: bool = False
     reconciliation_on_request_enabled: bool = True
     reconciliation_interval_seconds: float = Field(default=60.0, ge=30, le=3600)

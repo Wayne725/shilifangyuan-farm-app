@@ -15,6 +15,7 @@ from .common import (
     HTTPResponse,
     IntegrationConfigurationError,
     IntegrationResponseError,
+    require_provider_mutation_enabled,
     post_json,
 )
 
@@ -59,6 +60,7 @@ class ECPayLogisticsSettings:
     query_url: str = ECPAY_STAGE_LOGISTICS_QUERY_URL
     print_url: str = ECPAY_STAGE_LOGISTICS_PRINT_URL
     timeout_seconds: float = 15.0
+    recovery_mode: bool = False
 
     def validate(self) -> None:
         if not self.merchant_id.strip():
@@ -329,6 +331,7 @@ class ECPayLogisticsAdapter:
         *,
         now: Optional[datetime] = None,
     ) -> str:
+        require_provider_mutation_enabled(self.settings.recovery_mode)
         response = await self.transport(
             self.settings.selection_url,
             self.build_envelope(request.to_data(), now=now),
@@ -413,6 +416,7 @@ class ECPayLogisticsAdapter:
             self.settings.query_url,
             data,
             now=now,
+            read_only=True,
         )
 
     async def create_print_document_page(
@@ -423,6 +427,7 @@ class ECPayLogisticsAdapter:
         print_mode: int = 1,
         now: Optional[datetime] = None,
     ) -> str:
+        require_provider_mutation_enabled(self.settings.recovery_mode)
         unique_ids = list(dict.fromkeys(logistics_ids))
         if not unique_ids or any(not value.strip() for value in unique_ids):
             raise ValueError("At least one LogisticsID is required")
@@ -533,7 +538,10 @@ class ECPayLogisticsAdapter:
         data: Mapping[str, Any],
         *,
         now: Optional[datetime],
+        read_only: bool = False,
     ) -> Dict[str, Any]:
+        if not read_only:
+            require_provider_mutation_enabled(self.settings.recovery_mode)
         response = await self.transport(
             url,
             self.build_envelope(data, now=now),
@@ -659,6 +667,7 @@ def ecpay_logistics_adapter_from_settings(
             query_url=settings.ecpay_logistics_query_url,
             print_url=settings.ecpay_logistics_print_url,
             timeout_seconds=settings.integration_timeout_seconds,
+            recovery_mode=settings.recovery_mode,
         ),
         transport=transport,
     )

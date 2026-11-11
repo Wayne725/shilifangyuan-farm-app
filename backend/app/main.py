@@ -40,12 +40,20 @@ AUTH_EMAIL_PATHS = {
 }
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{8,128}$")
 logger = logging.getLogger(__name__)
+RECOVERY_READ_PATHS = {
+    "/health", "/ready", "/v1/platform", "/v1/orders", "/v1/admin/reconciliation-status",
+}
+RECOVERY_ORDER_PATH = re.compile(r"/v1/orders/[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     install_access_log_redaction()
     settings = get_settings()
+    if settings.recovery_mode:
+        logger.info("recovery_mode_started")
+        yield
+        return
     if settings.environment.strip().lower() in {"development", "test"}:
         async with SessionLocal() as session:
             await seed_demo_data(session)
@@ -121,7 +129,19 @@ def create_app() -> FastAPI:
         request.state.request_id = request_id
         started_at = time.perf_counter()
         try:
-            response = await call_next(request)
+            path = request.url.path
+            if settings.recovery_mode and (
+                request.method != "GET" or (
+                    path not in RECOVERY_READ_PATHS and not RECOVERY_ORDER_PATH.fullmatch(path)
+                )
+            ):
+                response = JSONResponse(
+                    status_code=503,
+                    content={"detail": "資料還原驗證中，暫停交易操作。"},
+                    headers={"X-Error-Code": "recovery_read_only", "Cache-Control": "no-store"},
+                )
+            else:
+                response = await call_next(request)
         except Exception:
             logger.exception(
                 "request_failed request_id=%s method=%s path=%s",
@@ -175,7 +195,7 @@ def create_app() -> FastAPI:
         tables and can call ECPay — never sits in the user's request path.
         """
         response = await call_next(request)
-        if not settings.reconciliation_on_request_enabled:
+        if settings.recovery_mode or not settings.reconciliation_on_request_enabled:
             return response
         if request.url.path in AUTH_EMAIL_PATHS:
             schedule_background_reconcile(
@@ -216,6 +236,12 @@ def create_app() -> FastAPI:
                     "status": "not_ready",
                     "database": "unavailable",
                 },
+            )
+        if settings.recovery_mode:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "database": "available", "reason": "recovery_mode"},
+                headers={"Cache-Control": "no-store"},
             )
         return {"status": "ready", "database": "available"}
 

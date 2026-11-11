@@ -69,6 +69,7 @@ def invoice_adapter_from_settings(
                 base_url=settings.fanyu_invoice_base_url,
                 signature_verified=settings.fanyu_invoice_signature_verified,
                 timeout_seconds=settings.integration_timeout_seconds,
+                recovery_mode=settings.recovery_mode,
             )
         )
     return ECPayInvoiceAdapter(
@@ -80,6 +81,7 @@ def invoice_adapter_from_settings(
             query_url=settings.ecpay_invoice_query_url,
             barcode_url=settings.ecpay_invoice_barcode_url,
             timeout_seconds=settings.integration_timeout_seconds,
+            recovery_mode=settings.recovery_mode,
         )
     )
 

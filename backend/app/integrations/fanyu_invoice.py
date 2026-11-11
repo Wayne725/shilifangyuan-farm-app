@@ -15,6 +15,7 @@ from .common import (
     HTTPResponse,
     IntegrationConfigurationError,
     IntegrationResponseError,
+    require_provider_mutation_enabled,
     post_json_no_redirect,
 )
 from .invoice import (
@@ -59,6 +60,7 @@ class FanyuInvoiceSettings:
     base_url: str = FANYU_TEST_BASE_URL
     signature_verified: bool = False
     timeout_seconds: float = 15.0
+    recovery_mode: bool = False
 
     def validate(self) -> None:
         required = {
@@ -342,6 +344,7 @@ class FanyuInvoiceAdapter:
                 "sellerID": self.settings.seller_id,
             },
             allow_no_data=True,
+            read_only=True,
         )
         if not response:
             return {
@@ -428,7 +431,10 @@ class FanyuInvoiceAdapter:
         request_data: Mapping[str, Any],
         *,
         allow_no_data: bool = False,
+        read_only: bool = False,
     ) -> Mapping[str, Any]:
+        if not read_only:
+            require_provider_mutation_enabled(self.settings.recovery_mode)
         response: HTTPResponse = await self.transport(
             f"{self.settings.base_url.rstrip('/')}{path}",
             self.build_envelope(request_data),

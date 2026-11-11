@@ -18,6 +18,7 @@ from .common import (
     HTTPResponse,
     IntegrationConfigurationError,
     IntegrationResponseError,
+    require_provider_mutation_enabled,
     is_public_https_origin,
     is_public_https_url,
     post_json_no_redirect,
@@ -73,6 +74,7 @@ class RayGateSettings:
     terminal_id: str = ""
     device_type: str = ""
     timeout_seconds: float = 15.0
+    recovery_mode: bool = False
 
     def validate(self) -> None:
         store_identifier = self.store_identifier.strip()
@@ -453,6 +455,8 @@ class RayGateAdapter:
         operation: str,
         transaction: Mapping[str, Any],
     ) -> Dict[str, Any]:
+        if operation != "query":
+            require_provider_mutation_enabled(self.settings.recovery_mode)
         self.settings.validate_server_api()
         transaction_data = self.encrypt_transaction(transaction)
         response = await self.transport(

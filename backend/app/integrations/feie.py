@@ -95,6 +95,8 @@ class FeieClient:
         path = _API_PATHS.get(api)
         if path is None:
             raise FeieError("unsupported_printer_api")
+        if self.settings.recovery_mode and api not in {"Open_queryOrderState", "Open_queryPrinterStatus"}:
+            raise FeieError("recovery_mode")
         validate_live_config(self.settings)
         request_url = f"{self.settings.feie_api_base_url}{path}"
         stime = str(int(time.time()))

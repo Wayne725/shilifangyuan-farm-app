@@ -74,6 +74,9 @@ def main() -> None:
     )
     settings = get_settings()
     settings.validate_runtime_secrets()
+    if settings.recovery_mode and args.command == "prepare":
+        logger.info("startup_stage=prepare status=skipped_recovery_mode")
+        return
     run_with_retries(
         migrate_database,
         attempts=settings.startup_migration_attempts,

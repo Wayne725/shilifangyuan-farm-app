@@ -168,6 +168,8 @@ async def reconcile_once(
     source: str = "job",
 ) -> ReconcileReport:
     active_settings = settings or get_settings()
+    if active_settings.recovery_mode:
+        raise RuntimeError("Reconciliation is disabled in recovery mode")
     current = now or datetime.now(timezone.utc)
     report = ReconcileReport()
     from .activity_payments import reconcile_charges
@@ -289,6 +291,9 @@ def schedule_background_reconcile(
     garbage-collect a still-running reconciliation.
     """
 
+    active_settings = settings or get_settings()
+    if active_settings.recovery_mode:
+        raise RuntimeError("Reconciliation is disabled in recovery mode")
     global _background_reconcile_task
     if (
         _background_reconcile_task is not None
@@ -346,7 +351,7 @@ def schedule_background_reconcile(
 
 @asynccontextmanager
 async def periodic_reconciliation(settings: Settings):
-    if not settings.reconciliation_enabled:
+    if settings.recovery_mode or not settings.reconciliation_enabled:
         yield
         return
     stop = asyncio.Event()

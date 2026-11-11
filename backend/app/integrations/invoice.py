@@ -21,6 +21,7 @@ from .common import (
     HTTPResponse,
     IntegrationConfigurationError,
     IntegrationResponseError,
+    require_provider_mutation_enabled,
     post_json,
 )
 
@@ -51,6 +52,7 @@ class ECPayInvoiceSettings:
     barcode_url: str = ECPAY_STAGE_BARCODE_URL
     query_url: str = ECPAY_STAGE_INVOICE_QUERY_URL
     timeout_seconds: float = 15.0
+    recovery_mode: bool = False
 
     def validate(self) -> None:
         if not self.merchant_id:
@@ -441,6 +443,7 @@ class ECPayInvoiceAdapter:
                 "MerchantID": self.settings.merchant_id,
                 "RelateNumber": relate_number,
             },
+            read_only=True,
         )
 
     async def validate_mobile_barcode(
@@ -461,6 +464,7 @@ class ECPayInvoiceAdapter:
                     "MerchantID": self.settings.merchant_id,
                     "BarCode": normalized,
                 },
+                read_only=True,
             )
         except IntegrationResponseError:
             return BarcodeValidation(
@@ -485,8 +489,10 @@ class ECPayInvoiceAdapter:
         )
 
     async def _request(
-        self, endpoint: str, data: Mapping[str, Any]
+        self, endpoint: str, data: Mapping[str, Any], *, read_only: bool = False
     ) -> Dict[str, Any]:
+        if not read_only:
+            require_provider_mutation_enabled(self.settings.recovery_mode)
         envelope = {
             "MerchantID": self.settings.merchant_id,
             "RqHeader": {

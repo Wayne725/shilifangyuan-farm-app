@@ -261,7 +261,9 @@ Repository Settings → Secrets and variables → Actions 新增：
 
 `RECONCILIATION_ENABLED` 控制定期補查。`RECONCILIATION_ON_REQUEST_ENABLED` 預設為 `true`，控制 API 請求觸發的補查，包含註冊、驗證信重寄與忘記密碼。外部排程使用帶有補查密鑰的 `POST /internal/reconcile`。
 
-隔離還原驗收使用獨立設定。啟動前設為 `RECONCILIATION_ENABLED=false`、`RECONCILIATION_ON_REQUEST_ENABLED=false` 和 `PRINTER_ENABLED=false`，配置獨立補查密鑰與合成供應商憑證。以對外網路規則只允許測試端點，並使正式流量及外部排程繼續指向原服務。
+隔離還原啟動時設 `RECOVERY_MODE=true`。`prepare` 跳過遷移與展示資料，API 停止請求觸發的補查、定期補查及列印工作。只開放 `GET /health`、`GET /ready`、公開平台資訊、原訂單查詢與管理員補查狀態。訂單及管理員查詢沿用帳號權限，使用隔離環境簽發的短效存取憑證。其餘請求回 503，包括付款回呼與 `/internal/reconcile`。`/ready` 仍檢查資料庫，但回 503 與 `reason=recovery_mode`，使 Render 的正式就緒檢查不會放行此實例。
+
+先以隔離的可寫角色明確執行 `python -m app.startup migrate` 升級副本。再切換至唯讀角色啟動 API。使用獨立密鑰，讓正式流量與排程維持在原服務，並在網路層封鎖正式供應商連線。需要驗證新交易時，另以合成資料和模擬供應商啟動測試服務。還原副本須完成切點後的供應商對帳與排程確認，才能解除 `RECOVERY_MODE`。先前已交付買家的外部付款頁仍須比對金流紀錄。
 
 程式回復時可保留新增欄位，不需為回復程式而降級正式資料庫。
 

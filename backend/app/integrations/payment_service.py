@@ -119,6 +119,8 @@ def ensure_payment_runtime_enabled(
     sales_channel: Optional[SalesChannel] = None,
     meal_event_id: Optional[str] = None,
 ) -> None:
+    if settings.recovery_mode:
+        raise PaymentApplicationError("系統還原中，暫停線上付款")
     try:
         ensure_sales_scope_allows(
             settings,
@@ -165,7 +167,7 @@ async def ensure_order_payment_runtime_enabled(
     *,
     amount: Optional[int] = None,
 ) -> None:
-    if await is_meals_test_product_order(session, settings, order, amount=amount):
+    if not settings.recovery_mode and await is_meals_test_product_order(session, settings, order, amount=amount):
         if order.invoice_provider_context != invoice_context_from_settings(settings):
             raise PaymentApplicationError(
                 "此訂單的發票平台資料已過期或未設定，無法付款；請重新訂購測試商品"
@@ -263,6 +265,7 @@ def raygate_payment_adapter_from_settings(settings: Settings) -> RayGateAdapter:
             terminal_id=settings.raygate_payment_terminal_id,
             device_type=settings.raygate_payment_device_type,
             timeout_seconds=getattr(settings, "integration_timeout_seconds", 15.0),
+            recovery_mode=settings.recovery_mode,
         )
     )
 

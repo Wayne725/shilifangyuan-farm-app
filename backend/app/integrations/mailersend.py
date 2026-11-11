@@ -3,6 +3,7 @@ from typing import Any, Dict
 
 from ..config import Settings
 from .common import (
+    require_provider_mutation_enabled,
     IntegrationConfigurationError,
     IntegrationResponseError,
     post_json,
@@ -107,6 +108,7 @@ class MailerSendAdapter:
 
 
 def mailersend_adapter_from_settings(settings: Settings) -> MailerSendAdapter:
+    require_provider_mutation_enabled(settings.recovery_mode)
     return MailerSendAdapter(
         MailerSendSettings(
             api_token=settings.mailersend_api_token,
