@@ -1108,7 +1108,19 @@ class SQLAlchemyPaymentCallbackRepository:
         event_key: str,
         payload: Mapping[str, str],
     ) -> str:
-        await require_unheld(self.session, ("provider_payment", provider_payment_reference(provider, payload["MerchantTradeNo"])))
+        return await self._apply_payment_callback(provider, event_key, payload)
+
+    async def _apply_verified_recovery_raygate(self, attempt_id: str, payload: Mapping[str, str]) -> str:
+        return await self._apply_payment_callback(
+            RAYGATE_PAYMENT_PROVIDER, raygate_event_key(payload), payload, recovery_attempt_id=attempt_id,
+        )
+
+    async def _apply_payment_callback(
+        self, provider: str, event_key: str, payload: Mapping[str, str], *, recovery_attempt_id: str | None = None,
+    ) -> str:
+        if recovery_attempt_id is None:
+            await require_unheld(self.session, ("provider_payment", provider_payment_reference(provider, payload["MerchantTradeNo"])))
+        callback_options = {} if recovery_attempt_id is None else {"notify_email": False}
         event_provider = (
             "ecpay_aio" if provider == "ecpay" else "raygate_payment"
         )
@@ -1120,6 +1132,8 @@ class SQLAlchemyPaymentCallbackRepository:
             )
         )
         if tombstone is not None:
+            if recovery_attempt_id is not None:
+                raise PaymentApplicationError("付款嘗試已封存，不可補登")
             self.session.add(
                 ExternalEvent(
                     provider=event_provider,
@@ -1180,7 +1194,10 @@ class SQLAlchemyPaymentCallbackRepository:
         )
         if attempt is None:
             raise PaymentApplicationError("找不到付款嘗試")
-        await require_unheld(self.session, *payment_targets(attempt))
+        if recovery_attempt_id is None:
+            await require_unheld(self.session, *payment_targets(attempt))
+        elif attempt.id != recovery_attempt_id:
+            raise PaymentApplicationError("付款證明與付款嘗試不符")
         if attempt.provider != provider:
             raise PaymentApplicationError("付款服務與付款嘗試不符")
         if attempt.order is not None and attempt.order.payment_method != PaymentMethod.ONLINE:
@@ -1233,7 +1250,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 event.processed_at = datetime.now(timezone.utc)
                 await self.session.commit()
                 return "duplicate"
-            await self._apply_provider_refund(attempt, payload)
+            await self._apply_provider_refund(attempt, payload, **callback_options)
             event.processed = True
             event.processed_at = datetime.now(timezone.utc)
             await self.session.commit()
@@ -1297,7 +1314,7 @@ class SQLAlchemyPaymentCallbackRepository:
             await self.session.commit()
             return "failed"
 
-        await self._apply_success(attempt, payload)
+        await self._apply_success(attempt, payload, **callback_options)
         event.processed = True
         event.processed_at = datetime.now(timezone.utc)
         await self.session.commit()
@@ -1319,7 +1336,7 @@ class SQLAlchemyPaymentCallbackRepository:
         return await self.apply_ecpay_payment_callback(key, synthetic)
 
     async def _apply_success(
-        self, attempt: PaymentAttempt, payload: Mapping[str, str]
+        self, attempt: PaymentAttempt, payload: Mapping[str, str], *, notify_email: bool = True,
     ) -> None:
         current = datetime.now(timezone.utc)
         payment_time = _provider_payment_time(payload) or current
@@ -1740,6 +1757,7 @@ class SQLAlchemyPaymentCallbackRepository:
             "payment_succeeded",
             "付款成功通知",
             "訂單 {} 已付款成功。".format(order.order_number),
+            notify_email=notify_email,
         )
 
     async def _assign_provider_trade_no(
@@ -1767,9 +1785,7 @@ class SQLAlchemyPaymentCallbackRepository:
         attempt.provider_trade_no = provider_trade_no
 
     async def _apply_provider_refund(
-        self,
-        attempt: PaymentAttempt,
-        payload: Mapping[str, str],
+        self, attempt: PaymentAttempt, payload: Mapping[str, str], *, notify_email: bool = True,
     ) -> None:
         await self._assign_provider_trade_no(attempt, payload)
         provider_refund_id = payload.get("RayGateAssociatedOrderID", "")
@@ -1929,7 +1945,7 @@ class SQLAlchemyPaymentCallbackRepository:
                     refund.id,
                 )
                 if fulfillment_irreversible:
-                    await self._publish_refunded_fulfillment_alert(order, refund)
+                    await self._publish_refunded_fulfillment_alert(order, refund, notify_email=notify_email)
         elif attempt.membership_charge is not None:
             charge = attempt.membership_charge
             if remaining_payment_status is None:
@@ -1971,7 +1987,7 @@ class SQLAlchemyPaymentCallbackRepository:
                         "refund_purpose": refund.purpose,
                         "order_revision": attempt.order_revision if order else None,
                     },
-                    email=owner.email,
+                    email=owner.email if notify_email else None,
                     dedupe_key=f"refund:{refund.id}",
                 )
             )
@@ -1995,6 +2011,8 @@ class SQLAlchemyPaymentCallbackRepository:
         self,
         order: Order,
         refund: Refund,
+        *,
+        notify_email: bool = True,
     ) -> None:
         admins = list(
             await self.session.scalars(
@@ -2015,7 +2033,7 @@ class SQLAlchemyPaymentCallbackRepository:
                         "但物流已建立或商品已交付；請立即人工攔截或追蹤退回。"
                     ),
                     data={"order_id": order.id, "refund_id": refund.id},
-                    email=admin.email,
+                    email=admin.email if notify_email else None,
                     dedupe_key=(
                         f"refund-fulfillment:{refund.id}:{admin.id}"
                     ),
@@ -2306,6 +2324,8 @@ class SQLAlchemyPaymentCallbackRepository:
         event_type: str,
         title: str,
         body: str,
+        *,
+        notify_email: bool = True,
     ) -> None:
         service = NotificationService(
             SQLAlchemyNotificationRepository(self.session)
@@ -2317,7 +2337,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 title=title,
                 body=body,
                 data={"order_id": order.id},
-                email=order.contact_email,
+                email=order.contact_email if notify_email else None,
                 dedupe_key="payment:{}:{}".format(attempt.id, event_type),
             )
         )

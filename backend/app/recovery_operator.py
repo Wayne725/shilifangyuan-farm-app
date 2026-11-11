@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .auth import decode_token, get_active_user_for_access
 from .config import get_settings
 from .database import SessionLocal
+from .recovery_payment_proof import MAX_PROOF_BYTES, SignedRayGateEvidence, apply_raygate_proof
 from .models import RecoveryCutover, RecoveryHold, User
 from .recovery_quarantine import (
     Digest, Manifest, QuarantineInput, Resolution, _require_admin, arm_cutover, begin_cutover,
@@ -87,6 +88,12 @@ async def run(args: argparse.Namespace, token: str) -> dict:
             return {"items": await export_inventory(session, actor, args.cutover_id, args.output)}
         if args.action == "status":
             return {"items": await export_status(session, actor, args.cutover_id, args.output)}
+        if args.action == "raygate-proof":
+            with args.input.open("rb") as handle:
+                raw = handle.read(MAX_PROOF_BYTES + 1)
+            if len(raw) > MAX_PROOF_BYTES:
+                raise ValueError("對帳證明檔案過大")
+            return await apply_raygate_proof(session, actor, settings, SignedRayGateEvidence.model_validate_json(raw))
         raw = args.input.read_bytes()
         if args.action == "arm":
             return {"new_holds": await arm_cutover(session, actor, Manifest.model_validate_json(raw))}
@@ -103,7 +110,7 @@ def main():
         export = commands.add_parser(command)
         export.add_argument("cutover_id", type=UUID)
         export.add_argument("output", type=Path)
-    for command in ("arm", "resolve"):
+    for command in ("arm", "resolve", "raygate-proof"):
         commands.add_parser(command).add_argument("input", type=Path)
     args = parser.parse_args()
     if not get_settings().recovery_mode:

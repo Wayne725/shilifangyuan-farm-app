@@ -343,12 +343,12 @@ class RayGateAdapter:
             transaction_data, provided_digest
         ):
             raise IntegrationResponseError("Invalid RayGate HashDigest")
-        return self._parse_payment_result(
-            self.decrypt_transaction(transaction_data),
-            require_pos_order_number=True,
-        )
+        return self.parse_payment_result(self.decrypt_transaction(transaction_data), self.settings.store_identifier)
 
     async def query_order(self, pos_order_number: str) -> Dict[str, str]:
+        return (await self.query_order_record(pos_order_number)).to_canonical_payload()
+
+    async def query_order_record(self, pos_order_number: str) -> RayGatePaymentResult:
         if not pos_order_number or len(pos_order_number) > 50:
             raise ValueError("RayGate pos_order_number must be 1-50 characters")
         response_payload = await self._post_server_api(
@@ -382,7 +382,7 @@ class RayGateAdapter:
                 "RayGate query Data must be an object or array"
             )
         matches = [
-            self._parse_payment_result(item, require_pos_order_number=True)
+            self.parse_payment_result(item, self.settings.store_identifier)
             for item in records
             if isinstance(item, Mapping)
             and str(item.get("pos_order_number", "")) == pos_order_number
@@ -391,7 +391,7 @@ class RayGateAdapter:
             raise IntegrationResponseError(
                 "RayGate query must return exactly one matching transaction"
             )
-        return matches[0].to_canonical_payload()
+        return matches[0]
 
     async def refund(
         self,
@@ -494,12 +494,8 @@ class RayGateAdapter:
             headers["X-Merchant-DeviceType"] = self.settings.device_type.strip()
         return headers
 
-    def _parse_payment_result(
-        self,
-        payload: Mapping[str, Any],
-        *,
-        require_pos_order_number: bool,
-    ) -> RayGatePaymentResult:
+    @staticmethod
+    def parse_payment_result(payload: Mapping[str, Any], store_identifier: str) -> RayGatePaymentResult:
         required = {
             "order_id",
             "amount",
@@ -545,11 +541,11 @@ class RayGateAdapter:
             ),
         )
         if not hmac.compare_digest(
-            result.store_code,
-            self.settings.store_identifier.strip(),
+            result.store_code.encode(),
+            store_identifier.strip().encode(),
         ):
             raise IntegrationResponseError("Unexpected RayGate store_code")
-        if require_pos_order_number and not result.pos_order_number:
+        if not result.pos_order_number:
             raise IntegrationResponseError("Missing RayGate pos_order_number")
         if amount <= 0 or len(str(amount)) > 10:
             raise IntegrationResponseError("Invalid RayGate payment amount")
@@ -564,7 +560,6 @@ class RayGateAdapter:
                 "Refunded RayGate payment is missing associated_order_id"
             )
         return result
-
 
 def _validate_callback_url(value: str, label: str, *, required: bool) -> None:
     if not value and not required:
