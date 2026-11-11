@@ -4,10 +4,12 @@ from decimal import Decimal
 from sqlalchemy import select, union_all
 from sqlalchemy.orm import selectinload
 
-from .models import ActivityCharge, Invoice, InvoiceStatus, Order, PaymentAttempt, PaymentStatus, RefundStatus
+from .models import ActivityCharge, Invoice, InvoiceStatus, Order, PaymentAttempt, PaymentStatus, RefundStatus, WalkInSale
+from .order_categories import FINANCIAL_ORDER_CATEGORY_GROUPS, FINANCIAL_ORDER_CATEGORY_LABELS, financial_order_category
 
 RECEIVED = {PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED}
 PROVIDERS = {'newebpay': {'newebpay'}, 'jkopay': {'jkopay'}, 'linepay': {'linepay'}}
+LEGACY_CATEGORY_BY_CHANNEL = {'regular': 'general', 'group': 'general', 'meal_preorder': 'meal'}
 
 
 def manual_subject(record):
@@ -23,6 +25,7 @@ async def reconcile_statement(session, batch):
     external_ids = {row['external_id'] for row in batch.rows if row['external_id']}
     manual = {subject for row in batch.rows if (subject := manual_subject(row))}
     found = {}
+    order_categories = {}
     keys = list(references | external_ids | {subject[1] for subject in manual})
     for offset in range(0, len(keys), 400):
         chunk = keys[offset:offset + 400]
@@ -34,9 +37,16 @@ async def reconcile_statement(session, batch):
                           select(PaymentAttempt.order_id).where(PaymentAttempt.merchant_trade_no.in_(chunk))]
             if providers := PROVIDERS.get(batch.source):
                 selectors.append(select(PaymentAttempt.order_id).where(PaymentAttempt.provider.in_(providers), PaymentAttempt.provider_trade_no.in_(chunk)))
-        orders = await session.scalars(select(Order).where(Order.id.in_(union_all(*selectors))).options(
-            selectinload(Order.invoice), selectinload(Order.refunds), selectinload(Order.payment_attempts)))
-        found.update((('order', order.id), order) for order in orders)
+        orders = await session.execute(
+            select(Order, financial_order_category()).select_from(Order)
+            .outerjoin(WalkInSale, WalkInSale.order_id == Order.id)
+            .where(Order.id.in_(union_all(*selectors))).options(
+                selectinload(Order.invoice), selectinload(Order.refunds), selectinload(Order.payment_attempts),
+            )
+        )
+        for order, category in orders:
+            found[('order', order.id)] = order
+            order_categories[order.id] = category
         if batch.source != 'invoice':
             selectors = [select(ActivityCharge.id).where(ActivityCharge.id.in_(chunk)),
                          select(ActivityCharge.id).where(ActivityCharge.number.in_(chunk)),
@@ -65,6 +75,7 @@ async def reconcile_statement(session, batch):
         subject = next(iter(candidate_ids)) if len(candidate_ids) == 1 else None
         entity = found.get(subject)
         order = entity if subject and subject[0] == 'order' else None
+        category = order_categories[order.id] if order else None
         reasons = []
         amount = Decimal(record['amount'])
         expected = None
@@ -123,6 +134,8 @@ async def reconcile_statement(session, batch):
         status = 'matched' if not reasons else 'unmatched' if not entity else 'difference'
         results.append({**record, 'order_id': order.id if order else None, 'order_number': order.order_number if order else None,
                         'sales_channel': order.sales_channel.value if order else None,
+                        'financial_order_category': category,
+                        'financial_order_category_label': FINANCIAL_ORDER_CATEGORY_LABELS.get(category),
                         'subject_type': subject[0] if entity else None, 'subject_id': entity.id if entity else None,
                         'subject_number': (order.order_number if order else entity.number) if entity else None,
                         'expected_amount': str(expected) if expected is not None else None,
@@ -133,9 +146,10 @@ async def reconcile_statement(session, batch):
 
 def filter_reconciliation(rows, *, q='', order_category='all', subject_type='all', result='all'):
     term = q.strip().casefold()
+    categories = FINANCIAL_ORDER_CATEGORY_GROUPS.get(order_category)
     return [row for row in rows
             if (subject_type == 'all' or row.get('subject_type', 'order' if row.get('order_id') else None) == subject_type)
-            and (order_category == 'all' or (row['sales_channel'] in {'regular', 'group'} if order_category == 'general' else row['sales_channel'] == 'meal_preorder'))
+            and (categories is None or row.get('financial_order_category', LEGACY_CATEGORY_BY_CHANNEL.get(row.get('sales_channel'))) in categories)
             and (result == 'all' or row['result'] == result)
             and (not term or term in ' '.join(str(row.get(key) or '') for key in ['external_id', 'reference', 'order_number', 'subject_number', 'occurred_at', 'state', 'website_state']).casefold() or term in ' '.join(row['reasons']).casefold())]
 

@@ -1,10 +1,11 @@
 import csv
 import io
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 
-from app.models import Invoice, InvoiceStatus, Order, SalesChannel
+from app.models import Invoice, InvoiceStatus, MembershipType, Order, OrderKind, PaymentMethod, SalesChannel, WalkInSale
 from app.routers.invoice_reports import invoice_reports_router
 from tests.support import auth_headers
 from tests.test_accounting_exports import spreadsheet_values
@@ -40,6 +41,83 @@ async def test_invoice_categories_include_group_and_csv_matches_search(review_co
     assert len(table) == 1 and table[0]['訂單編號'] == general[1].order_number
     assert table[0]['訂單分類'] == '一般訂單'
     assert (await c.client.get(path + '?order_category=wrong', headers=headers)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invoice_register_projects_walk_in_categories_in_screen_and_csv(review_context):
+    c = review_context
+    c.client._transport.app.include_router(invoice_reports_router)
+    counter_orders = {
+        category: Order(
+            order_number=number, customer_kind='walk_in', user_id=None,
+            order_kind=OrderKind.REGULAR, sales_channel=SalesChannel.REGULAR,
+            payment_method=PaymentMethod.CASH_ON_PICKUP, membership_type_snapshot=MembershipType.NONMEMBER,
+            amount_total=120, contact_email='',
+        )
+        for category, number in (('meal', 'COUNTER-MEAL'), ('product', 'COUNTER-PRODUCT'), (None, 'COUNTER-UNKNOWN'))
+    }
+    c.session.add_all(counter_orders.values())
+    await c.session.flush()
+    c.session.add_all([
+        WalkInSale(order_id=order.id, client_request_id=str(uuid4()), request_fingerprint='a' * 64,
+                   operator_id=c.admin.id, sale_category=category)
+        for category, order in counter_orders.items()
+    ])
+    await c.session.commit()
+
+    headers = auth_headers(c.admin)
+    path = '/v1/admin/invoice-register'
+    expected = {
+        'meal': {c.order.order_number: '便當訂單', 'COUNTER-MEAL': '現場便當'},
+        'general': {'COUNTER-PRODUCT': '現場一般商品'},
+        'walk_in_unclassified': {'COUNTER-UNKNOWN': '現場未分類'},
+    }
+    expected['all'] = {number: label for entries in expected.values() for number, label in entries.items()}
+    for category, labels in expected.items():
+        params = {'order_category': category}
+        page = await c.client.get(path, params=params, headers=headers)
+        exported = await c.client.get(path + '.csv', params=params, headers=headers)
+        assert page.status_code == exported.status_code == 200
+        assert page.json()['total'] == len(labels)
+        items = page.json()['items']
+        assert {row['order_number']: row['financial_order_category_label'] for row in items} == labels
+        assert all(row['sales_channel'] == 'regular' for row in items if row['order_number'].startswith('COUNTER-'))
+        table = csv.DictReader(io.StringIO(exported.text.lstrip('\ufeff')))
+        assert {row['訂單編號']: row['訂單分類'] for row in table} == labels
+
+    content = statement_file('newebpay', [
+        {**payment_row(reference=order.order_number, external=f'COUNTER{index}'), '訂單交易日期': '2030-01-02'}
+        for index, order in enumerate(counter_orders.values(), 1)
+    ])
+    uploaded = await upload(c, 'newebpay', content)
+    assert uploaded.status_code == 201
+    batch_id = uploaded.json()['id']
+    statements = '/v1/admin/financial-statements'
+    statement = f'{statements}/{batch_id}'
+    for filter_key, counter_key in (('meal', 'meal'), ('general', 'product'), ('walk_in_unclassified', None)):
+        order = counter_orders[counter_key]
+        label = expected[filter_key][order.order_number]
+        params = {'order_category': filter_key}
+        detail = await c.client.get(statement, params=params, headers=headers)
+        assert detail.status_code == 200
+        assert detail.json()['total'] == 1
+        assert detail.json()['items'][0]['financial_order_category_label'] == label
+        report = await c.client.get(statement + '/reconciliation.csv', params=params, headers=headers)
+        assert report.status_code == 200
+        reconciled = list(csv.DictReader(io.StringIO(report.text.lstrip('\ufeff'))))
+        assert [(row['網站訂單編號'], row['訂單分類']) for row in reconciled] == [(order.order_number, label)]
+        options = await c.client.get(statements + '/order-options', params={**params, 'q': 'COUNTER-'}, headers=headers)
+        assert options.status_code == 200
+        assert [(row['id'], row['financial_order_category_label']) for row in options.json()] == [(order.id, label)]
+
+        accounting = await c.client.get(statements + '/accounting-export', headers=headers, params={
+            **params, 'source': 'newebpay', 'batch_id': batch_id,
+            'starts_on': '2030-01-02', 'ends_on': '2030-01-02',
+        })
+        assert accounting.status_code == 200
+        template = spreadsheet_values(accounting.content, 'newebpay')
+        assert '訂單分類' not in template[0] and len(template) == 2
+        assert template[1][template[0].index('商店訂單編號')] == order.order_number
 
 
 @pytest.mark.asyncio
