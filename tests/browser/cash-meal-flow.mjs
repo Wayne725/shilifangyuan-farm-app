@@ -96,7 +96,7 @@ for (const width of [390, 1280]) {
     await page.getByLabel('實收金額', { exact: true }).fill('120');
     await page.getByLabel('處理原因', { exact: true }).fill('已核對 POS');
     await page.getByLabel('現場收款方式', { exact: true }).selectOption('pos');
-    await page.getByLabel('POS 單號／收款參考（選填）', { exact: true }).fill('POS-123');
+    await page.getByLabel('POS 單號／收款參考', { exact: true }).fill('POS-123');
     assert.equal(await page.getByRole('button', { name: '確認已付款', exact: true }).isEnabled(), false);
     await page.getByLabel('已核對上述款項確實收到', { exact: true }).check();
     await page.getByRole('button', { name: '確認已付款', exact: true }).click();
