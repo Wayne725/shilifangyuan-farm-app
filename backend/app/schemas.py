@@ -1667,22 +1667,30 @@ class MealEventSummary(ApiModel):
     pickup_ends_at: datetime
 
 
-class MealEventRead(MealEventSummary):
+class MealEventBookingRead(MealEventSummary):
     booking_policy: Literal["legacy", "workday", "special"] = "legacy"
     new_orders_blocked_reason: Optional[str] = None
-    allow_cash_payment: bool = False
     ordering_starts_at: datetime
     ordering_ends_at: datetime
     status: MealEventStatus
-    offerings: List[MealOfferingRead] = Field(default_factory=list)
     service_date: date
     meal_period: Literal["lunch", "dinner"]
-    schedule_template_id: Optional[str] = None
-    can_edit: bool = False
     pickup_slot_ends_at: Optional[datetime] = None
     pickup_slots: List[datetime] = Field(default_factory=list)
     booking_starts_at: datetime
     booking_ends_at: datetime
+
+
+class MealEventCalendarRead(MealEventBookingRead):
+    has_active_offerings: bool
+    has_available_offerings: bool
+
+
+class MealEventRead(MealEventBookingRead):
+    allow_cash_payment: bool = False
+    offerings: List[MealOfferingRead] = Field(default_factory=list)
+    schedule_template_id: Optional[str] = None
+    can_edit: bool = False
 
 
 class MealOrderLineInput(BaseModel):

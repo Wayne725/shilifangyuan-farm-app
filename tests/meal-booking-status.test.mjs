@@ -12,7 +12,7 @@ const compiled = ts.transpileModule(source, {
 assert.deepEqual(compiled.diagnostics.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error), []);
 const {
   mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions, mealPickupChoices,
-  validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime, mealBookingDates,
+  validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime, mealBookingDates, mealMenuAvailability,
 } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
 
 const NOW = Date.parse("2026-09-17T12:00:00+08:00");
@@ -157,6 +157,20 @@ test("停用餐點尚有份數不會讓已售完場次重新標示可預訂", ()
     { id: "sold", is_active: true, available_quantity: 0 },
   ] });
   assert.equal(mealBookingStatus(event, NOW), "已售完");
+});
+
+test("精簡日期摘要與完整菜單維持相同售完、空菜單及已截止判斷", () => {
+  for (const [overrides, expected] of [
+    [{}, "可預訂"],
+    [{ offerings: [] }, "菜單待公告"],
+    [{ offerings: [{ is_active: false, available_quantity: 2 }, { is_active: true, available_quantity: 0 }] }, "已售完"],
+    [{ status: "ordering_closed", offerings: [] }, "已截止"],
+    [{ booking_starts_at: "2026-09-17T12:00:00.001+08:00" }, "尚未開放"],
+  ]) {
+    const { offerings, ...timing } = mealEvent(overrides);
+    assert.equal(mealBookingStatus({ ...timing, ...mealMenuAvailability(offerings) }, NOW), expected);
+    assert.equal(mealBookingStatus({ ...timing, offerings }, NOW), expected);
+  }
 });
 
 test("截止判斷優先於售完與空菜單", () => {

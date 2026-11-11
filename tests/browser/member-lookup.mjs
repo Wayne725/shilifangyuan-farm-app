@@ -34,7 +34,7 @@ async function fixture(t, width, { signedIn = false, rejected = false, start = '
     }
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: false } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
-    if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events'].includes(path)) return route.fulfill({ json: [] });
+    if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events/calendar'].includes(path)) return route.fulfill({ json: [] });
     state.unknown.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated route' } });
   });

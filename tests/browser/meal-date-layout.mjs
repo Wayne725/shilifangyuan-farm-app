@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 const testUrl = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4187');
@@ -46,8 +47,8 @@ async function fixture(t, width, { events = defaultEvents, now = '2026-09-17T00:
       if (request.method() === 'POST' && url.pathname === '/v1/auth/refresh') {
         return route.fulfill({ status: 401, json: { detail: '隔離測試未登入' } });
       }
-      if (request.method() === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/meal-events'].includes(url.pathname)) {
-        return route.fulfill({ json: url.pathname === '/v1/meal-events' ? events : [] });
+      if (request.method() === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/meal-events/calendar'].includes(url.pathname)) {
+        return route.fulfill({ json: url.pathname === '/v1/meal-events/calendar' ? mealCalendarFixture(events) : [] });
       }
       unknownApi.push(`${request.method()} ${url.pathname}`);
       return route.abort();

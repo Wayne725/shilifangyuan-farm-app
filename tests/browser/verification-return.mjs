@@ -47,7 +47,7 @@ async function fixture(t, { signedIn = false, returnTo, verificationStatus = 200
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, social_open: true } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: state.signedIn } });
     if (path === '/v1/meal-events/verify-meal') return route.fulfill({ json: meal });
-    if (['/v1/products', '/v1/meal-events', '/v1/group-campaigns', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
+    if (['/v1/products', '/v1/meal-events/calendar', '/v1/group-campaigns', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
     state.unknown.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated route' } });
   });

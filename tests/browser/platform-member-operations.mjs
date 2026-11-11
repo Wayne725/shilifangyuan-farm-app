@@ -17,7 +17,7 @@ async function fixture(t, width, {admin = false, closed = false} = {}) {
   if (path === '/v1/auth/refresh') return route.fulfill(admin ? {json:{access_token:'isolated',user:{id:'admin',user_role:'admin',display_name:'管理員',email:'admin@example.test',membership_type:'member'}}} : {status:401,json:{detail:'未登入'}});
   if (req.method() === 'GET') {
    if (path === '/v1/platform') return route.fulfill({json:{orders_open:!closed,closed_message:'目前暫停接受新訂單'}});
-   if (['/v1/products','/v1/meal-events','/v1/group-campaigns'].includes(path)) return route.fulfill({json:[]});
+   if (['/v1/products','/v1/meal-events/calendar','/v1/group-campaigns'].includes(path)) return route.fulfill({json:[]});
    if (path === '/v1/auth/line/status') return route.fulfill({json:{ready:true,linked:false}});
    if (path === '/v1/admin/platform') return route.fulfill({json:{orders_open:true,closed_message:'目前暫停接受新訂單',printer_brand:'',printer_model:'',printer_connection:'unknown',kitchen_sound:false,invoice_provider:'fanyu'}});
    if (path === '/v1/admin/member-register') return route.fulfill({json:{total:1,items:[{id:'member',source:'membership',member_number:'M001',legal_name:'隔離社員',email:'member@example.test',status:'active',share_count:5,share_capital_amount:5000,share_certificate_number:'SH001'}]}});

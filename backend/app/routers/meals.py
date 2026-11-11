@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -57,7 +57,15 @@ from ..integrations.payment_service import (
 from ..meal_pricing import price_meal_line
 from ..meal_photos import router as meal_photos_router
 from ..meal_options_admin import router as meal_options_router
-from ..meal_booking import configured_booking_window, meal_booking_window, meal_new_orders_blocked_reason, meal_pickup_slots, validate_meal_booking_day
+from ..meal_booking import (
+    configured_booking_window,
+    meal_booking_window,
+    meal_new_orders_blocked_reason,
+    meal_period,
+    meal_pickup_slots,
+    meal_service_date,
+    validate_meal_booking_day,
+)
 from ..meal_schedules import TAIPEI, generate_scheduled_meal_events
 from ..workday_calendar import CalendarUnavailable, calendar_status, is_workday, next_workday, previous_workday
 from ..meal_operations import meal_operations_summary, search_meal_orders
@@ -102,6 +110,7 @@ from ..schemas import (
     MealCancellationRequestRead,
     MealCancellationReview,
     MealEventActionRequest,
+    MealEventCalendarRead,
     MealEventCancelRequest,
     MealEventCreate,
     MealEventRead,
@@ -176,29 +185,34 @@ def _meal_event_allows_edit(event: MealEvent, now: datetime) -> bool:
     )
 
 
-def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRead:
-    local_pickup = _aware(event.pickup_starts_at).astimezone(TAIPEI)
+def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
     booking_start, booking_end = meal_booking_window(event)
+    return {
+        "id": event.id,
+        "booking_policy": event.booking_policy,
+        "new_orders_blocked_reason": meal_new_orders_blocked_reason(event),
+        "title": event.title,
+        "location": event.location,
+        "ordering_starts_at": _aware(event.ordering_starts_at),
+        "ordering_ends_at": booking_end,
+        "pickup_starts_at": _aware(event.pickup_starts_at),
+        "pickup_ends_at": _aware(event.pickup_ends_at),
+        "status": event.status,
+        "service_date": meal_service_date(event),
+        "meal_period": meal_period(event),
+        "pickup_slot_ends_at": _aware(event.pickup_slot_ends_at) if event.pickup_slot_ends_at else None,
+        "pickup_slots": meal_pickup_slots(event),
+        "booking_starts_at": booking_start,
+        "booking_ends_at": booking_end,
+    }
+
+
+def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRead:
     return MealEventRead(
-        id=event.id,
-        booking_policy=event.booking_policy,
-        new_orders_blocked_reason=meal_new_orders_blocked_reason(event),
-        title=event.title,
-        location=event.location,
-        ordering_starts_at=_aware(event.ordering_starts_at),
-        ordering_ends_at=booking_end,
-        pickup_starts_at=_aware(event.pickup_starts_at),
-        pickup_ends_at=_aware(event.pickup_ends_at),
-        status=event.status,
+        **_meal_event_booking_fields(event),
         allow_cash_payment=event.allow_cash_payment,
-        service_date=event.service_date or local_pickup.date(),
-        meal_period=event.meal_period or ("dinner" if local_pickup.hour >= 15 else "lunch"),
         schedule_template_id=event.schedule_template_id,
         can_edit=can_edit,
-        pickup_slot_ends_at=_aware(event.pickup_slot_ends_at) if event.pickup_slot_ends_at else None,
-        pickup_slots=meal_pickup_slots(event),
-        booking_starts_at=booking_start,
-        booking_ends_at=booking_end,
         offerings=[
             MealOfferingRead(
                 id=offering.id,
@@ -610,6 +624,19 @@ async def _unique_pickup_code(session: AsyncSession) -> str:
     raise HTTPException(status_code=503, detail="暫時無法產生取餐碼")
 
 
+def _public_meal_event_query(settings: Settings, *columns):
+    query = select(MealEvent, *columns).where(
+        MealEvent.status.in_([
+            MealEventStatus.PUBLISHED,
+            MealEventStatus.ORDERING_CLOSED,
+            MealEventStatus.PICKUP_OPEN,
+        ])
+    )
+    if settings.environment.strip().lower() == "production":
+        query = query.where(MealEvent.id.not_in(DEMO_MEAL_EVENT_IDS))
+    return query.order_by(MealEvent.pickup_starts_at)
+
+
 @meals_router.get("/v1/meal-events", response_model=list[MealEventRead])
 async def list_meal_events(
     session: AsyncSession = Depends(get_session),
@@ -617,30 +644,39 @@ async def list_meal_events(
 ) -> list[MealEventRead]:
     events = (
         await session.scalars(
-            select(MealEvent)
-            .where(
-                MealEvent.id.notin_(DEMO_MEAL_EVENT_IDS)
-                if settings.environment.strip().lower() == "production"
-                else True,
-                MealEvent.status.in_(
-                    [
-                        MealEventStatus.PUBLISHED,
-                        MealEventStatus.ORDERING_CLOSED,
-                        MealEventStatus.PICKUP_OPEN,
-                    ]
-                )
-            )
-            .options(
+            _public_meal_event_query(settings).options(
                 selectinload(MealEvent.offerings).selectinload(
                     MealEventOffering.meal
                 ).selectinload(Meal.option_groups).selectinload(
                     MealOptionGroup.options
                 )
             )
-            .order_by(MealEvent.pickup_starts_at)
         )
     ).all()
     return [_meal_event_read(event) for event in events]
+
+
+@meals_router.get("/v1/meal-events/calendar", response_model=list[MealEventCalendarRead])
+async def list_meal_event_calendar(
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> list[MealEventCalendarRead]:
+    # SQLite can use the event ID index when this boolean predicate is an inequality.
+    active = MealEventOffering.is_active != false()
+    available = MealEventOffering.capacity > MealEventOffering.paid_quantity + MealEventOffering.reserved_quantity
+    events = await session.execute(_public_meal_event_query(
+        settings,
+        MealEvent.offerings.any(active),
+        MealEvent.offerings.any(active & available),
+    ))
+    return [
+        MealEventCalendarRead(
+            **_meal_event_booking_fields(event),
+            has_active_offerings=has_active,
+            has_available_offerings=has_available,
+        )
+        for event, has_active, has_available in events
+    ]
 
 
 @meals_router.get(

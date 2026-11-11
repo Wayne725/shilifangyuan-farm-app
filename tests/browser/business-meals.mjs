@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
 
 const { chromium, webkit } = createRequire(import.meta.url)('playwright');
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
@@ -33,6 +34,8 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'synthetic-token', user: { id: 'synthetic-buyer', email: 'buyer@example.test', display_name: '隔離買家', membership_type: 'nonmember', user_role: role } } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, support_phone: '071234567', closed_message: '' } });
     if (path === '/v1/notifications' || path === '/v1/pickup-locations') return route.fulfill({ json: [] });
+    if (path === '/v1/products' || path === '/v1/group-campaigns') return route.fulfill({ json: [] });
+    if (path === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture([event]) });
     if (path === `/v1/meal-events/${event.id}`) return route.fulfill({ json: event });
     if (path === '/v1/admin/order-summary' || path === '/v1/admin/order-summary/print-preview') {
       const filters = Object.fromEntries(url.searchParams);
@@ -108,9 +111,11 @@ test('重整保留會餐訂餐方式，清空草稿後回復一般餐點', async
   assert.deepEqual(state.unknown, []);
 });
 
-test('390px會餐建單送公司統編與兩份，不提前建立付款', async t => {
+test('390px 從日期摘要進入會餐，建單送公司統編與兩份且不提前付款', async t => {
   const { page, state } = await fixture(t);
-  await page.goto(`${base}/meals/${event.id}?pickup_at=2030-01-02T11%3A00`);
+  await page.goto(`${base}/shop`);
+  await page.getByRole('link', { name: '隔離取餐點 11:00 取餐', exact: true }).click();
+  await page.waitForURL(url => url.pathname === `/meals/${event.id}` && url.searchParams.get('pickup_at') === '2030-01-02T11:00');
   await page.getByRole('radio', { name: '會餐（統編報帳）', exact: true }).check();
   await page.getByRole('button', { name: '增加合成便當', exact: true }).click({ clickCount: 2 });
   await page.getByRole('combobox', { name: '合成便當 主食', exact: true }).selectOption('rice-0');
@@ -131,6 +136,10 @@ test('390px會餐建單送公司統編與兩份，不提前建立付款', async 
   assert.equal(state.posts[0].body.invoice_buyer_type, 'company');
   assert.equal(state.posts[0].body.invoice_buyer_tax_id, '15989995');
   assert.equal(state.posts[0].body.items[0].quantity, 2);
+  assert.equal(state.posts[0].body.pickup_at, '2030-01-02T03:00:00.000Z');
+  const calendarRead = state.reads.indexOf('GET /v1/meal-events/calendar');
+  assert.ok(calendarRead >= 0 && state.reads.indexOf(`GET /v1/meal-events/${event.id}`) > calendarRead);
+  assert.equal(state.reads.includes('GET /v1/meal-events'), false);
   assert.equal(await page.getByRole('button', { name: '前往付款 $200', exact: true }).isDisabled(), true);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);

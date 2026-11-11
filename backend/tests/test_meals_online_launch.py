@@ -102,6 +102,9 @@ async def test_only_production_public_listing_hides_demo_events_without_deleting
         public_ids = {event["id"] for event in listing.json()}
         assert live_id in public_ids
         assert (public_ids & DEMO_MEAL_EVENT_IDS) == (set() if environment == "production" else DEMO_MEAL_EVENT_IDS)
+        calendar = await client.get("/v1/meal-events/calendar")
+        assert calendar.status_code == 200, calendar.text
+        assert {event["id"] for event in calendar.json()} == public_ids
         admin_list = await client.get("/v1/admin/meal-events", headers={"Authorization": f"Bearer {admin_token}"})
         assert admin_list.status_code == 200
         assert DEMO_MEAL_EVENT_IDS <= {event["id"] for event in admin_list.json()}
