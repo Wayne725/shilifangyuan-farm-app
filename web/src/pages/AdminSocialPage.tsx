@@ -9,6 +9,7 @@ import { SocialActionButton } from "../components/SocialActionButton";
 import { AdminActivityCard, ActivityRefundInbox } from "../components/AdminActivityPayments";
 import { AdminAdmissionInbox } from "../components/AdminAdmissionInbox";
 import { MembershipEducationSettings } from "../components/MembershipEducationSettings";
+import { MembershipAdmissionFeeSettings } from "../components/MembershipAdmissionFeeSettings";
 import { activityAccessDenied, activityTime, retryActivityRead } from "../lib/activities";
 import { AdminNav } from "../components/AdminNav";
 import { MeetingFilters, MeetingSetup } from "../components/MeetingTools";
@@ -180,6 +181,7 @@ export function AdminSocialPage() {
 
         <Tabs.Content className="tab-content" value="education">
           <MembershipEducationSettings />
+          <MembershipAdmissionFeeSettings adminId={user.id} />
         </Tabs.Content>
       </Tabs.Root>
     </section>

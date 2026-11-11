@@ -5,10 +5,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
+from app.membership_admission_fee import ADMISSION_FEE_KEY
 from app.models import (
-    Membership, MembershipCharge, MembershipAdmissionQuizAttempt,
+    AdminAudit, Membership, MembershipCharge, MembershipAdmissionQuizAttempt,
     MembershipAdmissionReview, MembershipAdmissionRound, Notification, OutboxEvent,
-    User, UserRole,
+    SystemSetting, User, UserRole,
 )
 from app.routers.membership_admission import membership_admission_router
 from app.routers.admin_users import admin_users_router
@@ -16,7 +17,7 @@ from pgtests.test_transaction_concurrency import postgres_sessions
 from tests.support import api_test_context, auth_headers
 from tests.test_admin_users import roster
 from tests.test_membership_admission import (
-    ADMIN_URL, URL, admission_settings, profile_body, quiz_body, ready, submitted,
+    ADMIN_URL, FEE_URL, URL, admission_settings, profile_body, quiz_body, ready, submitted,
 )
 
 
@@ -69,6 +70,47 @@ async def test_concurrent_starts_create_one_round(admission_pg, same_key):
     assert len({response.json()["id"] for response in results}) == 1
     async with factory() as session:
         assert await session.scalar(select(func.count(MembershipAdmissionRound.id))) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initially_configured", [False, True])
+async def test_concurrent_fee_changes_and_versioned_admission(admission_pg, initially_configured):
+    factory, headers = admission_pg
+    version = 0
+    if initially_configured:
+        saved = await call(factory, "PUT", FEE_URL, headers["admin_headers"], {
+            "admission_fee_amount": 600, "expected_version": 0,
+        })
+        assert saved.status_code == 200
+        version = 1
+    results = await race(*(
+        call(factory, "PUT", FEE_URL, headers[admin], {
+            "admission_fee_amount": amount, "expected_version": version,
+        })
+        for admin, amount in (("admin_headers", 700), ("second_admin_headers", 800))
+    ))
+    assert sorted(response.status_code for response in results) == [200, 409]
+    saved = next(response.json() for response in results if response.status_code == 200)
+    assert saved["version"] == version + 1
+    key = str(uuid4())
+    started = await call(factory, "POST", f"{URL}/rounds", headers["owner_headers"], {
+        "idempotency_key": key, "expected_fee_version": version,
+    })
+    assert started.status_code == 409
+    started = await call(factory, "POST", f"{URL}/rounds", headers["owner_headers"], {
+        "idempotency_key": key, "expected_fee_version": saved["version"],
+    })
+    assert started.status_code == 200
+    async with factory() as session:
+        stored = await session.get(SystemSetting, ADMISSION_FEE_KEY)
+        assert stored.value == {"admission_fee_amount": saved["admission_fee_amount"], "version": saved["version"]}
+        assert await session.scalar(select(func.count(AdminAudit.id))
+            .where(AdminAudit.aggregate_id == ADMISSION_FEE_KEY)) == version + 1
+        admission = (await session.scalars(select(MembershipAdmissionRound))).one()
+        assert (admission.admission_fee_amount, admission.admission_fee_version, admission.share_unit_amount) == (
+            saved["admission_fee_amount"], saved["version"], 100,
+        )
+        assert await session.scalar(select(func.count(MembershipCharge.id))) == 0
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ def test_browser_refresh_downgrade_refuses_active_sqlite_selection(tmp_path, mon
     get_settings.cache_clear()
     database = MigrationDatabase(url)
     try:
-        command.upgrade(database.config, "head")
+        command.upgrade(database.config, "0057_browser_refresh_recovery")
         seed_user(database)
         now = datetime.now(timezone.utc)
         database.insert("refresh_sessions", id="migration-session", user_id="migration-admin",

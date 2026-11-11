@@ -31,6 +31,7 @@ class AdmissionProfile(AdmissionInput):
 
 class AdmissionRoundStart(AdmissionInput):
     idempotency_key: UUID
+    expected_fee_version: int = Field(default=0, ge=0, strict=True)
 
 
 class AdmissionVersionInput(AdmissionInput):
@@ -142,6 +143,9 @@ class AdmissionRoundRead(BaseModel):
     status: str
     profile: AdmissionProfile | None
     requested_share_count: int
+    admission_fee_amount: int
+    admission_fee_version: int
+    share_unit_amount: int
     student_claimed: bool
     discovery_channel: str | None
     discovery_other: str | None

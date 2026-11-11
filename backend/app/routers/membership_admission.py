@@ -1,12 +1,16 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import membership_admission as admission
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
+from ..membership_admission_fee import (
+    AdmissionFeeConflict, AdmissionFeeSettingsRead, AdmissionFeeSettingsUpdate,
+    read_admission_fee_settings, update_admission_fee_settings,
+)
 from ..membership_admission_schemas import (
     AdmissionEducationConfirm, AdmissionListRead, AdmissionMeRead, AdmissionQuizSubmit,
     AdmissionReviewInput, AdmissionRoundRead, AdmissionRoundStart, AdmissionRoundUpdate,
@@ -30,6 +34,20 @@ async def _write(session, operation):
     except Exception:
         await session.rollback()
         raise
+
+
+@membership_admission_router.get("/v1/admin/membership/admission-fee", response_model=AdmissionFeeSettingsRead)
+async def admission_fee_settings(_admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await read_admission_fee_settings(session)
+
+
+@membership_admission_router.put("/v1/admin/membership/admission-fee", response_model=AdmissionFeeSettingsRead)
+async def change_admission_fee_settings(body: AdmissionFeeSettingsUpdate, admin: User = Depends(require_admin),
+                                        session: AsyncSession = Depends(get_session)):
+    try:
+        return await _write(session, update_admission_fee_settings(session, body, actor_id=admin.id))
+    except AdmissionFeeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Cache-Control": "no-store"}) from exc
 
 
 @membership_admission_router.get("/v1/membership/admission", response_model=AdmissionMeRead)
