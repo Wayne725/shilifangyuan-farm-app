@@ -56,6 +56,10 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
       if (existing && state.holdRecovery) await state.holdRecovery;
       return route.fulfill(existing ? { json: existing.sale } : { status: 404, json: { detail: '尚未找到此筆隔離交易' } });
     }
+    if (request.method() === 'GET' && path === '/v1/admin/walk-in-sales/isolated-walk-in-order') {
+      const stored = [...state.sales.values()].find(({ sale }) => sale.order_id === 'isolated-walk-in-order');
+      return route.fulfill(stored ? { json: stored.sale } : { status: 404, json: { detail: '尚未找到此筆隔離交易' } });
+    }
     if (request.method() === 'POST' && path === '/v1/admin/walk-in-sales') {
       const raw = request.postData(), body = request.postDataJSON();
       state.posts.push({ raw, body });
@@ -196,6 +200,26 @@ test('手機手動開票直接填表後確認，固定即時開票且不帶入�
     reason: '現場客人收款', confirm_received: true, confirm_not_invoiced_elsewhere: true,
   });
   assert.equal(state.posts[0].raw.includes(staffBarcode), false);
+  await assertClean(page, state);
+});
+
+test('現場收款後更新原票狀態，只讀同一筆交易', async t => {
+  const { page, region, state } = await fixture(t);
+  await fillSale(region, { barcode: true });
+  await region.getByRole('button', { name: '確認', exact: true }).click();
+  await assertRecorded(region);
+  const requestId = state.posts[0].body.client_request_id;
+  const stored = state.sales.get(requestId).sale;
+  Object.assign(stored, { invoice_status: 'issued', invoice_number: 'AB12345678' });
+
+  const lookup = 'GET /v1/admin/walk-in-sales/isolated-walk-in-order';
+  assert.equal(state.adminRequests.includes(lookup), false);
+  await region.getByRole('button', { name: '更新發票狀態', exact: true }).click();
+  await region.getByText('已開立 · AB12345678', { exact: true }).waitFor();
+  const href = await region.getByRole('link', { name: '查看交易與發票狀態', exact: true }).getAttribute('href');
+  assert.equal(new URL(href, base).searchParams.get('order_id'), 'isolated-walk-in-order');
+  assert.equal(state.adminRequests.filter(entry => entry === lookup).length, 1);
+  assert.equal(state.posts.length, 1);
   await assertClean(page, state);
 });
 

@@ -25,7 +25,7 @@ from ..integrations.invoice import is_mobile_barcode_format
 from ..integrations.payment_service import award_order_purchase_points
 from ..invoice_timing import TAIPEI, pickup_invoice_due
 from ..models import (
-    AdminAudit, FulfillmentMethod, FulfillmentState, FulfillmentStatus, InvoiceBuyerType, InvoiceCarrierType, InvoiceStatus,
+    AdminAudit, FulfillmentMethod, FulfillmentState, FulfillmentStatus, Invoice, InvoiceBuyerType, InvoiceCarrierType, InvoiceStatus,
     MembershipType, Order, OrderFulfillment, OrderItem, OrderKind, PaymentAttempt,
     PaymentMethod, PaymentStatus, Refund, RefundStatus, SalesChannel, TaxType, User, WalkInRequestGuard,
     WalkInSale, new_id,
@@ -144,9 +144,15 @@ class WalkInSaleCreate(BaseModel):
 
 
 async def walk_in_sale_read(session: AsyncSession, order: Order) -> dict:
+    sale_category, invoice_number = (await session.execute(
+        select(WalkInSale.sale_category, Invoice.invoice_number)
+        .select_from(WalkInSale)
+        .outerjoin(Invoice, Invoice.order_id == WalkInSale.order_id)
+        .where(WalkInSale.order_id == order.id),
+    )).one()
     return {
         "order_id": order.id, "order_number": order.order_number,
-        "sale_category": await session.scalar(select(WalkInSale.sale_category).where(WalkInSale.order_id == order.id)),
+        "sale_category": sale_category, "invoice_number": invoice_number,
         "payment_status": order.payment_status.value, "invoice_status": order.invoice_status.value,
         "invoice_handling": order.invoice_handling, "invoice_issue_after": aware(order.invoice_issue_after) if order.invoice_issue_after else None,
         "amount_total": order.amount_total, "tax_amount": order.tax_amount,

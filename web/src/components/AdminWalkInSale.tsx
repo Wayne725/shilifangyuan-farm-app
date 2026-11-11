@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ApiError, apiFetch, formatMoney } from "../lib/api";
 import { invoicePreferencePayload, type InvoicePreference } from "../lib/commerce";
+import { invoiceStatusLabel } from "../lib/labels";
 import { isTaiwanTaxId } from "./InvoicePreferenceFields";
 import { walkInCatalogItems, type WalkInCatalogItem, type WalkInCatalogSource } from "../lib/walkInCatalog";
 import { RecentManualInvoiceRecords } from "./AdminManualInvoiceRecords";
@@ -32,9 +34,24 @@ interface WalkInSale {
   order_id: string;
   order_number: string;
   amount_total: number;
+  invoice_status?: string;
+  invoice_number?: string | null;
   invoice_handling: string;
   invoice_issue_after: string | null;
   sale_category: "meal" | "product" | null;
+}
+
+function walkInInvoiceStatus(sale: WalkInSale): string {
+  if (sale.invoice_handling === "pickup_day" && (!sale.invoice_status || sale.invoice_status === "pending")) {
+    const date = sale.invoice_issue_after
+      ? new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", dateStyle: "medium" }).format(new Date(sale.invoice_issue_after))
+      : "待查核";
+    return `預定開票日：${date}`;
+  }
+  if (sale.invoice_handling === "external") return invoiceStatusLabel("external");
+  if (!sale.invoice_status || sale.invoice_status === "pending") return "已安排系統開票";
+  const label = invoiceStatusLabel(sale.invoice_status);
+  return sale.invoice_number ? `${label} · ${sale.invoice_number}` : label;
 }
 
 function defaultWalkInPreference(): InvoicePreference {
@@ -189,6 +206,13 @@ export function AdminWalkInSale() {
     },
   });
   const sale = result || recovery.data;
+  const invoiceRead = useQuery({
+    queryKey: ["admin-walk-in-invoice-status", requestId, sale?.order_id] as const,
+    enabled: false,
+    retry: false,
+    queryFn: ({ queryKey: [, , orderId], signal }) =>
+      apiFetch<WalkInSale>(`/v1/admin/walk-in-sales/${orderId}`, { signal }),
+  });
   const creation = useMutation({
     mutationFn: (id: string) => {
       const submission = pendingSubmission.current;
@@ -275,7 +299,20 @@ export function AdminWalkInSale() {
       {storageError && <p className="form-error" role="alert">{storageError}</p>}
       {recovery.isPending && requestId && <p role="status">正在查核交易紀錄…</p>}
       {recovery.isError && <div role="alert"><p>{recovery.error.message}</p><button type="button" disabled={creation.isPending || recovery.isFetching} onClick={checkRecovery}>重新查核交易</button></div>}
-      {sale ? <div className="admin-walk-in-result" role="status"><p>已記錄收款 · {sale.order_number} · {formatMoney(sale.amount_total)}</p><p>{sale.invoice_handling === "pickup_day" ? `預定開票日：${sale.invoice_issue_after ? new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", dateStyle: "medium" }).format(new Date(sale.invoice_issue_after)) : "待查核"}` : "已安排系統開票"}</p><div className="form-actions"><a className="button button-quiet" href={`/admin?section=orders&q=${encodeURIComponent(sale.order_number)}`}>查看交易與發票狀態</a><button type="button" className="button button-system" disabled={creation.isPending} onClick={next}>下一筆現場交易</button></div></div>
+      {sale ? <div className="admin-walk-in-result">
+          <div role="status">
+            <p>已記錄收款 · {sale.order_number} · {formatMoney(sale.amount_total)}</p>
+            <p>{walkInInvoiceStatus(invoiceRead.data ?? sale)}</p>
+          </div>
+          {invoiceRead.isError && <p className="form-error" role="alert">{invoiceRead.error.message}</p>}
+          <div className="form-actions">
+            <button type="button" className="button button-quiet" disabled={invoiceRead.isFetching} onClick={() => void invoiceRead.refetch()}>
+              {invoiceRead.isFetching ? "更新中…" : "更新發票狀態"}
+            </button>
+            <Link className="button button-quiet" to="/admin" search={{ section: "orders", q: sale.order_number, order_id: sale.order_id }}>查看交易與發票狀態</Link>
+            <button type="button" className="button button-system" disabled={creation.isPending} onClick={next}>下一筆現場交易</button>
+          </div>
+        </div>
         : requestId && recovery.isSuccess && !storageError && <form onSubmit={event => { event.preventDefault(); if (payload || valid) submit(); }}>
           <fieldset disabled={Boolean(payload) || creation.isPending}>
             <legend>交易內容</legend>
