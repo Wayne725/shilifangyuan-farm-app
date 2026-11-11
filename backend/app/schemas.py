@@ -1569,6 +1569,7 @@ class MealOfferingInput(BaseModel):
 class MealEventCreate(BaseModel):
     booking_policy: Literal["legacy", "workday", "special"] = "workday"
     same_day_preparation_minutes: Optional[int] = Field(default=None, ge=1, le=1439, strict=True)
+    business_only: bool = False
     allow_cash_payment: bool = False
     title: str = Field(min_length=1, max_length=160)
     location: str = Field(min_length=1, max_length=240)
@@ -1671,6 +1672,7 @@ class MealEventSummary(ApiModel):
 class MealEventBookingRead(MealEventSummary):
     booking_policy: Literal["legacy", "workday", "special"] = "legacy"
     same_day_preparation_minutes: Optional[int] = None
+    business_only: bool = False
     new_orders_blocked_reason: Optional[str] = None
     ordering_starts_at: datetime
     ordering_ends_at: datetime

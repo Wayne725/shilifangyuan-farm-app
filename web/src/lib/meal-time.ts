@@ -46,7 +46,7 @@ export function formatMealDate(value?: string | null): string {
   return value ? taipeiDate(value).replaceAll("-", "/") : "日期待公告";
 }
 
-export function validPickupTime(value: string, event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = "standard"): boolean {
+export function validPickupTime(value: string, event: MealEventTiming, now = Date.now(), bookingType?: MealBookingType): boolean {
   return pickupTimeOptions(event, now, bookingType).some((option) => option.value === value);
 }
 
@@ -56,7 +56,8 @@ function usesConfiguredBooking(event: MealEventTiming): boolean {
 
 export function mealBookingDeadline(event: MealEventTiming, bookingType: MealBookingType = "standard"): number {
   const deadline = new Date(event.booking_ends_at || event.ordering_ends_at).getTime();
-  if (usesConfiguredBooking(event) && (bookingType !== "business" || event.same_day_preparation_minutes == null)) return deadline;
+  const priorDayOnly = event.business_only || (bookingType === "business" && event.same_day_preparation_minutes != null);
+  if (usesConfiguredBooking(event) && !priorDayOnly) return deadline;
   const cutoff = new Date(`${shiftMealDate(mealServiceDate(event), -1)}T20:00:00+08:00`).getTime();
   return Math.min(cutoff, deadline);
 }
@@ -69,8 +70,9 @@ export function mealPickupDeadline(event: MealEventTiming, pickupAt: number, boo
     : deadline;
 }
 
-export function mealOrderingOpen(event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = "standard"): boolean {
-  return ["published", "pickup_open"].includes(event.status)
+export function mealOrderingOpen(event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = event.business_only ? "business" : "standard"): boolean {
+  return (!event.business_only || bookingType === "business")
+    && ["published", "pickup_open"].includes(event.status)
     && !event.new_orders_blocked_reason
     && (usesConfiguredBooking(event) || mealServiceDate(event) === shiftMealDate(taipeiDate(now), 1))
     && new Date(event.booking_starts_at || event.ordering_starts_at).getTime() <= now
@@ -84,7 +86,7 @@ export function mealMenuAvailability(offerings: MealEvent["offerings"]) {
   };
 }
 
-export function mealBookingStatus(event: MealEvent | MealCalendarEvent, now = Date.now(), bookingType: MealBookingType = "standard"): string {
+export function mealBookingStatus(event: MealEvent | MealCalendarEvent, now = Date.now(), bookingType: MealBookingType = event.business_only ? "business" : "standard"): string {
   if (event.new_orders_blocked_reason) return "暫停預訂";
   const today = taipeiDate(now);
   const serviceDate = mealServiceDate(event);
@@ -100,8 +102,8 @@ export function mealBookingStatus(event: MealEvent | MealCalendarEvent, now = Da
   return "可預訂";
 }
 
-export function pickupTimeOptions(event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = "standard"): Array<{ value: string; label: string }> {
-  if (event.new_orders_blocked_reason) return [];
+export function pickupTimeOptions(event: MealEventTiming, now = Date.now(), bookingType: MealBookingType = event.business_only ? "business" : "standard"): Array<{ value: string; label: string }> {
+  if (event.new_orders_blocked_reason || (event.business_only && bookingType !== "business")) return [];
   if (!usesConfiguredBooking(event) && mealServiceDate(event) !== shiftMealDate(taipeiDate(now), 1)) return [];
   const start = new Date(event.pickup_starts_at).getTime();
   const endInclusive = event.pickup_slot_ends_at != null;
@@ -131,7 +133,7 @@ export function mealPickupChoices(events: MealCalendarEvent[], date: string, now
       const status = mealBookingStatus(event, now);
       if (date === today && status !== "可預訂") return [];
       return pickupTimeOptions(event, now).map((option) => ({
-        ...option, eventId: event.id, location: event.location, title: event.title, status,
+        ...option, eventId: event.id, location: event.location, title: event.title, status, businessOnly: event.business_only === true,
       }));
     }).sort((left, right) => left.value.localeCompare(right.value) || left.location.localeCompare(right.location) || left.eventId.localeCompare(right.eventId));
 }

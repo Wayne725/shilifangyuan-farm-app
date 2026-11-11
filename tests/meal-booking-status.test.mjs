@@ -295,3 +295,18 @@ test("手動當日訂餐只保留備餐時限前的一般便當時段，會餐�
   assert.deepEqual(mealBookingDates([ordinaryEvent, event], at("11:45:00")), []);
   assert.deepEqual(mealBookingDates([{ ...event, offerings: [{ is_active: true, available_quantity: 0 }] }], at("10:30:00")), []);
 });
+
+test("週六會餐限定場次依實際截止顯示，無一般或當日預訂", () => {
+  const date = "2026-11-07";
+  const event = workdayMeal(date, { booking_policy: "special", business_only: true, booking_ends_at: `${date}T08:00:00+08:00` });
+  const cutoff = Date.parse("2026-11-06T20:00:00+08:00");
+  const before = cutoff - 1;
+  assert.equal(mealOrderingOpen(event, before, "standard"), false);
+  assert.deepEqual(pickupTimeOptions(event, before, "standard"), []);
+  assert.equal(mealOrderingOpen(event, before, "business"), true);
+  assert.equal(mealOrderingOpen(event, cutoff, "business"), false);
+  assert.equal(mealOrderingOpen({ ...event, booking_ends_at: "2026-11-06T18:00:00+08:00" }, before, "business"), false);
+  assert.ok(mealPickupChoices([event], date, before).every(choice => choice.status === "可預訂" && choice.businessOnly));
+  assert.deepEqual(mealBookingDates([event], cutoff), [{ date, status: "已截止" }]);
+  assert.deepEqual(mealBookingDates([event], Date.parse(`${date}T09:00:00+08:00`)), []);
+});

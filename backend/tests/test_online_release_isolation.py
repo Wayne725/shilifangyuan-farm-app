@@ -91,11 +91,12 @@ def test_online_product_exception_rejects_skus_longer_than_eighty_characters():
 def test_core_release_keeps_one_merged_migration_head():
     backend = Path(__file__).resolve().parents[1]
     migrations = ScriptDirectory(str(backend / "alembic"))
-    assert migrations.get_heads() == ["0061_meal_same_day"]
+    assert migrations.get_heads() == ["0062_meal_business_only"]
+    assert migrations.get_revision("0062_meal_business_only").down_revision == "0061_meal_same_day"
     assert migrations.get_revision("0061_meal_same_day").down_revision == "0060_procurement_snapshot"
     assert migrations.get_revision("0060_procurement_snapshot").down_revision == "0059_recovery_quarantine"
     assert migrations.get_revision("0059_recovery_quarantine").down_revision == "0058_admission_fee_snapshot"
-    assert len(list(migrations.walk_revisions())) == 66
+    assert len(list(migrations.walk_revisions())) == 67
     assert migrations.get_revision("0058_admission_fee_snapshot").down_revision == "0057_browser_refresh_recovery"
     assert migrations.get_revision("0056_payment_return_storefront").down_revision == "0055_counter_member_pricing"
     assert migrations.get_revision("0057_browser_refresh_recovery").down_revision == "0056_payment_return_storefront"

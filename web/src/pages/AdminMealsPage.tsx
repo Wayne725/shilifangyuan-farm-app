@@ -27,6 +27,7 @@ interface EventDraft {
   title: string;
   booking_policy: "legacy" | "workday" | "special";
   same_day_preparation_minutes?: string | null;
+  business_only?: boolean;
   allow_cash_payment?: boolean;
   location: string;
   ordering_starts_at: string;
@@ -114,9 +115,15 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
   const [draft, setDraft] = useState<EventDraft>(() => initial ? eventDraft(initial) : emptyEventDraft());
   const [calendarDate, setCalendarDate] = useState<string>();
   const cutoffErrorId = useId();
-  const sameDay = draft.same_day_preparation_minutes != null;
+  const businessOnly = draft.business_only === true;
+  const sameDay = !businessOnly && draft.same_day_preparation_minutes != null;
   const pickupDate = draft.pickup_starts_at.slice(0, 10);
-  const cutoffDateInvalid = sameDay && Boolean(draft.ordering_ends_at) && draft.ordering_ends_at.slice(0, 10) !== pickupDate;
+  const cutoff = eventDraftCutoff(draft);
+  const cutoffDateInvalid = sameDay && Boolean(cutoff) && cutoff.slice(0, 10) !== pickupDate;
+  const openingTooLate = businessOnly && Boolean(cutoff) && draft.ordering_starts_at >= cutoff;
+  const cutoffError = cutoffDateInvalid
+    ? "當日訂餐的截止日期須與取餐開始日期相同。"
+    : openingTooLate ? "會餐的開放預訂時間須早於預訂截止。" : "";
   const calendar = useQuery({
     queryKey: ["admin-meal-calendar", calendarDate],
     queryFn: () => apiFetch<{ service_date: string; is_workday: boolean; previous_workday: string; next_workday: string | null; ordering_starts_at: string; ordering_ends_at: string }>(`/v1/admin/meal-calendar?${calendarDate ? `service_date=${calendarDate}` : ""}`),
@@ -147,6 +154,7 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
     setDraft((current) => ({
       ...(policy === "legacy" && current.same_day_preparation_minutes != null ? disableSameDay(current) : current),
       booking_policy: policy,
+      ...(policy === "legacy" ? { business_only: undefined } : {}),
     }));
     if (policy === "workday" && initial) setCalendarDate(pickupDate);
   };
@@ -163,6 +171,7 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
       setDraft((current) => ({
         ...(current.same_day_preparation_minutes != null ? disableSameDay(current) : current),
         title: "",
+        business_only: undefined,
         offerings: [],
       }));
       onDone();
@@ -177,7 +186,7 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
   }));
   return <form className="social-form admin-master-form" onSubmit={(event) => {
     event.preventDefault();
-    if (!cutoffDateInvalid) create.mutate();
+    if (!cutoffError) create.mutate();
   }}>
     <div className="form-heading"><div><p className="eyebrow">EVENT SCHEDULE / 供餐排程</p><h2>{initial ? "手動編輯便當場次" : "建立便當場次"}</h2></div></div>
     <fieldset>
@@ -185,23 +194,26 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
       <div className="form-actions" role="group" aria-label="供餐規則">
         {(initial && (!initial.booking_policy || initial.booking_policy === "legacy") ? ["legacy", "workday", "special"] as const : ["workday", "special"] as const).map((policy) => <button key={policy} type="button" className={`button ${draft.booking_policy === policy ? "button-primary" : "button-quiet"}`} aria-pressed={draft.booking_policy === policy} onClick={() => changeBookingPolicy(policy)}>{policy === "workday" ? "工作日供餐" : policy === "special" ? "特殊日期加開" : "沿用舊場次規則"}</button>)}
       </div>
-      {draft.booking_policy !== "legacy" && <label className="check-field">
-        <input type="checkbox" checked={sameDay} onChange={(event) => changeSameDay(event.target.checked)} />開放當日訂餐（僅線上付款）
-      </label>}
+      {draft.booking_policy !== "legacy" && <>
+        <label className="check-field"><input type="checkbox" checked={businessOnly} onChange={(event) => setDraft({ ...draft, business_only: event.target.checked })} />僅開放會餐</label>
+        <label className="check-field">
+          <input type="checkbox" checked={sameDay} disabled={businessOnly} onChange={(event) => changeSameDay(event.target.checked)} />開放當日訂餐（僅線上付款）
+        </label>
+      </>}
     </fieldset>
     <div className="field-grid two-columns">
       <label className="field"><span>場次名稱</span><input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
       <label className="field"><span>取餐地點</span><input required value={draft.location} onChange={(event) => setDraft({ ...draft, location: event.target.value })} /></label>
-      <DateTimeField label="開放預訂" value={draft.ordering_starts_at} onChange={(value) => setDraft({ ...draft, ordering_starts_at: value })} />
-      <DateTimeField label="預訂截止" value={draft.ordering_ends_at} onChange={(value) => setDraft({ ...draft, ordering_ends_at: value })} invalid={cutoffDateInvalid} errorId={cutoffErrorId} />
+      <DateTimeField label="開放預訂" value={draft.ordering_starts_at} onChange={(value) => setDraft({ ...draft, ordering_starts_at: value })} invalid={openingTooLate} errorId={cutoffErrorId} />
+      <DateTimeField label="預訂截止" value={cutoff} onChange={(value) => setDraft({ ...draft, ordering_ends_at: value })} max={businessOnly ? priorDayCutoff(pickupDate) : undefined} invalid={cutoffDateInvalid} errorId={cutoffErrorId} />
       <DateTimeField label="取餐開始" value={draft.pickup_starts_at} onChange={changePickupStart} />
       <DateTimeField label="取餐結束" value={draft.pickup_ends_at} onChange={(value) => setDraft({ ...draft, pickup_ends_at: value })} />
       {sameDay && <label className="field"><span>最短備餐時間（分鐘）</span>
         <input type="number" min={1} max={1439} step={1} required value={draft.same_day_preparation_minutes ?? ""} onChange={(event) => setDraft({ ...draft, same_day_preparation_minutes: event.target.value })} />
       </label>}
     </div>
-    {cutoffDateInvalid && <p id={cutoffErrorId} className="form-error" role="alert">當日訂餐的截止日期須與取餐開始日期相同。</p>}
-    {draft.booking_policy === "workday" && calendar.isError && <p className="form-error" role="alert">{calendar.error.message}</p>}{draft.booking_policy === "workday" && calendar.data?.is_workday === false && <p className="form-error" role="alert">這一天不是工作日。{calendar.data.next_workday ? `下一工作日為 ${calendar.data.next_workday}；若需加開，請選「特殊日期加開」。` : "請選其他工作日或特殊加開。"}</p>}{conflictNotice}<div className="meal-choice-grid">{activeMeals.map((meal) => <label key={meal.id} className="meal-choice"><input type="checkbox" checked={selected.has(meal.id)} onChange={() => toggleMeal(meal)} /><span><strong>{meal.name}</strong><small>{formatMoney(meal.price)}</small></span></label>)}</div>{draft.offerings.map((offering) => { const meal = meals.find((item) => item.id === offering.meal_id); return <div className="meal-offering-editor" key={offering.meal_id}><strong>{meal?.name}</strong><label className="field"><span>本場售價</span><input min={0} type="number" value={offering.price} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, price: Number(event.target.value) } : item) })} /></label><label className="field"><span>份數</span><input min={1} type="number" value={offering.capacity} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, capacity: Number(event.target.value) } : item) })} /></label></div>; })}{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || draft.offerings.length === 0 || cutoffDateInvalid || create.isPending || (draft.booking_policy === "workday" && (calendar.isFetching || calendar.isError || calendar.data?.is_workday === false))}><CalendarPlus size={17} />{initial ? "儲存場次修改" : "建立草稿場次"}</button>{onCancel && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}</div></form>;
+    {cutoffError && <p id={cutoffErrorId} className="form-error" role="alert">{cutoffError}</p>}
+    {draft.booking_policy === "workday" && calendar.isError && <p className="form-error" role="alert">{calendar.error.message}</p>}{draft.booking_policy === "workday" && calendar.data?.is_workday === false && <p className="form-error" role="alert">這一天不是工作日。{calendar.data.next_workday ? `下一工作日為 ${calendar.data.next_workday}；若需加開，請選「特殊日期加開」。` : "請選其他工作日或特殊加開。"}</p>}{conflictNotice}<div className="meal-choice-grid">{activeMeals.map((meal) => <label key={meal.id} className="meal-choice"><input type="checkbox" checked={selected.has(meal.id)} onChange={() => toggleMeal(meal)} /><span><strong>{meal.name}</strong><small>{formatMoney(meal.price)}</small></span></label>)}</div>{draft.offerings.map((offering) => { const meal = meals.find((item) => item.id === offering.meal_id); return <div className="meal-offering-editor" key={offering.meal_id}><strong>{meal?.name}</strong><label className="field"><span>本場售價</span><input min={0} type="number" value={offering.price} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, price: Number(event.target.value) } : item) })} /></label><label className="field"><span>份數</span><input min={1} type="number" value={offering.capacity} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, capacity: Number(event.target.value) } : item) })} /></label></div>; })}{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || draft.offerings.length === 0 || Boolean(cutoffError) || create.isPending || (draft.booking_policy === "workday" && (calendar.isFetching || calendar.isError || calendar.data?.is_workday === false))}><CalendarPlus size={17} />{initial ? "儲存場次修改" : "建立草稿場次"}</button>{onCancel && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}</div></form>;
 }
 
 function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal[]; onDone: () => void }) {
@@ -221,7 +233,7 @@ function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal
     onSuccess: (result) => { setRedeemed(`${result.order_number} 已完成取餐`); setCredential(""); onDone(); },
   });
   return <article className="admin-review-card meal-event-admin-card">
-    <div className="review-card-copy"><span className="status-chip">{mealEventStatusLabel(event.status)}</span><h3>{event.title}</h3><p>{event.location} · {formatMealDateTime(event.pickup_starts_at)} 至 {formatMealDateTime(event.pickup_ends_at)}</p><div className="meal-event-offerings">{event.offerings.map((offering) => <span key={offering.id}>{offering.meal_name} {offering.paid_quantity}/{offering.capacity}</span>)}</div></div>
+    <div className="review-card-copy"><span className="status-chip">{mealEventStatusLabel(event.status)}</span>{event.business_only && <span className="status-chip">僅開放會餐</span>}<h3>{event.title}</h3><p>{event.location} · {formatMealDateTime(event.pickup_starts_at)} 至 {formatMealDateTime(event.pickup_ends_at)}</p><div className="meal-event-offerings">{event.offerings.map((offering) => <span key={offering.id}>{offering.meal_name} {offering.paid_quantity}/{offering.capacity}</span>)}</div></div>
     <div className="review-card-actions"><label className="field"><span>處理原因<OptionalMark /></span><input value={reason} onChange={(input) => setReason(input.target.value)} /></label><div><button type="button" disabled={action.isPending} onClick={() => action.mutate("duplicate")}><Copy size={16} />複製至隔日</button>{event.status === "draft" && <button type="button" disabled={action.isPending} onClick={() => action.mutate("publish")}><SealCheck size={16} />發布</button>}{["published", "ordering_closed"].includes(event.status) && <button type="button" disabled={action.isPending} onClick={() => action.mutate("open-pickup")}>開放取餐</button>}{event.status === "pickup_open" && <button type="button" disabled={action.isPending} onClick={() => action.mutate("complete")}>結束場次</button>}{!["cancelled", "completed"].includes(event.status) && <button type="button" disabled={action.isPending} onClick={() => action.mutate("cancel")}>取消場次</button>}<Link to="/meals/$eventId" params={{ eventId: event.id }}>查看前台</Link></div></div>
     {event.status === "pickup_open" && <form className="meal-redeem-panel" onSubmit={(submit) => { submit.preventDefault(); redeem.mutate(); }}><QrCode size={24} weight="light" /><label className="field"><span>掃描 QR token 或輸入六位取餐碼</span><input autoComplete="off" value={credential} onChange={(input) => setCredential(input.target.value.trim())} /></label><button className="button button-system" disabled={credential.length < 6 || redeem.isPending}>確認核銷</button>{redeemed && <p className="form-success">{redeemed}</p>}{redeem.isError && <p className="form-error">{redeem.error.message}</p>}</form>}
     {action.isError && <p className="form-error">{action.error.message}</p>}
@@ -237,6 +249,7 @@ function MealPaymentOptions({ event, onDone }: { event: MealEvent; onDone: () =>
     mutationFn: (allow: boolean) => apiFetch(`/v1/admin/meal-events/${event.id}/payment-options`, { method: "PATCH", body: JSON.stringify({ allow_cash_payment: allow }) }),
     onSuccess: onDone,
   });
+  if (event.business_only) return <p className="meal-payment-options">取餐當日線上付款</p>;
   if (event.same_day_preparation_minutes != null) return <p className="meal-payment-options">當日訂餐 · 線上付款</p>;
   return <div className="meal-payment-options"><label className="check-field"><input type="checkbox" checked={Boolean(event.allow_cash_payment)} disabled={update.isPending || ["cancelled", "completed"].includes(event.status)} onChange={input => update.mutate(input.target.checked)} />開放合作社現場付款</label>{update.isError && <p className="form-error" role="alert">{update.error.message}</p>}</div>;
 }
@@ -273,17 +286,22 @@ function EventPickupOrders({ eventId }: { eventId: string }) {
   </div>;
 }
 
-function DateTimeField({ label, value, onChange, invalid, errorId }: {
-  label: string; value: string; onChange: (value: string) => void; invalid?: boolean; errorId?: string;
+function DateTimeField({ label, value, onChange, invalid, errorId, max }: {
+  label: string; value: string; onChange: (value: string) => void; invalid?: boolean; errorId?: string; max?: string;
 }) {
   return <label className="field"><span>{label}（台灣時間）</span>
-    <input required type="datetime-local" value={value} aria-invalid={invalid || undefined}
+    <input required type="datetime-local" value={value} max={max} aria-invalid={invalid || undefined}
       aria-describedby={invalid ? errorId : undefined} onChange={(event) => onChange(event.target.value)} />
   </label>;
 }
 
 function priorDayCutoff(serviceDate: string): string {
   return serviceDate ? `${shiftMealDate(serviceDate, -1)}T20:00` : "";
+}
+
+function eventDraftCutoff(draft: EventDraft): string {
+  const prior = priorDayCutoff(draft.pickup_starts_at.slice(0, 10));
+  return draft.business_only && prior && draft.ordering_ends_at > prior ? prior : draft.ordering_ends_at;
 }
 
 function disableSameDay(draft: EventDraft): EventDraft {
@@ -306,6 +324,7 @@ function eventDraft(event: MealEvent): EventDraft {
   return {
     title: event.title, booking_policy: event.booking_policy || "legacy", location: event.location,
     same_day_preparation_minutes: event.same_day_preparation_minutes == null ? undefined : String(event.same_day_preparation_minutes),
+    business_only: event.business_only ? true : undefined,
     allow_cash_payment: event.allow_cash_payment,
     ordering_starts_at: taipeiDateTimeInput(event.ordering_starts_at),
     ordering_ends_at: taipeiDateTimeInput(event.ordering_ends_at),
@@ -328,13 +347,13 @@ function shiftEvent(event: MealEvent): EventDraft {
 }
 
 function eventPayload(draft: EventDraft) {
-  const preparation = draft.same_day_preparation_minutes;
+  const preparation = draft.business_only ? null : draft.same_day_preparation_minutes;
   return {
     ...draft,
     same_day_preparation_minutes: preparation == null ? preparation : Number(preparation),
-    ...(preparation != null ? { allow_cash_payment: false } : {}),
+    ...(draft.business_only || preparation != null ? { allow_cash_payment: false } : {}),
     ordering_starts_at: taipeiInputToIso(draft.ordering_starts_at),
-    ordering_ends_at: taipeiInputToIso(draft.ordering_ends_at),
+    ordering_ends_at: taipeiInputToIso(eventDraftCutoff(draft)),
     pickup_starts_at: taipeiInputToIso(draft.pickup_starts_at),
     pickup_ends_at: taipeiInputToIso(draft.pickup_ends_at),
   };

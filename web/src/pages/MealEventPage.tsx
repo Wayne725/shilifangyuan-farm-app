@@ -78,16 +78,17 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const contactPhoneReady = contactPhoneIsValid(contactPhone);
   const submission = useRef<{storageKey: string; id: string} | null>(null);
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
-  const mealBookingType = draft.mealBookingType || "standard";
   const setMealBookingType = (value: "standard" | "business") => setDraft(current => ({ ...current, mealBookingType: value === "business" ? "business" : undefined }));
-  const business = mealBookingType === "business";
   const [standardPaymentMethod, setPaymentMethod] = useState<"online" | "cash_on_pickup">("online");
   const event = useQuery({
     queryKey: ["meal-event", eventId],
     queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
     refetchInterval: 30000,
   });
-  const allowCash = Boolean(event.data?.allow_cash_payment && event.data.same_day_preparation_minutes == null);
+  const businessOnly = event.data?.business_only === true;
+  const mealBookingType = businessOnly ? "business" : draft.mealBookingType || "standard";
+  const business = mealBookingType === "business";
+  const allowCash = Boolean(!businessOnly && event.data?.allow_cash_payment && event.data.same_day_preparation_minutes == null);
   const paymentMethod = business || !allowCash ? "online" : standardPaymentMethod;
   const cashOnPickup = paymentMethod === "cash_on_pickup";
   const [couponInput, setCouponInput] = useState("");
@@ -120,7 +121,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const pickupLocationReady = !locations.isError && Boolean(activeLocations && (!activeLocations.length || selectedPickupLocation));
   const pickupReady = Boolean(event.data && validPickupTime(pickupAt, event.data, now, mealBookingType));
   const orderingOpen = Boolean(event.data && mealOrderingOpen(event.data, now, mealBookingType));
-  const businessClosed = business && event.data?.same_day_preparation_minutes != null
+  const businessClosed = business && event.data && (businessOnly || event.data.same_day_preparation_minutes != null)
     && now >= mealBookingDeadline(event.data, mealBookingType);
   const activeOfferings = event.data?.offerings.filter((item) => item.is_active) || [];
   const items = useMemo(
@@ -255,7 +256,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const tomorrow = shiftMealDate(today, 1);
   const serviceDate = mealServiceDate(mealEvent);
   const dateLabel = serviceDate === today ? "（今天）" : serviceDate === tomorrow ? "（明天）" : "";
-  const deadline = mealEvent.same_day_preparation_minutes == null
+  const deadline = !businessOnly && mealEvent.same_day_preparation_minutes == null
     ? mealEvent.booking_ends_at || mealEvent.ordering_ends_at
     : new Date(pickupReady
       ? mealPickupDeadline(mealEvent, Date.parse(taipeiInputToIso(pickupAt)), mealBookingType)
@@ -340,10 +341,10 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         </div>
       </div>
 
-      <fieldset className="meal-booking-type" disabled={checkout.isPending}>
+      {businessOnly ? <p className="meal-booking-type">會餐（統編報帳）</p> : <fieldset className="meal-booking-type" disabled={checkout.isPending}>
         <legend>訂餐方式</legend>
         {([['standard', '一般餐點'], ['business', '會餐（統編報帳）']] as const).map(([value, label]) => <label key={value} className={mealBookingType === value ? "selected" : ""}><input type="radio" name="meal-booking-type" value={value} checked={mealBookingType === value} onChange={() => { setMealBookingType(value); setEditingInvoice(false); setSubmitted(false); setTouched({}); }} />{label}</label>)}
-      </fieldset>
+      </fieldset>}
 
       <div className="offer-checkout meal-checkout">
         <div>
@@ -488,7 +489,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           <div className="meal-payment-action">
           <dl className="meal-payment-total"><div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div></dl>
           {!user ? (
-            <button className="button button-primary full-width" type="button" disabled={mealEvent.same_day_preparation_minutes != null && (!orderingOpen || !pickupOptions.length)} onClick={openLogin}>登入後預訂</button>
+            <button className="button button-primary full-width" type="button" disabled={(businessOnly || mealEvent.same_day_preparation_minutes != null) && (!orderingOpen || !pickupOptions.length)} onClick={openLogin}>登入後預訂</button>
           ) : (
             <button className="button button-system full-width" type="button" disabled={checkout.isPending || (business ? !orderingOpen || quote.isFetching || quote.isError : !canOrder || !quote.data || quote.isFetching || quote.isError)} onClick={attemptCheckout}>
               {checkout.isPending ? "建立餐點訂單中…" : business ? "送出會餐訂單（取餐當日付款）" : cashOnPickup ? "確認預訂・現場付款" : "預訂並前往線上付款"}

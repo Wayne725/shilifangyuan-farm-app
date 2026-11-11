@@ -1773,11 +1773,17 @@ class MealEvent(Base):
             "AND booking_policy IN ('workday', 'special') AND NOT allow_cash_payment)",
             name="meal_same_day_configuration",
         ),
+        CheckConstraint(
+            "NOT business_only OR (booking_policy IN ('workday', 'special') "
+            "AND same_day_preparation_minutes IS NULL AND NOT allow_cash_payment)",
+            name="meal_business_only_configuration",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     booking_policy: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
     same_day_preparation_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))

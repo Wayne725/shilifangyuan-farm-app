@@ -36,7 +36,7 @@ export function MealDateNavigation({ events, now }: Props) {
         <h4>{location}</h4>
         <div className="meal-pickup-options">{choices.filter((choice) => choice.location === location).map((choice) => {
           const duplicate = choices.filter((other) => other.location === location && other.value === choice.value).length > 1;
-          const name = `${choice.label}${duplicate ? ` · ${choice.title}` : ""}`;
+          const name = `${choice.label}${duplicate ? ` · ${choice.title}` : ""}${choice.businessOnly ? " · 會餐" : ""}`;
           return choice.status === "可預訂"
             ? <Link key={`${choice.eventId}-${choice.value}`} to="/meals/$eventId" params={{ eventId: choice.eventId }} search={{ pickup_at: choice.value }} aria-label={`${location} ${name} 取餐`}>{name}</Link>
             : <button key={`${choice.eventId}-${choice.value}`} type="button" disabled aria-label={`${location} ${name}，${choice.status}`}>{name}<small>{choice.status}</small></button>;

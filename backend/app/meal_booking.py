@@ -31,7 +31,7 @@ def meal_period(event: MealEvent) -> str:
 def meal_booking_window(event: MealEvent, *, business: bool = False) -> tuple[datetime, datetime]:
     if event.booking_policy in {"workday", "special"}:
         end = _aware(event.ordering_ends_at)
-        if business and event.same_day_preparation_minutes is not None:
+        if business and (event.same_day_preparation_minutes is not None or event.business_only):
             prior_day_cutoff = datetime.combine(
                 meal_service_date(event) - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI,
             )

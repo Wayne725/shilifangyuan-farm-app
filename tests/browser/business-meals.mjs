@@ -21,7 +21,7 @@ function order(overrides = {}) {
     items: [{ offering_id: meal.id, meal_id: meal.meal_id, meal_name: meal.meal_name, product_name: meal.meal_name, quantity: 2, unit_price: 100, unit_label: '份', subtotal: 200, tax_type: 'taxable', selections: [] }], ...overrides };
 }
 
-async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = order(), role = 'customer' } = {}) {
+async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = order(), role = 'customer', mealEvent = event } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
@@ -35,8 +35,8 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, support_phone: '071234567', closed_message: '' } });
     if (path === '/v1/notifications' || path === '/v1/pickup-locations') return route.fulfill({ json: [] });
     if (path === '/v1/products' || path === '/v1/group-campaigns') return route.fulfill({ json: [] });
-    if (path === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture([event]) });
-    if (path === `/v1/meal-events/${event.id}`) return route.fulfill({ json: event });
+    if (path === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture([mealEvent]) });
+    if (path === `/v1/meal-events/${event.id}`) return route.fulfill({ json: mealEvent });
     if (path === '/v1/admin/order-summary' || path === '/v1/admin/order-summary/print-preview') {
       const filters = Object.fromEntries(url.searchParams);
       const summary = { order_count: 1, quantity: 2, product_count: 1, paid_order_count: 0, pending_order_count: 1, inactive_order_count: 0, pending_business_order_count: 1 };
@@ -94,6 +94,36 @@ test('390px會餐切換保留一般偏好，統編必填且錯誤延後顯示', 
   assert.equal(await page.getByRole('combobox', { name: '開票時機', exact: true }).count(), 0);
   assert.equal(await page.getByText('發票於取餐當日開立', { exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.unknown, []);
+});
+
+test('僅開放會餐的場次自動使用統編報帳，普通買家可送出會餐預訂', async t => {
+  const { page, state } = await fixture(t, { mealEvent: { ...event, business_only: true } });
+  await page.goto(`${base}/shop`);
+  await page.getByRole('link', { name: '隔離取餐點 11:00 · 會餐 取餐', exact: true }).click();
+  await page.getByText('會餐（統編報帳）', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('radio', { name: '一般餐點', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('radio', { name: '合作社現場付款', exact: true }).count(), 0);
+  const taxId = page.getByLabel('統一編號', { exact: true });
+  assert.equal(await taxId.getAttribute('required'), '');
+  await page.getByRole('button', { name: '增加合成便當', exact: true }).click({ clickCount: 2 });
+  await page.getByRole('combobox', { name: '合成便當 主食', exact: true }).selectOption('rice-0');
+  const submit = page.getByRole('button', { name: '送出會餐訂單（取餐當日付款）', exact: true });
+  await submit.click();
+  await page.getByText('請填寫有效的 8 碼統一編號', { exact: true }).waitFor();
+  assert.deepEqual(state.posts, []);
+  await taxId.fill('15989995');
+  const quoted = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/quote'));
+  await page.getByLabel('公司名稱', { exact: true }).fill('隔離單位');
+  await quoted;
+  await submit.click();
+  await page.getByRole('heading', { name: '會餐預訂成功', exact: true }).waitFor();
+  assert.equal(state.posts.length, 1);
+  assert.equal(state.posts[0].body.meal_booking_type, 'business');
+  assert.equal(state.posts[0].body.invoice_handling, 'pickup_day');
+  assert.equal(state.posts[0].body.invoice_buyer_tax_id, '15989995');
+  assert.equal(state.posts[0].body.payment_method, 'online');
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
 });

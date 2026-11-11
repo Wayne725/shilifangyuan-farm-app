@@ -17,7 +17,7 @@ function event(id, date, overrides = {}) {
     pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00`,
     offerings: [{ id: 'isolated-offering', meal_id: meal.id, meal_name: meal.name, description: '', price: 120, capacity: 20, reserved_quantity: 0, paid_quantity: 0, available_quantity: 20, position: 0, is_active: true, option_groups: [] }], ...overrides };
 }
-async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [] } = {}) {
+async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [], adminEvents = [] } = {}) {
   const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
@@ -37,14 +37,15 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
       if (url.pathname === '/v1/pickup-locations') return route.fulfill({ json: [] });
       if (url.pathname === '/v1/admin/meals') return route.fulfill({ json: [meal] });
       if (url.pathname === '/v1/admin/meal-schedules') return route.fulfill({ json: schedules });
-      if (['/v1/products', '/v1/group-campaigns', '/v1/admin/meal-events'].includes(url.pathname)) return route.fulfill({ json: [] });
+      if (url.pathname === '/v1/admin/meal-events') return route.fulfill({ json: adminEvents });
+      if (['/v1/products', '/v1/group-campaigns'].includes(url.pathname)) return route.fulfill({ json: [] });
       if (url.pathname === '/v1/admin/meal-calendar') {
         const date = url.searchParams.get('service_date') || '2026-11-09';
         return route.fulfill({ json: { service_date: date, is_workday: date === '2026-11-09', previous_workday: '2026-11-06', next_workday: date === '2026-11-09' ? '2026-11-10' : '2026-11-09', ordering_starts_at: '2026-11-05T16:00:00Z', ordering_ends_at: date === '2026-11-09' ? '2026-11-08T12:00:00Z' : '2026-11-06T12:00:00Z' } });
       }
       if (url.pathname === '/v1/admin/meal-schedules/calendar-status') return route.fulfill({ json: { available: true, from_date: '2025-01-01', to_date: '2027-12-31', message: '', source_url: 'https://data.gov.tw/dataset/14718' } });
     }
-    if (method === 'POST' && url.pathname === '/v1/admin/meal-events') {
+    if (method === 'POST' && (url.pathname === '/v1/admin/meal-events' || /^\/v1\/admin\/meal-events\/[^/]+\/duplicate$/.test(url.pathname))) {
       created.push(request.postDataJSON()); return route.fulfill({ status: 201, json: { id: 'created-special' } });
     }
     unknown.push(`${method} ${url.pathname}`);
@@ -166,6 +167,14 @@ test('管理員須明確填入當日截止與備餐時間才建立單場設定',
   assert.equal(created.length, 0);
 
   await cutoff.fill('2026-11-07T11:45');
+  const businessOnly = form.getByRole('checkbox', { name: '僅開放會餐', exact: true });
+  await businessOnly.check();
+  assert.equal(await sameDay.isDisabled(), true);
+  assert.equal(await preparation.count(), 0);
+  assert.equal(await cutoff.inputValue(), '2026-11-06T20:00');
+  await businessOnly.uncheck();
+  assert.equal(await preparation.inputValue(), '60');
+  assert.equal(await cutoff.inputValue(), '2026-11-07T11:45');
   await submit.click();
   await page.waitForFunction(() => [...document.querySelectorAll('label')].find(e => e.textContent === '場次名稱')?.querySelector('input')?.value === '');
   assert.equal(created.length, 1);
@@ -211,6 +220,47 @@ test('當日一般便當只顯示來得及備餐的時段，切到會餐後保�
   assert.match(await page.locator('.meal-booking-deadline').innerText(), /20:00/);
   await page.getByRole('radio', { name: '一般餐點', exact: true }).check();
   assert.equal(await pickupTime.inputValue(), `${date}T12:00`);
+  await noOverflow(page);
+  assert.deepEqual(unknown, []);
+});
+
+test('週六場次可手動只開放會餐，場次卡與複製草稿保留會餐規則', { timeout: 30000 }, async t => {
+  const date = '2026-11-07';
+  const existing = event('saturday-business', date, {
+    title: '隔離週六會餐', booking_policy: 'special', status: 'draft', business_only: true, can_edit: true,
+    ordering_ends_at: '2026-11-06T20:00:00+08:00',
+  });
+  const { page, unknown, created } = await fixture(t, 390, { admin: true, adminEvents: [existing] });
+  await page.goto(`${base}/admin/meals?tab=events`);
+  const form = page.locator('form').filter({ has: page.getByRole('heading', { name: '建立便當場次', exact: true }) });
+  const businessOnly = form.getByRole('checkbox', { name: '僅開放會餐', exact: true });
+  await businessOnly.waitFor();
+  assert.equal(await businessOnly.isChecked(), false);
+  await form.getByRole('button', { name: '特殊日期加開', exact: true }).click();
+  await form.getByLabel('場次名稱', { exact: true }).fill('週六僅會餐');
+  await form.getByLabel('取餐地點', { exact: true }).fill('隔離新取餐點');
+  await form.getByLabel('工作日測試便當').check();
+  await form.getByLabel('取餐開始（台灣時間）', { exact: true }).fill(`${date}T11:00`);
+  await businessOnly.check();
+  assert.equal(await form.getByLabel('預訂截止（台灣時間）', { exact: true }).inputValue(), '2026-11-06T20:00');
+  await form.getByRole('button', { name: '建立草稿場次' }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('label')].find(e => e.textContent === '場次名稱')?.querySelector('input')?.value === '');
+  assert.equal(created[0].business_only, true);
+  assert.equal(created[0].allow_cash_payment, false);
+  assert.equal(created[0].same_day_preparation_minutes, null);
+  assert.equal(created[0].ordering_ends_at, '2026-11-06T12:00:00.000Z');
+
+  const card = page.locator('article').filter({ has: page.getByRole('heading', { name: existing.title, exact: true }) });
+  await card.getByText('僅開放會餐', { exact: true }).waitFor();
+  assert.equal(await card.getByRole('checkbox', { name: '開放合作社現場付款' }).count(), 0);
+  const duplicated = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/duplicate'));
+  await card.getByRole('button', { name: '複製至隔日' }).click();
+  await duplicated;
+  assert.equal(created[1].business_only, true);
+  assert.equal(created[1].allow_cash_payment, false);
+  await card.getByRole('button', { name: '手動編輯場次' }).click();
+  const editForm = card.locator('form').filter({ has: page.getByRole('heading', { name: '手動編輯便當場次', exact: true }) });
+  assert.equal(await editForm.getByRole('checkbox', { name: '僅開放會餐' }).isChecked(), true);
   await noOverflow(page);
   assert.deepEqual(unknown, []);
 });
