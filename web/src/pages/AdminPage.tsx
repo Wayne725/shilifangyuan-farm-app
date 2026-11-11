@@ -2,9 +2,9 @@ import { AdminWalkInSale } from "../components/AdminWalkInSale";
 import { AdminInvoiceIssue } from "../components/AdminInvoiceIssue";
 import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
 import { Buildings, Package, Truck } from "@phosphor-icons/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { onlineManager, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminCashPayment } from "../components/AdminCashPayment";
@@ -101,6 +101,9 @@ export function AdminPage() {
   </>;
 }
 
+const subscribeOrderConnection = (listener: () => void) => onlineManager.subscribe(listener);
+const hasOrderConnection = () => onlineManager.isOnline();
+
 function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
   adminId: string;
   q?: string;
@@ -109,6 +112,7 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
   orderAccess: ReturnType<typeof useAdminOrderAccess>;
 }) {
   const queryClient = useQueryClient();
+  const isOnline = useSyncExternalStore(subscribeOrderConnection, hasOrderConnection);
   const [orderSearchInput, setOrderSearchInput] = useState(q || "");
   const [orderSearch, setOrderSearch] = useState(q || "");
   const [orderId, setOrderId] = useState(initialOrderId);
@@ -136,6 +140,7 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
       return { ...result, items, total: items.length };
     },
     enabled: !orderAccess.denied,
+    staleTime: 0,
     retry: (failureCount) => !orderAccess.isDenied() && failureCount < 2,
   });
   useEffect(() => {
@@ -150,11 +155,13 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
   const createLogistics = useMutation({
+    networkMode: "always",
     mutationFn: (orderId: string) =>
       orderAccess.request(`/v1/admin/orders/${orderId}/logistics/create`, { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
   const advanceShipment = useMutation({
+    networkMode: "always",
     mutationFn: ({ orderId, status }: { orderId: string; status: string }) =>
       orderAccess.request(`/v1/admin/orders/${orderId}/logistics/sandbox-status`, {
         method: "POST",
@@ -219,6 +226,8 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
           <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} invoiceTax={order.invoice_tax} invoiceStatus={order.invoice_status} />
           <AdminOrderAction
             order={order}
+            logisticsReady={isOnline && orderQuery.isSuccess && orderQuery.isFetchedAfterMount
+              && orderQuery.fetchStatus === "idle"}
             busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending}
             onFulfillment={(status) => updateFulfillment.mutate({ orderId: order.id, status })}
             onCreateLogistics={() => createLogistics.mutate(order.id)}
@@ -267,12 +276,14 @@ function displayedFulfillmentStatus(order: Order) {
 
 function AdminOrderAction({
   order,
+  logisticsReady,
   busy,
   onFulfillment,
   onCreateLogistics,
   onShipment,
 }: {
   order: Order;
+  logisticsReady: boolean;
   busy: boolean;
   onFulfillment: (status: string) => void;
   onCreateLogistics: () => void;
@@ -300,14 +311,15 @@ function AdminOrderAction({
     );
   }
   let fulfillmentControl: ReactNode = null;
+  const logisticsActions = logisticsReady && Array.isArray(order.available_actions) ? order.available_actions : [];
   if (order.fulfillment_status === "pending_confirmation") {
     fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("preparing")}>進入備貨</button>;
   } else if (order.fulfillment_method === "ecpay_logistics") {
-    if (order.shipment?.status === "ready_to_create") {
+    if (logisticsActions.includes("admin_create_logistics")) {
       fulfillmentControl = <button type="button" disabled={busy} onClick={onCreateLogistics}>建立綠界物流單</button>;
-    } else if (order.shipment?.status === "created") {
+    } else if (logisticsActions.includes("admin_simulate_shipment_in_transit")) {
       fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("in_transit")}>模擬配送中</button>;
-    } else if (order.shipment?.status === "in_transit") {
+    } else if (logisticsActions.includes("admin_simulate_shipment_delivered")) {
       fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("delivered")}>模擬已送達</button>;
     }
   } else if (order.fulfillment_status === "preparing") {

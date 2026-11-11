@@ -53,6 +53,8 @@ from ..schemas import (
     SupplierUpdate,
 )
 
+from .logistics import admin_logistics_action
+
 
 operations_router = APIRouter(tags=["operations"])
 
@@ -208,8 +210,11 @@ def admin_order_read(order: Order, settings: Settings, invoice_followup_reason: 
             phone_status = "available"
         except IntegrationError:
             phone_status = "unavailable"
+    data = order_read(order, True)
+    if logistics_action := admin_logistics_action(order, settings):
+        data.available_actions.append(logistics_action)
     return AdminOrderRead(
-        **order_read(order, True).model_dump(), customer_name=order.user.display_name if order.user else order.customer_name_snapshot or "現場客人",
+        **data.model_dump(), customer_name=order.user.display_name if order.user else order.customer_name_snapshot or "現場客人",
         contact_phone=phone, contact_phone_status=phone_status,
         invoice_followup_reason=invoice_followup_reason,
     )

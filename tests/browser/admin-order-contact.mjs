@@ -17,12 +17,12 @@ const order = {
   items: [{ id: 'item', product_name: '隔離白米', quantity: 1, unit_label: '袋', unit_price: 120, subtotal: 120, tax_type: 'taxable' }],
 };
 
-async function fixture(t, { width = 1280, channel = 'regular', bookingType = 'standard', lateResponse = false, contactEmail = order.contact_email } = {}) {
+async function fixture(t, { width = 1280, channel = 'regular', bookingType = 'standard', lateResponse = false, contactEmail = order.contact_email, orderUpdates = {} } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
-  const state = { status: 200, reads: [], unknown: [], errors: [], consoleErrors: [], apiRequests: [], release: null };
-  const payload = { items: [{ ...order, sales_channel: channel, meal_booking_type: bookingType, contact_email: contactEmail }], total: 1, limit: 12, offset: 0 };
+  const state = { status: 200, reads: [], unknown: [], errors: [], consoleErrors: [], apiRequests: [], release: null, deferNextRead: false, logisticsWrites: [] };
+  const payload = { items: [{ ...order, sales_channel: channel, meal_booking_type: bookingType, contact_email: contactEmail, ...orderUpdates }], total: 1, limit: 12, offset: 0 };
   if (lateResponse) await context.addInitScript(() => {
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -51,10 +51,27 @@ async function fixture(t, { width = 1280, channel = 'regular', bookingType = 'st
     if (path === '/v1/notifications') return route.fulfill({ json: [] });
     if (path === '/v1/admin/order-search') {
       state.reads.push(url.search);
+      if (state.deferNextRead) {
+        state.deferNextRead = false;
+        return new Promise(resolve => {
+          state.release = async () => {
+            await route.fulfill({ json: payload });
+            resolve();
+          };
+        });
+      }
       if (url.searchParams.get('q') === 'slow') return new Promise(resolve => {
         state.release = async () => { await route.fulfill({ json: payload }); resolve(); };
       });
       return route.fulfill(state.status === 200 ? { json: payload } : { status: state.status, json: { detail: '隔離讀取失敗' } });
+    }
+    if (request.method() === 'POST' && [
+      `/v1/admin/orders/${order.id}/logistics/create`,
+      `/v1/admin/orders/${order.id}/logistics/sandbox-status`,
+    ].includes(path)) {
+      state.logisticsWrites.push({ path, body: request.postDataJSON() });
+      payload.items[0].available_actions = [];
+      return route.fulfill({ json: {} });
     }
     state.unknown.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: '未定義的隔離 API' } });
@@ -71,7 +88,7 @@ async function fixture(t, { width = 1280, channel = 'regular', bookingType = 'st
       unknown: state.unknown, apiRequests: state.apiRequests, body: (await page.locator('body').innerText()).slice(0, 6000) }));
     throw error;
   }
-  return { page, state };
+  return { page, state, payload };
 }
 
 async function focusStaleQuery(page) {
@@ -169,4 +186,90 @@ test('暫時 503 不永久封鎖管理權限，恢復後可重新搜尋', async 
   await page.getByRole('link', { name: order.contact_phone, exact: true }).waitFor();
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
+});
+
+
+const logisticsLabels = ["建立綠界物流單", "模擬配送中", "模擬已送達"];
+const shippingOrder = (status, actions) => ({
+  fulfillment_method: "ecpay_logistics",
+  fulfillment_status: "preparing",
+  shipment: { id: "isolated-shipment", status, channel: "home_delivery", shipping_fee: 100 },
+  available_actions: actions,
+});
+
+test("依後端提供的動作建立物流單或模擬貨態，仍保留歷史", async t => {
+  const { page, state, payload } = await fixture(t, {
+    width: 390, orderUpdates: shippingOrder("ready_to_create", ["admin_create_logistics"]),
+  });
+  for (const [index, status, action, expectedStatus] of [
+    [0, "ready_to_create", "admin_create_logistics", undefined],
+    [1, "created", "admin_simulate_shipment_in_transit", "in_transit"],
+    [2, "in_transit", "admin_simulate_shipment_delivered", "delivered"],
+  ]) {
+    if (index > 0) {
+      Object.assign(payload.items[0], shippingOrder(status, [action]));
+      await page.getByRole("searchbox", { name: "搜尋訂單", exact: true }).fill(status);
+      await page.getByRole("button", { name: "搜尋", exact: true }).click();
+    }
+    const control = page.getByRole("button", { name: logisticsLabels[index], exact: true });
+    await control.waitFor();
+    assert.equal(await page.getByText(/宅配到府 · /).count(), 1);
+    for (const label of logisticsLabels.filter((_, position) => position !== index)) {
+      assert.equal(await page.getByRole("button", { name: label, exact: true }).count(), 0);
+    }
+    await control.click();
+    await control.waitFor({ state: "hidden" });
+    assert.equal(state.logisticsWrites.length, index + 1);
+    assert.equal(state.logisticsWrites.at(-1).path.endsWith(expectedStatus ? "/sandbox-status" : "/create"), true);
+    assert.equal(state.logisticsWrites.at(-1).body?.status, expectedStatus);
+  }
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.unknown, []);
+});
+
+test("離線切回快取訂單、舊版 API 或失權時都不提供物流操作", async t => {
+  const { page, state, payload } = await fixture(t, {
+    orderUpdates: shippingOrder("ready_to_create", ["admin_create_logistics"]),
+  });
+  const create = page.getByRole("button", { name: logisticsLabels[0], exact: true });
+  await create.waitFor();
+  const search = page.getByRole("searchbox", { name: "搜尋訂單", exact: true });
+  await search.fill("another");
+  const another = page.waitForResponse(response => new URL(response.url()).searchParams.get("q") === "another");
+  await page.getByRole("button", { name: "搜尋", exact: true }).click();
+  await another;
+  await create.waitFor();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+  await create.waitFor({ state: "hidden" });
+  const readsBeforeOfflineSearch = state.reads.length;
+  await page.getByRole("button", { name: "清除查詢", exact: true }).click();
+  await page.getByText(/宅配到府 · /).waitFor();
+  assert.equal(await create.count(), 0);
+  assert.equal(state.reads.length, readsBeforeOfflineSearch);
+
+  payload.items[0].available_actions = ["other_action"];
+  state.deferNextRead = true;
+  const cachedRead = page.waitForRequest(request => new URL(request.url()).pathname === "/v1/admin/order-search"
+    && new URL(request.url()).searchParams.get("q") === "");
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await cachedRead;
+  assert.equal(await page.getByText(/宅配到府 · /).count(), 1);
+  assert.equal(await create.count(), 0);
+  await state.release();
+  await page.getByText(/宅配到府 · /).waitFor();
+  for (const label of logisticsLabels) {
+    assert.equal(await page.getByRole("button", { name: label, exact: true }).count(), 0);
+  }
+
+  Object.assign(payload.items[0], shippingOrder("created", ["admin_simulate_shipment_in_transit"]));
+  await search.fill("allowed");
+  await page.getByRole("button", { name: "搜尋", exact: true }).click();
+  const simulate = page.getByRole("button", { name: logisticsLabels[1], exact: true });
+  await simulate.waitFor();
+  state.status = 403;
+  await focusStaleQuery(page);
+  await assertNoPrivateContact(page, state);
+  await simulate.waitFor({ state: "hidden" });
+  assert.deepEqual(state.logisticsWrites, []);
 });
