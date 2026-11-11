@@ -423,7 +423,13 @@ class FanyuInvoiceAdapter:
         barcode = response.get("barcode")
         if isinstance(barcode, str) and barcode.startswith("*") and barcode.endswith("*"):
             barcode = barcode[1:-1]  # Strip the optional Code 39 start and stop symbols.
-        if not isinstance(barcode, str) or not PRINT_BARCODE_PATTERN.fullmatch(barcode) or barcode[5:15] != invoice_number:
+        period_end_month = date.month + date.month % 2
+        barcode_prefix = f"{date.year - 1911:03d}{period_end_month:02d}{invoice_number}"
+        if (
+            not isinstance(barcode, str)
+            or not PRINT_BARCODE_PATTERN.fullmatch(barcode)
+            or not barcode.startswith(barcode_prefix)
+        ):
             raise IntegrationResponseError("汎宇列印資料缺少相符的一維條碼")
         left, right = response.get("leftQrcode"), response.get("rightQrcode")
         if not all(

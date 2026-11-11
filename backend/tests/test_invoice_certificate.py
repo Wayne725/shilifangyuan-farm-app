@@ -175,6 +175,8 @@ async def test_refuses_local_invoice_mismatch_before_contacting_provider(databas
     ("queryInvoice", {"randomNumber": "9876"}, InvoiceApplicationError),
     ("getInvoicePrintCode", {"invNo": OTHER_NUMBER}, IntegrationResponseError),
     ("getInvoicePrintCode", {"barcode": BARCODE.replace(NUMBER, OTHER_NUMBER)}, IntegrationResponseError),
+    ("getInvoicePrintCode", {"barcode": "114" + BARCODE[3:]}, IntegrationResponseError),
+    ("getInvoicePrintCode", {"barcode": BARCODE[:3] + "08" + BARCODE[5:]}, IntegrationResponseError),
     ("getInvoicePrintCode", {"leftQrcode": QR_LEFT.replace(NUMBER, OTHER_NUMBER)}, IntegrationResponseError),
     ("getInvoicePrintCode", {"leftQrcode": QR_LEFT.replace(SELLER, "00000000")}, IntegrationResponseError),
     ("getInvoicePrintCode", {"rightQrcode": ""}, IntegrationResponseError),
