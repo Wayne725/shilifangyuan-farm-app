@@ -14,9 +14,11 @@ from pydantic import ValidationError
 from .config import get_settings
 from .integrations.common import IntegrationError
 from .integrations.fanyu_invoice import FanyuInvoiceAdapter
+from .integrations.feie import FeieClient, FeieError
 from .integrations.invoice_service import invoice_adapter_from_settings
 from .integrations.payment_service import raygate_payment_adapter_from_settings
 from .recovery_invoice_proof import FanyuCaptureRequest, capture_fanyu_proof
+from .recovery_print_proof import FeieCaptureRequest, capture_feie_proof
 from .recovery_operator import _write_private_json
 from .recovery_payment_proof import MAX_PROOF_BYTES, RayGateCaptureRequest, capture_raygate_proof
 
@@ -33,7 +35,7 @@ def _load_signer(path: Path) -> Ed25519PrivateKey:
 
 
 async def run(
-    request_path: Path, signer_path: Path, output: Path, *, provider: Literal["raygate", "fanyu"] = "raygate",
+    request_path: Path, signer_path: Path, output: Path, *, provider: Literal["raygate", "fanyu", "feie"] = "raygate",
 ) -> None:
     settings = get_settings()
     if not settings.recovery_mode:
@@ -48,6 +50,8 @@ async def run(
         if not isinstance(adapter, FanyuInvoiceAdapter):
             raise ValueError("請設定原汎宇發票帳戶")
         proof = await capture_fanyu_proof(FanyuCaptureRequest.model_validate_json(raw), adapter, signer)
+    elif provider == "feie":
+        proof = await capture_feie_proof(FeieCaptureRequest.model_validate_json(raw), FeieClient(settings), signer)
     else:
         proof = await capture_raygate_proof(
             RayGateCaptureRequest.model_validate_json(raw), raygate_payment_adapter_from_settings(settings), signer,
@@ -60,11 +64,11 @@ def main() -> None:
     parser.add_argument("request", type=Path)
     parser.add_argument("signer", type=Path)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--provider", choices=("raygate", "fanyu"), default="raygate")
+    parser.add_argument("--provider", choices=("raygate", "fanyu", "feie"), default="raygate")
     args = parser.parse_args()
     try:
         asyncio.run(run(args.request, args.signer, args.output, provider=args.provider))
-    except (IntegrationError, OSError, TypeError, ValidationError, ValueError):
+    except (FeieError, IntegrationError, OSError, TypeError, ValidationError, ValueError):
         parser.exit(1, "無法擷取對帳證明，請核對查單權限、擷取需求與簽署設定。\n")
     print("對帳證明已儲存")
 

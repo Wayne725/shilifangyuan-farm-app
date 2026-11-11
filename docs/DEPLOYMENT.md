@@ -277,13 +277,19 @@ Repository Settings → Secrets and variables → Actions 新增：
 1. 在獨立的查單環境設定原雷門商戶與 `RECOVERY_MODE=true`。簽署私鑰僅留在此環境，使用擷取者擁有、權限 0600 的 Ed25519 PEM。隔離還原環境只設定固定的 `RECOVERY_PROOF_SIGNER_PUBLIC_KEY`，填入 32 位元組原始公開金鑰的 64 字元小寫十六進位，以及同一組雷門網址、店別、商戶與終端識別。補登不需要雷門 AES 金鑰或供應商網路。
 2. 在切點建立後準備私有擷取需求，填寫 `cutover_id`、`checkpoint_sha256`、`attempt_id`、`merchant_trade_no`。確認既有退款時另填 `refund_outbox_id`。在查單環境執行 `python -m app.recovery_capture <需求檔> <私鑰檔> <新證明檔>`。程式透過雷門查單、驗證店別與唯一交易後，簽署結果與切點。簽章證明指定的擷取者透過查單收到這筆結果。證明檔維持私有。
 3. 封存隔離清單後，在無供應商網路的還原環境執行 `python -m app.recovery_operator raygate-proof <證明檔>`，以有效隔離管理員憑證補登。適用於有原始付款嘗試的線上一般商品訂單。付款須有完整原庫存保留並在原期限內完成。退款須有原退款與背景工作。缺單、逾期、金額不同或交易結果矛盾時維持隔離。
-4. 已補登結果可沿用 `resolve` 結案。由補登產生的發票或調整工作會有各自的隔離項目。補登不重送金流請求或 Email，站內通知與帳務依原流程更新。飛鵝出單需另行取得可驗證的原始對帳證據。
+4. 已補登結果可沿用 `resolve` 結案。由補登產生的發票或調整工作會有各自的隔離項目。補登不重送金流請求或 Email，站內通知與帳務依原流程更新。飛鵝列印依下列工作編號查證。
 
 ### 補登汎宇原開票與作廢工作
 
 1. 在獨立汎宇查詢環境使用原賣方帳戶和 `RECOVERY_MODE=true`。沿用已固定的對帳簽署公鑰與私鑰分離方式。準備私有擷取需求，填寫 `cutover_id`、`checkpoint_sha256`、`order_id`、`invoice_id`、`outbox_id`、`relate_number`、`buyer_type` 及 `operation`（`issue` 或 `void`）。
 2. 執行 `python -m app.recovery_capture --provider fanyu <需求檔> <私鑰檔> <新證明檔>`。程式先查銷貨單的票號及開立時間，再依原票號與日期查明細，比對賣方、狀態及完整稅額。證明檔只保留對帳所需欄位。查不到原票、資料不全或兩次查詢矛盾時維持隔離。
 3. 在無供應商網路的還原環境使用同一組汎宇公開帳戶識別，執行 `python -m app.recovery_operator fanyu-proof <證明檔>`。程式只更新既有發票及對應隔離工作。作廢須有相符的原發票及全額退款。汎宇查回的原票日期會保留，作廢時間以原紀錄為準。已補登工作可沿用 `resolve` 結案。
+
+### 補登飛鵝確認已列印的工作
+
+1. 在隔離還原環境執行 `python -m app.recovery_operator feie-request <切點UUID> <工作UUID> <私有需求檔>`。需求會綁定既有正式工作、雲端工作編號、原設備與列印來源。支援原訂單的首次出單及單一彙總頁。缺工作編號、送印紀錄或來源的工作保留隔離。
+2. 在獨立查詢環境使用原飛鵝帳戶、設備與區域設定，以及 `RECOVERY_MODE=true`。以擷取者私鑰執行 `python -m app.recovery_capture --provider feie <需求檔> <私鑰檔> <新證明檔>`。程式只查 `queryOrderState`。飛鵝確認已列印才會簽發證明。待印、查無或無法確認的工作保留隔離。
+3. 在無供應商網路的還原環境執行 `python -m app.recovery_operator feie-proof <證明檔>`。程式驗證簽章並補登原工作的已列印狀態，記錄查詢確認時間。已補登工作可沿用 `resolve` 結案。
 
 程式回復時可保留新增欄位，不需為回復程式而降級正式資料庫。
 

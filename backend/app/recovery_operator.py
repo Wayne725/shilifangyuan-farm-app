@@ -19,6 +19,7 @@ from .config import get_settings
 from .database import SessionLocal
 from .recovery_invoice_proof import SignedFanyuEvidence, apply_fanyu_proof
 from .recovery_payment_proof import MAX_PROOF_BYTES, SignedRayGateEvidence, apply_raygate_proof
+from .recovery_print_proof import SignedFeieEvidence, apply_feie_proof, prepare_feie_request
 from .models import RecoveryCutover, RecoveryHold, User
 from .recovery_quarantine import (
     Digest, Manifest, QuarantineInput, Resolution, _require_admin, arm_cutover, begin_cutover,
@@ -89,13 +90,19 @@ async def run(args: argparse.Namespace, token: str) -> dict:
             return {"items": await export_inventory(session, actor, args.cutover_id, args.output)}
         if args.action == "status":
             return {"items": await export_status(session, actor, args.cutover_id, args.output)}
-        if args.action in {"raygate-proof", "fanyu-proof"}:
+        if args.action == "feie-request":
+            request = await prepare_feie_request(session, actor, args.cutover_id, args.job_id)
+            _write_private_json(args.output, request.model_dump(mode="json"))
+            return {"created": True}
+        if args.action in {"raygate-proof", "fanyu-proof", "feie-proof"}:
             with args.input.open("rb") as handle:
                 raw = handle.read(MAX_PROOF_BYTES + 1)
             if len(raw) > MAX_PROOF_BYTES:
                 raise ValueError("對帳證明檔案過大")
             if args.action == "fanyu-proof":
                 return await apply_fanyu_proof(session, actor, settings, SignedFanyuEvidence.model_validate_json(raw))
+            if args.action == "feie-proof":
+                return await apply_feie_proof(session, actor, settings, SignedFeieEvidence.model_validate_json(raw))
             return await apply_raygate_proof(session, actor, settings, SignedRayGateEvidence.model_validate_json(raw))
         raw = args.input.read_bytes()
         if args.action == "arm":
@@ -113,7 +120,11 @@ def main():
         export = commands.add_parser(command)
         export.add_argument("cutover_id", type=UUID)
         export.add_argument("output", type=Path)
-    for command in ("arm", "resolve", "raygate-proof", "fanyu-proof"):
+    feie_request = commands.add_parser("feie-request")
+    feie_request.add_argument("cutover_id", type=UUID)
+    feie_request.add_argument("job_id", type=UUID)
+    feie_request.add_argument("output", type=Path)
+    for command in ("arm", "resolve", "raygate-proof", "fanyu-proof", "feie-proof"):
         commands.add_parser(command).add_argument("input", type=Path)
     args = parser.parse_args()
     if not get_settings().recovery_mode:
