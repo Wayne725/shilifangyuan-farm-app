@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ApiError, apiFetch, downloadApiFile, formatMoney } from "../lib/api";
+import { currentUtcFinancePeriod, type UtcFinancePeriod } from "../lib/meal-finance";
 import { DataState, LoadingLines } from "./Shared";
 
 const taxNames = { taxable: "應稅", tax_exempt: "免稅" };
@@ -18,22 +19,12 @@ interface TaxLedgerRow {
   order_count: number;
 }
 
-interface TaxLedgerPeriod {
-  starts_on: string;
-  ends_on: string;
-}
-
-interface TaxLedgerReport extends TaxLedgerPeriod {
+interface TaxLedgerReport extends UtcFinancePeriod {
   rows: TaxLedgerRow[];
 }
 
-function currentUtcPeriod(): TaxLedgerPeriod {
-  const today = new Date().toISOString().slice(0, 10);
-  return { starts_on: `${today.slice(0, 7)}-01`, ends_on: today };
-}
-
 export function TaxLedger({ adminId }: { adminId: string }) {
-  const [draft, setDraft] = useState(currentUtcPeriod);
+  const [draft, setDraft] = useState(currentUtcFinancePeriod);
   const [period, setPeriod] = useState(draft);
   const [formError, setFormError] = useState("");
   const params = new URLSearchParams({ ...period });
@@ -54,7 +45,7 @@ export function TaxLedger({ adminId }: { adminId: string }) {
   return <section>
     <h2>稅務彙總</h2>
     <p>依 UTC 付款日彙總目前已付款訂單。銷售額採品項小計，稅額為估算。</p>
-    <form className="meal-finance-filters tax-ledger-filters" onSubmit={(event) => {
+    <form className="meal-finance-filters finance-period-filters" onSubmit={(event) => {
       event.preventDefault();
       if (draft.starts_on > draft.ends_on) {
         setFormError("結束日期不可早於開始日期。");

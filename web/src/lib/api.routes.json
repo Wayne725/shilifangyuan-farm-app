@@ -24,6 +24,7 @@
   "GET /v1/admin/finance/meal-sales",
   "GET /v1/admin/finance/meal-sales.csv",
   "GET /v1/admin/finance/nonmember-sales",
+  "GET /v1/admin/finance/sales-by-membership",
   "GET /v1/admin/finance/tax-ledger",
   "GET /v1/admin/finance/tax-ledger.csv",
   "GET /v1/admin/financial-statements",

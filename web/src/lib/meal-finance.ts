@@ -1,5 +1,10 @@
 import type { InvoiceStatus } from "./types";
 
+export interface UtcFinancePeriod {
+  starts_on: string;
+  ends_on: string;
+}
+
 export interface MealSalesPeriod {
   period: string;
   received: number;
@@ -81,4 +86,9 @@ export function financePeriodPreset(mode: "today" | "week" | "month", today = ta
   const date = new Date(`${today}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
   return { startsOn: date.toISOString().slice(0, 10), endsOn: today };
+}
+
+export function currentUtcFinancePeriod(): UtcFinancePeriod {
+  const { startsOn, endsOn } = financePeriodPreset("month", new Date().toISOString().slice(0, 10));
+  return { starts_on: startsOn, ends_on: endsOn };
 }
