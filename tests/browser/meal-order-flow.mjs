@@ -458,6 +458,7 @@ test('手機從日期摘要選時段後才讀完整菜單，原時段帶入一�
   const meal = page.getByRole('button', { name: '增加隔離每日便當', exact: true });
   await meal.waitFor();
   assert.ok(state.reads.includes('/v1/meal-events/scheduled-dinner'));
+  assert.equal(await page.getByRole('combobox', { name: '開票時機', exact: true }).count(), 0);
   const quote = page.waitForResponse(response => response.url().endsWith('/quote'));
   await meal.click();
   await quote;
@@ -466,7 +467,10 @@ test('手機從日期摘要選時段後才讀完整菜單，原時段帶入一�
   assert.equal(state.quotes.at(-1).pickup_at, '2026-09-17T10:00:00.000Z');
   assert.equal(state.orders.length, 1);
   assert.equal(state.orders[0].pickup_at, '2026-09-17T10:00:00.000Z');
+  assert.equal(Object.hasOwn(state.quotes.at(-1), 'invoice_handling'), false);
   assert.equal(Object.hasOwn(state.orders[0], 'meal_booking_type'), false);
+  assert.equal(Object.hasOwn(state.orders[0], 'invoice_handling'), false);
+  assert.equal(state.orders[0].payment_method, 'online');
   assert.deepEqual(state.unknownApi, []);
 });
 

@@ -91,7 +91,8 @@ test('390px會餐切換保留一般偏好，統編必填且錯誤延後顯示', 
   await page.getByRole('radio', { name: '一般餐點', exact: true }).check();
   await page.getByRole('button', { name: '修改發票設定', exact: true }).click();
   assert.equal(await page.getByRole('radio', { name: '個人電子發票', exact: true }).getAttribute('aria-checked'), 'true');
-  assert.equal(await page.getByRole('combobox', { name: '開票時機', exact: true }).inputValue(), 'on_payment');
+  assert.equal(await page.getByRole('combobox', { name: '開票時機', exact: true }).count(), 0);
+  assert.equal(await page.getByText('發票於取餐當日開立', { exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);

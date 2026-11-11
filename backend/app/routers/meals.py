@@ -875,6 +875,8 @@ async def create_meal_order(
     existing = await existing_submission()
     if existing is not None:
         return existing
+    if body.meal_booking_type == "standard" and body.invoice_handling == "pickup_day":
+        raise HTTPException(422, "取餐日開票適用會餐。請重新整理頁面後確認訂單。")
     from ..promotions import lock_promotions
     await lock_promotions(session)
     quote = await quote_meal_order(event_id, body, session, settings, user)
