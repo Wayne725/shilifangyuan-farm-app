@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "../context/AuthContext";
@@ -14,6 +14,8 @@ interface AdmissionList {
   limit: number;
   offset: number;
 }
+
+const pageSize = 25;
 
 type ReviewDecision = "approve" | "request_supplement" | "reject";
 const decisions: { value: ReviewDecision; label: string }[] = [
@@ -33,10 +35,16 @@ export function AdminAdmissionInbox() {
   const [notice, setNotice] = useState("");
   const query = useQuery({
     queryKey: ["admin-membership-admissions", user?.id, filters],
-    queryFn: () => apiFetch<AdmissionList>(`/v1/admin/membership/admissions?${new URLSearchParams({ q: filters.q, status: filters.status, limit: "25", offset: String(filters.offset) })}`),
+    queryFn: () => apiFetch<AdmissionList>(`/v1/admin/membership/admissions?${new URLSearchParams({ q: filters.q, status: filters.status, limit: String(pageSize), offset: String(filters.offset) })}`),
     enabled: user?.user_role === "admin" && !revoked,
     retry: (count, error) => !accessDenied(error) && count < 1,
   });
+  const total = query.isSuccess ? query.data.total : undefined;
+  useEffect(() => {
+    if (total === undefined || filters.offset === 0 || filters.offset < total) return;
+    const lastOffset = Math.max(0, Math.floor((total - 1) / pageSize) * pageSize);
+    setFilters(current => current.offset === filters.offset ? { ...current, offset: lastOffset } : current);
+  }, [filters.offset, total]);
   if (revoked || accessDenied(query.error)) return <section className="admin-review-section"><h2>新版入社審核</h2><p className="form-error" role="alert">入社審核權限已失效，請重新登入管理員帳號。</p></section>;
 
   const refresh = (round?: AdmissionRound) => {
@@ -61,7 +69,11 @@ export function AdminAdmissionInbox() {
     {notice && <p role="status">{notice}</p>}
     {query.isPending ? <LoadingLines count={2} /> : query.isError ? <><DataState kind="error" title="入社申請無法讀取" detail={query.error.message} /><button type="button" className="button button-quiet" onClick={() => { void query.refetch(); }}>重新讀取</button></> : <>
       {query.data.items.length === 0 ? <DataState title="沒有符合條件的入社申請" detail="" /> : <div className="admin-review-list">{query.data.items.map(round => <AdmissionReviewCard key={`${user?.id}:${round.id}`} round={round} onDone={refresh} onDenied={() => setRevoked(true)} />)}</div>}
-      {query.data.total > 25 && <nav className="admission-inbox-pagination" aria-label="入社申請分頁"><button type="button" className="button button-quiet" disabled={filters.offset === 0 || query.isFetching} onClick={() => setFilters({ ...filters, offset: Math.max(0, filters.offset - 25) })}>上一頁</button><span>{filters.offset + 1}–{Math.min(filters.offset + 25, query.data.total)}／{query.data.total}</span><button type="button" className="button button-quiet" disabled={filters.offset + 25 >= query.data.total || query.isFetching} onClick={() => setFilters({ ...filters, offset: filters.offset + 25 })}>下一頁</button></nav>}
+      {query.data.total > pageSize && filters.offset < query.data.total && <nav className="admission-inbox-pagination" aria-label="入社申請分頁">
+        <button type="button" className="button button-quiet" disabled={filters.offset === 0 || query.isFetching} onClick={() => setFilters({ ...filters, offset: Math.max(0, filters.offset - pageSize) })}>上一頁</button>
+        <span>{filters.offset + 1}–{Math.min(filters.offset + pageSize, query.data.total)}／{query.data.total}</span>
+        <button type="button" className="button button-quiet" disabled={filters.offset + pageSize >= query.data.total || query.isFetching} onClick={() => setFilters({ ...filters, offset: filters.offset + pageSize })}>下一頁</button>
+      </nav>}
     </>}
   </section>;
 }

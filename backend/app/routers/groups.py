@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select, text
@@ -367,6 +367,13 @@ async def update_campaign(
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return campaign_read(campaign)
+    if updates.keys() <= {"title", "description"}:
+        if "title" in updates and not updates["title"].strip():
+            raise HTTPException(status_code=422, detail="請填寫共同購買名稱")
+        changes = {field: value for field, value in updates.items() if getattr(campaign, field) != value}
+        if not changes:
+            return campaign_read(campaign)
+        return await _save_campaign_changes(session, campaign, admin, changes)
 
     candidate_values = {
         "source_proposal_id": campaign.source_proposal_id,
@@ -436,15 +443,23 @@ async def update_campaign(
             session, candidate.target_type, candidate.target_id
         )
 
-    for field in changed_fields:
-        setattr(campaign, field, candidate_dump[field])
+    return await _save_campaign_changes(
+        session, campaign, admin, {field: candidate_dump[field] for field in changed_fields}
+    )
+
+
+async def _save_campaign_changes(
+    session: AsyncSession, campaign: GroupCampaign, admin: User, changes: dict[str, Any],
+) -> CampaignRead:
+    for field, value in changes.items():
+        setattr(campaign, field, value)
     session.add(
         AdminAudit(
             actor_id=admin.id,
             action="campaign.update",
             aggregate_type="group_campaign",
             aggregate_id=campaign.id,
-            data={"changed_fields": sorted(changed_fields)},
+            data={"changed_fields": sorted(changes)},
         )
     )
     await session.commit()

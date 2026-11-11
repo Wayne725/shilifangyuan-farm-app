@@ -37,6 +37,7 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
     if((endpoint.startsWith('/v1/group-campaigns')||endpoint.endsWith('/admin/open-direct')||endpoint.endsWith('/admin/approve'))&&['POST','PATCH'].includes(method)) {
       const body=request.postDataJSON();state.writes.push({path:endpoint,method,body});
       if(state.failWrite){const failure=state.failWrite;if(failure.status!==401)state.failWrite=null;if(state.changeOnConflict)Object.assign(state.campaign,state.changeOnConflict);return route.fulfill({status:failure.status,json:{detail:failure.message}});}
+      if(endpoint==='/v1/group-campaigns/campaign'&&method==='PATCH')Object.assign(state.campaign,body);
       if(endpoint.endsWith('/admin/visibility')){assert.equal(body.expected_updated_at,state.campaign.updated_at);state.campaign.is_public=body.is_public;state.campaign.updated_at=new Date(Date.parse(state.campaign.updated_at)+1000).toISOString();}
       if(endpoint.endsWith('/admin/confirm')){assert.equal(body.expected_threshold_version,state.campaign.threshold_version);if(state.campaign.paid_quantity<state.campaign.min_paid_quantity){assert.equal(body.allow_below_threshold,true);}Object.assign(state.campaign,{decision_status:'confirmed',can_confirm:false,can_edit_review_deadline:false,final_pickup_at:body.final_pickup_at,confirmed_paid_quantity:state.campaign.paid_quantity,confirmed_min_paid_quantity:state.campaign.min_paid_quantity,confirmed_threshold_version:state.campaign.threshold_version,confirmation_exception_reason:body.reason||null});}
       if(endpoint.endsWith('/admin/review-deadline')){assert.equal(body.expected_confirmation_deadline,state.campaign.confirmation_deadline);assert.equal(body.expected_updated_at,state.campaign.updated_at);Object.assign(state.campaign,body,{review_overdue:false});}
@@ -51,6 +52,27 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
 const card=page=>page.getByRole('article',{name:'共同購買 截止審核隔離共同購買',exact:true});
 async function clean(page,state){assert.deepEqual(state.unknown,[]);assert.deepEqual(state.errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);}
 async function waitForAdminDenied(page,status){if(status===401)await page.getByRole('heading',{name:'共同購買管理只向管理者開放。',exact:true}).waitFor();else await page.getByText('共同購買管理權限已失效').waitFor();}
+
+test('已截止且有付款的共同購買可更正公開說明', async t => {
+  const { page, state, visit } = await fixture(t, { width: 390 });
+  const before = structuredClone(state.campaign);
+  await visit();
+  await card(page).getByRole('button', { name: '編輯名稱與說明' }).click();
+  const editor = card(page).getByRole('form', { name: '編輯共同購買名稱與說明' });
+  const save = editor.getByRole('button', { name: '儲存', exact: true });
+  assert.equal(await save.isDisabled(), true);
+  await editor.getByRole('textbox', { name: '說明', exact: true }).fill('到貨通知會寄到訂單 Email。');
+  await save.click();
+  await card(page).getByText('名稱與說明已儲存').waitFor();
+  assert.deepEqual(state.writes, [{
+    path: '/v1/group-campaigns/campaign', method: 'PATCH', body: { description: '到貨通知會寄到訂單 Email。' },
+  }]);
+  assert.deepEqual(state.campaign, { ...before, description: '到貨通知會寄到訂單 Email。' });
+  await card(page).getByRole('link', { name: '查看前台' }).click();
+  await page.getByText('到貨通知會寄到訂單 Email。', { exact: true }).waitFor();
+  assert.deepEqual(state.quotes, []);
+  await clean(page, state);
+});
 async function openReview(page){await card(page).getByRole('button',{name:'審核成團',exact:true}).click();return card(page).getByRole('form',{name:'確認共同購買成團'});}
 
 test('建立共同購買的處理提醒日預設付款截止+72h，台灣日期不受瀏覽器時區影響',async t=>{

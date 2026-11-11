@@ -78,9 +78,10 @@ export function AdminSocialPage() {
   const pendingApplications = applications.data?.filter((item) => ["submitted", "needs_supplement"].includes(item.status)) || [];
   const traineeMemberships = memberships.data?.filter((item) => item.status === "trainee") || [];
 
-  const publishedActive = (item: Activity) => item.status === "published" && item.is_public !== false && activityTime(item.ends_at) > now;
-  const visibleActivities = activeActivityView ? (activities.data || []).filter(publishedActive) :
-    filterWork(activities.data, activityScope, item => item.status === "pending_review" || publishedActive(item));
+  const publishedUpcoming = (item: Activity) => item.status === "published" && activityTime(item.ends_at) > now;
+  const visibleActivities = activeActivityView
+    ? (activities.data || []).filter(item => publishedUpcoming(item) && item.is_public !== false)
+    : filterWork(activities.data, activityScope, item => item.status === "pending_review" || publishedUpcoming(item));
   const voting = (item: Proposal) => item.status === "voting" && activityTime(item.voting_ends_at) > now;
   const visibleProposals = votingView ? (proposals.data || []).filter(voting) : filterWork(proposals.data, proposalScope, item =>
     item.status === "pending_review" || voting(item) || (item.status === "discussion" && activityTime(item.voting_ends_at) > now));

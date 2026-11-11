@@ -43,6 +43,44 @@ async def group_fixture(session, *, paid=False, cutoff=True):
     return admin, campaign, user, order, old, attempt
 
 
+async def test_closed_campaign_copy_correction_preserves_existing_commerce(database_session):
+    session = database_session
+    admin, campaign, buyer, order, _, attempt = await group_fixture(session, paid=True)
+    campaign.core_locked_at = campaign.deadline
+    campaign.decision_status = GroupDecisionStatus.CONFIRMED
+    await session.commit()
+    original_order = (order.payment_status, order.amount_total, order.revision, attempt.status)
+
+    async with api_test_context(session, [groups_router]) as client:
+        path = f"/v1/group-campaigns/{campaign.id}"
+        admin_headers = auth_headers(admin)
+        before = (await client.get(path)).json()
+        corrected = {"title": "更正共同購買標題", "description": "更新介紹文字"}
+        assert (await client.patch(path, headers=auth_headers(buyer), json=corrected)).status_code == 403
+        for invalid in ({"title": ""}, {"title": "　 "}, {"title": "餐" * 121}, {"title": None}, {"description": None}):
+            assert (await client.patch(path, headers=admin_headers, json=invalid)).status_code == 422
+
+        mixed = await client.patch(path, headers=admin_headers, json={**corrected, "member_price": 99})
+        assert mixed.status_code == 422
+        assert (await client.get(path)).json() == before
+
+        updated = await client.patch(path, headers=admin_headers, json=corrected)
+        assert updated.status_code == 200, updated.text
+        after = updated.json()
+        before.pop("updated_at")
+        assert {field: value for field, value in after.items() if field != "updated_at"} == {**before, **corrected}
+        assert (await client.get(path)).json() == after
+        assert (await client.patch(path, headers=admin_headers, json=corrected)).json() == after
+
+    audits = list(await session.scalars(select(AdminAudit).where(AdminAudit.aggregate_id == campaign.id)))
+    assert [(audit.actor_id, audit.action, audit.data) for audit in audits] == [
+        (admin.id, "campaign.update", {"changed_fields": ["description", "title"]}),
+    ]
+    await session.refresh(order)
+    await session.refresh(attempt)
+    assert (order.payment_status, order.amount_total, order.revision, attempt.status) == original_order
+
+
 @pytest.mark.parametrize("failure", ["timeout", "malformed", "pending", "ecpay_zero"])
 @pytest.mark.parametrize("status", [PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED])
 async def test_unknown_current_payment_is_retained_and_rechecked(database_session, monkeypatch, failure, status):
