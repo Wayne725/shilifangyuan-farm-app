@@ -1778,12 +1778,18 @@ class MealEvent(Base):
             "AND same_day_preparation_minutes IS NULL AND NOT allow_cash_payment)",
             name="meal_business_only_configuration",
         ),
+        CheckConstraint(
+            "ordering_pause_version >= 0 AND (ordering_paused_at IS NULL OR ordering_pause_version > 0)",
+            name="meal_ordering_pause_version",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     booking_policy: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
     same_day_preparation_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    ordering_paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ordering_pause_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))

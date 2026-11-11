@@ -528,6 +528,8 @@ export interface MealEventTiming {
   same_day_preparation_minutes?: number | null;
   business_only?: boolean;
   new_orders_blocked_reason?: string | null;
+  ordering_paused?: boolean;
+  ordering_pause_version?: number;
   service_date?: string | null;
   meal_period?: "lunch" | "dinner" | null;
   title: string;

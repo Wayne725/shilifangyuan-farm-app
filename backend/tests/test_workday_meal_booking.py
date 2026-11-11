@@ -489,3 +489,99 @@ async def test_business_only_rechecks_cutoff_after_allocating_pickup_code(workda
                                      headers=auth_headers(buyer))
         assert response.status_code == 409 and "時段已截止" in response.json()["detail"]
         assert await session.scalar(select(func.count(Order.id))) == 0
+
+
+async def test_ordering_pause_only_stops_new_orders_in_selected_event(workday_context, fake_payment):
+    client, session, admin, buyer, _meal = workday_context
+    event, body = await create_event(workday_context)
+    other_event, other_body = await create_event(workday_context, "2026-11-10", booking_policy="special")
+    root = f"/v1/meal-events/{event['id']}"
+    admin_path = f"/v1/admin/meal-events/{event['id']}/ordering-pause"
+    admin_headers = auth_headers(admin)
+    buyer_headers = auth_headers(buyer)
+    existing_body = {**body, "client_request_id": str(uuid4())}
+    created = await client.post(f"{root}/orders", json=existing_body, headers=buyer_headers)
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+    assert event["ordering_pause_version"] == 0 and event["ordering_paused"] is False
+
+    payload = {"paused": True, "expected_version": 0, "reason": "僅供管理員查看"}
+    for headers, code in [({}, 401), (buyer_headers, 403)]:
+        denied = await client.patch(admin_path, json=payload, headers=headers)
+        assert denied.status_code == code, denied.text
+    pause = await client.patch(admin_path, json=payload, headers=admin_headers)
+    assert pause.status_code == 200, pause.text
+    assert pause.json()["status"] == "published"
+    assert pause.json()["ordering_pause_version"] == 1 and pause.json()["ordering_paused"] is True
+    stale = await client.patch(admin_path, json={"paused": False, "expected_version": 0}, headers=admin_headers)
+    assert stale.status_code == 409 and "狀態已更新" in stale.json()["detail"]
+    repeated = await client.patch(admin_path, json={**payload, "expected_version": 1}, headers=admin_headers)
+    assert repeated.status_code == 200 and repeated.json()["ordering_pause_version"] == 1
+
+    public = await client.get(root)
+    calendar = await client.get("/v1/meal-events/calendar")
+    listed = next(item for item in calendar.json() if item["id"] == event["id"])
+    assert listed["ordering_paused"] is True and public.json()["ordering_paused"] is True
+    assert "僅供管理員查看" not in public.text and "僅供管理員查看" not in calendar.text
+    assert public.json()["new_orders_blocked_reason"] == "此場次暫停接受新訂單"
+    for action in ("quote", "orders"):
+        blocked = await client.post(f"{root}/{action}", json=body, headers=buyer_headers)
+        assert blocked.status_code == 409 and blocked.json()["detail"] == "此場次暫停接受新訂單"
+    replay = await client.post(f"{root}/orders", json=existing_body, headers=buyer_headers)
+    assert replay.status_code == 201 and replay.json()["id"] == order_id
+    unrelated = await client.post(f"/v1/meal-events/{other_event['id']}/orders", json=other_body, headers=buyer_headers)
+    assert unrelated.status_code == 201, unrelated.text
+
+    attempt = await create_payment_attempt(session, order_id, buyer, payment_settings())
+    assert (await client.get(f"/payments/{attempt.id}/checkout")).status_code == 200
+    paid = await SQLAlchemyPaymentCallbackRepository(session).apply_ecpay_payment_callback(
+        "paused-meal-order-payment", successful_callback(attempt, FRIDAY, "PAUSED-MEAL-TRADE"),
+    )
+    assert paid == "paid"
+
+    resume = await client.patch(admin_path, json={"paused": False, "expected_version": 1}, headers=admin_headers)
+    assert resume.status_code == 200, resume.text
+    assert resume.json()["ordering_pause_version"] == 2 and resume.json()["ordering_paused"] is False
+    assert (await client.post(f"{root}/quote", json=body)).status_code == 200
+    audits = list(await session.scalars(
+        select(AdminAudit).where(AdminAudit.action == "meal_event.ordering_pause").order_by(AdminAudit.id),
+    ))
+    assert len(audits) == 2
+    pause_audit = next(item for item in audits if item.data["after"]["paused"])
+    assert pause_audit.reason == payload["reason"]
+    assert pause_audit.data == {"before": {"paused": False, "version": 0}, "after": {"paused": True, "version": 1}}
+
+
+async def test_ordering_pause_allows_before_open_and_cannot_resume_after_last_preparation_deadline(workday_context):
+    client, _session, admin, _buyer, _meal = workday_context
+    event, body = await create_event(
+        workday_context, booking_policy="special", ordering_starts_at="2026-11-06T17:00:00+08:00",
+        same_day_preparation_minutes=120, ordering_ends_at="2026-11-09T12:00:00+08:00",
+    )
+    path = f"/v1/admin/meal-events/{event['id']}/ordering-pause"
+    pause = await client.patch(path, json={"paused": True, "expected_version": 0}, headers=auth_headers(admin))
+    assert pause.status_code == 200, pause.text
+    with time_machine.travel(datetime(2026, 11, 9, 11, tzinfo=TAIPEI), tick=False):
+        resume = await client.patch(path, json={"paused": False, "expected_version": 1}, headers=auth_headers(admin))
+        assert resume.status_code == 409 and "無可預訂" in resume.json()["detail"]
+        public = await client.get(f"/v1/meal-events/{event['id']}")
+        assert public.json()["ordering_paused"] is True
+        assert public.json()["ordering_pause_version"] == 1
+        assert (await client.post(f"/v1/meal-events/{event['id']}/quote", json=body)).status_code == 409
+
+
+async def test_ordering_pause_does_not_override_legacy_calendar(workday_context):
+    client, session, admin, _buyer, meal = workday_context
+    published, _body = await create_event(workday_context, "2026-11-07", booking_policy="special")
+    event = await session.get(MealEvent, published["id"])
+    template = template_for(admin, meal)
+    session.add(template)
+    await session.flush()
+    event.booking_policy = "legacy"
+    event.schedule_template_id = template.id
+    await session.commit()
+    response = await client.patch(
+        f"/v1/admin/meal-events/{event.id}/ordering-pause",
+        json={"paused": True, "expected_version": 0}, headers=auth_headers(admin),
+    )
+    assert response.status_code == 409 and "非供餐工作日" in response.json()["detail"]

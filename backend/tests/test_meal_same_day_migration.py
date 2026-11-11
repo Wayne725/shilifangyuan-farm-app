@@ -74,5 +74,30 @@ def test_same_day_migration_preserves_unconfigured_event_and_protects_enabled_ru
         restored = database.rows("meal_events")[0]
         assert "business_only" not in restored
         assert (restored["id"], restored["title"], restored["same_day_preparation_minutes"]) == (event_id, "保留場次", 90)
+
+        previous, revision = "0062_meal_business_only", "0063_meal_ordering_pause"
+        command.upgrade(database.config, revision)
+        default = database.rows("meal_events")[0]
+        assert default["ordering_paused_at"] is None and default["ordering_pause_version"] == 0
+        command.downgrade(database.config, previous)
+        assert "ordering_paused_at" not in database.rows("meal_events")[0]
+        command.upgrade(database.config, revision)
+        table = database.table("meal_events")
+        event_update = table.update().where(table.c.id == event_id)
+        with pytest.raises(IntegrityError):
+            database.run(lambda connection: connection.execute(event_update.values(ordering_paused_at=now)))
+        database.run(lambda connection: connection.execute(
+            event_update.values(ordering_paused_at=now, ordering_pause_version=1),
+        ))
+        with pytest.raises(RuntimeError, match="已有暫停接單紀錄"):
+            command.downgrade(database.config, previous)
+        database.run(lambda connection: connection.execute(
+            event_update.values(ordering_paused_at=None, ordering_pause_version=2),
+        ))
+        with pytest.raises(RuntimeError, match="已有暫停接單紀錄"):
+            command.downgrade(database.config, previous)
+        resumed = database.rows("meal_events")[0]
+        assert resumed["ordering_paused_at"] is None and resumed["ordering_pause_version"] == 2
+        assert resumed["id"] == event_id and resumed["same_day_preparation_minutes"] == 90
     finally:
         get_settings.cache_clear()

@@ -12,7 +12,7 @@ const compiled = ts.transpileModule(source, {
 assert.deepEqual(compiled.diagnostics.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error), []);
 const {
   mealBookingStatus, mealOrderingOpen, mealServiceDate, pickupTimeOptions, mealPickupChoices,
-  validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime, mealBookingDates, mealMenuAvailability,
+  validPickupTime, taipeiDate, shiftMealDate, formatMealDateTime, mealBookingDates, mealMenuAvailability, mealCanChangeOrderingPause,
 } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`);
 
 const NOW = Date.parse("2026-09-17T12:00:00+08:00");
@@ -309,4 +309,27 @@ test("週六會餐限定場次依實際截止顯示，無一般或當日預訂",
   assert.ok(mealPickupChoices([event], date, before).every(choice => choice.status === "可預訂" && choice.businessOnly));
   assert.deepEqual(mealBookingDates([event], cutoff), [{ date, status: "已截止" }]);
   assert.deepEqual(mealBookingDates([event], Date.parse(`${date}T09:00:00+08:00`)), []);
+});
+
+test("手動暫停的當日場次只顯示尚在備餐期限內的停用時段", () => {
+  const date = "2026-11-09";
+  const event = workdayMeal(date, {
+    booking_starts_at: `${date}T08:00:00+08:00`, booking_ends_at: `${date}T12:30:00+08:00`,
+    ordering_paused: true, same_day_preparation_minutes: 60, new_orders_blocked_reason: "此場次暫停接受新訂單",
+  });
+  const now = Date.parse(`${date}T10:30:00+08:00`);
+  const lastDeadline = Date.parse(`${date}T12:00:00+08:00`);
+  assert.equal(mealOrderingOpen(event, now), false);
+  assert.deepEqual(pickupTimeOptions(event, now), []);
+  assert.deepEqual(mealBookingDates([event], now), [{ date, status: "暫停預訂" }]);
+  assert.deepEqual(mealPickupChoices([event], date, now).map(({ label, status }) => [label, status]), [
+    ["12:00", "暫停預訂"], ["12:30", "暫停預訂"], ["13:00", "暫停預訂"],
+  ]);
+  assert.equal(mealCanChangeOrderingPause(event, now), true);
+  assert.equal(mealCanChangeOrderingPause(event, lastDeadline), false);
+  assert.deepEqual(mealBookingDates([event], lastDeadline), []);
+  assert.deepEqual(mealPickupChoices([event], date, lastDeadline), []);
+  assert.equal(mealCanChangeOrderingPause({ ...event, ordering_paused: false }, now), false);
+  assert.deepEqual(mealBookingDates([{ ...event, ordering_paused: false }], now), []);
+  assert.equal(mealBookingStatus({ ...event, ordering_paused: false, new_orders_blocked_reason: null }, now), "可預訂");
 });

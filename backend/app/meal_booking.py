@@ -86,6 +86,12 @@ def configured_booking_window(
 
 
 def meal_new_orders_blocked_reason(event: MealEvent) -> str | None:
+    if event.ordering_paused_at is not None:
+        return "此場次暫停接受新訂單"
+    return meal_calendar_blocked_reason(event)
+
+
+def meal_calendar_blocked_reason(event: MealEvent) -> str | None:
     if event.booking_policy != "legacy" or not event.schedule_template_id:
         return None
     from .workday_calendar import CalendarUnavailable, is_workday

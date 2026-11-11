@@ -101,7 +101,7 @@ export function reconcileMealDraft(draft: MealDraft, event: MealEvent, now = Dat
     }
     if (Object.keys(groups).length) next.selections[offering.id] = groups;
   }
-  if (pickupTimeOptions(event, now, draft.mealBookingType).some((option) => option.value === draft.pickupAt)) {
+  if (event.ordering_paused || pickupTimeOptions(event, now, draft.mealBookingType).some((option) => option.value === draft.pickupAt)) {
     next.pickupAt = draft.pickupAt;
   }
   return next;

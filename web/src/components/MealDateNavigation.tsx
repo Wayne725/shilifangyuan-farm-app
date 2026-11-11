@@ -42,7 +42,9 @@ export function MealDateNavigation({ events, now }: Props) {
             : <button key={`${choice.eventId}-${choice.value}`} type="button" disabled aria-label={`${location} ${name}，${choice.status}`}>{name}<small>{choice.status}</small></button>;
         })}</div>
       </section>)}
-      {!choices.length && <p className="meal-selection-notice">{selected ? "這一天的取餐時段尚未開放" : "目前沒有已公告的供餐日期"}</p>}
+      {!choices.length && <p className="meal-selection-notice">{selected
+        ? selected.status === "已截止" ? "這一天的取餐時段已截止" : "這一天的取餐時段尚未開放"
+        : "目前沒有已公告的供餐日期"}</p>}
     </div>
   </section>;
 }

@@ -7,10 +7,11 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import false, func, select
+from sqlalchemy import false, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from ..auth import (
     get_current_user,
@@ -60,6 +61,7 @@ from ..meal_options_admin import router as meal_options_router
 from ..meal_booking import (
     configured_booking_window,
     meal_booking_window,
+    meal_calendar_blocked_reason,
     meal_new_orders_blocked_reason,
     meal_order_deadline,
     meal_period,
@@ -119,6 +121,7 @@ from ..schemas import (
     MealOptionRead,
     MealOfferingRead,
     MealOrderCreate,
+    MealOrderingPauseUpdate,
     MealOrderQuoteRead,
     MealOrderRead,
     MealOrderSearchFilters,
@@ -193,6 +196,7 @@ def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
         "booking_policy": event.booking_policy,
         "same_day_preparation_minutes": event.same_day_preparation_minutes,
         "business_only": event.business_only,
+        "ordering_paused": event.ordering_paused_at is not None,
         "new_orders_blocked_reason": meal_new_orders_blocked_reason(event),
         "title": event.title,
         "location": event.location,
@@ -213,6 +217,7 @@ def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
 def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRead:
     return MealEventRead(
         **_meal_event_booking_fields(event),
+        ordering_pause_version=event.ordering_pause_version,
         allow_cash_payment=event.allow_cash_payment,
         schedule_template_id=event.schedule_template_id,
         can_edit=can_edit,
@@ -246,6 +251,7 @@ async def _load_event(
     event_id: str,
     *,
     for_update: bool = False,
+    refresh_existing: bool = False,
 ) -> MealEvent | None:
     query = (
         select(MealEvent)
@@ -258,9 +264,21 @@ async def _load_event(
             )
         )
     )
-    if for_update:
-        query = query.with_for_update()
-    return await session.scalar(query)
+    if not for_update:
+        return await session.scalar(query)
+    query = query.with_for_update()
+    if refresh_existing:
+        return await session.scalar(query.execution_options(populate_existing=True))
+    row = (await session.execute(query.add_columns(
+        MealEvent.ordering_paused_at, MealEvent.ordering_pause_version,
+    ))).one_or_none()
+    if row is None:
+        return None
+    event, paused_at, version = row
+    # Refresh the locked pause state without expiring other objects loaded by the caller.
+    set_committed_value(event, "ordering_paused_at", paused_at)
+    set_committed_value(event, "ordering_pause_version", version)
+    return event
 
 
 _MEAL_FULFILLMENT_LABELS = {
@@ -1734,6 +1752,63 @@ async def update_meal_payment_options(
     session.add(AdminAudit(actor_id=admin.id, action="meal_event.payment_options", aggregate_type="meal_event", aggregate_id=event.id, data={"allow_cash_payment": body.allow_cash_payment}))
     await session.commit()
     return _meal_event_read(event)
+
+
+@meals_router.patch("/v1/admin/meal-events/{event_id}/ordering-pause", response_model=MealEventRead)
+async def update_meal_ordering_pause(
+    event_id: str,
+    body: MealOrderingPauseUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MealEventRead:
+    event = await _load_event(session, event_id, for_update=True, refresh_existing=True)
+    if event is None:
+        raise HTTPException(404, "找不到便當場次")
+    stale = "接單狀態已更新，請重新整理後再試"
+    if event.ordering_pause_version != body.expected_version:
+        raise HTTPException(409, stale)
+    if event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}:
+        raise HTTPException(409, "此場次目前無法調整接單狀態")
+    if reason := meal_calendar_blocked_reason(event):
+        raise HTTPException(409, reason)
+    now = datetime.now(timezone.utc)
+    start, _ = meal_booking_window(event, business=event.business_only)
+    if not any(
+        max(start, now) < meal_order_deadline(event, slot, business=event.business_only)
+        for slot in meal_pickup_slots(event)
+    ):
+        raise HTTPException(409, "本場次已無可預訂的取餐時段")
+
+    can_edit = _meal_event_allows_edit(event, now) and not await session.scalar(
+        select(Order.id).where(Order.meal_event_id == event.id).limit(1),
+    )
+    paused = event.ordering_paused_at is not None
+    if paused == body.paused:
+        return _meal_event_read(event, can_edit=can_edit)
+
+    next_version = body.expected_version + 1
+    updated_id = await session.scalar(
+        update(MealEvent)
+        .where(MealEvent.id == event.id, MealEvent.ordering_pause_version == body.expected_version)
+        .values(ordering_paused_at=now if body.paused else None, ordering_pause_version=next_version)
+        .returning(MealEvent.id)
+        .execution_options(synchronize_session="fetch"),
+    )
+    if updated_id is None:
+        raise HTTPException(409, stale)
+    session.add(AdminAudit(
+        actor_id=admin.id,
+        action="meal_event.ordering_pause",
+        aggregate_type="meal_event",
+        aggregate_id=event.id,
+        reason=body.reason,
+        data={
+            "before": {"paused": paused, "version": body.expected_version},
+            "after": {"paused": body.paused, "version": next_version},
+        },
+    ))
+    await session.commit()
+    return _meal_event_read(event, can_edit=can_edit)
 
 
 @meals_router.post(

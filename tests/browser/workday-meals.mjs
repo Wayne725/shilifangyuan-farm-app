@@ -17,11 +17,11 @@ function event(id, date, overrides = {}) {
     pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00`,
     offerings: [{ id: 'isolated-offering', meal_id: meal.id, meal_name: meal.name, description: '', price: 120, capacity: 20, reserved_quantity: 0, paid_quantity: 0, available_quantity: 20, position: 0, is_active: true, option_groups: [] }], ...overrides };
 }
-async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [], adminEvents = [] } = {}) {
+async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [], adminEvents = [], eventOrders = {}, pauseConflict = false } = {}) {
   const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  const unknown = [], created = [];
+  const unknown = [], created = [], pauseRequests = [];
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), method = request.method();
     if (url.origin !== base) return route.abort();
@@ -38,12 +38,31 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
       if (url.pathname === '/v1/admin/meals') return route.fulfill({ json: [meal] });
       if (url.pathname === '/v1/admin/meal-schedules') return route.fulfill({ json: schedules });
       if (url.pathname === '/v1/admin/meal-events') return route.fulfill({ json: adminEvents });
+      const orderEvent = url.pathname.match(/^\/v1\/admin\/meal-events\/([^/]+)\/orders$/);
+      if (orderEvent && Object.hasOwn(eventOrders, orderEvent[1])) return route.fulfill({ json: eventOrders[orderEvent[1]] });
       if (['/v1/products', '/v1/group-campaigns'].includes(url.pathname)) return route.fulfill({ json: [] });
       if (url.pathname === '/v1/admin/meal-calendar') {
         const date = url.searchParams.get('service_date') || '2026-11-09';
         return route.fulfill({ json: { service_date: date, is_workday: date === '2026-11-09', previous_workday: '2026-11-06', next_workday: date === '2026-11-09' ? '2026-11-10' : '2026-11-09', ordering_starts_at: '2026-11-05T16:00:00Z', ordering_ends_at: date === '2026-11-09' ? '2026-11-08T12:00:00Z' : '2026-11-06T12:00:00Z' } });
       }
       if (url.pathname === '/v1/admin/meal-schedules/calendar-status') return route.fulfill({ json: { available: true, from_date: '2025-01-01', to_date: '2027-12-31', message: '', source_url: 'https://data.gov.tw/dataset/14718' } });
+    }
+    const pauseEventId = url.pathname.match(/^\/v1\/admin\/meal-events\/([^/]+)\/ordering-pause$/)?.[1];
+    const pauseEvent = pauseEventId && adminEvents.find(({ id }) => id === pauseEventId);
+    if (method === 'PATCH' && pauseEvent) {
+      const body = request.postDataJSON();
+      pauseRequests.push(body);
+      if (pauseConflict) {
+        pauseConflict = false;
+        pauseEvent.ordering_pause_version += 2;
+      }
+      if (body.expected_version !== pauseEvent.ordering_pause_version) {
+        return route.fulfill({ status: 409, json: { detail: '接單狀態已更新，請重新整理後再試' } });
+      }
+      pauseEvent.ordering_paused = body.paused;
+      pauseEvent.ordering_pause_version += 1;
+      pauseEvent.new_orders_blocked_reason = body.paused ? '此場次暫停接受新訂單' : null;
+      return route.fulfill({ json: pauseEvent });
     }
     if (method === 'POST' && (url.pathname === '/v1/admin/meal-events' || /^\/v1\/admin\/meal-events\/[^/]+\/duplicate$/.test(url.pathname))) {
       created.push(request.postDataJSON()); return route.fulfill({ status: 201, json: { id: 'created-special' } });
@@ -54,7 +73,7 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.clock.install({ time: new Date(now) });
-  return { page, unknown, created };
+  return { page, unknown, created, pauseRequests };
 }
 async function noOverflow(page) { assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true); }
 async function screenshot(page, name) {
@@ -261,6 +280,60 @@ test('週六場次可手動只開放會餐，場次卡與複製草稿保留會�
   await card.getByRole('button', { name: '手動編輯場次' }).click();
   const editForm = card.locator('form').filter({ has: page.getByRole('heading', { name: '手動編輯便當場次', exact: true }) });
   assert.equal(await editForm.getByRole('checkbox', { name: '僅開放會餐' }).isChecked(), true);
+  await noOverflow(page);
+  assert.deepEqual(unknown, []);
+});
+
+test('場次可暫停及恢復新預訂，衝突後讀取新版本並保留原取餐訂單', { timeout: 30000 }, async t => {
+  const date = '2026-11-07';
+  const lunch = event('paused-lunch', date, {
+    title: '隔離午餐', booking_policy: 'special', status: 'pickup_open', ordering_paused: false, ordering_pause_version: 3,
+    booking_starts_at: `${date}T08:00:00+08:00`, booking_ends_at: `${date}T11:45:00+08:00`, same_day_preparation_minutes: 60,
+  });
+  const dinner = event('open-dinner', '2026-11-08', { location: '隔離晚餐點', booking_policy: 'special' });
+  const existing = { id: 'paid-lunch', order_number: 'M2026110701', available_actions: [], payment_method: 'online', payment_status: 'paid',
+    pickup_at: `${date}T12:00:00+08:00`, venue_name: lunch.location, items: [], amount_total: 120 };
+  const { page, unknown, pauseRequests } = await fixture(t, 390, {
+    admin: true, now: `${date}T10:30:00+08:00`, events: [lunch, dinner], adminEvents: [lunch],
+    eventOrders: { [lunch.id]: [existing] }, pauseConflict: true,
+  });
+  const adminUrl = `${base}/admin/meals?tab=events`;
+  await page.goto(adminUrl);
+  const card = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: lunch.title, exact: true }) });
+  const pause = card.getByRole('button', { name: '暫停新預訂', exact: true });
+  await card.getByRole('button', { name: '查看本場訂單與取餐時間' }).click();
+  const existingOrder = card.getByRole('heading', { name: existing.order_number, exact: true });
+  await existingOrder.waitFor();
+  await pause.click();
+  await card.getByRole('alert').filter({ hasText: '接單狀態已更新' }).waitFor();
+  await pause.click();
+  await card.getByRole('status').filter({ hasText: '新預訂已暫停' }).waitFor();
+  assert.deepEqual(pauseRequests, [{ paused: true, expected_version: 3 }, { paused: true, expected_version: 5 }]);
+  assert.equal(await existingOrder.isVisible(), true);
+  assert.equal(await card.getByRole('button', { name: '確認核銷', exact: true }).isVisible(), true);
+
+  await page.goto(`${base}/shop`);
+  const navigation = page.getByRole('region', { name: '便當日期與取餐時間' });
+  await navigation.getByRole('button', { name: '11/7 週六，暫停預訂', exact: true }).click();
+  assert.equal(await navigation.getByRole('button', { name: '隔離取餐點 12:00，暫停預訂', exact: true }).isDisabled(), true);
+  assert.equal(await navigation.getByRole('link', { name: '隔離取餐點 12:00 取餐', exact: true }).count(), 0);
+  await navigation.getByRole('button', { name: '11/8 週日，可預訂', exact: true }).click();
+  assert.equal(await navigation.getByRole('link', { name: '隔離晚餐點 12:00 取餐', exact: true }).isVisible(), true);
+
+  await page.goto(`${base}/meals/${lunch.id}?pickup_at=${encodeURIComponent(`${date}T12:00`)}`);
+  await page.getByText('此場次暫停接受新訂單', { exact: false }).waitFor();
+  const pickup = page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true });
+  assert.equal(await pickup.inputValue(), `${date}T12:00`);
+  assert.equal(await pickup.isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('link', { name: '查看我的便當訂單', exact: true }).getAttribute('href'), '/meal-orders');
+
+  await page.goto(adminUrl);
+  await card.getByRole('button', { name: '恢復新預訂', exact: true }).click();
+  await pause.waitFor();
+  assert.deepEqual(pauseRequests.at(-1), { paused: false, expected_version: 6 });
+  await page.goto(`${base}/shop`);
+  await navigation.getByRole('link', { name: '隔離取餐點 12:00 取餐', exact: true }).waitFor();
   await noOverflow(page);
   assert.deepEqual(unknown, []);
 });

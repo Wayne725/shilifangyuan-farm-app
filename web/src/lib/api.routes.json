@@ -146,6 +146,7 @@
   "GET /v1/wishes",
   "PATCH /v1/admin/activities/{activity_id}/payment-settings",
   "PATCH /v1/admin/activities/{activity_id}/visibility",
+  "PATCH /v1/admin/meal-events/{event_id}/ordering-pause",
   "PATCH /v1/admin/meal-events/{event_id}/payment-options",
   "PATCH /v1/admin/meal-kitchen/orders/{order_id}/status",
   "PATCH /v1/admin/meeting-categories/{category_id}",

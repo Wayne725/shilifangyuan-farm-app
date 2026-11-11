@@ -1645,6 +1645,11 @@ class MealPaymentOptionsUpdate(BaseModel):
     allow_cash_payment: bool
 
 
+class MealOrderingPauseUpdate(AdminActionReason):
+    paused: bool = Field(strict=True)
+    expected_version: int = Field(ge=0, strict=True)
+
+
 class MealOfferingRead(ApiModel):
     id: str
     meal_id: str
@@ -1673,6 +1678,7 @@ class MealEventBookingRead(MealEventSummary):
     booking_policy: Literal["legacy", "workday", "special"] = "legacy"
     same_day_preparation_minutes: Optional[int] = None
     business_only: bool = False
+    ordering_paused: bool = False
     new_orders_blocked_reason: Optional[str] = None
     ordering_starts_at: datetime
     ordering_ends_at: datetime
@@ -1691,6 +1697,7 @@ class MealEventCalendarRead(MealEventBookingRead):
 
 
 class MealEventRead(MealEventBookingRead):
+    ordering_pause_version: int = 0
     allow_cash_payment: bool = False
     offerings: List[MealOfferingRead] = Field(default_factory=list)
     schedule_template_id: Optional[str] = None
