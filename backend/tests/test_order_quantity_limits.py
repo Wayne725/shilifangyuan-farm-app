@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import func, select
 
-from app.models import InventoryReservation, Order, PaymentAttempt, Product, User
+from app.models import InventoryReservation, Order, PaymentAttempt, Product, ProductCategory, User
+from app.routers.catalog import catalog_router
 from app.routers.orders import orders_router
 from tests.support import api_test_context, auth_headers, make_test_settings
 
@@ -14,14 +15,14 @@ async def quantity_context(database_session):
     products = [
         Product(
             slug=f"quantity-product-{index}", name=f"數量測試商品{index}",
-            category="processed", unit="份", member_price=10, nonmember_price=12,
+            category=ProductCategory.PROCESSED, unit="份", member_price=10, nonmember_price=12,
             stock_quantity=5000, is_active=True,
         )
         for index in range(2)
     ]
     database_session.add_all([buyer, *products])
     await database_session.commit()
-    async with api_test_context(database_session, [orders_router], settings=make_test_settings()) as client:
+    async with api_test_context(database_session, [catalog_router, orders_router], settings=make_test_settings()) as client:
         yield SimpleNamespace(session=database_session, client=client, buyer=buyer, products=products)
 
 
@@ -73,3 +74,35 @@ async def test_quantity_limit_applies_to_each_product_not_whole_cart(quantity_co
     assert len(body["items"]) == 2
     assert all(item["quantity"] == 999 for item in body["items"])
     assert body["amount_total"] == 2 * 999 * 12
+
+
+async def test_checkout_reads_current_stock_and_daily_sales_per_product(quantity_context):
+    c = quantity_context
+    remaining, unavailable = c.products
+    remaining.stock_quantity = 1
+    unavailable.stock_quantity = 0
+    unavailable.daily_sales_enabled = False
+    await c.session.commit()
+
+    item = await c.client.get(f"/v1/products/{remaining.id}")
+    assert item.status_code == 200
+    assert item.json()["stock_quantity"] == 1
+    assert item.json()["daily_sales_enabled"] is True
+
+    other = await c.client.get(f"/v1/products/{unavailable.id}")
+    assert other.status_code == 200
+    assert other.json()["stock_quantity"] == 0
+    assert other.json()["daily_sales_enabled"] is False
+
+    excessive = await submit(c, "/v1/orders/quote", [{"product_id": remaining.id, "quantity": 2}])
+    closed = await submit(c, "/v1/orders/quote", [{"product_id": unavailable.id, "quantity": 1}])
+    assert excessive.status_code == 409
+    assert closed.status_code == 422
+    valid = await submit(c, "/v1/orders/quote", [{"product_id": remaining.id, "quantity": 1}])
+    assert valid.status_code == 200
+    assert valid.json()["amount_total"] == 12
+
+    unavailable.is_active = False
+    await c.session.commit()
+    assert (await c.client.get(f"/v1/products/{unavailable.id}")).status_code == 404
+    assert await c.session.scalar(select(func.count(Order.id))) == 0

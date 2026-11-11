@@ -20,7 +20,8 @@ interface CommerceContextValue {
   cart: CartItem[];
   itemCount: number;
   addToCart: (product: Product, quantity?: number) => void;
-  adjustQuantity: (productId: string, delta: number) => void;
+  adjustQuantity: (productId: string, delta: number, purchaseLimit?: number | null) => void;
+  removeFromCart: (productId: string) => void;
   clearCart: (expectedItems?: { product_id: string; quantity: number }[]) => void;
 }
 
@@ -62,17 +63,17 @@ export function CommerceProvider({ children }: { children: ReactNode }) {
         });
         if (!changed) throw new Error("登入狀態已變更，請稍候再加入商品");
       },
-      adjustQuantity(productId, delta) {
-        store.update(scope, current => {
+      adjustQuantity(productId, delta, purchaseLimit = null) {
+        const changed = store.update(scope, current => {
           const existing = current.find((item) => item.product.id === productId);
           if (!existing) return current;
           const quantity = existing.quantity + delta;
           if (!Number.isInteger(delta) || !Number.isInteger(quantity) || quantity < 0) {
             throw new RangeError("請輸入有效的整數數量");
           }
-          const limit = maxOrderItemQuantity;
-          if (quantity > existing.quantity && quantity > limit) {
-            throw new RangeError(`此商品目前可購上限為 ${limit} ${existing.product.unit}`);
+          if (delta > 0 && purchaseLimit === null) throw new RangeError("請先確認商品庫存");
+          if (delta > 0 && purchaseLimit !== null && quantity > Math.min(purchaseLimit, maxOrderItemQuantity)) {
+            throw new RangeError(`此商品目前可購上限為 ${purchaseLimit} ${existing.product.unit}`);
           }
           return current
               .map((item) =>
@@ -80,6 +81,11 @@ export function CommerceProvider({ children }: { children: ReactNode }) {
               )
               .filter((item) => item.quantity > 0);
         });
+        if (!changed) throw new Error("登入狀態已變更，請重新確認結帳清單");
+      },
+      removeFromCart(productId) {
+        const changed = store.update(scope, current => current.filter(item => item.product.id !== productId));
+        if (!changed) throw new Error("登入狀態已變更，請重新確認結帳清單");
       },
       clearCart(expectedItems) {
         store.update(scope, current => expectedItems && !cartMatchesSubmission(current, expectedItems) ? current : []);

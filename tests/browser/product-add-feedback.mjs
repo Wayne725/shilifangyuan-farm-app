@@ -6,7 +6,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4195');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || target.pathname !== '/' || target.username || target.password) throw new Error('Use an isolated local origin');
 const base = target.origin;
-const product = { id: 'feedback-product', name: '隔離測試黑豆蔭油', description: '隔離測試商品', category: '合作社選品', unit: '瓶', supplier_name: '隔離合作社', member_price: 300, nonmember_price: 320, stock_quantity: 20, is_active: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'taxable' };
+const product = { id: 'feedback-product', name: '隔離測試黑豆蔭油', description: '隔離測試商品', category: '合作社選品', unit: '瓶', supplier_name: '隔離合作社', member_price: 300, nonmember_price: 320, stock_quantity: 20, is_active: true, daily_sales_enabled: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'taxable' };
 const soldOut = { ...product, id: 'sold-out-product', name: '隔離缺貨商品', stock_quantity: 0 };
 
 async function fixture(t, width, path, { stock = 20, initialStock = 100, initialQuantity = 2, signedIn = false, membershipType = 'nonmember', quoteError = false, quotePrice = 315 } = {}) {
@@ -34,7 +34,7 @@ async function fixture(t, width, path, { stock = 20, initialStock = 100, initial
       state.quotes.push(quantity);
       return route.fulfill({ status: quoteError ? 409 : 200, json: quoteError ? { detail: '商品庫存已變動，請調整選購數量' } : { amount_total: quantity * quotePrice, membership_type: membershipType, items: [{ product_id: item.id, product_name: item.name, quantity, unit_price: quotePrice, subtotal: quantity * quotePrice, tax_type: 'taxable' }] } });
     }
-    if (['/v1/meal-events', '/v1/group-campaigns', '/v1/activities', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
+    if (['/v1/meal-events', '/v1/meal-events/calendar', '/v1/group-campaigns', '/v1/activities', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
     state.unknown.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated route' } });
   });
@@ -207,7 +207,8 @@ test('加入後結帳能減量及移除，核價收到正確數量', async (t) =
   const row = page.locator('.checkout-item');
   await row.getByRole('button', { name: '增加數量', exact: true }).click();
   await page.locator('.summary-lines').getByText(`${product.name} × 6 · 應稅`, { exact: true }).waitFor();
-  assert.equal(await row.getByRole('button', { name: '增加數量', exact: true }).isDisabled(), false);
+  assert.equal(await row.getByRole('button', { name: '增加數量', exact: true }).isDisabled(), true);
+  await row.getByText('目前最多可買 6 瓶', { exact: true }).waitFor();
   for (let count = 6; count > 0; count--) await row.getByRole('button', { name: '減少數量', exact: true }).click();
   assert.equal(await page.locator('.checkout-item').count(), 0);
   assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem(window.__fixtureCartKey)).items), []);
@@ -228,11 +229,12 @@ test('目前庫存低於已選量時不靜默刪減，結帳仍接受後端核�
 });
 
 test('結帳快速增減不漏計且不超單項上限，儲存失敗用記憶體保留原清單，單價採後端核價', async (t) => {
-  const { page, state } = await fixture(t, 390, '/checkout', { initialStock: 5000, initialQuantity: 996, signedIn: true });
+  const { page, state } = await fixture(t, 390, '/checkout', { initialStock: 5000, stock: 5000, initialQuantity: 996, signedIn: true });
   const row = page.locator('.checkout-item');
   await row.getByText('$315／瓶', { exact: true }).waitFor();
   const increase = row.getByRole('button', { name: '增加數量', exact: true });
   const decrease = row.getByRole('button', { name: '減少數量', exact: true });
+  await page.waitForFunction(() => !document.querySelector('.checkout-item [aria-label=增加數量]')?.disabled);
   await increase.evaluate((element) => { for (let i = 0; i < 4; i++) element.click(); });
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(window.__fixtureCartKey)).items[0].quantity), 999);
   assert.equal(await increase.isDisabled(), true);
@@ -264,7 +266,7 @@ test('結帳快速增減不漏計且不超單項上限，儲存失敗用記憶�
 });
 
 test('舊清單超庫存仍可連續減量與移除，核價失敗不開放付款', async (t) => {
-  const { page, state } = await fixture(t, 390, '/checkout', { initialStock: 5, initialQuantity: 10, signedIn: true, quoteError: true });
+  const { page, state } = await fixture(t, 390, '/checkout', { stock: 5, initialQuantity: 10, signedIn: true, quoteError: true });
   await page.getByText('商品庫存已變動，請調整選購數量', { exact: true }).waitFor();
   const row = page.locator('.checkout-item');
   assert.equal(await page.getByRole('button', { name: '前往線上付款', exact: true }).isDisabled(), true);

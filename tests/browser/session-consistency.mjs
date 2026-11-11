@@ -63,6 +63,7 @@ async function fixture(t, { width = 1280, authenticated = true } = {}) {
     if (path === '/v1/auth/refresh') return refresh(route);
     if (path === '/v1/auth/logout') { state.loggedOut = true; return route.fulfill({ status: 204 }); }
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, sales_scope: 'pickup', shipping_enabled: false, support_phone: '0912345678' } });
+    if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
     const key = `${method} ${path}`;
     if (state.failNext.get(key) > 0) { state.failNext.set(key, state.failNext.get(key) - 1); return route.fulfill({ status: 401, json: { detail: '隔離access token已到期' } }); }
     if (path === '/v1/auth/login' && method === 'POST') {

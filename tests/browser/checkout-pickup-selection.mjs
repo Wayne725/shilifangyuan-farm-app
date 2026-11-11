@@ -6,7 +6,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4193');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname) || target.pathname !== '/') throw new Error('Only isolated local checkout is allowed');
 const base = target.origin;
-const product = { id: 'pickup-product', name: '隔離測試蔭油', unit: '瓶', supplier_name: '隔離合作社', member_price: 300, nonmember_price: 300, stock_quantity: 20, is_active: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'tax_exempt' };
+const product = { id: 'pickup-product', name: '隔離測試蔭油', unit: '瓶', supplier_name: '隔離合作社', member_price: 300, nonmember_price: 300, stock_quantity: 20, is_active: true, daily_sales_enabled: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'tax_exempt' };
 const locations = [
   { id: 'store', name: '合作社門市（水木書苑內左側）', is_active: true },
   { id: 'campus', name: '教育學院大樓', is_active: true },
@@ -27,6 +27,7 @@ async function fixture(t, { width = 960, large = false, state = 'ready' } = {}) 
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.test', display_name: '隔離買家', user_role: 'customer', membership_type: 'nonmember' } } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
+    if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
     if (path === '/v1/shipping-rates') return route.fulfill({ json: [] });
     if (path === '/v1/orders/quote') return route.fulfill({ json: { amount_total: 300, membership_type: 'nonmember', items: [{ product_id: product.id, product_name: product.name, quantity: 1, unit_price: 300, subtotal: 300, tax_type: 'tax_exempt' }] } });
     if (path === '/v1/pickup-locations') {

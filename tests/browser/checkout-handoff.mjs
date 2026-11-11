@@ -8,7 +8,7 @@ import test from 'node:test';
 const { chromium, webkit } = createRequire(import.meta.url)('playwright');
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const root = resolve(process.env.BROWSER_DIST_ROOT || resolve(import.meta.dirname, '../../web/dist'));
-const product = { id: 'recovery-product', name: '回復測試白米', unit: '包', member_price: 100, nonmember_price: 100, stock_quantity: 50, is_active: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'tax_exempt' };
+const product = { id: 'recovery-product', name: '回復測試白米', unit: '包', member_price: 100, nonmember_price: 100, stock_quantity: 50, is_active: true, daily_sales_enabled: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'tax_exempt' };
 const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
 
 async function stopPendingChromiumNavigation(page) {
@@ -67,6 +67,7 @@ async function fixture(t, { payable = false, providerDelay = 1800, shipping = fa
       }
       if (path === '/v1/auth/refresh') return send(200, { access_token: 'isolated-recovery', user: { id: 'recovery-buyer', email: 'buyer@example.com', display_name: '買家', membership_type: 'nonmember', user_role: 'customer' } });
       if (path === '/v1/platform') return send(200, { orders_open: true, closed_message: '暫停接單' });
+      if (path === `/v1/products/${product.id}`) return send(200, product);
       if (path === '/v1/pickup-locations') return send(200, [{ id: 'pickup', name: '合作社門市', is_active: true }]);
       if (path === '/v1/orders/quote') return send(200, { confirmation_fingerprint: 'a'.repeat(64), amount_total: state.total, membership_type: 'nonmember', tax_amount: 0,
         items: [{ product_id: product.id, product_name: product.name, quantity: 1, unit_price: state.total, subtotal: state.total, tax_type: 'tax_exempt' }] });
