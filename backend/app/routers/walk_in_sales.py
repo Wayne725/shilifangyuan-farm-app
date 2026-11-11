@@ -4,9 +4,14 @@ import json
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, PrivateAttr, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,17 +22,37 @@ from ..database import get_session
 from ..domain import aware, invoice_estimated_tax_amount
 from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
 from ..integrations.invoice import is_mobile_barcode_format
+from ..integrations.payment_service import award_order_purchase_points
 from ..invoice_timing import TAIPEI, pickup_invoice_due
 from ..models import (
     AdminAudit, FulfillmentMethod, FulfillmentState, FulfillmentStatus, InvoiceBuyerType, InvoiceCarrierType, InvoiceStatus,
     MembershipType, Order, OrderFulfillment, OrderItem, OrderKind, PaymentAttempt,
-    PaymentMethod, PaymentStatus, Refund, RefundStatus, SalesChannel, TaxType, User, WalkInSale, new_id,
+    PaymentMethod, PaymentStatus, Refund, RefundStatus, SalesChannel, TaxType, User, WalkInRequestGuard,
+    WalkInSale, new_id,
 )
 from ..order_numbers import allocate_order_number
+from ..rate_limit import PAYMENT_REFRESH_RULE, client_key, enforce
 from ..schemas import is_taiwan_tax_id
+from ..walk_in_member_pricing import (
+    CounterMemberIdentity, CounterMemberQuote, CounterMemberQuoteInput, counter_member_quote,
+)
 
 
-walk_in_sales_router = APIRouter(prefix="/v1/admin/walk-in-sales", tags=["walk-in-sales"])
+class WalkInRoute(APIRoute):
+    def get_route_handler(self):
+        route_handler = super().get_route_handler()
+
+        async def handle(request: Request) -> Response:
+            try:
+                return await route_handler(request)
+            except RequestValidationError as exc:
+                details = [{key: error[key] for key in ("loc", "msg", "type")} for error in exc.errors()]
+                return JSONResponse({"detail": details}, status_code=422, headers={"Cache-Control": "no-store"})
+
+        return handle
+
+
+walk_in_sales_router = APIRouter(prefix="/v1/admin/walk-in-sales", tags=["walk-in-sales"], route_class=WalkInRoute)
 
 
 class WalkInInvoicePreferenceInput(BaseModel):
@@ -79,6 +104,8 @@ class WalkInSaleCreate(BaseModel):
     reason: AdminExplanation = Field(default="", max_length=500)
     confirm_received: bool
     confirm_not_invoiced_elsewhere: bool = False
+    member: CounterMemberIdentity | None = None
+    catalog_id: UUID | None = None
 
     @field_validator("product_name", "customer_name")
     @classmethod
@@ -91,6 +118,10 @@ class WalkInSaleCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_collection(self):
+        if self.member is not None and (self.catalog_id is None or self.sale_category is None):
+            raise ValueError("社員交易須選擇目錄品項")
+        if self.member is None and self.catalog_id is not None:
+            raise ValueError("社員核對須填寫社員編號及手機號碼")
         if not self.confirm_received:
             raise ValueError("請確認已收到此筆款項")
         if self.invoice_handling != "external":
@@ -133,6 +164,34 @@ async def _existing(session: AsyncSession, request_id: str, fingerprint: str | N
     if fingerprint is not None and sale.request_fingerprint != fingerprint:
         raise HTTPException(409, "這筆操作已登錄不同內容，請查核原交易；不可用同一編號更改收款")
     return order
+
+
+async def _lock_request(session: AsyncSession, request_id: str) -> bool:
+    insert = postgres_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    statement = insert(WalkInRequestGuard).values(request_id=request_id)
+    # A conflicting write waits until the preceding attempt commits or rolls back.
+    locked = await session.execute(statement.on_conflict_do_update(
+        index_elements=[WalkInRequestGuard.request_id], set_={"request_id": statement.excluded.request_id},
+    ).returning(WalkInRequestGuard.retired))
+    return locked.scalar_one()
+
+
+def _stale_quote(detail: str) -> HTTPException:
+    return HTTPException(409, detail, headers={
+        "X-Error-Code": "walk_in_member_quote_stale", "Cache-Control": "no-store",
+    })
+
+
+@walk_in_sales_router.post("/member-quote", response_model=CounterMemberQuote)
+async def quote_walk_in_member_sale(
+    body: CounterMemberQuoteInput, request: Request, response: Response,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> CounterMemberQuote:
+    response.headers["Cache-Control"] = "no-store"
+    enforce(client_key(request, "counter-member-quote", admin.id), PAYMENT_REFRESH_RULE)
+    _, quote = await counter_member_quote(session, settings, body)
+    return quote
 
 
 @walk_in_sales_router.get("/request/{client_request_id}")
@@ -206,13 +265,16 @@ async def get_walk_in_sale(
 
 @walk_in_sales_router.post("", status_code=201)
 async def create_walk_in_sale(
-    body: WalkInSaleCreate, response: Response,
+    body: WalkInSaleCreate, request: Request, response: Response,
     admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
     response.headers["Cache-Control"] = "no-store"
     request_id = str(body.client_request_id)
-    fingerprint_data = body.model_dump(mode="json")
+    fingerprint_data = body.model_dump(mode="json", exclude={"member", "catalog_id"})
+    if body.member is not None:
+        fingerprint_data["member_number"] = body.member.member_number
+        fingerprint_data["catalog_id"] = str(body.catalog_id)
     if "sale_category" not in body.model_fields_set:
         fingerprint_data.pop("sale_category")
         # Older clients hashed the submitted tax ID before whitespace normalization.
@@ -227,6 +289,44 @@ async def create_walk_in_sale(
     now = datetime.now(timezone.utc)
     if body.pickup_date is not None and body.pickup_date < now.astimezone(TAIPEI).date():
         raise HTTPException(422, "取餐日期不可早於今天；發票不能倒填日期")
+    verified_membership_id = None
+    membership_type = MembershipType.NONMEMBER
+    member_tax_exempt = False
+    if body.member is not None:
+        enforce(client_key(request, "counter-member-collection", admin.id), PAYMENT_REFRESH_RULE)
+    retired = await _lock_request(session, request_id)
+    try:
+        existing = await _existing(session, request_id, fingerprint)
+    except HTTPException:
+        await session.rollback()
+        raise
+    if existing is not None:
+        result = await walk_in_sale_read(session, existing)
+        await session.rollback()
+        response.status_code = 200
+        return result
+    if retired:
+        await session.rollback()
+        raise _stale_quote("原操作編號已結束，請重新核對交易")
+    if body.member is not None:
+        try:
+            membership, quote = await counter_member_quote(session, settings, CounterMemberQuoteInput(
+                member=body.member, sale_category=body.sale_category, catalog_id=body.catalog_id,
+                invoice_buyer_type=body.preferences.invoice_buyer_type,
+            ), lock=True)
+            if (body.product_name, body.unit_price, body.tax_type) != (quote.product_name, quote.unit_price, quote.tax_type):
+                raise HTTPException(409, "品項、售價或稅別已變更，請重新核對")
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            # Retire the ID before signaling that another request cannot collect it.
+            await session.execute(update(WalkInRequestGuard).where(
+                WalkInRequestGuard.request_id == request_id,
+            ).values(retired=True))
+            await session.commit()
+            raise _stale_quote(exc.detail) from exc
+        verified_membership_id = membership.id
+        membership_type, member_tax_exempt = quote.membership_type, quote.member_tax_exempt
     pickup_at = datetime.combine(body.pickup_date, time(12), TAIPEI).astimezone(timezone.utc) if body.pickup_date else None
     completed = pickup_at is None
     amount = body.unit_price * body.quantity
@@ -236,7 +336,8 @@ async def create_walk_in_sale(
         order_number=await allocate_order_number(session, "O", now),
         order_kind=OrderKind.REGULAR, sales_channel=SalesChannel.REGULAR,
         fulfillment_method=FulfillmentMethod.COOPERATIVE_PICKUP,
-        membership_type_snapshot=MembershipType.NONMEMBER, member_tax_exempt_snapshot=False,
+        verified_counter_membership_id=verified_membership_id,
+        membership_type_snapshot=membership_type, member_tax_exempt_snapshot=member_tax_exempt,
         contact_email=str(body.contact_email or body.preferences.invoice_buyer_email or ""),
         amount_total=amount, tax_amount=invoice_estimated_tax_amount(
             [(amount, body.tax_type)], body.preferences.invoice_buyer_type,
@@ -263,8 +364,14 @@ async def create_walk_in_sale(
         session.add(WalkInSale(order_id=order.id, client_request_id=request_id, request_fingerprint=fingerprint, operator_id=actor_id, sale_category=body.sale_category))
         await session.flush()
         enqueue_invoice_issue(session, order, trigger="walk_in_payment_confirmed")
+        if verified_membership_id is not None:
+            await award_order_purchase_points(session, order)
+        audit_data = {"amount": amount, "tax_type": body.tax_type.value, "invoice_handling": body.invoice_handling, "sale_category": body.sale_category}
+        if verified_membership_id is not None:
+            audit_data.update(catalog_id=str(body.catalog_id), verified_membership_id=verified_membership_id)
         session.add(AdminAudit(actor_id=actor_id, action="walk_in_sale.collected", aggregate_type="order", aggregate_id=order.id,
-            reason=body.reason, data={"amount": amount, "tax_type": body.tax_type.value, "invoice_handling": body.invoice_handling, "sale_category": body.sale_category}))
+            reason=body.reason, data=audit_data))
+        await session.execute(delete(WalkInRequestGuard).where(WalkInRequestGuard.request_id == request_id))
         await session.commit()
     except IntegrityError:
         await session.rollback()

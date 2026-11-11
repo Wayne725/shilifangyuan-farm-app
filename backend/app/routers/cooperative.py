@@ -85,16 +85,20 @@ def _period(start: date, end: date) -> tuple[datetime, datetime]:
 async def _paid_contributions(
     session: AsyncSession, start: datetime, end: datetime
 ) -> dict[str, int]:
+    contributor = func.coalesce(Order.user_id, Membership.user_id)
     rows = (
         await session.execute(
-            select(Order.user_id, func.sum(Order.amount_total))
+            select(contributor, func.sum(Order.amount_total))
+            .select_from(Order)
+            .outerjoin(Membership, Membership.id == Order.verified_counter_membership_id)
             .where(
+                contributor.is_not(None),
                 Order.payment_status == PaymentStatus.PAID,
                 Order.membership_type_snapshot == MembershipType.MEMBER,
                 Order.paid_at >= start,
                 Order.paid_at <= end,
             )
-            .group_by(Order.user_id)
+            .group_by(contributor)
         )
     ).all()
     return {user_id: int(amount or 0) for user_id, amount in rows}
