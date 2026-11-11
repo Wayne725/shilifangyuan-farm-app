@@ -66,6 +66,7 @@ from ..meal_booking import (
     meal_order_deadline,
     meal_period,
     meal_pickup_slots,
+    meal_schedule_has_pickup_slots,
     meal_service_date,
     validate_meal_booking_day,
 )
@@ -1316,6 +1317,19 @@ async def _validate_schedule_meals(session: AsyncSession, body: MealScheduleInpu
         raise HTTPException(status_code=422, detail="每日菜單包含無效或停用餐點")
 
 
+def _validate_schedule_pickup_slots(body: MealScheduleInput, existing: MealScheduleTemplate | None = None) -> None:
+    if meal_schedule_has_pickup_slots(body.meal_period, body.pickup_start_time, body.pickup_end_time):
+        return
+    # An old schedule with an unusable time range can still be disabled.
+    if existing is not None and not body.enabled and (
+        body.meal_period == existing.meal_period
+        and body.pickup_start_time == time.fromisoformat(existing.pickup_start_time)
+        and body.pickup_end_time == time.fromisoformat(existing.pickup_end_time)
+    ):
+        return
+    raise HTTPException(422, "取餐時間須包含至少一個該餐別的半小時取餐時段")
+
+
 def _schedule_values(body: MealScheduleInput) -> dict[str, Any]:
     values = body.model_dump(mode="json")
     for name in ("pickup_start_time", "pickup_end_time", "cutoff_time"):
@@ -1362,6 +1376,7 @@ async def admin_create_meal_schedule(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MealScheduleRead:
+    _validate_schedule_pickup_slots(body)
     await _validate_schedule_meals(session, body)
     template = MealScheduleTemplate(**_schedule_values(body), created_by_id=admin.id)
     session.add(template)
@@ -1384,6 +1399,7 @@ async def admin_update_meal_schedule(
     template = await session.scalar(select(MealScheduleTemplate).where(MealScheduleTemplate.id == template_id).with_for_update())
     if template is None:
         raise HTTPException(status_code=404, detail="找不到每日供餐設定")
+    _validate_schedule_pickup_slots(body, template)
     await _validate_schedule_meals(session, body)
     before = MealScheduleRead.model_validate(template).model_dump(mode="json")
     for name, value in _schedule_values(body).items():
@@ -1408,7 +1424,9 @@ async def admin_generate_meal_schedule(
         raise HTTPException(status_code=404, detail="找不到每日供餐設定")
     if not template.enabled:
         raise HTTPException(status_code=409, detail="請先啟用每日供餐設定")
-    await _validate_schedule_meals(session, MealScheduleRead.model_validate(template))
+    schedule = MealScheduleRead.model_validate(template)
+    _validate_schedule_pickup_slots(schedule)
+    await _validate_schedule_meals(session, schedule)
     conversion = {}
     created_ids = await generate_scheduled_meal_events(session, datetime.now(timezone.utc), template_id=template.id, report=conversion)
     return {"created_count": len(created_ids), "created_event_ids": created_ids, "conversion": conversion}
@@ -1649,8 +1667,15 @@ async def admin_update_meal_event(
     service_date = _aware(body.pickup_starts_at).astimezone(TAIPEI).date()
     if event.schedule_template_id and service_date != event.service_date:
         raise HTTPException(status_code=422, detail="排程場次不可更換供餐日期；請另建手動場次")
-    if event.status == MealEventStatus.PUBLISHED and _aware(values["ordering_ends_at"]) <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=422, detail="已發布場次的訂購截止時間不得設為過去")
+    if event.status == MealEventStatus.PUBLISHED:
+        if _aware(values["ordering_ends_at"]) <= datetime.now(timezone.utc):
+            raise HTTPException(422, "已發布場次的訂購截止時間不得設為過去")
+        candidate = MealEvent(
+            **values, service_date=event.service_date, meal_period=event.meal_period,
+            pickup_slot_ends_at=event.pickup_slot_ends_at,
+        )
+        if not meal_pickup_slots(candidate):
+            raise HTTPException(422, "此場次沒有可預訂的取餐時段")
     meal_ids = {offering.meal_id for offering in body.offerings}
     active_ids = set(await session.scalars(select(Meal.id).where(Meal.id.in_(meal_ids), Meal.is_active.is_(True))))
     if meal_ids != active_ids:
@@ -1727,10 +1752,11 @@ async def publish_meal_event(
     )
     if cutoff <= max(start, now):
         raise HTTPException(status_code=409, detail="訂購截止時間已過")
-    if event.business_only and not meal_pickup_slots(event):
+    slots = meal_pickup_slots(event)
+    if not slots:
         raise HTTPException(409, "此場次沒有可預訂的取餐時段")
     if event.same_day_preparation_minutes is not None and not any(
-        now < meal_order_deadline(event, slot) for slot in meal_pickup_slots(event)
+        now < meal_order_deadline(event, slot) for slot in slots
     ):
         raise HTTPException(409, "本場次已無可預訂的取餐時段")
     event.status = MealEventStatus.PUBLISHED

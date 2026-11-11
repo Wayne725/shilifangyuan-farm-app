@@ -41,7 +41,7 @@ export function campaignStatusLabel(campaign: GroupCampaign, now = Date.now()) {
 
 export function campaignConfirmBlockReason(campaign: GroupCampaign, now = Date.now()) {
   if (!Number.isFinite(campaignTimestamp(campaign.deadline))) return "付款截止時間待確認";
-  if (campaignTimestamp(campaign.deadline) > now) return "付款截止後才能審核成團";
+  if (campaignTimestamp(campaign.deadline) > now) return "付款截止後開放審核";
   if (campaign.intake_status === "settling") return "付款尚在結算，暫時無法確認成團";
   if (campaign.paid_quantity <= 0) return "沒有有效付款，不能確認空團";
   if (!campaign.can_confirm || campaign.decision_status !== "pending_confirmation" || campaign.intake_status !== "closed" || !Number.isInteger(campaign.threshold_version)) return campaign.confirmation_blocked_reason || "目前無法確認成團，請更新共同購買資料";
@@ -72,8 +72,8 @@ export function groupProposalStatusLabel(status: string) {
 }
 
 export function campaignQuantityBlockReason(campaign: GroupCampaign, now = Date.now()) {
-  if (!["recruiting", "pending_confirmation", "confirmed"].includes(campaign.decision_status)) return "此團已結束，無法修改數量設定。";
-  if (campaignTimestamp(campaign.deadline) <= now) return "付款已截止，無法修改數量設定。";
-  if (campaign.core_locked_at) return "已有付款紀錄，限購與成團數量已鎖定。";
+  if (!["recruiting", "pending_confirmation", "confirmed"].includes(campaign.decision_status)) return "共同購買已結束";
+  if (campaignTimestamp(campaign.deadline) <= now) return "付款已截止";
+  if (campaign.core_locked_at) return "數量設定已鎖定";
   return "";
 }

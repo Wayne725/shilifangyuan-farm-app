@@ -1,11 +1,13 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
+import time_machine
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.jobs import reconcile_once
+from app.meal_booking import meal_pickup_slots
 from app.meal_schedules import TAIPEI, generate_scheduled_meal_events
 from app.models import Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User, UserRole
 from app.routers import meals as meals_module
@@ -104,7 +106,7 @@ async def test_enabled_templates_create_drafts_until_explicit_auto_publish(sched
 async def test_generation_uses_taipei_dates_cross_midnight_and_does_not_reopen_cancelled(schedule_context):
     client, session, admin, _buyer, meal = schedule_context
     response = await client.post("/v1/admin/meal-schedules", json=schedule_body(
-        meal.id, meal_period="dinner", pickup_start_time="23:30", pickup_end_time="00:30", cutoff_time="22:30",
+        meal.id, meal_period="dinner", pickup_start_time="17:30", pickup_end_time="00:30", cutoff_time="22:30",
         weekdays=list(range(7)),
     ), headers=auth_headers(admin))
     template = await session.get(MealScheduleTemplate, response.json()["id"])
@@ -116,9 +118,10 @@ async def test_generation_uses_taipei_dates_cross_midnight_and_does_not_reopen_c
     events = list(await session.scalars(select(MealEvent).order_by(MealEvent.pickup_starts_at)))
     assert len(created_ids) == 2
     assert events[0].service_date.isoformat() == "2027-01-04"
-    assert events[0].pickup_starts_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-04T23:30:00+08:00"
+    assert events[0].pickup_starts_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-04T17:30:00+08:00"
     assert events[0].pickup_slot_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-05T00:30:00+08:00"
     assert events[0].pickup_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI).isoformat() == "2027-01-05T01:00:00+08:00"
+    assert [slot.astimezone(TAIPEI).strftime("%H:%M") for slot in meal_pickup_slots(events[0])] == ["17:30", "18:00"]
     events[0].status = MealEventStatus.CANCELLED
     await session.commit()
     assert await generate_scheduled_meal_events(session, now) == []
@@ -376,3 +379,99 @@ async def test_generated_event_manual_changes_survive_schedule_and_cannot_move_d
         update[name] = (datetime.fromisoformat(update[name]) + timedelta(days=1)).isoformat()
     moved = await client.put(f"/v1/admin/meal-events/{event.id}", json=update, headers=auth_headers(admin))
     assert moved.status_code == 422
+
+
+async def test_old_schedule_without_pickup_slots_can_be_read_disabled_and_corrected(schedule_context):
+    client, session, admin, buyer, meal = schedule_context
+    path = "/v1/admin/meal-schedules"
+    fixed_now = datetime(2027, 3, 8, 10, tzinfo=TAIPEI)
+    invalid = schedule_body(
+        meal.id, pickup_start_time="14:00", pickup_end_time="15:00", enabled=True, auto_publish=True, weekdays=list(range(5)),
+    )
+    with time_machine.travel(fixed_now, tick=False):
+        admin_headers = auth_headers(admin)
+        response = await client.post(path, json=invalid, headers=admin_headers)
+        assert response.status_code == 422 and "半小時取餐時段" in response.json()["detail"]
+
+        template = MealScheduleTemplate(**invalid, created_by_id=admin.id)
+        session.add(template)
+        await session.flush()
+        prior_event = MealEvent(
+            title="保留舊場次", location="合作社", booking_policy="legacy", meal_period="lunch",
+            schedule_template_id=template.id, service_date=date(2027, 3, 9),
+            created_by_id=admin.id, status=MealEventStatus.PUBLISHED,
+            ordering_starts_at=datetime(2027, 3, 8, tzinfo=TAIPEI),
+            ordering_ends_at=datetime(2027, 3, 8, 20, tzinfo=TAIPEI),
+            pickup_starts_at=datetime(2027, 3, 9, 11, tzinfo=TAIPEI),
+            pickup_ends_at=datetime(2027, 3, 9, 13, 30, tzinfo=TAIPEI),
+            offerings=[MealEventOffering(meal=meal, price=100, capacity=20)],
+        )
+        session.add(prior_event)
+        await session.commit()
+        existing = await client.post(f"/v1/meal-events/{prior_event.id}/orders", json={
+            "contact_email": buyer.email, "items": [{"offering_id": prior_event.offerings[0].id, "quantity": 1}],
+        }, headers=auth_headers(buyer))
+        assert existing.status_code == 201, existing.text
+
+        listed = await client.get(path, headers=admin_headers)
+        assert listed.status_code == 200, listed.text
+        assert listed.json()[0]["enabled"] is True and listed.json()[0]["pickup_start_time"] == "14:00:00"
+        assert await generate_scheduled_meal_events(session, fixed_now) == []
+        await session.refresh(template)
+        await session.refresh(prior_event)
+        assert template.enabled is True and template.pickup_start_time == "14:00"
+        assert prior_event.status == MealEventStatus.PUBLISHED and prior_event.booking_policy == "legacy"
+        assert await session.scalar(select(func.count(Order.id))) == 1
+
+        edit = f"{path}/{template.id}"
+        generate = await client.post(f"{edit}/generate", headers=admin_headers)
+        assert generate.status_code == 422 and "半小時取餐時段" in generate.json()["detail"]
+        changed_invalid = await client.put(edit, json={**invalid, "pickup_end_time": "15:30"}, headers=admin_headers)
+        assert changed_invalid.status_code == 422
+        disabled = await client.put(edit, json={**invalid, "enabled": False}, headers=admin_headers)
+        assert disabled.status_code == 200 and disabled.json()["enabled"] is False
+
+        corrected = await client.put(edit, json={
+            **invalid, "pickup_start_time": "12:50", "pickup_end_time": "13:00",
+        }, headers=admin_headers)
+        assert corrected.status_code == 200, corrected.text
+        public = (await client.get("/v1/meal-events")).json()
+        generated = [event for event in public if event["id"] != prior_event.id]
+        assert generated
+        for event in generated:
+            assert [datetime.fromisoformat(slot).astimezone(TAIPEI).strftime("%H:%M") for slot in event["pickup_slots"]] == ["13:00"]
+        assert await session.scalar(select(Order.id).where(Order.meal_event_id == prior_event.id)) == existing.json()["id"]
+
+
+async def test_manual_publish_and_published_edit_require_a_bookable_pickup_slot(schedule_context):
+    client, _session, admin, _buyer, meal = schedule_context
+    fixed_now = datetime(2027, 3, 8, 10, tzinfo=TAIPEI)
+    path = "/v1/admin/meal-events"
+    invalid = {
+        "title": "特殊場次", "location": "合作社", "booking_policy": "special",
+        "ordering_starts_at": "2027-03-08T00:00:00+08:00", "ordering_ends_at": "2027-03-08T20:00:00+08:00",
+        "pickup_starts_at": "2027-03-09T13:15:00+08:00", "pickup_ends_at": "2027-03-09T14:00:00+08:00",
+        "offerings": [{"meal_id": meal.id, "price": 100, "capacity": 20}],
+    }
+    with time_machine.travel(fixed_now, tick=False):
+        headers = auth_headers(admin)
+        created = await client.post(path, json=invalid, headers=headers)
+        assert created.status_code == 201, created.text
+        assert created.json()["pickup_slots"] == []
+        event_id = created.json()["id"]
+        publish = f"{path}/{event_id}/publish"
+        blocked = await client.post(publish, headers=headers)
+        assert blocked.status_code == 409 and "沒有可預訂的取餐時段" in blocked.json()["detail"]
+        assert (await client.get("/v1/meal-events")).json() == []
+
+        edit = f"{path}/{event_id}"
+        fixed = {**invalid, "pickup_starts_at": "2027-03-09T12:30:00+08:00", "pickup_ends_at": "2027-03-09T13:00:00+08:00"}
+        corrected = await client.put(edit, json=fixed, headers=headers)
+        assert corrected.status_code == 200, corrected.text
+        published = await client.post(publish, headers=headers)
+        assert published.status_code == 200, published.text
+        assert [datetime.fromisoformat(slot).astimezone(TAIPEI).strftime("%H:%M") for slot in published.json()["pickup_slots"]] == ["12:30"]
+        broken_edit = await client.put(edit, json=invalid, headers=headers)
+        assert broken_edit.status_code == 422 and "沒有可預訂的取餐時段" in broken_edit.json()["detail"]
+        still_published = (await client.get(f"/v1/meal-events/{event_id}")).json()
+        assert still_published["pickup_slots"] == published.json()["pickup_slots"]

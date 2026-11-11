@@ -28,8 +28,8 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone, onAcces
       <div><dt>成團所需總數量</dt><dd>{campaign.min_paid_quantity} {unit}</dd></div>
       <div><dt>本團供應上限</dt><dd>{campaign.supply_cap} {unit}</dd></div>
     </dl>
-    <button className="button button-system" type="button" disabled={closed || update.isPending} onClick={() => { setDraft(quantities(campaign)); setOriginal(quantities(campaign)); setOpen((value) => !value); setSaved(false); update.reset(); }}>編輯數量設定</button>
-    {blockReason && <p className="form-error">{blockReason}</p>}
+    {closed ? <p role="status"><span className="status-chip">{blockReason}</span></p> :
+      <button className="button button-system" type="button" disabled={update.isPending} onClick={() => { setDraft(quantities(campaign)); setOriginal(quantities(campaign)); setOpen((value) => !value); setSaved(false); update.reset(); }}>編輯數量設定</button>}
     {saved && <p className="form-success" role="status">共同購買數量設定已儲存</p>}
     {open && !closed && <form className="social-form admin-master-form" aria-label="編輯共同購買數量" onSubmit={(event) => { event.preventDefault(); if (!error && Object.keys(changes).length) update.mutate(); }}>
       <div className="form-heading"><div><p className="eyebrow">CAMPAIGN QUANTITIES / 數量設定</p><h3>編輯共同購買數量</h3></div></div>
@@ -40,9 +40,10 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone, onAcces
           ["supply_cap", "本團供應上限"],
         ] as const).map(([key, label]) => <label className="field" key={key}><span>{label}（{unit}）</span><input required min={1} step={1} type="number" disabled={update.isPending} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: Number(event.target.value) })} /></label>)}
       </div>
-      {(error || update.isError) && <p className="form-error" role="alert">{error || update.error?.message}</p>}
-      <div className="form-actions"><button className="button button-quiet" type="button" disabled={update.isPending} onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={Boolean(error) || !Object.keys(changes).length || update.isPending}>儲存數量設定</button></div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="form-actions"><button className="button button-quiet" type="button" disabled={update.isPending} onClick={() => { setOpen(false); update.reset(); }}>取消</button><button className="button button-primary" disabled={Boolean(error) || !Object.keys(changes).length || update.isPending}>儲存數量設定</button></div>
     </form>}
+    {update.isError && <p className="form-error" role="alert">{update.error.message}</p>}
   </section>;
 }
 
