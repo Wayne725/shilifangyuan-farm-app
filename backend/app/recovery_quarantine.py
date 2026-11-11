@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from hashlib import sha256
 from typing import Annotated, Literal
 import re
@@ -28,6 +28,7 @@ SequenceFloor = Annotated[int, Field(strict=True, ge=0, le=2**63 - 2)]
 PENDING_PAYMENTS = frozenset({PaymentStatus.PENDING, PaymentStatus.FAILED, PaymentStatus.EXPIRED,
                               PaymentStatus.REFUND_PENDING, PaymentStatus.LATE_PAID_REFUND_REQUIRED})
 FINAL_PRINT_STATES = ("printed", "simulated")
+TAIPEI = ZoneInfo("Asia/Taipei")
 
 
 class RecoveryHoldActive(ValueError):
@@ -161,6 +162,10 @@ class OrderNumberCheckpoint(QuarantineInput):
     regular_last_value: SequenceFloor
     evidence_sha256: Digest
 
+    def require_business_date(self, timestamp: datetime) -> None:
+        if self.business_date != timestamp.astimezone(TAIPEI).date():
+            raise ValueError("流水號證據須為封存當日的台北營業日")
+
 
 class Manifest(QuarantineInput):
     cutover_id: UUID
@@ -278,8 +283,7 @@ async def arm_cutover(session: AsyncSession, actor: User, manifest: Manifest) ->
     number_checkpoint = ordered.order_number_checkpoint
     if number_checkpoint is None:
         raise ValueError("須核對恢復營業當日的最後已發單號")
-    if number_checkpoint.business_date != utcnow().astimezone(ZoneInfo("Asia/Taipei")).date():
-        raise ValueError("流水號證據須為封存當日的台北營業日")
+    number_checkpoint.require_business_date(utcnow())
     current = await inventory(session)
     decisions = {decision.target.key(): decision for decision in manifest.decisions}
     if current.keys() - decisions.keys():
@@ -302,17 +306,21 @@ async def arm_cutover(session: AsyncSession, actor: User, manifest: Manifest) ->
             for item in targets:
                 Item(scope=item[0], reference=item[1])
                 held.setdefault(item, decision.evidence_sha256)
-    await _apply_order_number_checkpoint(session, number_checkpoint)
-    for (scope, reference), evidence in held.items():
-        session.add(RecoveryHold(cutover_id=key, scope=scope, reference=reference, evidence_sha256=evidence))
-    row.manifest_sha256 = digest
-    row.armed_at = utcnow()
-    _audit(session, actor, key, "recovery.cutover_armed", {
-        "manifest_sha256": digest,
-        "hold_count": len(held),
-        "order_number_checkpoint": number_checkpoint.model_dump(mode="json"),
-    })
-    await session.flush()
+    async with session.begin_nested():
+        await _apply_order_number_checkpoint(session, number_checkpoint)
+        armed_at = utcnow()
+        number_checkpoint.require_business_date(armed_at)
+        for (scope, reference), evidence in held.items():
+            session.add(RecoveryHold(cutover_id=key, scope=scope, reference=reference, evidence_sha256=evidence))
+        row.manifest_sha256 = digest
+        row.armed_at = armed_at
+        _audit(session, actor, key, "recovery.cutover_armed", {
+            "manifest_sha256": digest,
+            "hold_count": len(held),
+            "order_number_checkpoint": number_checkpoint.model_dump(mode="json"),
+        })
+        await session.flush()
+        number_checkpoint.require_business_date(utcnow())
     return len(held)
 
 

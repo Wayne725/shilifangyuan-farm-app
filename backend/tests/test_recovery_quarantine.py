@@ -6,11 +6,12 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+import time_machine
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app import database, jobs, main
+from app import database, jobs, main, recovery_quarantine
 import app.routers.payments as payments
 from app.config import get_settings
 from app.integrations.payment_service import SQLAlchemyPaymentCallbackRepository, create_payment_attempt
@@ -94,6 +95,64 @@ async def test_missing_or_stale_order_number_checkpoint_cannot_arm(database_sess
         await arm_cutover(database_session, actor, empty.model_copy(update={"order_number_checkpoint": stale}))
     assert await has_active_hold(database_session)
     assert await database_session.scalar(select(func.count()).select_from(OrderNumberCounter)) == 0
+
+
+@pytest.mark.parametrize("stage", ["inventory", "flush"])
+async def test_arm_crossing_taipei_midnight_keeps_cutover_unsealed(database_session, monkeypatch, stage):
+    actor = await admin_user(database_session)
+    cutover = uuid4()
+    pending_event = OutboxEvent(event_type="invoice.issue_requested", aggregate_type="order", aggregate_id=str(uuid4()))
+    database_session.add(pending_event)
+    await begin_cutover(database_session, actor, cutover, CHECKPOINT)
+    await database_session.commit()
+    cutover_row = await database_session.get(RecoveryCutover, str(cutover))
+    cutover_date = datetime(2026, 11, 11, 15, 59, 59, tzinfo=timezone.utc)
+    hold = decision("outbox", pending_event.id)
+    with time_machine.travel(cutover_date, tick=False) as clock:
+        previous_day_manifest = manifest(cutover, hold, meal=3, regular=6)
+        moved = False
+
+        def cross_midnight():
+            nonlocal moved
+            if not moved:
+                clock.shift(timedelta(seconds=2))
+                moved = True
+
+        if stage == "inventory":
+            read_inventory = recovery_quarantine.inventory
+
+            async def slow_inventory(session):
+                result = await read_inventory(session)
+                cross_midnight()
+                return result
+
+            monkeypatch.setattr(recovery_quarantine, "inventory", slow_inventory)
+        else:
+            @event.listens_for(database_session.sync_session, "after_flush")
+            def slow_seal(_session, _flush_context):
+                if cutover_row.armed_at is not None:
+                    cross_midnight()
+
+        with pytest.raises(ValueError, match="台北營業日"):
+            await arm_cutover(database_session, actor, previous_day_manifest)
+        assert moved
+        assert await has_active_hold(database_session)
+        assert (await database_session.get(RecoveryCutover, str(cutover))).armed_at is None
+        assert await database_session.scalar(select(func.count()).select_from(OrderNumberCounter)) == 0
+        assert await database_session.scalar(select(func.count()).select_from(RecoveryHold)) == 0
+        assert await database_session.scalar(select(func.count()).select_from(AdminAudit).where(
+            AdminAudit.action == "recovery.cutover_armed",
+        )) == 0
+
+        current_day_manifest = manifest(cutover, hold, meal=2, regular=4)
+        assert await arm_cutover(database_session, actor, current_day_manifest) == 2
+        await database_session.commit()
+        assert not await has_active_hold(database_session)
+        assert await has_active_hold(database_session, ("outbox", pending_event.id))
+        assert await allocate_order_number(database_session, "M") == "M2026111203"
+        assert await allocate_order_number(database_session, "O") == "O2026111205"
+        clock.shift(timedelta(days=1))
+        assert await arm_cutover(database_session, actor, current_day_manifest) == 0
 
 
 async def test_arm_advances_only_the_verified_taipei_counters(database_session):
