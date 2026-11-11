@@ -74,8 +74,10 @@ export function AdminMealsPage() {
       <AdminNav />
       <Tabs.Root className="admin-social-tabs" value={activeTab} onValueChange={(tab) => void navigate({ search: { tab } })}>
         <Tabs.List className="tab-list" aria-label="便當營運分類"><Tabs.Trigger value="orders">訂單查詢與待辦</Tabs.Trigger><Tabs.Trigger value="cancellations">退單審核</Tabs.Trigger><Tabs.Trigger value="events">場次與核銷</Tabs.Trigger><Tabs.Trigger value="schedules">每日午晚餐排程</Tabs.Trigger><Tabs.Trigger value="meals">餐點主檔</Tabs.Trigger></Tabs.List>
-        <Tabs.Content className="tab-content" value="orders"><AdminMealOrderSearch key={routeSearch.q || "all"} initialSearch={routeSearch.q} onReviewOrder={(q) => void navigate({ search: { tab: "cancellations", q } })} /></Tabs.Content>
-        <Tabs.Content className="tab-content" value="cancellations"><AdminMealCancellations key={routeSearch.q || "all"} initialSearch={routeSearch.q} /></Tabs.Content>
+        <Tabs.Content className="tab-content" value="orders"><AdminMealOrderSearch key={routeSearch.q || "all"} initialSearch={routeSearch.q} /></Tabs.Content>
+        <Tabs.Content className="tab-content" value="cancellations">
+          <AdminMealCancellations key={JSON.stringify([routeSearch.order_id, routeSearch.q])} initialSearch={routeSearch.q} initialOrderId={routeSearch.order_id} />
+        </Tabs.Content>
         <Tabs.Content className="tab-content" value="events">
           <EventCreateForm meals={meals.data || []} events={events.data || []} onDone={refreshEvents} />
           {events.isPending && <LoadingLines count={4} />}

@@ -11,9 +11,14 @@ import {
 
 import {
   apiFetch,
+  captureExplicitSessionGuard,
+  captureSessionIdentityGuard,
   clearSession,
+  finishBrowserSignOut,
   restoreSession,
-  saveSession,
+  runBrowserAuthAction,
+  saveBrowserSignIn,
+  subscribeBrowserSessionChanges,
   subscribeSession,
   updateSessionUser,
 } from "../lib/api";
@@ -82,6 +87,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSessionError("");
   }), [queryClient]);
 
+  useEffect(() => subscribeBrowserSessionChanges(() => {
+    clearSession();
+    setIsAuthReady(false);
+    setSessionAttempt(value => value + 1);
+  }), []);
+
   useEffect(() => {
     let active = true;
     setIsAuthReady(false);
@@ -100,13 +111,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [sessionAttempt]);
 
-  const login = async (email: string, password: string, rememberMe: boolean) => {
+  const login = (email: string, password: string, rememberMe: boolean) => runBrowserAuthAction(async () => {
     const session = await apiFetch<AuthResponse>("/v1/auth/login", {
       method: "POST", body: JSON.stringify({ email, password, remember_me: rememberMe }),
     });
-    saveSession(session);
+    saveBrowserSignIn(session);
     rememberLoginEmail(email, rememberMe);
-  };
+  });
 
   const openLogin = () => {
     if (window.location.pathname === "/login") return;
@@ -114,13 +125,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.assign(`/login?return_to=${encodeURIComponent(returnTo)}`);
   };
 
-  const logout = async () => {
+  const logout = () => runBrowserAuthAction(async () => {
+    const stillCurrent = captureSessionIdentityGuard();
+    const sameSignIn = captureExplicitSessionGuard();
+    let confirmed = false;
     try {
       await apiFetch<void>("/v1/auth/logout", { method: "POST" });
+      confirmed = true;
     } finally {
-      clearSession();
+      if (stillCurrent() && sameSignIn()) finishBrowserSignOut(confirmed);
     }
-  };
+  });
 
   return <AuthContext.Provider value={{ user, isAuthReady, sessionError, sessionScope,
     retrySession: () => setSessionAttempt((value) => value + 1), openLogin, login, logout, saveMobileBarcode }}>

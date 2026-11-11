@@ -2,6 +2,7 @@
 .meal-finance-presets, .meal-finance-result-heading, .meal-finance-result-heading > div { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .meal-finance-presets { margin: 24px 0 16px; }
 .meal-finance-filters { display: grid; grid-template-columns: 1fr 1fr 1fr 2fr auto; gap: 16px; align-items: end; }
+.meal-finance-filters.tax-ledger-filters { grid-template-columns: repeat(2, minmax(0, 15rem)) auto; justify-content: start; }
 .meal-finance-page input, .meal-finance-page select, .meal-finance-page .button { min-height: 48px; font-size: 1.125rem; letter-spacing: 0; }
 .meal-finance-page :is(input, select, button, a, summary):focus-visible { outline: 3px solid var(--moss); outline-offset: 4px; }
 .meal-finance-result-heading { justify-content: space-between; margin: 20px 0; }
@@ -35,6 +36,7 @@
 .meal-finance-refunds summary { min-height: 48px; padding: 12px 0; cursor: pointer; }
 @media (max-width: 1000px) { .meal-finance-filters { grid-template-columns: 1fr 1fr; } .meal-finance-stats { grid-template-columns: 1fr 1fr; } .meal-finance-stats article:nth-child(3) { border-left: 0; } .meal-finance-order-meta, .meal-finance-order-totals { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) { .meal-finance-filters { grid-template-columns: 1fr; } .meal-finance-order header { flex-direction: column; } .meal-finance-stats article { padding: 16px 8px; } .meal-finance-order-meta { grid-template-columns: 1fr; } .meal-finance-result-heading { align-items: stretch; } }
+@media (max-width: 600px) { .meal-finance-filters.tax-ledger-filters { grid-template-columns: minmax(0, 1fr); justify-content: stretch; } }
 
 .meal-finance-definition summary { cursor: pointer; min-height: 48px; padding-block: 10px; }
 .meal-finance-definition p { margin-top: 12px; }

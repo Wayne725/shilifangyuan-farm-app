@@ -5,12 +5,12 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..admin_work_queues import admin_today_counts, business_invoice_followup_orders, pending_order_cancellation, unpaid_business_order
+from ..admin_work_queues import InvoiceFollowupReason, admin_today_counts, invoice_followup_conditions, pending_order_cancellation, unpaid_business_order
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -184,9 +184,10 @@ class AdminOrderRead(OrderRead):
     customer_name: str
     contact_phone: Optional[str] = None
     contact_phone_status: Literal["available", "missing", "unavailable"] = "missing"
+    invoice_followup_reason: InvoiceFollowupReason | None = Field(default=None, exclude_if=lambda reason: reason is None)
 
 
-def admin_order_read(order: Order, settings: Settings) -> AdminOrderRead:
+def admin_order_read(order: Order, settings: Settings, invoice_followup_reason: InvoiceFollowupReason | None = None) -> AdminOrderRead:
     from .orders import order_read
 
     phone = None
@@ -204,6 +205,7 @@ def admin_order_read(order: Order, settings: Settings) -> AdminOrderRead:
     return AdminOrderRead(
         **order_read(order, True).model_dump(), customer_name=order.user.display_name if order.user else order.customer_name_snapshot or "現場客人",
         contact_phone=phone, contact_phone_status=phone_status,
+        invoice_followup_reason=invoice_followup_reason,
     )
 
 
@@ -218,6 +220,7 @@ class AdminOrderPage(BaseModel):
 async def search_admin_orders(
     response: Response,
     q: str = Query(default="", max_length=120),
+    order_id: str | None = Query(default=None, min_length=1, max_length=36),
     cancellation_pending: bool = False,
     business_unpaid: bool = False,
     invoice_followup: bool = False,
@@ -233,13 +236,16 @@ async def search_admin_orders(
     query = select(Order).where(order_category_condition(order_category))
     if business_unpaid:
         query = query.where(unpaid_business_order())
-    if invoice_followup:
-        query = query.where(Order.id.in_(business_invoice_followup_orders(session, datetime.now(timezone.utc))))
+    followup = invoice_followup_conditions(session, datetime.now(timezone.utc)) if invoice_followup else None
+    if followup is not None:
+        query = query.where(or_(*followup.values()))
     if payment_status is not None:
         query = query.where(Order.payment_status == payment_status)
     if cancellation_pending:
         query = query.where(pending_order_cancellation())
-    if term := q.strip():
+    if order_id is not None:
+        query = query.where(Order.id == order_id)
+    elif term := q.strip():
         query = query.where(or_(
             Order.order_number.icontains(term, autoescape=True),
             Order.contact_email.icontains(term, autoescape=True),
@@ -249,15 +255,22 @@ async def search_admin_orders(
             Order.items.any(OrderItem.product_name.icontains(term, autoescape=True)),
         ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
-    orders = await session.scalars(query.options(
+    page_query = query.options(
         selectinload(Order.user),
         selectinload(Order.cancellation_requests),
         selectinload(Order.amendments), selectinload(Order.payment_attempts),
         selectinload(Order.items), selectinload(Order.group_campaign),
         selectinload(Order.meal_event), selectinload(Order.invoice),
         selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),
-    ).order_by(Order.created_at.desc(), Order.id.desc()).offset(offset).limit(limit))
-    return AdminOrderPage(items=[admin_order_read(order, settings) for order in orders], total=total or 0, limit=limit, offset=offset)
+    ).order_by(Order.created_at.desc(), Order.id.desc()).offset(offset).limit(limit)
+    if followup is None:
+        orders = await session.scalars(page_query)
+        items = [admin_order_read(order, settings) for order in orders]
+    else:
+        reason = case(*[(condition, code) for code, condition in followup.items()])
+        rows = await session.execute(page_query.add_columns(reason))
+        items = [admin_order_read(order, settings, invoice_followup_reason=code) for order, code in rows]
+    return AdminOrderPage(items=items, total=total or 0, limit=limit, offset=offset)
 
 
 @operations_router.get("/v1/admin/today")

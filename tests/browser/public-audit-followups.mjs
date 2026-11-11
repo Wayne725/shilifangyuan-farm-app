@@ -10,12 +10,14 @@ const base = target.origin;
 const deadline = new Date('2030-01-02T12:00:00Z');
 const activity = { id: 'synthetic-activity', title: '合成社區走讀', description: '隔離活動', location: '隔離場地', status: 'published', starts_at: '2030-01-03T02:00:00Z', ends_at: '2030-01-03T04:00:00Z', registration_deadline: deadline.toISOString(), capacity: 20, registration_count: 0, waitlist_count: 0, my_registration: null };
 const product = { id: 'synthetic-product', name: '合成醬油', description: '隔離商品', supplier_name: '隔離供應者', category: '加工品', sku: 'INTERNAL-SKU-PRIVATE', product_number: 'INTERNAL-ITEM-123', member_price: 100, nonmember_price: 120, tax_type: 'taxable', unit: '瓶', is_active: true, daily_sales_enabled: true, image_url: '', stock_quantity: 20 };
+const adminQuestion = '會計如何依原有格式匯出檔案？';
+const adminAnswer = '隔離驗收用的管理員說明';
 
 async function fixture(t, role = null) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' });
-  const state = { role, writes: [], unknown: [], errors: [] };
+  const state = { role, writes: [], unknown: [], errors: [], adminHelpRequests: [], denyAdminHelp: false };
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
@@ -23,6 +25,12 @@ async function fixture(t, role = null) {
     if (path === '/v1/auth/refresh') {
       const user = state.role && { id: 'isolated-user', email: 'isolated@example.test', display_name: '隔離使用者', user_role: state.role, membership_type: 'member', membership_status: 'active' };
       return route.fulfill({ status: user ? 200 : 401, json: user ? { access_token: 'isolated', user } : { detail: '尚未登入' } });
+    }
+    if (path === '/v1/admin/help') {
+      state.adminHelpRequests.push(request.headers().authorization);
+      return state.denyAdminHelp || state.role !== 'admin'
+        ? route.fulfill({ status: 403, json: { detail: '需要管理員權限' } })
+        : route.fulfill({ json: [{ question: adminQuestion, answer: adminAnswer }] });
     }
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/products') return route.fulfill({ json: [product] });
@@ -60,7 +68,7 @@ for (const path of ['/', '/activities']) test(`${path} 保持頁面開啟跨過�
   verify(state);
 });
 
-for (const role of [null, 'customer', 'admin']) test(`${role || 'guest'} 的FAQ保留會餐與取貨說明，管理問答依角色顯示`, async t => {
+for (const role of [null, 'customer', 'admin']) test(`${role || 'guest'} 的FAQ保留會餐與取貨說明，管理問答僅由管理員讀取`, async t => {
   const { page, state } = await fixture(t, role);
   await page.goto(`${base}/help`);
   await page.getByRole('heading', { name: '操作說明與常見問題', exact: true }).waitFor();
@@ -68,14 +76,38 @@ for (const role of [null, 'customer', 'admin']) test(`${role || 'guest'} 的FAQ�
   await page.getByText('什麼是會餐？', { exact: true }).waitFor();
   await page.getByText('各取貨點有哪些領取說明？', { exact: true }).waitFor();
   await page.getByText('社員頭像如何更新？', { exact: true }).waitFor();
-  for (const question of ['會計如何依原有格式匯出檔案？', '管理員如何匯入金流、銀行與發票明細？', '手動開票紀錄在哪裡？', '商品照片如何更新？']) assert.equal(await page.getByText(question, { exact: true }).count(), role === 'admin' ? 1 : 0);
+  const privateFaq = page.getByRole('region', { name: '管理員常見問題', exact: true });
   if (role === 'admin') {
+    await privateFaq.getByText(adminQuestion, { exact: true }).click();
+    await privateFaq.getByText(adminAnswer, { exact: true }).waitFor();
+    assert.deepEqual(state.adminHelpRequests, ['Bearer isolated']);
     state.role = 'customer';
     await page.reload();
     await page.locator('a[aria-label="會員中心：隔離使用者"]').waitFor({ state: 'attached' });
-    assert.equal(await page.getByText('會計如何依原有格式匯出檔案？', { exact: true }).count(), 0);
+    assert.deepEqual(state.adminHelpRequests, ['Bearer isolated']);
+  } else {
+    assert.deepEqual(state.adminHelpRequests, []);
   }
+  assert.equal(await privateFaq.count(), 0);
+  assert.equal(await page.getByText(adminQuestion, { exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  verify(state);
+});
+
+test('管理員問答讀取失權時，移除舊問答且保留公開內容', async t => {
+  const { page, state } = await fixture(t, 'admin');
+  await page.goto(`${base}/help`);
+  const privateFaq = page.getByRole('region', { name: '管理員常見問題', exact: true });
+  await privateFaq.getByText(adminQuestion, { exact: true }).click();
+  await privateFaq.getByText(adminAnswer, { exact: true }).waitFor();
+  state.denyAdminHelp = true;
+  const denied = page.waitForResponse(response => new URL(response.url()).pathname === '/v1/admin/help' && response.status() === 403);
+  await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+  await denied;
+  await privateFaq.waitFor({ state: 'detached' });
+  assert.equal(await page.getByText(adminAnswer, { exact: true }).count(), 0);
+  await page.getByText('什麼是會餐？', { exact: true }).waitFor();
+  assert.deepEqual(state.adminHelpRequests, ['Bearer isolated', 'Bearer isolated']);
   verify(state);
 });
 

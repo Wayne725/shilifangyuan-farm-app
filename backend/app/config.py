@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_minutes: int = Field(default=30, ge=5, le=60)
     refresh_token_days: int = Field(default=7, ge=1, le=30)
+    browser_refresh_protocol_enabled: bool = True
     refresh_cookie_name: str = Field(
         default="slf_refresh",
         pattern=r"^[A-Za-z0-9_-]{1,64}$",
@@ -104,6 +105,7 @@ class Settings(BaseSettings):
     line_login_redirect_uri: str = ""
     line_login_scope: str = "openid profile email"
     payment_provider: str = "ecpay"
+    payment_legacy_return_enabled: bool = True
     ecpay_payment_merchant_id: str = ""
     ecpay_payment_hash_key: str = ""
     ecpay_payment_hash_iv: str = ""
@@ -196,6 +198,7 @@ class Settings(BaseSettings):
     demo_reset_confirmation: str = ""
     payment_reservation_minutes: int = 15
     reconciliation_enabled: bool = False
+    reconciliation_on_request_enabled: bool = True
     reconciliation_interval_seconds: float = Field(default=60.0, ge=30, le=3600)
     reconciliation_retention_enabled: bool = True
     reconciliation_retention_days: int = Field(default=30, ge=1, le=365)

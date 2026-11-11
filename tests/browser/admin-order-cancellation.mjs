@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
@@ -45,7 +46,7 @@ for (const channel of ['regular', 'meal_preorder']) {
   }
 }
 
-async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 'regular', status = 'paid' } = {}) {
+async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 'regular', status = 'paid', legacyCancellationApi = false } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block', reducedMotion: 'reduce' });
@@ -53,6 +54,8 @@ async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 
     order: { ...structuredClone(channel === 'meal_preorder' ? meal : regular), sales_channel: channel, payment_status: status },
     settings: { version: 1, orders_open: true, closed_message: '暫停接受新訂單', support_phone: phone, printer_brand: '', printer_model: '', printer_connection: 'unknown', kitchen_sound: false },
     writes: [], reads: [], unknown: [], errors: [], failure: false, phoneFailure: false,
+    orderSearches: [], cancellationSearches: [], cancellationReportFilters: [],
+    similarOrder: null,
   };
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname, method = request.method();
@@ -68,9 +71,45 @@ async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 
     }
     if (path === '/v1/orders') return route.fulfill({ json: channel === 'meal_preorder' ? [] : [state.order] });
     if (path === '/v1/meal-orders') return route.fulfill({ json: channel === 'meal_preorder' ? [state.order] : [] });
-    if (path === '/v1/admin/order-search') return route.fulfill({ json: { items: [state.order], total: 1, offset: 0, limit: 12 } });
+    if (path === '/v1/admin/today') return route.fulfill({ json: {
+      pending_admissions: 0, pending_order_cancellations: Number(state.order.cancellation_request?.status === 'pending'),
+      unpaid_business_orders: 0, pending_activity_refunds: 0, active_activities: 0, active_activity_registrations: 0,
+      active_campaigns: 0, pending_campaign_decisions: 0, voting_group_proposals: 0, voting_member_proposals: 0, invoice_followups: 0,
+    } });
+    if (path === '/v1/admin/order-search') {
+      state.orderSearches.push(Object.fromEntries(url.searchParams));
+      return route.fulfill({ json: { items: [state.order], total: 1, offset: 0, limit: 12 } });
+    }
     if (path === '/v1/admin/meal-orders') return route.fulfill({ json: { items: [{ order: state.order, customer_name: '隔離買家', customer_email: 'isolated@example.test', meal_period: 'lunch' }], total: 1, offset: 0, limit: 20 } });
     if (path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { pending_cancellation: 0, refund_attention: state.order.payment_status === 'refund_pending' ? 1 : 0, invoice_attention: 0, today_pickup: 0 } });
+    const exactReport = path.match(/^\/v1\/admin\/meal-cancellations\/orders\/([^/]+)\.csv$/);
+    if (exactReport || ['/v1/admin/meal-cancellation-summary', '/v1/admin/meal-cancellations.csv', '/v1/admin/meal-cancellation-requests'].includes(path)) {
+      const filters = Object.fromEntries(url.searchParams);
+      const scope = !legacyCancellationApi && (exactReport?.[1] || filters.order_id);
+      const matching = [state.order, state.similarOrder].filter(order => order?.cancellation_request &&
+        (scope ? order.id === scope : order.order_number.includes(filters.search || '')));
+      if (path === '/v1/admin/meal-cancellation-summary') {
+        state.cancellationReportFilters.push({ path, ...filters });
+        return route.fulfill({ json: { order_id: scope || undefined, pending: matching.filter(order => order.cancellation_request.status === 'pending').length, approved: 0, rejected: 0, approved_amount: 0, refund_pending: 0, refunded: 0 } });
+      }
+      const current = matching.filter(order => filters.review_status === 'all' || order.cancellation_request.status === filters.review_status);
+      if (exactReport || path === '/v1/admin/meal-cancellations.csv') {
+        state.cancellationReportFilters.push({ path, ...filters });
+        if (exactReport && legacyCancellationApi) return route.fulfill({ status: 404, json: { detail: 'Not Found' } });
+        return route.fulfill({ contentType: 'text/csv; charset=utf-8', body: ['訂單編號', ...current.map(order => order.order_number)].join('\n') });
+      }
+      state.cancellationSearches.push(filters);
+      const items = current.map(order => ({
+        order, request: order.cancellation_request, customer_name: '隔離買家', customer_email: 'isolated@example.test',
+        can_approve: !order.cancelled_at,
+      }));
+      return route.fulfill({ json: { items, total: items.length, offset: 0, limit: 30 } });
+    }
+    if (method === 'POST' && path === `/v1/admin/meal-cancellation-requests/${state.order.cancellation_request?.id}/review`) {
+      state.writes.push({ path, body: request.postDataJSON() });
+      state.order.cancellation_request = { ...state.order.cancellation_request, status: 'rejected' };
+      return route.fulfill({ json: state.order.cancellation_request });
+    }
     if (['/v1/admin/meals', '/v1/admin/meal-events', '/v1/products', '/v1/activities', '/v1/notifications'].includes(path)) return route.fulfill({ json: [] });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'nonmember', membership: null } });
     if (path === `/v1/orders/${state.order.id}/admin/cancel` || path === `/v1/admin/meal-orders/${state.order.id}/cancel`) {
@@ -227,7 +266,12 @@ for (const [label, override, expectedLink] of [
     await page.getByText(state.order.order_number, { exact: true }).waitFor();
     const link = page.getByRole('link', { name: '便當取餐與退單', exact: true });
     assert.equal(await link.count(), expectedLink ? 1 : 0);
-    if (expectedLink) assert.match(await link.getAttribute('href'), /\/admin\/meals\?.*q=ISOLATED-MEAL/);
+    if (expectedLink) {
+      const destination = new URL(await link.getAttribute('href'), base);
+      assert.equal(destination.pathname, '/admin/meals');
+      assert.equal(destination.searchParams.get('tab'), 'orders');
+      assert.equal(destination.searchParams.get('q'), state.order.order_number);
+    }
     for (const [summary, action, kind] of [['查詢發票', '查詢作廢狀態', 'invoice'], ['查詢付款', '查詢退款狀態', 'payment']]) {
       const control = page.locator('details.admin-extra-actions').filter({ has: page.locator('summary', { hasText: summary }) });
       await control.locator('summary').first().click();
@@ -240,12 +284,130 @@ for (const [label, override, expectedLink] of [
   });
 }
 
+for (const [stateName, status, normalized, label, canCancel] of [
+  ['逾時未取', 'picked_up', 'no_show', '逾時未取', true],
+  ['實際已交付', 'picked_up', 'picked_up', '已完成', false],
+  ['已取消', 'cancelled', 'no_show', '已取消', false],
+]) {
+  test(`後台訂單區分${stateName}便當，依原權限顯示退單動作`, async t => {
+    const { page, state } = await fixture(t, { width: 390, channel: 'meal_preorder' });
+    state.order.fulfillment_status = status;
+    state.order.fulfillment = { status: normalized };
+    state.order.available_actions = canCancel ? ['cancel'] : [];
+    await page.goto(`${base}/admin?section=orders`);
+    const card = page.locator('.operations-list article');
+    await card.getByLabel(`履約：${label}`, { exact: true }).waitFor();
+    assert.equal(await card.getByRole('button', { name: '辦理退單', exact: true }).count(), Number(canCancel));
+    assert.deepEqual(state.writes, []);
+    await assertClean(page, state);
+  });
+}
+
+for (const rejectionOnly of [false, true]) {
+  test(rejectionOnly ? '訂單查詢直接開啟僅可拒絕的便當退單' : '今日待辦直接開啟指定便當退單', async t => {
+    const { page, state } = await fixture(t, { width: rejectionOnly ? 390 : 1280, channel: 'meal_preorder' });
+    const orderNumber = state.order.order_number = 'M2030010210';
+    state.order.cancellation_request = {
+      id: 'meal-request', order_id: state.order.id, status: 'pending', reason: '隔離退單申請', requested_at: '2030-01-02T01:00:00Z',
+    };
+    const similarNumber = 'M20300102100';
+    state.similarOrder = { ...state.order, id: 'similar-order', order_number: similarNumber,
+      cancellation_request: { ...state.order.cancellation_request, id: 'similar-request', order_id: 'similar-order' } };
+    if (rejectionOnly) {
+      Object.assign(state.order, { payment_status: 'refunded', fulfillment_status: 'cancelled', cancelled_at: '2030-01-02T02:00:00Z', available_actions: [] });
+      await page.goto(`${base}/admin?section=orders&q=${orderNumber}`);
+    } else {
+      await page.goto(`${base}/admin`);
+      await page.getByRole('link', { name: /待審退單/ }).click();
+      assert.match(page.url(), /queue=refunds/);
+    }
+    const link = page.getByRole('link', { name: '審核便當退單', exact: true });
+    await link.waitFor();
+    assert.equal(await link.count(), 1);
+    assert.equal(await page.getByRole('link', { name: '便當取餐與退單', exact: true }).count(), 0);
+    assert.equal(state.orderSearches[0].q, rejectionOnly ? orderNumber : '');
+    assert.equal(state.orderSearches[0].cancellation_pending, String(!rejectionOnly));
+    await link.click();
+
+    const reviewTab = page.getByRole('tab', { name: '退單審核', exact: true });
+    const card = page.getByRole('article').filter({ has: page.getByRole('heading', { name: orderNumber, exact: true }) });
+    const approve = card.getByRole('button', { name: '核准退單', exact: true });
+    const reject = card.getByRole('button', { name: '拒絕退單', exact: true });
+    await approve.waitFor();
+    assert.equal(await reviewTab.getAttribute('aria-selected'), 'true');
+    assert.equal(await page.getByLabel('訂單編號或 Email').inputValue(), orderNumber);
+    assert.equal(new URL(page.url()).searchParams.get('q'), orderNumber);
+    assert.equal(new URL(page.url()).searchParams.get('order_id'), state.order.id);
+    assert.equal(state.cancellationSearches[0].search, orderNumber);
+    assert.equal(state.cancellationSearches[0].order_id, state.order.id);
+    assert.equal(state.cancellationSearches[0].review_status, 'pending');
+    assert.equal(await page.getByRole('heading', { name: similarNumber, exact: true }).count(), 0);
+    assert.equal(state.reads.includes('/v1/admin/meal-orders'), false);
+    assert.equal(await approve.isDisabled(), rejectionOnly);
+    assert.equal(await reject.isEnabled(), true);
+    assert.deepEqual(state.writes, []);
+    if (rejectionOnly) {
+      await reject.click();
+      const confirm = card.getByRole('button', { name: '確認拒絕', exact: true });
+      assert.deepEqual(state.writes, []);
+      await confirm.click();
+      await page.getByText('沒有符合條件的退單申請', { exact: true }).waitFor();
+      assert.deepEqual(state.writes, [{ path: '/v1/admin/meal-cancellation-requests/meal-request/review', body: { decision: 'reject', reason: '' } }]);
+      assert.equal(state.order.payment_status, 'refunded');
+      assert.equal(state.similarOrder.cancellation_request.status, 'pending');
+    } else {
+      const file = page.waitForEvent('download');
+      await page.getByRole('button', { name: '匯出退單明細', exact: true }).click();
+      assert.equal(await readFile(await (await file).path(), 'utf8'), `訂單編號\n${orderNumber}`);
+      assert.deepEqual(state.cancellationReportFilters, [
+        { path: '/v1/admin/meal-cancellation-summary', search: orderNumber, order_id: state.order.id },
+        { path: `/v1/admin/meal-cancellations/orders/${state.order.id}.csv`, review_status: 'pending' },
+      ]);
+      await page.getByLabel('訂單編號或 Email').fill('M20300102');
+      await page.getByRole('button', { name: '搜尋', exact: true }).click();
+      await page.getByRole('heading', { name: similarNumber, exact: true }).waitFor();
+      assert.equal(state.cancellationSearches.at(-1).order_id, undefined);
+      await page.goto(`${base}/admin/meals?tab=cancellations&q=${orderNumber}`);
+      await page.getByRole('heading', { name: similarNumber, exact: true }).waitFor();
+      assert.equal(state.cancellationSearches.at(-1).order_id, undefined);
+    }
+    await assertClean(page, state);
+  });
+}
+
+test('舊 API 的寬鬆清單與摘要不能擴大單筆退單操作或匯出', async t => {
+  const { page, state } = await fixture(t, { width: 390, channel: 'meal_preorder', legacyCancellationApi: true });
+  state.order.order_number = 'M2030010210';
+  state.order.cancellation_request = {
+    id: 'meal-request', order_id: state.order.id, status: 'pending', requested_at: '2030-01-02T01:00:00Z',
+  };
+  state.similarOrder = { ...state.order, id: 'similar-order', order_number: 'M20300102100',
+    cancellation_request: { ...state.order.cancellation_request, id: 'similar-request', order_id: 'similar-order' } };
+  await page.goto(`${base}/admin?section=orders`);
+  await page.getByRole('link', { name: '審核便當退單', exact: true }).click();
+  await page.getByRole('heading', { name: state.order.order_number, exact: true }).waitFor();
+  assert.equal(await page.getByRole('heading', { name: state.similarOrder.order_number, exact: true }).count(), 0);
+  const summary = page.getByRole('region', { name: '退單統整', exact: true });
+  await summary.getByText('單筆退單統整暫時無法讀取。', { exact: true }).waitFor();
+  assert.equal(await summary.locator('.admin-cancellation-metrics strong').count(), 0);
+  const downloads = [];
+  page.on('download', file => downloads.push(file));
+  await summary.getByRole('button', { name: '匯出退單明細', exact: true }).click();
+  await summary.getByText('單筆退單匯出暫時無法使用，請稍後重試。', { exact: true }).waitFor();
+  assert.deepEqual(state.cancellationReportFilters.filter(item => item.path.endsWith('.csv')).map(item => item.path),
+    [`/v1/admin/meal-cancellations/orders/${state.order.id}.csv`]);
+  assert.deepEqual(downloads, []);
+  assert.deepEqual(state.writes, []);
+  await assertClean(page, state);
+});
+
 test('退單錯誤保留原因及對話，歷史待審入口仍可操作', async t => {
   const { page, state } = await fixture(t);
   state.failure = true;
   state.order.cancellation_request = { id: 'existing-request', status: 'pending', reason: '既有退單申請', requested_at: '2030-01-02T01:00:00Z' };
   await page.goto(`${base}/admin?section=orders`);
   await page.getByRole('button', { name: '拒絕退單申請', exact: true }).waitFor();
+  assert.equal(await page.getByRole('link', { name: '審核便當退單', exact: true }).count(), 0);
   await page.getByRole('button', { name: '辦理退單', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '確認辦理退單', exact: true });
   await dialog.getByLabel('退單原因', { exact: true }).fill('電話確認');

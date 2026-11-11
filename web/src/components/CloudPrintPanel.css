@@ -14,6 +14,11 @@
 .cloud-print-tools :is(.button, .text-link) { min-height: 48px; margin: 0; font-size: 1rem; }
 .cloud-print-tools .button { padding-inline: 16px; }
 .cloud-print-tools .text-link { display: inline-flex; align-items: center; }
+.cloud-print-configuration { padding-block: 12px; border-top: 1px solid var(--line); }
+.cloud-print-configuration-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: 12px 16px; margin: 0; }
+.cloud-print-configuration-fields dt { color: var(--ink-soft); }
+.cloud-print-configuration-fields dd { margin: 2px 0 0; }
+.cloud-print-configuration-blockers { grid-column: 1 / -1; }
 .cloud-print-panel :is(input, select, .button, a):focus-visible { outline: 2px solid var(--moss-dark); outline-offset: 3px; }
 .cloud-print-controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 .cloud-print-jobs { list-style: none; padding: 0; }

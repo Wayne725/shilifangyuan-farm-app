@@ -25,7 +25,7 @@ const workQueues = [
   { key: "today_pickup", title: "今日待取餐", detail: "已付款且仍可取餐" },
 ] as const;
 
-export function AdminMealOrderSearch({ initialSearch = "", onReviewOrder }: { initialSearch?: string; onReviewOrder: (orderNumber: string) => void }) {
+export function AdminMealOrderSearch({ initialSearch = "" }: { initialSearch?: string }) {
   const [draft, setDraft] = useState({ ...emptyFilters, search: initialSearch });
   const [filters, setFilters] = useState({ ...emptyFilters, search: initialSearch });
   const [offset, setOffset] = useState(0);
@@ -82,13 +82,13 @@ export function AdminMealOrderSearch({ initialSearch = "", onReviewOrder }: { in
     {orders.data?.items.length === 0 && <DataState title="沒有符合條件的便當訂單" detail="可調整日期、狀態或搜尋條件。" actionLabel="清除篩選" onAction={() => apply(emptyFilters)} />}
     {orders.data && <>
       <p className="meal-order-result-count" role="status">共 {orders.data.total} 筆{orders.data.total > 0 && `，顯示第 ${Math.min(offset + 1, orders.data.total)}～${Math.min(offset + pageSize, orders.data.total)} 筆`}</p>
-      <div className="meal-operation-orders">{orders.data.items.map((item) => <MealOperationOrder key={item.order.id} item={item} onReviewOrder={onReviewOrder} />)}</div>
+      <div className="meal-operation-orders">{orders.data.items.map((item) => <MealOperationOrder key={item.order.id} item={item} />)}</div>
       <nav className="admin-pagination" aria-label="便當訂單分頁"><button className="button button-quiet" type="button" disabled={offset === 0 || orders.isFetching} onClick={() => setOffset(Math.max(0, offset - pageSize))}>上一頁</button><button className="button button-quiet" type="button" disabled={offset + pageSize >= orders.data.total || orders.isFetching} onClick={() => setOffset(offset + pageSize)}>下一頁</button></nav>
     </>}
   </section>;
 }
 
-function MealOperationOrder({ item, onReviewOrder }: { item: MealAdminOrderItem; onReviewOrder: (orderNumber: string) => void }) {
+function MealOperationOrder({ item }: { item: MealAdminOrderItem }) {
   const { order } = item;
   const client = useQueryClient();
   const update = useMutation({
@@ -116,7 +116,7 @@ function MealOperationOrder({ item, onReviewOrder }: { item: MealAdminOrderItem;
       {order.cancellation_request && <div className="meal-cancellation-reason">{order.cancellation_request.reason && <p>退單原因：{order.cancellation_request.reason}</p>}<p>申請時間：{formatDateTime(order.cancellation_request.requested_at)}</p>{order.cancellation_request.review_reason && <p>審核理由：{order.cancellation_request.review_reason}</p>}</div>}
       <p>下單時間：{formatDateTime(order.created_at)}</p>
     </details>
-    <div className="form-actions">{canPrepare && order.fulfillment_status === "pending" && <button className="button button-system" type="button" disabled={update.isPending} onClick={() => update.mutate("preparing")}>{update.isPending ? "更新中…" : "開始製作"}</button>}{canPrepare && order.fulfillment_status === "preparing" && <button className="button button-system" type="button" disabled={update.isPending} onClick={() => update.mutate("ready_for_pickup")}>{update.isPending ? "更新中…" : "標記待取餐"}</button>}{order.cancellation_request?.status === "pending" && <button className="button button-system" type="button" onClick={() => onReviewOrder(order.order_number)}>審核這筆退單</button>}<Link className="button button-quiet" to="/admin" search={{ q: order.order_number }}>處理付款／發票</Link></div>
+    <div className="form-actions">{canPrepare && order.fulfillment_status === "pending" && <button className="button button-system" type="button" disabled={update.isPending} onClick={() => update.mutate("preparing")}>{update.isPending ? "更新中…" : "開始製作"}</button>}{canPrepare && order.fulfillment_status === "preparing" && <button className="button button-system" type="button" disabled={update.isPending} onClick={() => update.mutate("ready_for_pickup")}>{update.isPending ? "更新中…" : "標記待取餐"}</button>}{order.cancellation_request?.status === "pending" && <Link className="button button-system" to="/admin/meals" search={{ tab: "cancellations", q: order.order_number, order_id: order.id }}>審核這筆退單</Link>}<Link className="button button-quiet" to="/admin" search={{ q: order.order_number }}>處理付款／發票</Link></div>
     {update.isError && <p className="form-error" role="alert">{update.error.message}</p>}
   </article>;
 }

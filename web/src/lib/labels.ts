@@ -47,6 +47,7 @@ export const fulfillmentStatusLabel = createLabeler({
   preparing: "備貨中",
   ready_for_pickup: "可領取",
   picked_up: "已完成",
+  no_show: "逾時未取",
   awaiting_shipment: "待建立物流單",
   shipped: "配送中",
   delivered: "已送達",
@@ -74,3 +75,8 @@ export const invoiceStatusLabel = createLabeler({
   void_pending: "作廢處理中",
   voided: "已作廢",
 });
+
+export const invoiceProviderNames: Readonly<Partial<Record<string, string>>> = {
+  fanyu: "汎宇雲端發票",
+  ecpay: "綠界科技電子發票",
+};

@@ -25,6 +25,8 @@ from ..integrations.ecpay import (
 from ..integrations.payment_service import (
     PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
+    browser_return_base,
+    browser_return_storefront,
     create_membership_payment_attempt,
     create_payment_attempt,
     ensure_order_payment_runtime_enabled,
@@ -130,6 +132,7 @@ async def _refresh_raygate_attempt(
 )
 async def start_payment(
     order_id: str,
+    request: Request,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -140,6 +143,7 @@ async def start_payment(
             order_id=order_id,
             user=user,
             settings=settings,
+            return_storefront=browser_return_storefront(settings, request.headers.get("Origin")),
         )
         return payment_attempt_read(attempt, settings)
     except PaymentApplicationError as exc:
@@ -160,6 +164,7 @@ async def start_payment(
 )
 async def start_membership_payment(
     charge_id: str,
+    request: Request,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -170,6 +175,7 @@ async def start_membership_payment(
             charge_id=charge_id,
             user=user,
             settings=settings,
+            return_storefront=browser_return_storefront(settings, request.headers.get("Origin")),
         )
         return payment_attempt_read(attempt, settings)
     except PaymentApplicationError as exc:
@@ -539,6 +545,7 @@ async def raygate_payment_result(
     order_id = attempt.order_id
     membership_charge_id = attempt.membership_charge_id
     activity_charge_id = attempt.activity_charge_id
+    return_storefront = attempt.browser_return_storefront
     payment_state = attempt.status.value
     if attempt.status in {
         PaymentStatus.PENDING,
@@ -573,6 +580,7 @@ async def raygate_payment_result(
             membership_charge_id=membership_charge_id,
             activity_charge_id=activity_charge_id,
             attempt_id=attempt_id,
+            return_storefront=return_storefront,
         ),
         status_code=status.HTTP_303_SEE_OTHER,
         headers={
@@ -606,6 +614,7 @@ async def ecpay_payment_result(
     order_id = attempt.order_id
     membership_charge_id = attempt.membership_charge_id
     activity_charge_id = attempt.activity_charge_id
+    return_storefront = attempt.browser_return_storefront
     try:
         repository = SQLAlchemyPaymentCallbackRepository(session)
         await repository.apply_ecpay_payment_callback(
@@ -629,6 +638,7 @@ async def ecpay_payment_result(
             order_id=order_id,
             membership_charge_id=membership_charge_id,
             activity_charge_id=activity_charge_id,
+            return_storefront=return_storefront,
         ),
         status_code=status.HTTP_303_SEE_OTHER,
     )
@@ -642,11 +652,13 @@ def _payment_result_location(
     membership_charge_id: str | None,
     attempt_id: str | None = None,
     activity_charge_id: str | None = None,
+    return_storefront: str | None = None,
 ) -> str:
+    base = browser_return_base(settings, return_storefront)
     if activity_charge_id is not None:
         query = urlencode({"activity_charge_id": activity_charge_id, "payment": payment_state,
             **({"attempt_id": attempt_id} if attempt_id else {})})
-        return f"{settings.web_base_url.rstrip('/')}/activities/registrations?{query}"
+        return f"{base}/activities/registrations?{query}"
     if order_id is not None:
         query = urlencode(
             {
@@ -655,7 +667,7 @@ def _payment_result_location(
                 **({"attempt_id": attempt_id} if attempt_id else {}),
             }
         )
-        return f"{settings.web_base_url.rstrip('/')}/orders?{query}"
+        return f"{base}/orders?{query}"
     query = urlencode(
         {
             "membership_charge_id": membership_charge_id,
@@ -663,7 +675,7 @@ def _payment_result_location(
             **({"attempt_id": attempt_id} if attempt_id else {}),
         }
     )
-    return f"{settings.web_base_url.rstrip('/')}/account?{query}"
+    return f"{base}/account?{query}"
 
 
 router = payments_router

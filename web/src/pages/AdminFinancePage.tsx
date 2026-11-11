@@ -8,6 +8,7 @@ import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
 import { channelMatchesCategory, orderCategoryLabels, type OrderCategory } from "../lib/order-category";
 import { ActivityFinance } from "../components/ActivityFinance";
 import { AdminNav } from "../components/AdminNav";
+import { TaxLedger } from "../components/TaxLedger";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, downloadApiFile, formatMoney } from "../lib/api";
@@ -24,7 +25,20 @@ const channelNames = { all: "全部銷售", meal_preorder: "便當", regular: "�
 export function AdminFinancePage() {
   const {user,openLogin}=useAuth();
   if(user?.user_role!=="admin") return <section className="admin-gate"><h1>財務報表只向管理員開放。</h1>{!user&&<button className="button button-primary" onClick={openLogin}>管理員登入</button>}</section>;
-  return <section className="admin-module-page meal-finance-page"><header className="workspace-heading"><div><p className="eyebrow">FINANCE / 財務報表</p><h1>收款與銷售報表</h1></div></header><AdminNav/><Tabs.Root key={user.id} defaultValue="sales"><Tabs.List className="tab-list" aria-label="財務來源"><Tabs.Trigger value="sales">商品銷售</Tabs.Trigger><Tabs.Trigger value="activities">活動收款</Tabs.Trigger></Tabs.List><Tabs.Content value="sales"><ProductFinance/></Tabs.Content><Tabs.Content value="activities"><ActivityFinance/></Tabs.Content></Tabs.Root></section>;
+  return <section className="admin-module-page meal-finance-page">
+    <header className="workspace-heading"><div><p className="eyebrow">FINANCE / 財務報表</p><h1>收款與銷售報表</h1></div></header>
+    <AdminNav />
+    <Tabs.Root key={user.id} defaultValue="sales">
+      <Tabs.List className="tab-list" aria-label="財務來源">
+        <Tabs.Trigger value="sales">商品銷售</Tabs.Trigger>
+        <Tabs.Trigger value="activities">活動收款</Tabs.Trigger>
+        <Tabs.Trigger value="tax">稅務彙總</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="sales"><ProductFinance /></Tabs.Content>
+      <Tabs.Content value="activities"><ActivityFinance /></Tabs.Content>
+      <Tabs.Content value="tax"><TaxLedger adminId={user.id} /></Tabs.Content>
+    </Tabs.Root>
+  </section>;
 }
 function ProductFinance() {
   const { user, openLogin } = useAuth();
@@ -111,7 +125,7 @@ function PeriodTable({ rows, period }: { rows: MealSalesPeriod[]; period: string
 
 function SalesOrder({ order }: { order: MealSalesOrder }) {
   return <article className="meal-finance-order">
-    <header><div><h2>{order.order_number}</h2><p>{order.customer_name} · {membershipNames[order.membership_type] || order.membership_type}</p><p>{order.customer_email}</p></div><Link className="button button-quiet" to="/admin" search={{ q: order.order_number }}>處理付款／發票</Link></header>
+    <header><div><h2>{order.order_number}</h2><p>{order.customer_name} · {membershipNames[order.membership_type] || order.membership_type}</p><p>{order.customer_email}</p></div><Link className="button button-quiet" to="/admin" search={{ section: "orders", q: order.order_number, order_id: order.id }}>處理付款／發票</Link></header>
     <div className="meal-finance-order-states"><span>{adminPaymentStatusLabel(order.payment_status)}</span><span>{fulfillmentStatusLabel(order.fulfillment_status)}</span><span>{invoiceStatusLabel(order.invoice_status)}{order.invoice_number && ` · ${order.invoice_number}`}</span>{order.cancellation_status && <span>{cancellationNames[order.cancellation_status] || order.cancellation_status}</span>}</div>
     <dl className="meal-finance-order-meta">{order.revision !== undefined && <div><dt>目前訂單版本</dt><dd>第 {order.revision} 版</dd></div>}<div><dt>下單時間</dt><dd>{financeDateTime(order.created_at)}</dd></div><div><dt>首次付款時間</dt><dd>{financeDateTime(order.paid_at)}</dd></div><div><dt>取貨時間</dt><dd>{financeDateTime(order.pickup_at)}{!order.pickup_time_confirmed && order.pickup_at && "（原場次開始時間）"}</dd></div><div><dt>取貨地點</dt><dd>{order.location || "—"}</dd></div></dl>
     <ul className="meal-finance-item-list">{order.items.map((item, index) => <li key={`${item.name}-${index}`}><div><strong>{item.name} × {item.quantity} {item.unit}</strong><p>單價 {formatMoney(item.unit_price)} · {item.tax_type === "taxable" ? "含稅" : "免稅"}{item.options.length > 0 && ` · 加選：${item.options.map((option) => `${option.group_name}／${option.name}`).join("、")}`}</p></div><strong>{formatMoney(item.subtotal)}</strong></li>)}</ul>

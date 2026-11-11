@@ -1,12 +1,16 @@
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import app.jobs as jobs
 import app.main as main_module
+from app.config import get_settings
+from app.database import get_session
 from app.integrations.common import HTTPResponse
 from app.integrations.email_sender import EmailSendResult
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
@@ -18,6 +22,53 @@ from app.integrations.payment_service import (
 from tests.support import fanyu_test_context, make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
 from tests.test_integrations import make_regular_order, payment_settings, signed_payment_callback
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_reconciliation_enabled", [True, False])
+async def test_request_reconciliation_can_be_disabled(
+    database_session, monkeypatch, request_reconciliation_enabled,
+):
+    monkeypatch.delenv("RECONCILIATION_ON_REQUEST_ENABLED", raising=False)
+    if not request_reconciliation_enabled:
+        monkeypatch.setenv("RECONCILIATION_ON_REQUEST_ENABLED", "false")
+    settings = make_test_settings(environment="development", reconciliation_enabled=False)
+    assert settings.reconciliation_on_request_enabled is request_reconciliation_enabled
+
+    should_reconcile = Mock(return_value=True)
+    schedule = Mock()
+    reconcile_once = AsyncMock(return_value=jobs.ReconcileReport())
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "should_reconcile_now", should_reconcile)
+    monkeypatch.setattr(main_module, "schedule_background_reconcile", schedule)
+    monkeypatch.setattr(jobs, "reconcile_once", reconcile_once)
+    application = main_module.create_app()
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[get_session] = lambda: database_session
+
+    async with AsyncClient(transport=ASGITransport(app=application), base_url="http://test") as client:
+        platform = await client.get("/v1/platform")
+        assert platform.status_code == 200
+        should_reconcile.return_value = False
+        assert (await client.get("/v1/platform")).status_code == 200
+        registration = await client.post("/v1/auth/register", json={
+            "email": "isolated-reconcile@example.com",
+            "display_name": "隔離驗收",
+            "password": "synthetic-password-123",
+        })
+        assert registration.status_code == 201
+        assert (await client.post("/internal/reconcile")).status_code == 401
+        explicit = await client.post(
+            "/internal/reconcile", headers={"X-Reconcile-Secret": settings.internal_reconcile_secret},
+        )
+        assert explicit.status_code == 200
+    reconcile_once.assert_awaited_once_with(database_session, settings, source="internal")
+    if request_reconciliation_enabled:
+        assert should_reconcile.call_count == 2
+        assert schedule.call_args_list == [call(settings), call(settings, minimum_interval_seconds=0)]
+    else:
+        should_reconcile.assert_not_called()
+        schedule.assert_not_called()
 
 
 @pytest.mark.asyncio

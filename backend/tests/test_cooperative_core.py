@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import csv
+import io
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
+from app import main
+from app.auth import create_token
+from app.config import get_settings
+from app.database import get_session
 from app.models import (
     AdminAudit, PointTransaction,
     Membership,
@@ -21,7 +28,7 @@ from app.models import (
     UserRole,
 )
 from app.routers.cooperative import cooperative_router
-from tests.support import api_test_context, auth_headers, fast_password_hash
+from tests.support import api_test_context, auth_headers, fast_password_hash, make_test_settings
 
 
 @pytest.fixture
@@ -93,6 +100,70 @@ async def test_finance_monitor_tax_and_irreversible_surplus(cooperative_context)
     mine = await client.get("/v1/me/surplus-distributions", headers=auth_headers(cooperative_context["member_a"]))
     assert mine.status_code == 200
     assert mine.json()[0]["distribution_amount"] == 188
+
+
+@pytest.mark.asyncio
+async def test_tax_ledger_read_and_csv_share_scope_and_reject_unauthorized(
+    cooperative_context, monkeypatch,
+) -> None:
+    settings = make_test_settings(reconciliation_on_request_enabled=False)
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    application = main.create_app()
+
+    async def session_override():
+        yield cooperative_context["session"]
+
+    application.dependency_overrides[get_session] = session_override
+    application.dependency_overrides[get_settings] = lambda: settings
+
+    def headers(user, valid_for: timedelta) -> dict[str, str]:
+        token = create_token(user, "access", valid_for, settings)
+        return {"Authorization": f"Bearer {token}"}
+
+    admin = cooperative_context["admin"]
+    authorized = headers(admin, timedelta(minutes=5))
+    expired = headers(admin, -timedelta(minutes=5))
+    customer = headers(cooperative_context["customer"], timedelta(minutes=5))
+    path = "/v1/admin/finance/tax-ledger"
+    period = {"starts_on": "2030-01-01", "ends_on": "2030-01-01"}
+    reversed_period = {"starts_on": "2030-01-02", "ends_on": period["starts_on"]}
+    midnight = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    next_midnight = midnight + timedelta(days=1)
+    orders = (await cooperative_context["session"].scalars(select(Order).order_by(Order.order_number))).all()
+    for order, paid_at in zip(orders, (
+        midnight - timedelta(microseconds=1), midnight, next_midnight - timedelta(microseconds=1),
+        midnight + timedelta(hours=4),
+    ), strict=True):
+        order.paid_at = paid_at
+    await cooperative_context["session"].commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url=settings.app_base_url,
+    ) as client:
+        for url in (path, f"{path}.csv"):
+            for credentials, expected in (({}, 401), (expired, 401), (customer, 403)):
+                blocked = await client.get(url, params=period, headers=credentials)
+                assert blocked.status_code == expected
+                assert blocked.headers["cache-control"] == "no-store"
+                assert "content-disposition" not in blocked.headers
+                assert "rows" not in blocked.json()
+            invalid_period = await client.get(url, params=reversed_period, headers=authorized)
+            assert invalid_period.status_code == 422
+        report = await client.get(path, params=period, headers=authorized)
+        exported = await client.get(f"{path}.csv", params=period, headers=authorized)
+
+    assert report.status_code == exported.status_code == 200
+    assert report.headers["cache-control"] == exported.headers["cache-control"] == "no-store"
+    assert exported.headers["content-disposition"] == 'attachment; filename="tax-ledger-2030-01-01-2030-01-01.csv"'
+    assert exported.content.startswith(b"\xef\xbb\xbf")
+    assert exported.headers["content-type"] == "text/csv; charset=utf-8"
+    fields = ["tax_type", "membership_type", "sales_channel", "sales_amount", "tax_amount", "order_count"]
+    expected_rows = [["tax_exempt", "member", "regular", 100, 0, 1], ["taxable", "nonmember", "regular", 200, 9, 1]]
+    assert report.json() == {**period, "rows": [dict(zip(fields, row)) for row in expected_rows]}
+    assert list(csv.reader(io.StringIO(exported.content.decode("utf-8-sig")))) == [
+        ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"],
+        *[[str(value) for value in row] for row in expected_rows],
+    ]
 
 
 @pytest.mark.asyncio

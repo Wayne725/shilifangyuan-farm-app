@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,7 +12,7 @@ from ..config import Settings, get_settings
 from ..database import get_session
 from .. import activity_payments as service
 from ..integrations.common import IntegrationError
-from ..integrations.payment_service import PaymentApplicationError, payment_attempt_read
+from ..integrations.payment_service import PaymentApplicationError, browser_return_storefront, payment_attempt_read
 from ..models import Activity, ActivityCharge, ActivityRefundRequest, ActivityRegistration, ActivityStatus, AdminAudit, User, UserRole
 from ..schemas import ActivityChargeRead, ActivityPaymentSettings, ActivityRefundRequestRead, ActivityRefundReview, ActivityRegistrationRead
 from .payments import PaymentAttemptResponse
@@ -49,9 +49,18 @@ async def get_charge(charge_id: str, user: User = Depends(get_current_user), ses
 
 
 @router.post("/v1/activity-charges/{charge_id}/payment-attempts", response_model=PaymentAttemptResponse, status_code=201)
-async def start_payment(charge_id: str, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+async def start_payment(
+    charge_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
     try:
-        attempt = await service.create_payment_attempt(session, charge_id, user, settings)
+        attempt = await service.create_payment_attempt(
+            session, charge_id, user, settings,
+            return_storefront=browser_return_storefront(settings, request.headers.get("Origin")),
+        )
         return payment_attempt_read(attempt, settings)
     except PaymentApplicationError as exc:
         await session.rollback()

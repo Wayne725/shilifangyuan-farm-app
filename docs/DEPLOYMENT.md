@@ -259,7 +259,11 @@ Repository Settings → Secrets and variables → Actions 新增：
 7. 由使用者同意的測試訂單驗收：付款後關閉瀏覽器，核對後端查單入帳、汎宇票號、同單查回及官方 Email。再分別測 Email 會員載具、手機條碼及 B2B；真實扣款與退款由使用者操作或另行授權。
 8. 退款後核對調整待辦，管理員填原因查回發票。自動作廢／折讓尚未完成，不可把退款完成當成發票也已完成處理。
 
-`RECONCILIATION_ENABLED=false` 只停止新增的定期驅動，不會關閉既有 request 補跑或外部 reconciliation 入口。如需停止所有外部交易工作，必須另行制定完整停機程序。程式回復時可保留新增欄位，不需為回復程式而降級正式資料庫。
+`RECONCILIATION_ENABLED` 控制定期補查。`RECONCILIATION_ON_REQUEST_ENABLED` 預設為 `true`，控制 API 請求觸發的補查，包含註冊、驗證信重寄與忘記密碼。外部排程使用帶有補查密鑰的 `POST /internal/reconcile`。
+
+隔離還原驗收使用獨立設定。啟動前設為 `RECONCILIATION_ENABLED=false`、`RECONCILIATION_ON_REQUEST_ENABLED=false` 和 `PRINTER_ENABLED=false`，配置獨立補查密鑰與合成供應商憑證。以對外網路規則只允許測試端點，並使正式流量及外部排程繼續指向原服務。
+
+程式回復時可保留新增欄位，不需為回復程式而降級正式資料庫。
 
 完整修復與限制見 [本輪修復報告](ACCEPTANCE_FIXES_2026-09-05.md)。
 

@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import false, func, or_, select
+from sqlalchemy import false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -1060,6 +1060,7 @@ async def list_meal_cancellation_requests(
     ends_on: date | None = None,
     review_status: Literal["pending", "approved", "rejected", "all"] = "pending",
     search: str = Query(default="", max_length=100),
+    order_id: str | None = Query(default=None, min_length=1, max_length=36),
     limit: int = Query(default=30, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin),
@@ -1067,11 +1068,9 @@ async def list_meal_cancellation_requests(
 ) -> MealCancellationQueueRead:
     query = select(MealCancellationRequest).join(Order).where(Order.sales_channel == SalesChannel.MEAL_PREORDER)
     from .meal_cancellation_reports import cancellation_filters
-    query = cancellation_filters(query, starts_on, ends_on, "")
+    query = cancellation_filters(query, starts_on, ends_on, search, order_id=order_id)
     if review_status != "all":
         query = query.where(MealCancellationRequest.status == review_status)
-    if search.strip():
-        query = query.where(or_(Order.order_number.icontains(search.strip(), autoescape=True), Order.contact_email.icontains(search.strip(), autoescape=True)))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     requests = list(await session.scalars(query.options(
         selectinload(MealCancellationRequest.order).selectinload(Order.items).selectinload(OrderItem.selected_options),

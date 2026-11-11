@@ -1,14 +1,57 @@
 import type { AuthResponse, User } from "./types";
 import { fetchWithTimeout, RequestTimeoutError } from "./http";
-import { localStore } from "./browser-storage";
+import { localStore, readStoredJson, sessionStore, writeStoredJson } from "./browser-storage";
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 let accessToken: string | null = null;
 let currentSession: AuthResponse | null = null;
 let credentialRevision = 0;
 let identityRevision = 0;
+let explicitSessionRevision = 0;
 let refreshPromise: Promise<AuthResponse | null> | null = null;
 const sessionListeners = new Set<(user: User | null, identityChanged: boolean) => void>();
+const refreshOperationKey = "slf_refresh_operation_v2";
+const sessionChangeKey = "slf_session_change_v2";
+const refreshOperationLifetimeMs = 30_000;
+const signInPaths = new Set(["/v1/auth/login", "/v1/auth/line/callback", "/v1/auth/line/register"]);
+
+function browserNonce(): string | null {
+  if (typeof window === "undefined" || typeof crypto === "undefined") return null;
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function announceSessionChange(): void {
+  const notice = browserNonce();
+  if (notice === null) return;
+  localStore.removeItem(refreshOperationKey);
+  sessionStore.removeItem(refreshOperationKey);
+  localStore.setItem(sessionChangeKey, notice);
+}
+
+export function subscribeBrowserSessionChanges(listener: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    const notice = event.newValue;
+    if (event.key !== sessionChangeKey || !notice || !/^[0-9a-f]{32}$/.test(notice)) return;
+    const invalidate = () => {
+      if (localStore.getItem(sessionChangeKey) !== notice) return;
+      explicitSessionRevision += 1;
+      listener();
+    };
+    void runBrowserAuthAction(async () => invalidate()).catch(invalidate);
+  };
+  window.addEventListener("storage", onStorage);
+  return () => window.removeEventListener("storage", onStorage);
+}
+
+type RefreshOperation = { id: string; expiresAt: number };
+
+function readRefreshOperation(storage: typeof localStore): RefreshOperation | null {
+  const operation = readStoredJson<RefreshOperation | null>(storage, refreshOperationKey, null);
+  const now = Date.now();
+  return operation && /^[0-9a-f]{32}$/.test(operation.id) && Number.isFinite(operation.expiresAt)
+    && operation.expiresAt > now && operation.expiresAt <= now + refreshOperationLifetimeMs
+    ? operation : null;
+}
 
 if (typeof window !== "undefined") {
   localStore.removeItem("slf_access_token");
@@ -69,6 +112,23 @@ export function saveSession(session: AuthResponse): void {
   publishSession(session);
 }
 
+export function captureExplicitSessionGuard(): () => boolean {
+  const revision = explicitSessionRevision;
+  return () => explicitSessionRevision === revision;
+}
+
+export function saveBrowserSignIn(session: AuthResponse): void {
+  explicitSessionRevision += 1;
+  saveSession(session);
+  announceSessionChange();
+}
+
+export function finishBrowserSignOut(confirmed: boolean): void {
+  explicitSessionRevision += 1;
+  clearSession();
+  if (confirmed) announceSessionChange();
+}
+
 export function clearSession(): void {
   accessToken = null;
   credentialRevision += 1;
@@ -127,16 +187,15 @@ function nativeLockUnavailable(error: unknown): boolean {
     && ["SecurityError", "NotSupportedError"].includes(error.name);
 }
 
-async function requestSessionRefresh(stillCurrent: () => boolean): Promise<Response | null> {
-  const send = () => stillCurrent() ? requestApi("/v1/auth/refresh", { method: "POST" }) : Promise.resolve(null);
+async function withSessionLock<T>(name: string, send: (locked: boolean) => Promise<T>): Promise<T> {
   let manager: LockManager | undefined;
   try {
     manager = typeof navigator === "undefined" ? undefined : navigator.locks;
   } catch (error) {
-    if (nativeLockUnavailable(error)) return send();
+    if (nativeLockUnavailable(error)) return send(false);
     throw error;
   }
-  if (!manager || typeof manager.request !== "function") return send();
+  if (!manager || typeof manager.request !== "function") return send(false);
   const controller = new AbortController();
   let entered = false;
   let timedOut = false;
@@ -146,20 +205,56 @@ async function requestSessionRefresh(stillCurrent: () => boolean): Promise<Respo
     timer = setTimeout(() => { timedOut = true; controller.abort(); reject(waitingError()); }, 15_000);
   });
   try {
-    const request = manager.request("slf-auth-refresh-v1", { mode: "exclusive", signal: controller.signal }, () => {
+    const request = manager.request(name, { mode: "exclusive", signal: controller.signal }, () => {
       entered = true;
       if (timer !== undefined) clearTimeout(timer);
       if (timedOut) throw waitingError();
-      return send();
+      return send(true);
     });
     return await Promise.race([request, timeout]);
   } catch (error) {
     if (!entered && timedOut) throw waitingError();
-    if (!entered && nativeLockUnavailable(error)) return send();
+    if (!entered && nativeLockUnavailable(error)) return send(false);
     throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+export function runBrowserAuthAction<T>(action: () => Promise<T>): Promise<T> {
+  // Preserve the device selector and publication order on concurrent explicit auth actions.
+  return withSessionLock("slf-auth-signin-v2", action);
+}
+
+async function requestSessionRefresh(stillCurrent: () => boolean): Promise<Response | null> {
+  return withSessionLock("slf-auth-refresh-v1", async (crossTabLocked) => {
+    if (!stillCurrent()) return null;
+    const nonce = browserNonce();
+    if (nonce === null) return requestApi("/v1/auth/refresh", { method: "POST" });
+
+    const storage = crossTabLocked ? localStore : sessionStore;
+    const operation = readRefreshOperation(storage) ?? {
+      id: nonce, expiresAt: Date.now() + refreshOperationLifetimeMs,
+    };
+    // Only the operation identifier is persisted, never the session or its credentials.
+    writeStoredJson(storage, refreshOperationKey, operation);
+    const refresh = () => requestApi("/v1/auth/refresh", { method: "POST", headers: {
+      "X-Refresh-Protocol": "2", "X-Refresh-Operation": operation.id,
+    } });
+    const hasCookieRace = (response: Response) => response.status === 401
+      && response.headers.get("X-Error-Code") === "refresh_cookie_race";
+    let response = await refresh();
+    if (hasCookieRace(response)) {
+      // A concurrent response can still be delivering the current HttpOnly cookie.
+      await new Promise(resolve => setTimeout(resolve, 250));
+      if (!stillCurrent()) return null;
+      response = await refresh();
+      if (hasCookieRace(response)) throw new ApiError(503, "登入狀態暫時無法更新，請重試連線。");
+    }
+    if ((response.ok || response.status === 401)
+      && readRefreshOperation(storage)?.id === operation.id) storage.removeItem(refreshOperationKey);
+    return response;
+  });
 }
 
 export async function restoreSession(): Promise<AuthResponse | null> {
@@ -197,6 +292,10 @@ async function authenticatedResponse(
 ): Promise<{ response: Response; identity: number }> {
   const identity = identityRevision;
   const headers = new Headers(init.headers);
+  if ((signInPaths.has(path) || path === "/v1/auth/logout")
+    && typeof window !== "undefined" && typeof crypto !== "undefined") {
+    headers.set("X-Refresh-Protocol", "2");
+  }
   const token = getAccessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -261,7 +360,11 @@ export async function fetchApiBlob(path: string, signal?: AbortSignal): Promise<
 }
 
 export async function downloadApiFile(path: string, filename: string): Promise<void> {
-  const objectUrl = URL.createObjectURL(await fetchApiBlob(path));
+  downloadBlob(await fetchApiBlob(path), filename);
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = objectUrl;
   anchor.download = filename;

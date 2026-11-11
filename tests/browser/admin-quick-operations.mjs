@@ -37,7 +37,11 @@ async function fixture(t, width) {
       if (path === '/v1/admin/printers/status') return route.fulfill({json: {enabled: false, dry_run: true, status: 'disabled', error: null}});
       if (path === '/v1/admin/printers/jobs') return route.fulfill({json: {items: [], total: 0}});
       if (path === '/v1/admin/platform') return route.fulfill({json:{orders_open:true,closed_message:'',printer_brand:'',printer_model:'',printer_connection:'unknown',kitchen_sound:false,invoice_provider:'fanyu'}});
-      if (path === '/v1/admin/meal-cancellation-summary') return route.fulfill({json:{requests:2,orders:2,pending:2,approved:0,rejected:0,pending_amount:240,approved_amount:0,refund_pending:0,refunded:0,refund_failed:0}});
+      if (path === '/v1/admin/meal-cancellation-summary') {
+        const orderId = url.searchParams.get('order_id');
+        const count = orderId ? state.requests.filter(row => row.order.id === orderId).length : state.requests.length;
+        return route.fulfill({json:{order_id:orderId || undefined,requests:count,orders:count,pending:count,approved:0,rejected:0,pending_amount:120*count,approved_amount:0,refund_pending:0,refunded:0,refund_failed:0}});
+      }
       state.reads.push({ path, ...Object.fromEntries(url.searchParams) });
       if (path === '/v1/admin/meal-events') return route.fulfill({ json: state.events });
       if (path === '/v1/admin/meal-calendar') return route.fulfill({ json: { service_date: date, is_workday: true, previous_workday: '2030-01-02', next_workday: '2030-01-04', ordering_starts_at: '2030-01-01T16:00:00Z', ordering_ends_at: '2030-01-02T12:00:00Z' } });
@@ -48,7 +52,9 @@ async function fixture(t, width) {
         return route.fulfill({ json: { items: rows.map((o) => ({ order: o, customer_name: '測試使用者', customer_email: 'test@example.com', meal_period: 'lunch' })), total: rows.length, limit: 20, offset: 0 } });
       }
       if (path === '/v1/admin/meal-cancellation-requests') {
-        const rows = state.requests.filter((row) => (!url.searchParams.get('search') || row.order.order_number.includes(url.searchParams.get('search'))) && (url.searchParams.get('review_status') === 'all' || row.request.status === url.searchParams.get('review_status')));
+        const orderId = url.searchParams.get('order_id');
+        const search = url.searchParams.get('search');
+        const rows = state.requests.filter((row) => (orderId ? row.order.id === orderId : !search || row.order.order_number.includes(search)) && (url.searchParams.get('review_status') === 'all' || row.request.status === url.searchParams.get('review_status')));
         return route.fulfill({ json: { items: rows, total: rows.length, limit: 30, offset: 0 } });
       }
       if (path === '/v1/admin/meal-kitchen') return route.fulfill({ json: { items: [{ id: 'A', order_number: 'QUICK-A', customer_name: '測試使用者', location: '合作社', pickup_at: `${date}T11:30:00+08:00`, pickup_time_confirmed: true, fulfillment_status: 'pending_confirmation', pending_cancellation: { reason: '行程更改' }, items: [{ name: '蔬食便當', quantity: 1, unit: '份', options: [] }] }], total: 1, meal_quantity: 1, products: [] } });
@@ -190,6 +196,7 @@ for (const width of [1440, 390]) {
     await page.getByRole('link', { name: '審核這筆退單', exact: true }).click();
     await page.getByRole('button', { name: '核准退單', exact: true }).waitFor();
     assert.match(page.url(), /tab=cancellations/); assert.match(page.url(), /q=QUICK-A/);
+    assert.equal(new URL(page.url()).searchParams.get('order_id'), 'A');
     await page.reload(); await page.getByRole('button', { name: '核准退單', exact: true }).click();
     assert.equal(state.writes.length, 0);
     assert.equal(await page.locator('.meal-cancellation-review textarea').count(), 0);

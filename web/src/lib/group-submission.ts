@@ -22,11 +22,12 @@ export interface GroupSubmission {
   pickupLocationName?: string;
 }
 
-const storageKey = (userId: string, campaignId: string) => `slf_group_submission:${userId}:${campaignId}`;
+const storageKeyPrefix = "slf_group_submission:";
+const storageKey = (userId: string, campaignId: string) => `${storageKeyPrefix}${userId}:${campaignId}`;
 export const groupQuoteIsConfirmed = (quote?: GroupQuote): quote is GroupQuote => Boolean(quote
   && /^[0-9a-f]{64}$/.test(quote.confirmation_fingerprint) && Number.isInteger(quote.amount_total) && quote.amount_total >= 0);
 
-export function readGroupSubmission(userId: string, campaignId: string, storage: SafeBrowserStorage = sessionStore): GroupSubmission | null {
+export function readGroupSubmission(userId: string, campaignId: string, storage: Pick<SafeBrowserStorage, "getItem"> = sessionStore): GroupSubmission | null {
   const saved = readStoredJson<GroupSubmission | null>(storage, storageKey(userId, campaignId), null);
   const input = saved?.input;
   return saved && typeof saved.requestId === "string" && typeof saved.title === "string"
@@ -36,6 +37,26 @@ export function readGroupSubmission(userId: string, campaignId: string, storage:
     && ["pickup", "shipping"].includes(input.fulfillment?.kind)
     && groupQuoteIsConfirmed(saved.quote) && input.expectedTotal === saved.quote.amount_total
     && input.expectedQuoteFingerprint === saved.quote.confirmation_fingerprint ? saved : null;
+}
+
+export function hasGroupSubmissionForPath(pathname: string, storage: Storage): boolean {
+  const match = /^\/groups\/([^/]+)\/?$/.exec(pathname);
+  if (!match) return false;
+
+  let campaignId: string;
+  try {
+    campaignId = decodeURIComponent(match[1]);
+  } catch {
+    return false;
+  }
+  if (/[:/]/.test(campaignId)) return false;
+
+  return Object.keys(storage).some(key => {
+    if (!key.startsWith(storageKeyPrefix)) return false;
+    const [userId, savedCampaignId, extra] = key.slice(storageKeyPrefix.length).split(":");
+    return Boolean(userId && savedCampaignId === campaignId && extra === undefined
+      && readGroupSubmission(userId, campaignId, storage));
+  });
 }
 
 export function prepareGroupSubmission(userId: string, input: GroupCheckoutInput, quote: GroupQuote,

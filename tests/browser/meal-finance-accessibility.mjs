@@ -3,7 +3,9 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const playwright = createRequire(import.meta.url)('playwright');
+const browserEngine = process.env.BROWSER_ENGINE ?? 'chromium';
+assert.ok(['chromium', 'webkit'].includes(browserEngine), 'Use Chromium or WebKit');
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4189');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || target.pathname !== '/' || target.username || target.password) throw new Error('Use an isolated local origin');
 const base = target.origin;
@@ -27,7 +29,7 @@ const report = { starts_on: '2030-01-01', ends_on: '2030-01-02', summary: { rece
   daily: [{ period: '2030-01-02', received: 320, refunded: 100, net: 220 }], weekly: [{ period: '2029-12-31', received: 320, refunded: 100, net: 220 }], monthly: [{ period: '2030-01', received: 320, refunded: 100, net: 220 }],
   products: [{ name: '有機米', unit: '袋', quantity: 2, sales_amount: 320, order_count: 1 }], orders: { items: [sale], total: 1, limit: 20, offset: 0 } };
 async function fixture(t, width) {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await playwright[browserEngine].launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
   const state = { unknown: [], errors: [], quotes: [], reads: [], writes: [] };
@@ -95,11 +97,9 @@ for (const width of [1440, 390]) {
     await page.getByRole('button', { name: '增加蔬食便當', exact: true }).click();
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();
     assert.equal(state.quotes.at(-1).body.pickup_at, '2030-01-03T10:00:00.000Z');
-    await page.getByText('修改取餐時間', {exact:true}).click();
     await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).selectOption('2030-01-03T17:30');
     await page.waitForURL(/pickup_at=.*17%3A30/);
     await page.reload();
-    await page.getByText('修改取餐時間', {exact:true}).click();
     await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).waitFor();
     assert.equal(await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).inputValue(), '2030-01-03T17:30');
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();

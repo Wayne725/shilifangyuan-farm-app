@@ -12,11 +12,24 @@ from sqlalchemy.orm import selectinload
 
 from ..auth import (
     decode_token,
+    get_active_user_for_access,
     get_current_user,
     hash_password,
     make_token_pair,
     membership_type_for_user,
+    oauth2_scheme,
     verify_and_update_password,
+)
+from ..browser_refresh import (
+    BrowserLoginGeneration,
+    PreparedBrowserLogin,
+    browser_token_response,
+    clear_logout_cookies,
+    establish_browser_login,
+    prepare_browser_login,
+    refresh_browser_session,
+    should_revoke_on_logout,
+    uses_browser_refresh,
 )
 from ..config import Settings, get_settings
 from ..platform_settings import platform_settings
@@ -104,16 +117,6 @@ def _set_refresh_cookie(
     )
 
 
-def _clear_refresh_cookie(response: Response, settings: Settings) -> None:
-    response.delete_cookie(
-        key=settings.refresh_cookie_name,
-        path="/v1/auth",
-        secure=settings.refresh_cookie_secure,
-        httponly=True,
-        samesite=settings.refresh_cookie_samesite,
-    )
-
-
 def _validate_cookie_origin(request: Request, settings: Settings) -> None:
     origin = request.headers.get("origin")
     if not origin:
@@ -159,6 +162,39 @@ def _new_token_pair_and_session(
             tz=timezone.utc,
         ),
     )
+
+
+async def _issue_login_session(
+    user: User,
+    session: AsyncSession,
+    settings: Settings,
+    browser: PreparedBrowserLogin | None,
+    *,
+    remember_me: bool,
+) -> dict[str, str] | BrowserLoginGeneration:
+    if browser is not None:
+        return await establish_browser_login(session, browser, user, settings)
+    pair, refresh_session = _new_token_pair_and_session(user, settings, remember_me=remember_me)
+    session.add(refresh_session)
+    return pair
+
+
+def _login_token_response(
+    user: User,
+    request: Request,
+    response: Response,
+    settings: Settings,
+    tokens: dict[str, str] | BrowserLoginGeneration,
+    *,
+    remember_me: bool,
+) -> TokenResponse:
+    if isinstance(tokens, dict):
+        return token_response(user, response, settings, tokens, remember_me=remember_me)
+    selection, generation = tokens
+    access_token = browser_token_response(
+        request, response, user, settings, selection, generation, remember_me=remember_me,
+    )
+    return TokenResponse(access_token=access_token, token_type="bearer", user=user_read(user))
 
 
 def _token_hash(token: str) -> str:
@@ -583,10 +619,8 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email 或密碼錯誤",
         )
-    verified, updated_hash = verify_and_update_password(
-        body.password,
-        user.password_hash,
-    )
+    original_hash = user.password_hash
+    verified, updated_hash = verify_and_update_password(body.password, original_hash)
     if not verified:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -597,8 +631,6 @@ async def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="請先完成 Email 驗證",
         )
-    if updated_hash is not None:
-        user.password_hash = updated_hash
     await session.execute(
         delete(RefreshSession)
         .where(
@@ -607,12 +639,30 @@ async def login(
         )
         .execution_options(synchronize_session=False)
     )
-    pair, refresh_session = _new_token_pair_and_session(user, settings, remember_me=body.remember_me)
-    session.add(refresh_session)
+    browser = await prepare_browser_login(request, session, settings)
+    if browser is not None:
+        # An overlapping logout on this device may have advanced the account version.
+        user = await session.scalar(
+            select(User)
+            .where(User.id == user.id, User.is_active.is_(True), User.email_verified_at.is_not(None))
+            .options(selectinload(User.membership))
+            .execution_options(populate_existing=True)
+        )
+        if user is None:
+            raise HTTPException(status_code=401, detail="Email 或密碼錯誤")
+        if user.password_hash != original_hash:
+            verified, updated_hash = verify_and_update_password(body.password, user.password_hash)
+            if not verified:
+                raise HTTPException(status_code=401, detail="Email 或密碼錯誤")
+    if updated_hash is not None:
+        user.password_hash = updated_hash
+    tokens = await _issue_login_session(user, session, settings, browser, remember_me=body.remember_me)
     await session.flush()
     await reset_credential_quota(session, account_key("login", user.email), settings, budget=quota_budget)
     await session.commit()
-    return token_response(user, response, settings, pair, remember_me=body.remember_me)
+    return _login_token_response(
+        user, request, response, settings, tokens, remember_me=body.remember_me,
+    )
 
 
 @auth_router.post("/refresh", response_model=TokenResponse)
@@ -623,6 +673,14 @@ async def refresh(
     settings: Settings = Depends(get_settings),
 ) -> TokenResponse:
     _validate_cookie_origin(request, settings)
+    if uses_browser_refresh(request, settings):
+        user, selection, generation, remember_me = await refresh_browser_session(
+            request, session, settings,
+        )
+        await session.commit()
+        return _login_token_response(
+            user, request, response, settings, (selection, generation), remember_me=remember_me,
+        )
     refresh_token = request.cookies.get(settings.refresh_cookie_name)
     if not refresh_token:
         raise HTTPException(
@@ -685,11 +743,17 @@ async def refresh(
 async def logout(
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    token: str = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> None:
     _validate_cookie_origin(request, settings)
+    payload = decode_token(token, "access", settings)
+    revoke = await should_revoke_on_logout(request, session, settings, payload)
+    user = await get_active_user_for_access(payload, session, logout=True)
+    if not revoke:
+        clear_logout_cookies(request, response, settings, payload)
+        return
     now = datetime.now(timezone.utc)
     user.token_version = int(user.token_version or 0) + 1
     await session.execute(
@@ -701,7 +765,7 @@ async def logout(
         .values(revoked_at=now)
     )
     await session.commit()
-    _clear_refresh_cookie(response, settings)
+    clear_logout_cookies(request, response, settings, payload)
 
 
 @auth_router.get("/me", response_model=UserRead)

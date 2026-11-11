@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hmac
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Literal, Mapping, Optional
+from urllib.parse import urlencode
 
 from sqlalchemy import case, exists, select
 from sqlalchemy.exc import IntegrityError
@@ -586,6 +587,35 @@ def _checkout_url(settings: Settings, attempt_id: str) -> str:
     )
 
 
+BrowserReturnStorefront = Literal["canonical", "legacy"]
+CANONICAL_STOREFRONT = "https://shilifangyuan.com"
+LEGACY_STOREFRONT = "https://shilifangyuan-web.onrender.com"
+
+
+def browser_return_storefront(settings: Settings, origin: str | None) -> BrowserReturnStorefront | None:
+    if settings.web_base_url.rstrip("/") == CANONICAL_STOREFRONT:
+        if (
+            settings.payment_legacy_return_enabled
+            and origin == LEGACY_STOREFRONT
+            and browser_return_base(settings, "legacy") == origin
+        ):
+            return "legacy"
+        if origin == CANONICAL_STOREFRONT:
+            return "canonical"
+    return None
+
+
+def browser_return_base(settings: Settings, storefront: str | None) -> str:
+    default_base = settings.web_base_url.rstrip("/")
+    if (
+        storefront == "legacy"
+        and default_base == CANONICAL_STOREFRONT
+        and any(origin.rstrip("/") == LEGACY_STOREFRONT for origin in settings.cors_origins)
+    ):
+        return LEGACY_STOREFRONT
+    return default_base
+
+
 def _build_checkout_payload(
     *,
     settings: Settings,
@@ -678,6 +708,8 @@ async def create_payment_attempt(
     user: User,
     settings: Settings,
     now: Optional[datetime] = None,
+    *,
+    return_storefront: BrowserReturnStorefront | None = None,
 ) -> PaymentAttempt:
     current = now or datetime.now(timezone.utc)
     owned_order_id = await session.scalar(
@@ -800,6 +832,7 @@ async def create_payment_attempt(
         order=order,
         order_revision=order.revision,
         provider=settings.payment_provider,
+        browser_return_storefront=return_storefront,
         merchant_trade_no=merchant_trade_no,
         amount=order.amount_total,
         status=PaymentStatus.PENDING,
@@ -915,7 +948,7 @@ async def create_payment_attempt(
             for item in order.items
         ),
         client_back_url="{}/orders?order_id={}".format(
-            settings.web_base_url.rstrip("/"), order.id
+            browser_return_base(settings, attempt.browser_return_storefront), order.id
         ),
         custom_fields={"CustomField1": order.id},
         current=current,
@@ -931,6 +964,8 @@ async def create_membership_payment_attempt(
     user: User,
     settings: Settings,
     now: Optional[datetime] = None,
+    *,
+    return_storefront: BrowserReturnStorefront | None = None,
 ) -> PaymentAttempt:
     ensure_payment_runtime_enabled(settings)
     current = now or datetime.now(timezone.utc)
@@ -990,6 +1025,7 @@ async def create_membership_payment_attempt(
     attempt = PaymentAttempt(
         membership_charge=charge,
         provider=settings.payment_provider,
+        browser_return_storefront=return_storefront,
         merchant_trade_no=merchant_trade_no,
         amount=charge.amount,
         status=PaymentStatus.PENDING,
@@ -1003,14 +1039,15 @@ async def create_membership_payment_attempt(
         if charge.charge_kind.value == "admission_fee"
         else "十里方圓股金"
     )
+    client_back_url = f"{browser_return_base(settings, return_storefront)}/account"
+    if return_storefront == "legacy":
+        client_back_url += "?" + urlencode({"membership_charge_id": charge.id, "attempt_id": attempt.id})
     attempt.checkout_payload = _build_checkout_payload(
         settings=settings,
         attempt=attempt,
         amount=charge.amount,
         item_name=item_name,
-        client_back_url="{}/account".format(
-            settings.web_base_url.rstrip("/")
-        ),
+        client_back_url=client_back_url,
         custom_fields={
             "CustomField1": charge.id,
             "CustomField2": "membership_charge",

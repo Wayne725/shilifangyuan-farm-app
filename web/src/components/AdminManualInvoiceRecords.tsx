@@ -55,7 +55,7 @@ function ManualInvoiceRecordsList({ paginate }: { paginate: boolean }) {
                 <thead><tr><th>操作時間／人員</th><th>交易／開票安排</th><th>目前發票狀態</th><th>處理原因</th></tr></thead>
                 <tbody>{records.data.items.map(row => <tr key={row.id}>
                   <td>{financeDateTime(row.recorded_at)}<br/>{row.operator_name || "未記錄姓名"}</td>
-                  <td><Link className="text-link" to="/admin" search={{ section: "orders", q: row.order_number }}>{row.order_number}</Link><br/>
+                  <td><Link className="text-link" to="/admin" search={{ section: "orders", q: row.order_number, order_id: row.order_id }}>{row.order_number}</Link><br/>
                     {formatMoney(row.amount)} · {row.action === "walk_in_sale.collected" ? "現場收款開票" : "手動安排開票"}<br/>
                     {row.action === "walk_in_sale.collected" && <>{row.sale_category === "meal" ? "便當" : row.sale_category === "product" ? "一般商品" : "未分類"}<br/></>}
                     {row.handling === "pickup_day" ? "取餐日開立" : "現在開立"}

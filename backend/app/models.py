@@ -524,6 +524,19 @@ class RefreshSession(Base):
     user: Mapped[User] = relationship(back_populates="refresh_sessions")
 
 
+class BrowserRefreshSelection(Base):
+    __tablename__ = "browser_refresh_selections"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    family_id: Mapped[str] = mapped_column(String(36))
+    current_session_id: Mapped[str] = mapped_column(
+        ForeignKey("refresh_sessions.id", ondelete="CASCADE"), index=True
+    )
+    predecessor_id: Mapped[Optional[str]] = mapped_column(String(36))
+    recovery_proof_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    recovery_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class CredentialRateLimitBucket(Base):
     __tablename__ = "credential_rate_limit_buckets"
     __table_args__ = (Index("ix_credential_rate_limit_expiry_key", "expires_at", "key_hash"),)
@@ -2463,6 +2476,10 @@ class PaymentAttempt(Base):
             "(order_id IS NULL AND membership_charge_id IS NULL AND activity_charge_id IS NOT NULL)",
             name="exactly_one_payment_subject",
         ),
+        CheckConstraint(
+            "browser_return_storefront IN ('canonical', 'legacy')",
+            name="browser_return_storefront_supported",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -2495,6 +2512,7 @@ class PaymentAttempt(Base):
         index=True,
     )
     checkout_payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    browser_return_storefront: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     provider_response: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     next_reconcile_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True

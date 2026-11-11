@@ -5,13 +5,10 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { useAdminPanelAccess } from "../lib/admin-panel-access";
 import { adminPlatformQueryKey, useAdminPlatformSettings } from "../lib/admin-platform-settings";
+import { invoiceProviderNames } from "../lib/labels";
 import "./AdminSettingsPage.css";
 
 const privateQueryKeys = [adminPlatformQueryKey];
-const invoiceProviders: Readonly<Partial<Record<string, string>>> = {
-  fanyu: "汎宇雲端發票",
-  ecpay: "綠界科技電子發票",
-};
 
 export function AdminSettingsPage() {
   const { user, openLogin } = useAuth();
@@ -48,7 +45,7 @@ export function AdminSettingsPage() {
           <section className="admin-settings-section">
             <p className="eyebrow">INVOICE / 電子發票</p><h2>發票設定</h2>
             <dl>
-              <div><dt>發票供應商</dt><dd>{invoiceProvider ? invoiceProviders[invoiceProvider] ?? "未識別的供應商" : "未設定"}</dd></div>
+              <div><dt>發票供應商</dt><dd>{invoiceProvider ? invoiceProviderNames[invoiceProvider] ?? "未識別的供應商" : "未設定"}</dd></div>
               <div><dt>開立規則</dt><dd>確認付款成功後開立</dd></div>
               <div><dt>字軌與配號</dt><dd>由發票供應商管理</dd></div>
             </dl>

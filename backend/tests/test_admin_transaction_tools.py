@@ -33,6 +33,39 @@ async def test_admin_order_search_is_paginated_and_role_protected(database_sessi
         assert invalid.status_code == 422
 
 
+async def test_admin_order_lookup_uses_exact_identity_without_changing_manual_search(database_session):
+    buyer, _, first = await make_regular_order(database_session)
+    first.order_number = "O2030010210"
+    first.contact_email = "first@example.com"
+    newer = Order(
+        order_number="O20300102100", user_id=buyer.id, order_kind=first.order_kind,
+        membership_type_snapshot=first.membership_type_snapshot, amount_total=600,
+        contact_email="different@example.com", created_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+    admin = User(email="exact-admin@example.test", display_name="管理員", password_hash="unused", user_role=UserRole.ADMIN)
+    database_session.add_all([newer, admin])
+    await database_session.commit()
+    path = "/v1/admin/order-search"
+    params = {"q": first.order_number}
+    async with api_test_context(database_session, [operations_router], settings=make_test_settings()) as client:
+        headers = auth_headers(admin)
+        fuzzy = await client.get(path, params=params, headers=headers)
+        assert [row["id"] for row in fuzzy.json()["items"]] == [newer.id, first.id]
+        selected = await client.get(path, params=params | {"order_id": first.id, "limit": 1}, headers=headers)
+        assert selected.status_code == 200, selected.text
+        assert selected.headers["cache-control"] == "no-store"
+        assert selected.json()["total"] == 1
+        assert [row["id"] for row in selected.json()["items"]] == [first.id]
+        assert selected.json()["items"][0]["contact_email"] == first.contact_email
+        missing = await client.get(path, params=params | {"order_id": "unknown"}, headers=headers)
+        assert missing.json()["total"] == 0 and missing.json()["items"] == []
+        wrong_category = await client.get(path, params=params | {"order_id": first.id, "order_category": "meal"}, headers=headers)
+        assert wrong_category.json()["total"] == 0
+        assert (await client.get(path, params={"order_id": first.id})).status_code == 401
+        assert (await client.get(path, params={"order_id": first.id}, headers=auth_headers(buyer))).status_code == 403
+        assert (await client.get(path, params={"order_id": "x" * 37}, headers=headers)).status_code == 422
+
+
 async def test_failed_email_retry_requires_confirmation_but_optional_reason(database_session):
     buyer, _product, _order = await make_regular_order(database_session)
     buyer.user_role = UserRole.ADMIN

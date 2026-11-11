@@ -8,11 +8,11 @@ const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4327');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('Use isolated local fixtures only');
 const base = target.origin;
 
-async function fixture(t, { width = 1280, role = 'admin', mode = 'records', path = '/admin/invoices' } = {}) {
+async function fixture(t, { width = 1280, role = 'admin', mode = 'records', path = '/admin/invoices', exactOrders = false, legacyOrderApi = false } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium && process.env.BROWSER_EXECUTABLE ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 960 }, serviceWorkers: 'block', timezoneId: 'Asia/Taipei' });
-  const state = { reads: [], writes: [], unknown: [], errors: [], mode };
+  const state = { reads: [], orderReads: [], writes: [], unknown: [], errors: [], mode, onlySibling: false };
   const rows = Array.from({ length: 7 }, (_, index) => ({
     id: `audit-${index}`, order_id: `order-${index}`, order_number: `O203001020${index + 1}`,
     recorded_at: '2030-01-02T01:00:00Z', operator_name: index === 4 ? null : '合成店員',
@@ -24,6 +24,25 @@ async function fixture(t, { width = 1280, role = 'admin', mode = 'records', path
     invoice_date: index === 1 ? '2030-01-02T02:00:00Z' : null,
     requested_issue_after: index % 2 ? '2030-01-03T00:00:00+08:00' : null,
   }));
+  if (exactOrders) rows[0].order_number = 'O2030010210';
+  const selectedOrder = {
+    id: rows[0].order_id, order_number: rows[0].order_number, sales_channel: 'regular', payment_method: 'online',
+    fulfillment_method: 'coop_pickup', payment_status: 'paid', invoice_status: 'issued', fulfillment_status: 'pending_confirmation',
+    customer_name: '原單聯絡人', contact_email: 'target@example.test', contact_phone_status: 'missing',
+    amount_total: 120, tax_amount: 0, created_at: '2030-01-02T01:00:00Z', available_actions: ['cancel'], items: [],
+  };
+  const similarOrder = {
+    ...selectedOrder, id: 'order-similar', order_number: 'O20300102100', customer_name: '相似編號聯絡人',
+    contact_email: 'similar@example.test', created_at: '2030-01-02T02:00:00Z',
+  };
+  const invoice = {
+    ...selectedOrder, order_id: selectedOrder.id, invoice_number: 'AB12345678', status: 'issued',
+    amount: 120, provider: 'fanyu', email: selectedOrder.contact_email,
+  };
+  const sale = {
+    ...selectedOrder, customer_email: selectedOrder.contact_email, membership_type: 'nonmember',
+    order_amount: 120, period_received: 120, period_refunded: 0, period_net: 120, refunds: [],
+  };
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
@@ -40,7 +59,19 @@ async function fixture(t, { width = 1280, role = 'admin', mode = 'records', path
     if (request.method() === 'GET' && path.startsWith('/v1/admin/walk-in-sales/request/')) {
       return route.fulfill({ status: 404, json: { detail: '尚未找到此筆隔離交易' } });
     }
-    if (path === '/v1/admin/invoice-register') return route.fulfill({ json: { items: [], total: 0 } });
+    if (path === '/v1/admin/invoice-register') return route.fulfill({ json: { items: exactOrders ? [invoice] : [], total: Number(exactOrders) } });
+    if (path === '/v1/admin/finance/meal-sales') return route.fulfill({ json: {
+      summary: { received: 120, refunded: 0, net: 120, receipt_count: 1, refund_count: 0, pending_refund_amount: 0, paid_meal_quantity: 0 },
+      orders: { items: [sale], total: 1, limit: 20, offset: 0 }, daily: [], weekly: [], monthly: [], products: [],
+    } });
+    if (path === '/v1/admin/order-search') {
+      const filters = Object.fromEntries(url.searchParams);
+      state.orderReads.push(filters);
+      const candidates = state.onlySibling ? [similarOrder] : [similarOrder, selectedOrder];
+      const items = candidates.filter(order => !legacyOrderApi && filters.order_id
+        ? order.id === filters.order_id : order.order_number.includes(filters.q || ''));
+      return route.fulfill({ json: { items, total: items.length, limit: 12, offset: 0 } });
+    }
     if (path === '/v1/admin/manual-invoice-records') {
       state.reads.push(Object.fromEntries(url.searchParams));
       if (state.mode === 'error') return route.fulfill({ status: 503, json: { detail: '隔離紀錄暫時無法讀取' } });
@@ -84,7 +115,9 @@ for (const width of [1280, 390]) {
     assert.match(await records.innerText(), /開立失敗|開票失敗/);
     assert.match(await records.innerText(), /已作廢/);
     assert.match(await records.innerText(), /未記錄姓名/);
-    assert.equal(await records.getByRole('link', { name: 'O2030010201', exact: true }).getAttribute('href'), '/admin?section=orders&q=O2030010201');
+    const original = new URL(await records.getByRole('link', { name: 'O2030010201', exact: true }).getAttribute('href'), base);
+    assert.equal(original.pathname, '/admin');
+    assert.deepEqual(Object.fromEntries(original.searchParams), { section: 'orders', q: 'O2030010201', order_id: 'order-0' });
     const pagination = records.getByRole('navigation', { name: '手動開票紀錄分頁' });
     await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
     await records.getByRole('link', { name: 'O2030010206', exact: true }).waitFor();
@@ -139,6 +172,62 @@ test('手動開票紀錄空白與讀取失敗可更新恢復，不觸發開票�
   state.mode = 'records';
   await records.getByRole('button', { name: '更新紀錄', exact: true }).click();
   await records.getByRole('link', { name: 'O2030010201', exact: true }).waitFor();
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.unknown, []);
+  assert.deepEqual(state.errors, []);
+});
+
+for (const [label, path, legacyOrderApi, width] of [
+  ['手動開票', '/admin?section=manual-invoice', true, 390],
+  ['發票清單', '/admin/invoices', false, 1280],
+  ['銷售明細', '/admin/finance', true, 1280],
+]) {
+  test(`${label}只開啟所選訂單，尾碼 10 與 100 保持各自資料`, async t => {
+    const { page, state } = await fixture(t, { path, width, exactOrders: true, legacyOrderApi });
+    let link;
+    if (label === '手動開票') {
+      link = page.getByRole('region', { name: '近期開票紀錄', exact: true }).getByRole('link', { name: 'O2030010210', exact: true });
+    } else if (label === '發票清單') {
+      link = page.getByRole('link', { name: '開啟訂單與發票', exact: true });
+    } else {
+      await page.locator('.meal-finance-sale > summary').click();
+      link = page.getByRole('link', { name: '處理付款／發票', exact: true });
+    }
+    await link.click();
+    const cards = page.locator('.operations-list article');
+    await cards.getByText('原單聯絡人', { exact: true }).waitFor();
+    assert.equal(await cards.count(), 1);
+    assert.equal(await cards.getByText('O20300102100', { exact: true }).count(), 0);
+    assert.equal(await cards.getByRole('button', { name: '辦理退單', exact: true }).count(), 1);
+    assert.equal(new URL(page.url()).searchParams.get('order_id'), 'order-0');
+    assert.equal(state.orderReads.at(-1).order_id, 'order-0');
+    assert.equal(state.orderReads.at(-1).q, 'O2030010210');
+
+    if (label === '手動開票') {
+      await page.reload();
+      await cards.getByText('原單聯絡人', { exact: true }).waitFor();
+      assert.equal(await cards.count(), 1);
+      const search = page.getByRole('searchbox', { name: '搜尋訂單', exact: true });
+      await search.fill('O20300102');
+      await page.getByRole('button', { name: '搜尋', exact: true }).click();
+      await cards.getByText('相似編號聯絡人', { exact: true }).waitFor();
+      assert.equal(await cards.count(), 2);
+      assert.equal(state.orderReads.at(-1).order_id, undefined);
+    }
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.unknown, []);
+    assert.deepEqual(state.errors, []);
+  });
+}
+
+test('舊 API 只回傳相似編號時，指定單筆連結無法操作該相似訂單', async t => {
+  const { page, state } = await fixture(t, { path: '/admin/invoices', exactOrders: true, legacyOrderApi: true });
+  state.onlySibling = true;
+  await page.getByRole('link', { name: '開啟訂單與發票', exact: true }).click();
+  await page.getByText('找不到這筆訂單。', { exact: true }).waitFor();
+  assert.equal(await page.locator('.operations-list article').count(), 0);
+  assert.equal(await page.getByRole('button', { name: '辦理退單', exact: true }).count(), 0);
   assert.deepEqual(state.writes, []);
   assert.deepEqual(state.unknown, []);
   assert.deepEqual(state.errors, []);

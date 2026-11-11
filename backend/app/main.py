@@ -87,7 +87,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Error-Code"],
+        expose_headers=["X-Error-Code", "X-Refresh-Protocol"],
     )
     allowed_hosts = {
         host
@@ -175,6 +175,8 @@ def create_app() -> FastAPI:
         tables and can call ECPay — never sits in the user's request path.
         """
         response = await call_next(request)
+        if not settings.reconciliation_on_request_enabled:
+            return response
         if request.url.path in AUTH_EMAIL_PATHS:
             schedule_background_reconcile(
                 settings,

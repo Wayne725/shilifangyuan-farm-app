@@ -3,9 +3,9 @@ import pytest
 import time_machine
 from sqlalchemy import func, select
 from app.models import (
-    Activity, ActivityRegistration, ActivityRegistrationStatus, ActivityStatus, AdminAudit, FulfillmentMethod,
+    Activity, ActivityRegistration, ActivityRegistrationStatus, ActivityStatus, AdminAudit, FulfillmentMethod, FulfillmentState,
     InvoiceBuyerType, InvoiceStatus, MealCancellationRequest, MembershipAdmissionRound, MembershipApplication,
-    MembershipApplicationStatus, MembershipType, Order, OrderKind, Refund, RefundStatus, SalesChannel, new_id,
+    MembershipApplicationStatus, MembershipType, Order, OrderFulfillment, OrderKind, Refund, RefundStatus, SalesChannel, new_id,
 )
 from app.routers.meal_cancellation_reports import meal_cancellation_reports_router
 from app.routers.invoice_reports import invoice_reports_router
@@ -78,9 +78,11 @@ async def test_admin_invoice_followup_queue_matches_order_flag_at_taipei_midnigh
         (None, InvoiceStatus.PENDING, midnight - timedelta(seconds=1), False),
         (None, InvoiceStatus.PENDING, midnight, True),
         (None, InvoiceStatus.ISSUED, midnight - timedelta(seconds=1), True),
+        (None, InvoiceStatus.FAILED, midnight, True),
     ]:
         c.order.invoice.invoice_date = issue_at
         c.order.invoice.status = status
+        c.order.invoice_status = status
         await c.session.commit()
         with time_machine.travel(now, tick=False):
             headers = auth_headers(c.admin)
@@ -89,6 +91,9 @@ async def test_admin_invoice_followup_queue_matches_order_flag_at_taipei_midnigh
             order = (await c.client.get("/v1/admin/order-search", headers=headers)).json()["items"][0]
             assert order["invoice_followup_required"] is expected
             assert counts["invoice_followups"] == results["total"] == int(expected)
+            assert "invoice_followup_reason" not in order
+            if expected:
+                assert results["items"][0]["invoice_followup_reason"] == "business_date"
 
 @pytest.mark.asyncio
 async def test_cancellation_summary_distinguishes_review_and_actual_refunds(review_context):
@@ -114,6 +119,60 @@ async def test_cancellation_summary_distinguishes_review_and_actual_refunds(revi
     assert (await c.client.get(path+'?starts_on=2030-01-01&ends_on=2020-01-01', headers=auth_headers(c.admin))).status_code == 422
     exported = await c.client.get('/v1/admin/meal-cancellations.csv?review_status=approved', headers=auth_headers(c.admin))
     assert exported.status_code == 200 and c.order.order_number in exported.text and '已核准' in exported.text
+
+@pytest.mark.asyncio
+async def test_meal_cancellation_scope_is_exact_and_manual_search_stays_partial(review_context):
+    import csv
+    import io
+
+    c = review_context
+    c.client._transport.app.include_router(meal_cancellation_reports_router)
+    c.order.order_number = "M2026110610"
+    await submit(c)
+    sibling = Order(
+        order_number="M20261106100", order_kind=OrderKind.REGULAR, sales_channel=SalesChannel.MEAL_PREORDER,
+        fulfillment_method=FulfillmentMethod.EVENT_PICKUP, meal_event=c.event, user=c.other, amount_total=70,
+        contact_email="nearby@example.com", membership_type_snapshot=MembershipType.NONMEMBER,
+        fulfillment=OrderFulfillment(method=FulfillmentMethod.EVENT_PICKUP, status=FulfillmentState.PENDING_CONFIRMATION),
+    )
+    c.session.add(MealCancellationRequest(order=sibling, requested_by_id=c.other.id, reason="相似編號"))
+    await c.session.commit()
+    paths = (
+        "/v1/admin/meal-cancellation-requests",
+        "/v1/admin/meal-cancellation-summary",
+        "/v1/admin/meal-cancellations.csv",
+    )
+    headers = auth_headers(c.admin)
+
+    async def reports(params):
+        queue, summary = [await c.client.get(path, headers=headers, params=params) for path in paths[:2]]
+        order_id = params.get("order_id")
+        export_path = f"/v1/admin/meal-cancellations/orders/{order_id}.csv" if order_id else paths[2]
+        exported = await c.client.get(export_path, headers=headers, params={} if order_id else params)
+        assert queue.status_code == summary.status_code == exported.status_code == 200, (
+            queue.text, summary.text, exported.text,
+        )
+        listed = {item["order"]["order_number"] for item in queue.json()["items"]}
+        totals = summary.json()
+        assert totals.get("order_id") == order_id
+        rows = csv.DictReader(io.StringIO(exported.text.lstrip("\ufeff")))
+        assert {row["訂單編號"] for row in rows} == listed
+        assert queue.json()["total"] == totals["orders"] == totals["pending"] == len(listed)
+        return listed, totals["pending_amount"]
+
+    params = {"search": c.order.order_number}
+    assert await reports(params) == ({"M2026110610", "M20261106100"}, 270)
+    assert await reports({**params, "order_id": c.order.id}) == ({"M2026110610"}, 200)
+    assert await reports({"search": "does-not-match", "order_id": sibling.id}) == ({"M20261106100"}, 70)
+    assert await reports({"search": "nearby@"}) == ({"M20261106100"}, 70)
+    assert await reports({**params, "order_id": new_id()}) == (set(), 0)
+    for path in paths:
+        assert (await c.client.get(path, headers=auth_headers(c.buyer), params={"order_id": c.order.id})).status_code == 403
+    export_path = f"/v1/admin/meal-cancellations/orders/{c.order.id}.csv"
+    assert (await c.client.get(export_path)).status_code == 401
+    assert (await c.client.get(export_path, headers=auth_headers(c.buyer))).status_code == 403
+    assert (await c.client.get("/v1/admin/meal-cancellations/orders/.csv", headers=headers)).status_code == 404
+
 
 @pytest.mark.asyncio
 async def test_invoice_register_search_is_read_only_and_export_audited(review_context):

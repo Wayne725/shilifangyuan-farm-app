@@ -4,6 +4,7 @@ from .photos import photos_router
 from .auth import auth_router
 from .member_lookup import member_lookup_router
 from .line_auth import line_auth_router
+from .admin_help import admin_help_router
 from .admin_users import admin_users_router
 from .catalog import catalog_router
 from .community import community_router
@@ -32,6 +33,7 @@ from .financial_statements import router as financial_statements_router
 from .walk_in_sales import walk_in_sales_router
 
 ALL_ROUTERS = [
+    admin_help_router,
     walk_in_sales_router,
     activity_payments_router,
     activity_finance_router,

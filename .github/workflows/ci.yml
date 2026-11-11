@@ -233,6 +233,7 @@ jobs:
           kill -0 "$supplemental_preview_pid"
           supplemental_tests=(tests/browser/payment-return.mjs tests/browser/meal-order-flow.mjs)
           supplemental_tests+=(tests/browser/workday-meals.mjs tests/browser/shop-tab-order.mjs)
+          supplemental_tests+=(tests/browser/admin-tax-ledger.mjs tests/browser/meal-finance-accessibility.mjs)
           if [[ "$BROWSER_ENGINE" == chromium ]]; then
             supplemental_tests+=(tests/browser/activity-payments.mjs tests/browser/group-review-window.mjs)
           fi
