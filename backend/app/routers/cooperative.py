@@ -279,14 +279,11 @@ async def my_surplus_distributions(
     ]
 
 
-@cooperative_router.get("/v1/admin/finance/nonmember-sales")
-async def nonmember_sales(
-    starts_on: date,
-    ends_on: date,
-    admin: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
+async def _membership_sales_report(
+    session: AsyncSession,
+    start: datetime,
+    end: datetime,
 ) -> dict[str, Any]:
-    start, end = _period(starts_on, ends_on)
     rows = (
         await session.execute(
             select(
@@ -322,27 +319,7 @@ async def nonmember_sales(
     nonmember = revenues[MembershipType.NONMEMBER]
     ratio = ratios[MembershipType.NONMEMBER]
     level = "limit" if ratio >= 0.30 else "warning" if ratio >= 0.25 else "normal"
-    if level != "normal":
-        existing = await session.scalar(
-            select(Notification).where(
-                Notification.user_id == admin.id,
-                Notification.event_type == f"nonmember_sales_{level}",
-                Notification.created_at >= start,
-            )
-        )
-        if existing is None:
-            session.add(
-                Notification(
-                    user_id=admin.id,
-                    event_type=f"nonmember_sales_{level}",
-                    title="非社員銷售比例警示",
-                    body=f"期間非社員銷售占比為 {ratio:.1%}，系統僅警示、不阻擋交易。",
-                )
-            )
-            await session.commit()
     return {
-        "starts_on": starts_on,
-        "ends_on": ends_on,
         "total_revenue": total,
         "nonmember_revenue": nonmember,
         "ratio": ratio,
@@ -368,6 +345,57 @@ async def nonmember_sales(
         "headroom_amount": max(int(total * 0.30) - nonmember, 0),
         "level": level,
         "transactions_blocked": False,
+    }
+
+
+@cooperative_router.get("/v1/admin/finance/nonmember-sales")
+async def nonmember_sales(
+    starts_on: date,
+    ends_on: date,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    start, end = _period(starts_on, ends_on)
+    report = await _membership_sales_report(session, start, end)
+    level = report["level"]
+    if level != "normal":
+        existing = await session.scalar(
+            select(Notification).where(
+                Notification.user_id == admin.id,
+                Notification.event_type == f"nonmember_sales_{level}",
+                Notification.created_at >= start,
+            )
+        )
+        if existing is None:
+            ratio = report["nonmember_ratio"]
+            session.add(Notification(
+                user_id=admin.id,
+                event_type=f"nonmember_sales_{level}",
+                title="非社員銷售比例警示",
+                body=f"期間非社員銷售占比為 {ratio:.1%}，系統僅警示、不阻擋交易。",
+            ))
+            await session.commit()
+    return {"starts_on": starts_on, "ends_on": ends_on, **report}
+
+
+@cooperative_router.get("/v1/admin/finance/sales-by-membership")
+async def sales_by_membership(
+    starts_on: date,
+    ends_on: date,
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    report = await _membership_sales_report(session, *_period(starts_on, ends_on))
+    return {
+        "starts_on": starts_on,
+        "ends_on": ends_on,
+        "total_revenue": report["total_revenue"],
+        "sales_breakdown": report["sales_breakdown"],
+        "monitoring_threshold_reached": {
+            "warning": report["warning_threshold"], "limit": report["legal_limit"],
+        }.get(report["level"]),
     }
 
 

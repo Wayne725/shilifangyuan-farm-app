@@ -9,6 +9,7 @@ if (!['localhost', '127.0.0.1'].includes(target.hostname) || target.pathname !==
 }
 const base = target.origin;
 const ledgerPath = '/v1/admin/finance/tax-ledger';
+const membershipPath = '/v1/admin/finance/sales-by-membership';
 const row = {
   tax_type: 'taxable', membership_type: 'trainee', sales_channel: 'meal_preorder',
   sales_amount: 545, tax_amount: 25, order_count: 2,
@@ -26,7 +27,7 @@ async function fixture(t, { width = 1280, role = 'admin' } = {}) {
     viewport: { width, height: 860 }, locale: 'zh-TW', timezoneId: 'Asia/Taipei',
     serviceWorkers: 'block', acceptDownloads: true, reducedMotion: 'reduce',
   });
-  const state = { requests: [], errors: [], unexpected: [], expired: false, forbidden: false };
+  const state = { requests: [], membershipRequests: [], errors: [], unexpected: [], expired: false, forbidden: false };
   await context.route('**/*', (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -42,6 +43,20 @@ async function fixture(t, { width = 1280, role = 'admin' } = {}) {
     if (request.method() === 'GET') {
       if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
       if (path === '/v1/admin/finance/meal-sales') return route.fulfill({ json: sales });
+      if (path === membershipPath) {
+        const period = Object.fromEntries(url.searchParams);
+        state.membershipRequests.push({ period, authorization: request.headers().authorization });
+        if (state.forbidden) return route.fulfill({ status: 403, json: { detail: '需要管理員權限' } });
+        const empty = period.starts_on === '2030-02-01';
+        return route.fulfill({ json: {
+          ...period, total_revenue: empty ? 0 : 600, monitoring_threshold_reached: empty ? null : 0.3,
+          sales_breakdown: [
+            { membership_type: 'nonmember', revenue: empty ? 0 : 200, ratio: empty ? 0 : 1 / 3 },
+            { membership_type: 'trainee', revenue: empty ? 0 : 100, ratio: empty ? 0 : 1 / 6 },
+            { membership_type: 'member', revenue: empty ? 0 : 300, ratio: empty ? 0 : 0.5 },
+          ],
+        } });
+      }
       if ([ledgerPath, `${ledgerPath}.csv`].includes(path)) {
         const period = Object.fromEntries(url.searchParams);
         const exporting = path.endsWith('.csv');
@@ -106,7 +121,9 @@ test('未登入與一般買家不能查詢或下載稅務彙總', async (t) => {
     await page.getByRole('heading', { name: '財務報表只向管理員開放。' }).waitFor();
     if (!role) await page.getByRole('button', { name: '管理員登入' }).waitFor();
     assert.equal(await page.getByRole('tab', { name: '稅務彙總' }).count(), 0);
+    assert.equal(await page.getByRole('tab', { name: '身分銷售占比' }).count(), 0);
     assert.deepEqual(state.requests, []);
+    assert.deepEqual(state.membershipRequests, []);
     assert.deepEqual(state.unexpected, []);
   }
 });
@@ -145,3 +162,37 @@ test('管理員權限撤銷時隱藏報表與下載按鈕，重新查詢仍須�
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unexpected, []);
 });
+
+for (const width of [1280, 390]) {
+  test(`${width}px 身分銷售占比用唯讀查詢，顯示三類身分與營運提醒`, async (t) => {
+    const { page, state } = await fixture(t, { width });
+    await page.getByRole('heading', { name: '銷售明細與統整' }).waitFor();
+    assert.deepEqual(state.membershipRequests, []);
+    await page.getByRole('tab', { name: '身分銷售占比', exact: true }).click();
+    const table = page.getByRole('table', { name: '結帳身分銷售占比' });
+    await table.waitFor();
+    assert.deepEqual(await table.locator('tbody th').allTextContents(), ['一般買家', '實習社員', '社員']);
+    assert.deepEqual(await table.locator('tbody td').allTextContents(), ['$200', '33.3%', '$100', '16.7%', '$300', '50%']);
+    await page.getByText('一般買家占比達營運提醒值 30%', { exact: true }).waitFor();
+    assert.deepEqual(state.membershipRequests, [{
+      period: { starts_on: '2030-01-01', ends_on: '2030-01-31' }, authorization: 'Bearer isolated',
+    }]);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    await page.getByLabel('付款日期起').fill('2030-02-01');
+    await page.getByRole('button', { name: '查詢', exact: true }).click();
+    await page.getByText('結束日期不可早於開始日期。', { exact: true }).waitFor();
+    assert.equal(state.membershipRequests.length, 1);
+    await page.getByLabel('付款日期迄').fill('2030-02-01');
+    await page.getByRole('button', { name: '查詢', exact: true }).click();
+    await page.getByText('2030-02-01 至 2030-02-01（UTC）', { exact: true }).waitFor();
+    assert.deepEqual(await table.locator('tbody td').allTextContents(), ['$0', '—', '$0', '—', '$0', '—']);
+    assert.equal(await page.getByText('一般買家占比達營運提醒值 30%', { exact: true }).count(), 0);
+    state.forbidden = true;
+    await page.getByRole('button', { name: '查詢', exact: true }).click();
+    await page.getByText('需要管理員權限', { exact: true }).waitFor();
+    assert.equal(await table.count(), 0);
+    assert.deepEqual(state.requests, []);
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(state.unexpected, []);
+  });
+}

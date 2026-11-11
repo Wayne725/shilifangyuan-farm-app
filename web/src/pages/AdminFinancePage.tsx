@@ -9,6 +9,7 @@ import { channelMatchesCategory, orderCategoryLabels, type OrderCategory } from 
 import { ActivityFinance } from "../components/ActivityFinance";
 import { AdminNav } from "../components/AdminNav";
 import { TaxLedger } from "../components/TaxLedger";
+import { SalesByMembership } from "../components/SalesByMembership";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, downloadApiFile, formatMoney } from "../lib/api";
@@ -31,10 +32,12 @@ export function AdminFinancePage() {
     <Tabs.Root key={user.id} defaultValue="sales">
       <Tabs.List className="tab-list" aria-label="財務來源">
         <Tabs.Trigger value="sales">商品銷售</Tabs.Trigger>
+        <Tabs.Trigger value="memberships">身分銷售占比</Tabs.Trigger>
         <Tabs.Trigger value="activities">活動收款</Tabs.Trigger>
         <Tabs.Trigger value="tax">稅務彙總</Tabs.Trigger>
       </Tabs.List>
       <Tabs.Content value="sales"><ProductFinance /></Tabs.Content>
+      <Tabs.Content value="memberships"><SalesByMembership adminId={user.id} /></Tabs.Content>
       <Tabs.Content value="activities"><ActivityFinance /></Tabs.Content>
       <Tabs.Content value="tax"><TaxLedger adminId={user.id} /></Tabs.Content>
     </Tabs.Root>

@@ -17,6 +17,7 @@ from app.models import (
     Membership,
     MembershipStatus,
     MembershipType,
+    Notification,
     Order,
     OrderItem,
     OrderKind,
@@ -164,6 +165,44 @@ async def test_tax_ledger_read_and_csv_share_scope_and_reject_unauthorized(
         ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"],
         *[[str(value) for value in row] for row in expected_rows],
     ]
+
+
+@pytest.mark.asyncio
+async def test_membership_sales_view_is_admin_only_read_only_and_reuses_ledger_scope(cooperative_context):
+    c = cooperative_context
+    client, session, admin = c["client"], c["session"], c["admin"]
+    url = "/v1/admin/finance/sales-by-membership"
+    params = {"starts_on": "2020-01-01", "ends_on": "2030-12-31"}
+    expired = {"Authorization": f"Bearer {create_token(admin, 'access', -timedelta(minutes=5))}"}
+    for headers, expected in (({}, 401), (expired, 401), (auth_headers(c["customer"]), 403)):
+        assert (await client.get(url, params=params, headers=headers)).status_code == expected
+    invalid = await client.get(url, params={"starts_on": "2030-01-01", "ends_on": "2029-12-31"}, headers=auth_headers(admin))
+    assert invalid.status_code == 422
+
+    for _ in range(2):
+        response = await client.get(url, params=params, headers=auth_headers(admin))
+        assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+        report = response.json()
+        assert report == {
+            **params, "total_revenue": 600, "monitoring_threshold_reached": 0.30,
+            "sales_breakdown": [
+                {"membership_type": "nonmember", "revenue": 200, "ratio": pytest.approx(1 / 3)},
+                {"membership_type": "trainee", "revenue": 0, "ratio": 0},
+                {"membership_type": "member", "revenue": 400, "ratio": pytest.approx(2 / 3)},
+            ],
+        }
+    assert await session.scalar(select(func.count(Notification.id))) == 0
+    assert await session.scalar(select(func.count(AdminAudit.id))) == 0
+    tax = await client.get("/v1/admin/finance/tax-ledger", params=params, headers=auth_headers(admin))
+    assert sum(row["sales_amount"] for row in tax.json()["rows"]) == report["total_revenue"]
+    old = await client.get("/v1/admin/finance/nonmember-sales", params=params, headers=auth_headers(admin))
+    assert old.json()["sales_breakdown"] == report["sales_breakdown"]
+    notice = (await session.scalars(select(Notification))).one()
+    assert notice.event_type == "nonmember_sales_limit" and notice.user_id == admin.id
+
+    empty = await client.get(url, params={"starts_on": "2001-01-01", "ends_on": "2001-01-01"}, headers=auth_headers(admin))
+    assert empty.status_code == 200
+    assert empty.json()["total_revenue"] == 0 and empty.json()["monitoring_threshold_reached"] is None
 
 
 @pytest.mark.asyncio
