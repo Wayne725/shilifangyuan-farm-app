@@ -232,7 +232,7 @@ jobs:
           curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:4192/ > /dev/null
           kill -0 "$supplemental_preview_pid"
           supplemental_tests=(tests/browser/payment-return.mjs tests/browser/meal-order-flow.mjs)
-          supplemental_tests+=(tests/browser/workday-meals.mjs)
+          supplemental_tests+=(tests/browser/workday-meals.mjs tests/browser/shop-tab-order.mjs)
           if [[ "$BROWSER_ENGINE" == chromium ]]; then
             supplemental_tests+=(tests/browser/activity-payments.mjs tests/browser/group-review-window.mjs)
           fi

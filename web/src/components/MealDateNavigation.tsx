@@ -2,10 +2,10 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 
 import { mealBookingDates, mealPickupChoices } from "../lib/meal-time";
-import type { MealEvent } from "../lib/types";
+import type { MealCalendarEvent } from "../lib/types";
 
 type Props = {
-  events: MealEvent[];
+  events: MealCalendarEvent[];
   now: number;
 };
 

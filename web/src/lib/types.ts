@@ -522,14 +522,12 @@ export interface MealOptionSelection {
   price_delta: number;
 }
 
-export interface MealEvent {
+export interface MealEventTiming {
   id: string;
   booking_policy?: "legacy" | "workday" | "special";
   new_orders_blocked_reason?: string | null;
-  can_edit?: boolean;
   service_date?: string | null;
   meal_period?: "lunch" | "dinner" | null;
-  schedule_template_id?: string | null;
   title: string;
   location: string;
   pickup_starts_at: string;
@@ -541,6 +539,16 @@ export interface MealEvent {
   ordering_starts_at: string;
   ordering_ends_at: string;
   status: string;
+}
+
+export interface MealCalendarEvent extends MealEventTiming {
+  has_active_offerings: boolean;
+  has_available_offerings: boolean;
+}
+
+export interface MealEvent extends MealEventTiming {
+  can_edit?: boolean;
+  schedule_template_id?: string | null;
   allow_cash_payment?: boolean;
   offerings: Array<{
     id: string;

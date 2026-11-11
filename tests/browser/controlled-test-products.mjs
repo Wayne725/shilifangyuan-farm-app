@@ -67,7 +67,7 @@ async function fixture(t, selected) {
       if (method === 'GET') {
         if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (url.pathname === '/v1/products') return route.fulfill({ json: catalog });
-        if (['/v1/group-campaigns', '/v1/meal-events', '/v1/shipping-rates'].includes(url.pathname)) return route.fulfill({ json: [] });
+        if (['/v1/group-campaigns', '/v1/meal-events/calendar', '/v1/shipping-rates'].includes(url.pathname)) return route.fulfill({ json: [] });
         if (url.pathname === '/v1/pickup-locations') return route.fulfill({ json: [{ id: pickupId,
           name: '隔離自取點', address: '隔離地址', instructions: '僅用於本機測試', is_active: true }] });
         if (url.pathname === '/v1/orders') return route.fulfill({ json: state.mutations.length ? [order] : [] });

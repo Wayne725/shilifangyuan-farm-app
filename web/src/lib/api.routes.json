@@ -100,6 +100,7 @@
   "GET /v1/me/points",
   "GET /v1/me/surplus-distributions",
   "GET /v1/meal-events",
+  "GET /v1/meal-events/calendar",
   "GET /v1/meal-events/{event_id}",
   "GET /v1/meal-orders",
   "GET /v1/meal-orders/{order_id}",

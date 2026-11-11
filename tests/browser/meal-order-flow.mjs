@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
 
 const { chromium, webkit } = createRequire(import.meta.url)('playwright');
 const testUrl = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4185');
@@ -304,7 +305,7 @@ async function scheduleFixture(t, { admin = false } = {}) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' });
   const dinner = scheduledEvent({ id: 'scheduled-dinner', title: '隔離每日晚餐', meal_period: 'dinner',
     pickup_starts_at: '2026-09-17T08:30:00Z', pickup_ends_at: '2026-09-17T10:30:00Z' });
-  const state = { events: [scheduledEvent(), dinner], quotes: [], orders: [], schedules: [], writes: [], unknownApi: [], blockedExternal: [], rejectEdit: false, adminMealReads: 0, adminEventReads: 0, adminPickupOrderReads: 0 };
+  const state = { events: [scheduledEvent(), dinner], quotes: [], orders: [], schedules: [], writes: [], reads: [], unknownApi: [], blockedExternal: [], rejectEdit: false, adminMealReads: 0, adminEventReads: 0, adminPickupOrderReads: 0 };
   const meal = { id: 'scheduled-meal', name: '隔離每日便當', description: '隔離驗收', slug: 'isolated', price: 120, is_active: true, tax_type: 'taxable', option_groups: [] };
   await context.route('**/*', (route) => {
     const request = route.request();
@@ -319,8 +320,12 @@ async function scheduleFixture(t, { admin = false } = {}) {
     if (method === 'GET' && path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { pending_cancellation: 0, refund_attention: 0, invoice_attention: 0, today_pickup: 0 } });
     if (method === 'GET' && path === '/v1/admin/meal-orders') return route.fulfill({ json: { items: [], total: 0, limit: 20, offset: 0 } });
     if (method === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/orders', '/v1/meal-orders', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
-    if (method === 'GET' && ['/v1/meal-events', '/v1/admin/meal-events'].includes(path)) {
-      if (path === '/v1/admin/meal-events') state.adminEventReads++;
+    if (method === 'GET' && path === '/v1/meal-events/calendar') {
+      state.reads.push(path);
+      return route.fulfill({ json: mealCalendarFixture(state.events) });
+    }
+    if (method === 'GET' && path === '/v1/admin/meal-events') {
+      state.adminEventReads++;
       return route.fulfill({ json: state.events });
     }
     if (method === 'GET' && path === '/v1/admin/meals') { state.adminMealReads++; return route.fulfill({ json: [meal] }); }
@@ -357,7 +362,10 @@ async function scheduleFixture(t, { admin = false } = {}) {
       return route.fulfill({ json: [paidOrder({ pickup_at: '2026-09-17T04:05:00Z' })] });
     }
     const event = state.events.find((candidate) => path === `/v1/meal-events/${candidate.id}` || path.startsWith(`/v1/meal-events/${candidate.id}/`));
-    if (event && method === 'GET' && path === `/v1/meal-events/${event.id}`) return route.fulfill({ json: event });
+    if (event && method === 'GET' && path === `/v1/meal-events/${event.id}`) {
+      state.reads.push(path);
+      return route.fulfill({ json: event });
+    }
     if (event && method === 'POST' && path.endsWith('/quote')) {
       const payload = request.postDataJSON();
       state.quotes.push(payload);
@@ -402,6 +410,7 @@ test('便當按已公告供餐日選擇，舊規則僅明日場次提供九個�
   assert.deepEqual(await slots.allTextContents(), ['11:00', '11:30', '12:00', '12:30', '13:00', '16:30', '17:00', '17:30', '18:00']);
   const hrefs = await slots.evaluateAll((links) => links.map((link) => link.getAttribute('href')));
   assert.ok(hrefs.every((href) => /\/meals\/scheduled-(lunch|dinner)\?/.test(href) && new URL(href, base).searchParams.get('pickup_at').startsWith('2026-09-17T')));
+  assert.ok(state.reads.length > 0 && state.reads.every(path => path === '/v1/meal-events/calendar'));
   await captureMealScreenshot(page, 'meal-tomorrow-fixed-slots-mobile.png');
   state.events = [];
   await page.reload();
@@ -437,6 +446,28 @@ test('晚餐僅准16:30至18:00半小時時段，非法跨午夜時間不報價�
   assert.equal(state.orders[0].pickup_at, '2026-09-17T10:00:00.000Z');
   assert.deepEqual(state.unknownApi, []);
   assert.ok(state.blockedExternal.every((origin) => origin === 'https://fonts.googleapis.com'));
+});
+
+test('手機從日期摘要選時段後才讀完整菜單，原時段帶入一般便當報價、建單與付款', { timeout: 25000 }, async (t) => {
+  const { page, state } = await scheduleFixture(t);
+  await page.goto(`${base}/shop`);
+  const slot = page.getByRole('link', { name: '隔離取餐區 18:00 取餐', exact: true });
+  await slot.waitFor();
+  assert.ok(state.reads.length > 0 && state.reads.every(path => path === '/v1/meal-events/calendar'));
+  await slot.click();
+  const meal = page.getByRole('button', { name: '增加隔離每日便當', exact: true });
+  await meal.waitFor();
+  assert.ok(state.reads.includes('/v1/meal-events/scheduled-dinner'));
+  const quote = page.waitForResponse(response => response.url().endsWith('/quote'));
+  await meal.click();
+  await quote;
+  await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
+  await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
+  assert.equal(state.quotes.at(-1).pickup_at, '2026-09-17T10:00:00.000Z');
+  assert.equal(state.orders.length, 1);
+  assert.equal(state.orders[0].pickup_at, '2026-09-17T10:00:00.000Z');
+  assert.equal(Object.hasOwn(state.orders[0], 'meal_booking_type'), false);
+  assert.deepEqual(state.unknownApi, []);
 });
 
 test('便當訂單顯示實際選定的取餐時間，舊單不捏造已選時間', { timeout: 20000 }, async (t) => {

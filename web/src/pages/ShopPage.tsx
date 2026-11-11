@@ -8,9 +8,10 @@ import { useEffect, useState } from "react";
 import { DataState, LoadingLines, ProductCard, SectionHeading } from "../components/Shared";
 import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
-import { apiFetch, formatDate } from "../lib/api";
+import { ApiError, apiFetch, formatDate } from "../lib/api";
 import { campaignOrderBlockReason, campaignStatusLabel } from "../lib/group-campaigns";
-import type { GroupCampaign, MealEvent, Product } from "../lib/types";
+import { mealMenuAvailability } from "../lib/meal-time";
+import type { GroupCampaign, MealCalendarEvent, MealEvent, Product } from "../lib/types";
 
 export function ShopPage() {
   const platform = useStorefrontStatus();
@@ -33,9 +34,18 @@ export function ShopPage() {
     queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns"),
   });
   const meals = useQuery({
-    queryKey: ["meal-events"],
-    queryFn: () => apiFetch<MealEvent[]>("/v1/meal-events"),
-    refetchInterval: 60000,
+    queryKey: ["meal-events", "calendar"],
+    queryFn: async ({ signal }) => {
+      try {
+        return await apiFetch<MealCalendarEvent[]>("/v1/meal-events/calendar", { signal });
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 404) throw error;
+        const events = await apiFetch<MealEvent[]>("/v1/meal-events", { signal });
+        return events.map(({ offerings, ...timing }) => ({ ...timing, ...mealMenuAvailability(offerings) }));
+      }
+    },
+    enabled: activeTab === "meals",
+    refetchInterval: 60_000,
   });
   const upcomingMeals = meals.data?.filter((meal) =>
     !["draft", "cancelled", "completed"].includes(meal.status)

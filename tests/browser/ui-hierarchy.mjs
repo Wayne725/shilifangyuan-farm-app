@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4198');
@@ -32,7 +33,7 @@ async function fixture(t, width, email = 'buyer@example.test') {
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (['/v1/products', '/v1/group-campaigns', '/v1/orders'].includes(path)) return route.fulfill({ json: [] });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [] });
-    if (path === '/v1/meal-events') return route.fulfill({ json: [sample] });
+    if (path === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture([sample]) });
     if (path === '/v1/meal-events/sample') return route.fulfill({ json: sample });
     if (path === '/v1/meal-events/sample/quote') {
       const body = request.postDataJSON(); state.quotes.push(body);
