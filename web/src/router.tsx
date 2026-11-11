@@ -270,6 +270,9 @@ const adminSocialRoute = createRoute({
   }),
   beforeLoad: ({ search }) => {
     if (search.tab === "wishes") throw redirect({ to: "/admin/groups", search: { tab: "wishes" }, replace: true });
+    if (search.tab === "members" || search.tab === "roster") {
+      throw redirect({ to: "/admin/users", search: { tab: search.tab, q: search.q }, replace: true });
+    }
   },
 });
 
@@ -367,11 +370,13 @@ const adminKitchenRoute = createRoute({
 const adminRecordsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/records",
-  component: page("./pages/AdminRecordsPage", "AdminRecordsPage"),
-  validateSearch: (search: Record<string, unknown>): { tab?: "members" | "payments" | "points"; member?: string } => ({
-    tab: search.tab === "payments" || search.tab === "points" ? search.tab : "members",
+  validateSearch: (search: Record<string, unknown>): { tab?: "payments" | "points"; member?: string } => ({
+    tab: search.tab === "payments" || search.tab === "points" ? search.tab : undefined,
     member: typeof search.member === "string" ? search.member.trim().slice(0, 100) || undefined : undefined,
   }),
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: "/admin/users", search: { tab: "records", ledger: search.tab, member: search.member }, replace: true });
+  },
 });
 
 const adminPromotionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/promotions", component: page("./pages/AdminPromotionsPage", "AdminPromotionsPage") });
@@ -384,6 +389,22 @@ const adminSettingsRoute = createRoute({ getParentRoute: () => rootRoute, path: 
 const adminUsersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/users",
+  validateSearch: (search: Record<string, unknown>): {
+    tab?: "members" | "roster" | "records";
+    ledger?: "payments" | "points";
+    q?: string;
+    membership?: string;
+    member?: string;
+  } => {
+    const tab = search.tab === "members" || search.tab === "roster" || search.tab === "records" ? search.tab : undefined;
+    return {
+      tab,
+      ledger: tab === "records" && (search.ledger === "payments" || search.ledger === "points") ? search.ledger : undefined,
+      q: tab === "members" && typeof search.q === "string" ? search.q.trim().slice(0, 100) || undefined : undefined,
+      membership: tab && typeof search.membership === "string" ? search.membership.trim().slice(0, 100) || undefined : undefined,
+      member: tab && typeof search.member === "string" ? search.member.trim().slice(0, 100) || undefined : undefined,
+    };
+  },
   component: page("./pages/AdminUsersPage", "AdminUsersPage"),
 });
 

@@ -36,6 +36,7 @@ async function fixture(t, userRole = 'admin') {
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-share-edit-token', user: { id: 'isolated-user', email: 'operator@example.test', display_name: '隔離操作員', user_role: userRole } } });
     if (method === 'GET') {
       state.reads.push(path);
+      if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', sales_scope: 'all' } });
       if (path === rosterPath) return route.fulfill({ json: state.roster });
       if (path === membersPath) return route.fulfill({ json: state.members });
       if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'member', membership: { status: 'active', member_number: 'ISOLATED-001', share_capital_amount: 999999, share_count: 999, share_certificate_number: 'MUST-NOT-DISPLAY' }, directory: { is_public: false } } });
@@ -68,14 +69,15 @@ function memberCard(page) {
 }
 
 async function beginRosterEdit(page, claimed = true) {
-  await page.goto(`${base}/admin/social`);
-  await page.getByRole('tab', { name: '社員名冊', exact: true }).click();
+  await page.goto(`${base}/admin/users?tab=roster`);
   const card = rosterCard(page, claimed);
   await card.getByRole('button', { name: '編輯股金／股數', exact: true }).click();
   return { card, form: card.getByRole('form', { name: '修改股金與股數', exact: true }) };
 }
 
-test('已認領名冊原因留空仍可修正股籍，成功同步重新讀取兩份列表', { timeout: 20000 }, async (t) => {
+const workspaceLink = (page, name) => page.getByRole('navigation', { name: '會員管理分類', exact: true }).getByRole('link', { name, exact: true });
+
+test('已認領名冊原因留空仍可修正股籍，會籍分頁讀取同步結果', { timeout: 20000 }, async (t) => {
   const { page, state } = await fixture(t);
   const { card, form } = await beginRosterEdit(page);
   await form.getByText(/僅修正股籍，不會收款或退款/).waitFor();
@@ -84,14 +86,14 @@ test('已認領名冊原因留空仍可修正股籍，成功同步重新讀取�
   await form.getByLabel('股金（元）', { exact: true }).fill('2400');
   await form.getByLabel('股數', { exact: true }).fill('4');
   const rosterReads = state.reads.filter((path) => path === rosterPath).length;
-  const memberReads = state.reads.filter((path) => path === membersPath).length;
+  assert.equal(state.reads.includes(membersPath), false);
   await save.click();
   await card.getByRole('status').getByText('股籍已更新；未收款或退款。', { exact: true }).waitFor();
   await card.getByText('股金 2400 元 · 4 股', { exact: true }).waitFor();
   assert.deepEqual(state.writes, [{ path: `${rosterPath}/roster-claimed/shares`, payload: { share_capital_amount: 2400, share_count: 4, reason: '', expected_updated_at: originalVersion } }]);
   assert.ok(state.reads.filter((path) => path === rosterPath).length > rosterReads);
-  assert.ok(state.reads.filter((path) => path === membersPath).length > memberReads);
-  await page.getByRole('tab', { name: '會籍管理', exact: true }).click();
+  assert.equal(state.reads.includes(membersPath), false);
+  await workspaceLink(page, '會籍管理').click();
   await memberCard(page).getByText('股金 2400 元 · 4 股', { exact: true }).waitFor();
   assert.doesNotMatch(await page.locator('main').innerText(), /股票號碼|股票代號/);
   assert.deepEqual(state.unknownApi, []);
@@ -99,8 +101,7 @@ test('已認領名冊原因留空仍可修正股籍，成功同步重新讀取�
 
 test('會籍股籍可反向修正並同步名冊，零元零股不觸發退款', { timeout: 20000 }, async (t) => {
   const { page, state } = await fixture(t);
-  await page.goto(`${base}/admin/social`);
-  await page.getByRole('tab', { name: '會籍管理', exact: true }).click();
+  await page.goto(`${base}/admin/users?tab=members`);
   const card = memberCard(page);
   await card.getByRole('button', { name: '編輯股金／股數', exact: true }).click();
   const form = card.getByRole('form', { name: '修改股金與股數', exact: true });
@@ -109,7 +110,7 @@ test('會籍股籍可反向修正並同步名冊，零元零股不觸發退款',
   await form.getByLabel('修改原因', { exact: true }).fill('修正暫存股籍，非退款作業');
   await form.getByRole('button', { name: '儲存股籍修正', exact: true }).click();
   await card.getByText('股金 0 元 · 0 股', { exact: true }).waitFor();
-  await page.getByRole('tab', { name: '社員名冊', exact: true }).click();
+  await workspaceLink(page, '社員名冊').click();
   await rosterCard(page).getByText('股金 0 元 · 0 股', { exact: true }).waitFor();
   assert.equal(state.writes.length, 1);
   assert.equal(state.writes[0].path, `${membersPath}/membership-claimed/shares`);

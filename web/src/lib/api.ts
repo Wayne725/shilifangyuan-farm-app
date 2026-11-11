@@ -261,7 +261,11 @@ export async function fetchApiBlob(path: string, signal?: AbortSignal): Promise<
 }
 
 export async function downloadApiFile(path: string, filename: string): Promise<void> {
-  const objectUrl = URL.createObjectURL(await fetchApiBlob(path));
+  downloadBlob(await fetchApiBlob(path), filename);
+}
+
+export function downloadBlob(blob: Blob, filename: string): void {
+  const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = objectUrl;
   anchor.download = filename;

@@ -9,10 +9,10 @@ export function useAdminPanelAccess(privateQueryKeys: readonly (readonly unknown
   const deniedRef = useRef(false);
   const [denied, setDenied] = useState(false);
   const isDenied = useCallback(() => deniedRef.current, []);
-  const request = useCallback(async <T>(path: string, options: RequestInit = {}): Promise<T> => {
+  const run = useCallback(async <T>(operation: () => Promise<T>): Promise<T> => {
     if (deniedRef.current) throw new Error("管理權限待重新驗證。");
     try {
-      const result = await apiFetch<T>(path, options);
+      const result = await operation();
       // A response started before another request confirmed denial cannot restore private data.
       if (deniedRef.current) throw new Error("管理權限待重新驗證。");
       return result;
@@ -28,7 +28,8 @@ export function useAdminPanelAccess(privateQueryKeys: readonly (readonly unknown
       throw error;
     }
   }, [client, privateQueryKeys]);
-  return { denied, isDenied, request };
+  const request = useCallback(<T>(path: string, options: RequestInit = {}): Promise<T> => run(() => apiFetch<T>(path, options)), [run]);
+  return { denied, isDenied, request, run };
 }
 
 export type AdminPanelAccess = ReturnType<typeof useAdminPanelAccess>;
