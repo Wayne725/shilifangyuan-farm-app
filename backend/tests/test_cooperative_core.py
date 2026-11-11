@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -21,12 +22,14 @@ from app.models import (
     Order,
     OrderItem,
     OrderKind,
+    PaymentMethod,
     PaymentStatus,
     Product,
     SalesChannel,
     TaxType,
     User,
     UserRole,
+    WalkInSale,
 )
 from app.routers.cooperative import cooperative_router
 from tests.support import api_test_context, auth_headers, fast_password_hash, make_test_settings
@@ -165,6 +168,62 @@ async def test_tax_ledger_read_and_csv_share_scope_and_reject_unauthorized(
         ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"],
         *[[str(value) for value in row] for row in expected_rows],
     ]
+
+
+@pytest.mark.asyncio
+async def test_tax_ledger_filters_walk_in_categories_in_report_and_csv(cooperative_context) -> None:
+    context = cooperative_context
+    session = context["session"]
+    paid_at = datetime(2040, 2, 15, 1, tzinfo=timezone.utc)
+    sources = [
+        ("web-meal", SalesChannel.MEAL_PREORDER, False, None, 130),
+        ("web-product", SalesChannel.REGULAR, False, None, 43),
+        ("counter-meal", SalesChannel.REGULAR, True, "meal", 40),
+        ("counter-product", SalesChannel.REGULAR, True, "product", 52),
+        ("counter-unknown", SalesChannel.REGULAR, True, None, 21),
+    ]
+    counter_orders = []
+    for name, channel, walk_in, category, amount in sources:
+        order = Order(
+            order_number=f"TAX-{name}", order_kind=OrderKind.REGULAR, sales_channel=channel,
+            customer_kind="walk_in" if walk_in else "account", user_id=None if walk_in else context["customer"].id,
+            payment_method=PaymentMethod.CASH_ON_PICKUP if walk_in else PaymentMethod.ONLINE,
+            payment_status=PaymentStatus.PAID, paid_at=paid_at, amount_total=amount,
+            membership_type_snapshot=MembershipType.NONMEMBER, contact_email="",
+            items=[OrderItem(product_name=name, unit_label="份", quantity=1, unit_price=amount,
+                             subtotal=amount, tax_type=TaxType.TAXABLE)],
+        )
+        session.add(order)
+        if walk_in:
+            counter_orders.append((order, category))
+    await session.flush()
+    session.add_all(
+        WalkInSale(order_id=order.id, client_request_id=str(uuid4()), request_fingerprint="a" * 64,
+                   operator_id=context["admin"].id, sale_category=category)
+        for order, category in counter_orders
+    )
+    await session.commit()
+
+    path = "/v1/admin/finance/tax-ledger"
+    headers = auth_headers(context["admin"])
+    expected = {
+        "all": {"meal_preorder": (130, 6, 1), "regular": (156, 7, 4)},
+        "meal": {"meal_preorder": (130, 6, 1), "regular": (40, 1, 1)},
+        "general": {"regular": (95, 4, 2)},
+        "walk_in_unclassified": {"regular": (21, 1, 1)},
+    }
+    for category, rows in expected.items():
+        params = {"starts_on": "2040-02-15", "ends_on": "2040-02-15", "order_category": category}
+        report = await context["client"].get(path, params=params, headers=headers)
+        exported = await context["client"].get(f"{path}.csv", params=params, headers=headers)
+        assert report.status_code == exported.status_code == 200
+        assert {
+            row["sales_channel"]: (row["sales_amount"], row["tax_amount"], row["order_count"])
+            for row in report.json()["rows"]
+        } == rows
+        table = csv.reader(io.StringIO(exported.content.decode("utf-8-sig")))
+        assert next(table) == ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"]
+        assert {channel: (int(sales), int(tax), int(count)) for _, _, channel, sales, tax, count in table} == rows
 
 
 @pytest.mark.asyncio

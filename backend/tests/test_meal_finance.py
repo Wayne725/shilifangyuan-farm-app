@@ -1,13 +1,14 @@
 import csv
 import io
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
 
 from app.models import (
     MealCancellationRequest, Order, OrderItem, OrderItemOption, OrderKind, PaymentAttempt,
-    PaymentStatus, Refund, RefundStatus, SalesChannel, TaxType,
+    PaymentMethod, PaymentStatus, Refund, RefundStatus, SalesChannel, TaxType, WalkInSale,
 )
 from app.routers.meal_finance import meal_finance_router
 from tests.support import api_test_context, auth_headers, make_test_settings
@@ -253,3 +254,80 @@ async def test_invalid_channel_is_rejected(finance_context):
     c = finance_context
     response = await c.client.get('/v1/admin/finance/meal-sales', params={'starts_on': '2030-01-02', 'ends_on': '2030-01-02', 'sales_channel': 'unknown'}, headers=auth_headers(c.admin))
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_walk_in_category_filters_totals_details_and_csv_independently_of_channel(finance_context):
+    c = finance_context
+    product_name = "蔬食便當"
+    counter_sales = [
+        ("COUNTER-MEAL", "meal", "現場便當", 180),
+        ("COUNTER-PRODUCT", "product", "現場一般商品", 210),
+        ("COUNTER-LEGACY", None, "現場未分類", 90),
+    ]
+    ordinary = await c.session.scalar(select(Order).where(Order.order_number == "ORDINARY-REPORT"))
+    c.session.add(OrderItem(order=ordinary, product_name=product_name, unit_label="份", quantity=1,
+                            unit_price=5000, subtotal=5000, tax_type=TaxType.TAXABLE))
+    for number, sale_category, _, amount in counter_sales:
+        order = Order(
+            order_number=number, customer_kind="walk_in", order_kind=OrderKind.REGULAR,
+            sales_channel=SalesChannel.REGULAR, payment_method=PaymentMethod.CASH_ON_PICKUP,
+            payment_status=PaymentStatus.PAID, paid_at=FIRST, created_at=FIRST, amount_total=amount,
+            membership_type_snapshot=c.order.membership_type_snapshot, contact_email="",
+            items=[OrderItem(product_name=product_name, unit_label="份", quantity=1, unit_price=amount,
+                             subtotal=amount, tax_type=TaxType.TAXABLE)],
+        )
+        c.session.add(order)
+        await c.session.flush()
+        c.session.add(WalkInSale(order_id=order.id, client_request_id=str(uuid4()), request_fingerprint="a" * 64,
+                                 operator_id=c.admin.id, sale_category=sale_category))
+        if sale_category is not None:
+            c.session.add(PaymentAttempt(order=order, provider="onsite", merchant_trade_no=number, amount=amount,
+                                         status=PaymentStatus.PAID, expires_at=FIRST, paid_at=FIRST))
+        if sale_category == "meal":
+            c.session.add(Refund(order=order, amount=30, status=RefundStatus.COMPLETED, reason="合成退款",
+                                 requested_by_id=c.admin.id, created_at=FIRST, completed_at=FIRST))
+    await c.session.commit()
+
+    for (number, _, label, amount), category, expected_refund in zip(
+        counter_sales, ("meal", "general", "walk_in_unclassified"), (30, 0, 0), strict=True,
+    ):
+        result = await report(c, sales_channel="regular", order_category=category, search="COUNTER-")
+        assert result["summary"]["received"] == amount
+        assert result["summary"]["refunded"] == expected_refund
+        assert result["summary"]["receipt_count"] == 1
+        assert result["orders"]["total"] == 1
+        row = result["orders"]["items"][0]
+        assert (row["order_number"], row["sales_channel"], row["financial_order_category_label"]) == (number, "regular", label)
+        assert row["period_received"] == amount and row["period_refunded"] == expected_refund
+        assert result["products"] == [{"name": product_name, "unit": "份", "quantity": 1,
+                                       "sales_amount": amount, "order_count": 1}]
+
+        exported = await c.client.get("/v1/admin/finance/meal-sales.csv", params={
+            "starts_on": "2030-01-02", "ends_on": "2030-01-02", "sales_channel": "regular",
+            "order_category": category, "search": "COUNTER-",
+        }, headers=auth_headers(c.admin))
+        assert exported.status_code == 200
+        rows = list(csv.DictReader(io.StringIO(exported.text.lstrip("\ufeff"))))
+        assert [(item["訂單編號"], item["訂單分類"], item["銷售類型"], item["期間收款"]) for item in rows] == [
+            (number, label, "日常選品", str(amount)),
+        ]
+
+    combined_meals = await report(c, sales_channel="all", order_category="meal")
+    assert combined_meals["summary"]["received"] == 820
+    assert combined_meals["summary"]["refunded"] == 350
+    assert combined_meals["summary"]["paid_meal_quantity"] == 4
+    assert {item["financial_order_category"] for item in combined_meals["orders"]["items"]} == {"meal", "walk_in_meal"}
+    assert (await report(c, order_category="meal"))["summary"]["received"] == 640
+
+    all_sales = await report(c, sales_channel="all")
+    grouped = await report(c, sales_channel="all", group_products_by_category="true")
+    assert all_sales["summary"] == grouped["summary"]
+    assert [row for row in all_sales["products"] if row["name"] == product_name] == [
+        {"name": product_name, "unit": "份", "quantity": 5, "sales_amount": 5580, "order_count": 5},
+    ]
+    assert {row["financial_order_category"]: (row["quantity"], row["sales_amount"], row["order_count"])
+            for row in grouped["products"] if row["name"] == product_name} == {
+        "general": (1, 5000, 1), "meal": (1, 100, 1), "walk_in_meal": (1, 180, 1),
+        "walk_in_product": (1, 210, 1), "walk_in_unclassified": (1, 90, 1),
+    }

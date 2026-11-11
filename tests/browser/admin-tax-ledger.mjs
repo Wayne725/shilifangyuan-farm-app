@@ -64,7 +64,8 @@ async function fixture(t, { width = 1280, role = 'admin' } = {}) {
         if (state.expired) return route.fulfill({ status: 401, json: { detail: '登入已過期' } });
         if (state.forbidden) return route.fulfill({ status: 403, json: { detail: '需要管理員權限' } });
         if (exporting) return route.fulfill({ contentType: 'text/csv; charset=utf-8', body: csv });
-        return route.fulfill({ json: { ...period, rows: period.starts_on === '2030-02-02' ? [] : [row] } });
+        const selectedRow = period.order_category === 'meal' ? { ...row, sales_channel: 'regular' } : row;
+        return route.fulfill({ json: { ...period, rows: period.starts_on === '2030-02-02' ? [] : [selectedRow] } });
       }
     }
     state.unexpected.push(`${request.method()} ${path}`);
@@ -105,6 +106,19 @@ for (const width of [1280, 390]) {
     assert.equal(download.suggestedFilename(), '稅務彙總（預估）-2030-02-01-2030-02-01.csv');
     assert.deepEqual(state.requests.at(-1), { ...state.requests.at(-2), exporting: true });
 
+    await end.fill('2030-02-01');
+    const category = page.getByRole('combobox', { name: '訂單分類', exact: true });
+    await category.selectOption('meal');
+    await page.getByRole('button', { name: '查詢', exact: true }).click();
+    await table.getByRole('cell', { name: '現場便當', exact: true }).waitFor();
+    const applied = { starts_on: '2030-02-01', ends_on: '2030-02-01', order_category: 'meal' };
+    assert.deepEqual(state.requests.at(-1).period, applied);
+    await category.selectOption('walk_in_unclassified');
+    const [categoryDownload] = await Promise.all([page.waitForEvent('download'), downloadButton.click()]);
+    assert.equal(categoryDownload.suggestedFilename(), '稅務彙總（預估）-便當訂單-2030-02-01-2030-02-01.csv');
+    assert.deepEqual(state.requests.at(-1).period, applied);
+
+    await end.fill('2030-02-02');
     await start.fill('2030-02-02');
     await page.getByRole('button', { name: '查詢', exact: true }).click();
     await page.getByText('這段期間沒有已付款品項', { exact: true }).waitFor();

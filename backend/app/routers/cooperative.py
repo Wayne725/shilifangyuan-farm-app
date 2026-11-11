@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from ..admin_explanations import AdminExplanation
 from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
+from ..order_categories import FinancialOrderCategory, financial_order_category_condition
 from ..point_accounts import point_account
 from ..csv_export import csv_response
 from ..supplier_order_demand import supplier_order_demand_rows
@@ -53,6 +54,7 @@ from ..models import (
     SystemSetting,
     TaxType,
     User,
+    WalkInSale,
     Wish,
     WishStatus,
     WishSupport,
@@ -401,26 +403,31 @@ async def sales_by_membership(
     }
 
 
-async def _tax_rows(session: AsyncSession, start: datetime, end: datetime) -> list[list[Any]]:
-    rows = (
-        await session.execute(
-            select(
-                OrderItem.tax_type,
-                Order.membership_type_snapshot,
-                Order.sales_channel,
-                func.sum(OrderItem.subtotal),
-                func.count(func.distinct(Order.id)),
-            )
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.payment_status == PaymentStatus.PAID,
-                Order.paid_at >= start,
-                Order.paid_at <= end,
-            )
-            .group_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
-            .order_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
+async def _tax_rows(
+    session: AsyncSession, start: datetime, end: datetime, *, order_category: FinancialOrderCategory,
+) -> list[list[Any]]:
+    query = (
+        select(
+            OrderItem.tax_type,
+            Order.membership_type_snapshot,
+            Order.sales_channel,
+            func.sum(OrderItem.subtotal),
+            func.count(func.distinct(Order.id)),
         )
-    ).all()
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            Order.payment_status == PaymentStatus.PAID,
+            Order.paid_at >= start,
+            Order.paid_at <= end,
+        )
+        .group_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
+        .order_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
+    )
+    if order_category != "all":
+        query = query.outerjoin(WalkInSale, WalkInSale.order_id == Order.id).where(
+            financial_order_category_condition(order_category),
+        )
+    rows = (await session.execute(query)).all()
     return [
         [tax_type.value, membership.value, channel.value, int(sales), int(sales) * 5 // 105 if tax_type == TaxType.TAXABLE else 0, int(count)]
         for tax_type, membership, channel, sales, count in rows
@@ -431,10 +438,11 @@ async def _tax_rows(session: AsyncSession, start: datetime, end: datetime) -> li
 async def tax_ledger(
     starts_on: date,
     ends_on: date,
+    order_category: FinancialOrderCategory = "all",
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await _tax_rows(session, *_period(starts_on, ends_on))
+    rows = await _tax_rows(session, *_period(starts_on, ends_on), order_category=order_category)
     return {
         "starts_on": starts_on,
         "ends_on": ends_on,
@@ -449,10 +457,11 @@ async def tax_ledger(
 async def export_tax_ledger(
     starts_on: date,
     ends_on: date,
+    order_category: FinancialOrderCategory = "all",
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
-    rows = await _tax_rows(session, *_period(starts_on, ends_on))
+    rows = await _tax_rows(session, *_period(starts_on, ends_on), order_category=order_category)
     return csv_response(
         f"tax-ledger-{starts_on}-{ends_on}.csv",
         ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"], rows,
