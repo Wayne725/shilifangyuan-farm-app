@@ -94,11 +94,21 @@ jobs:
           set -euo pipefail
           mkdir -p pytest-exit-evidence
           TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/postgres -- pgtests -q --durations=10 2>&1 | tee pytest-exit-evidence/postgres.log
-      - name: Run pytest
+      - name: Run backend tests
         run: |
           set -euo pipefail
           mkdir -p pytest-exit-evidence
-          TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/full -- -q --durations=20 2>&1 | tee pytest-exit-evidence/full.log
+          find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print0 | LC_ALL=C sort -z > pytest-exit-evidence/test-files.bin
+          mapfile -d '' -t test_files < pytest-exit-evidence/test-files.bin
+          test "${#test_files[@]}" -gt 1
+          midpoint=$((${#test_files[@]} / 2))
+          TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/tests-first -- -q --durations=20 "${test_files[@]:0:midpoint}" 2>&1 | tee pytest-exit-evidence/tests-first.log
+          TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/tests-second -- -q --durations=20 "${test_files[@]:midpoint}" 2>&1 | tee pytest-exit-evidence/tests-second.log
+      - name: Run backend audits
+        run: |
+          set -euo pipefail
+          mkdir -p pytest-exit-evidence
+          TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/audits -- audits -q --durations=20 2>&1 | tee pytest-exit-evidence/audits.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
