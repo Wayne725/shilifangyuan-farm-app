@@ -12,7 +12,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, Table, inspect, select, text, update
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_engine_from_config, async_sessionmaker, create_async_engine
 
 from app.config import Settings
@@ -163,3 +163,19 @@ async def test_real_pg_empty_42_to_45_down_to_42_and_up_again(migrated_database)
     await database.migrate(command.upgrade, "0045_walk_in_sales")
     assert await version(database) == "0045_walk_in_sales"
     assert await table_rows(database, "orders") == [] and await table_rows(database, "walk_in_sales") == []
+
+
+@pytest.mark.asyncio
+async def test_counter_membership_migration_times_out_behind_live_order_reader_and_can_retry(migrated_database):
+    database = migrated_database
+    previous = "0054_catalog_visibility"
+    await database.migrate(command.upgrade, previous)
+    async with database.engine.begin() as live_reader:
+        await live_reader.execute(text("LOCK TABLE orders IN ACCESS SHARE MODE"))
+        with pytest.raises(DBAPIError) as blocked:
+            await database.migrate(command.upgrade, "head")
+        assert blocked.value.orig.sqlstate == "55P03"
+        assert await live_reader.scalar(text("SELECT version_num FROM alembic_version")) == previous
+        assert await live_reader.scalar(text("SELECT count(*) FROM orders")) == 0
+    await database.migrate(command.upgrade, "head")
+    assert await version(database) == database.head == "0055_counter_member_pricing"

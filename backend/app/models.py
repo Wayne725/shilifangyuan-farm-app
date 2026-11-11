@@ -1935,9 +1935,11 @@ class Order(Base):
         CheckConstraint("meal_booking_type != 'business' OR (sales_channel = 'meal_preorder' AND payment_method = 'online' AND invoice_buyer_type = 'company' AND invoice_handling IS NOT NULL AND invoice_handling = 'pickup_day' AND invoice_issue_after IS NOT NULL AND invoice_buyer_tax_id IS NOT NULL AND invoice_buyer_name IS NOT NULL)", name="business_meal_contract"),
         UniqueConstraint("user_id", "client_request_id", name="uq_orders_user_client_request"),
         CheckConstraint(
-            "(customer_kind = 'account' AND user_id IS NOT NULL) OR "
-            "(customer_kind = 'walk_in' AND user_id IS NULL AND membership_type_snapshot = 'nonmember' "
-            "AND NOT member_tax_exempt_snapshot AND sales_channel = 'regular' AND payment_method = 'cash_on_pickup')",
+            "(customer_kind = 'account' AND user_id IS NOT NULL AND verified_counter_membership_id IS NULL) OR "
+            "(customer_kind = 'walk_in' AND user_id IS NULL AND sales_channel = 'regular' AND payment_method = 'cash_on_pickup' AND "
+            "((verified_counter_membership_id IS NULL AND membership_type_snapshot = 'nonmember' AND NOT member_tax_exempt_snapshot) OR "
+            "(verified_counter_membership_id IS NOT NULL AND membership_type_snapshot IN ('member', 'trainee') AND "
+            "member_tax_exempt_snapshot = (membership_type_snapshot = 'member' AND invoice_buyer_type = 'personal'))))",
             name="customer_identity",
         ),
     )
@@ -1970,6 +1972,9 @@ class Order(Base):
     )
     customer_kind: Mapped[str] = mapped_column(String(16), default="account", server_default="account")
     customer_name_snapshot: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    verified_counter_membership_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("memberships.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     group_campaign_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("group_campaigns.id", ondelete="RESTRICT"),
         nullable=True,
@@ -2091,6 +2096,13 @@ class WalkInSale(Base):
     operator_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     sale_category: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WalkInRequestGuard(Base):
+    __tablename__ = "walk_in_request_guards"
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    retired: Mapped[bool] = mapped_column(Boolean, server_default=false())
 
 
 class OrderAmendment(Base):

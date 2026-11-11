@@ -13,6 +13,8 @@ from tests.test_group_review_window import group_fixture
 
 
 def test_visibility_migration_backfills_and_refuses_reexposing_hidden_records(tmp_path, monkeypatch):
+    visibility_revision = '0054_catalog_visibility'
+    previous_revision = '0053_email_registration_consent'
     path = tmp_path / 'visibility.db'
     url = f'sqlite+aiosqlite:///{path}'
     monkeypatch.setenv('DATABASE_URL', url)
@@ -39,13 +41,14 @@ def test_visibility_migration_backfills_and_refuses_reexposing_hidden_records(tm
     try:
         command.upgrade(config, 'head')
         asyncio.run(seed())
-        saved = financial_rows()
-        command.downgrade(config, '0053_email_registration_consent')
+        head_rows = financial_rows()
+        command.downgrade(config, visibility_revision)
+        visibility_rows = financial_rows()
+        command.downgrade(config, previous_revision)
         for table in ['activities', 'group_campaigns']:
             assert 'is_public' not in {column['name'] for column in inspect(engine).get_columns(table)}
-        command.upgrade(config, 'head')
-        command.check(config)
-        assert financial_rows() == saved
+        command.upgrade(config, visibility_revision)
+        assert financial_rows() == visibility_rows
         with engine.connect() as connection:
             for table in ['activities', 'group_campaigns']:
                 assert connection.execute(text(f'SELECT is_public FROM {table}')).scalar_one() == 1
@@ -53,10 +56,14 @@ def test_visibility_migration_backfills_and_refuses_reexposing_hidden_records(tm
         with engine.begin() as connection:
             connection.execute(text('UPDATE activities SET is_public = false'))
         with pytest.raises(RuntimeError, match='不可降版重新公開'):
-            command.downgrade(config, '0053_email_registration_consent')
+            command.downgrade(config, previous_revision)
         with engine.connect() as connection:
+            assert connection.scalar(text('SELECT version_num FROM alembic_version')) == visibility_revision
             assert connection.execute(text('SELECT is_public FROM activities')).scalar_one() == 0
-        assert financial_rows() == saved
+        assert financial_rows() == visibility_rows
+        command.upgrade(config, 'head')
+        command.check(config)
+        assert financial_rows() == head_rows
     finally:
         engine.dispose()
         get_settings.cache_clear()

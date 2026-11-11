@@ -228,6 +228,7 @@
   "POST /v1/admin/users/{user_id}/membership-phone-check",
   "POST /v1/admin/users/{user_id}/offline-membership",
   "POST /v1/admin/walk-in-sales",
+  "POST /v1/admin/walk-in-sales/member-quote",
   "POST /v1/admin/walk-in-sales/{order_id}/refund",
   "POST /v1/auth/forgot-password",
   "POST /v1/auth/line/callback",

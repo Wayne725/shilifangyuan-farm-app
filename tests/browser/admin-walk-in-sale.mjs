@@ -53,6 +53,7 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
       const id = path.split('/').at(-1);
       state.recoveries.push(id);
       const existing = state.recoveryVisible && state.sales.get(id);
+      if (existing && state.holdRecovery) await state.holdRecovery;
       return route.fulfill(existing ? { json: existing.sale } : { status: 404, json: { detail: '尚未找到此筆隔離交易' } });
     }
     if (request.method() === 'POST' && path === '/v1/admin/walk-in-sales') {
@@ -68,6 +69,7 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
       if (state.posts.length === 1 && firstResponse === 'abort') return route.abort('failed');
       if (state.posts.length === 1 && firstResponse === '503') return route.fulfill({ status: 503, json: { detail: '隔離回應中斷，交易結果待確認' } });
       if (state.posts.length === 1 && firstPostResponse) await firstPostResponse;
+      if (existing && state.holdRetry) await state.holdRetry;
       return route.fulfill({ status: existing ? 200 : 201, json: sale });
     }
     state.unknown.push(`${request.method()} ${path}`);
@@ -339,6 +341,55 @@ test('收款回應中斷後重新整理，只用保存的 UUID 查回交易、�
   await assertClean(page, state);
 });
 
+for (const action of ['查核', '重送']) {
+  test(`交易結果不明時先${action}，等回應完成再開下一筆表單`, async t => {
+    const { page, region, state } = await fixture(t, { firstResponse: '503', width: 390 });
+    await fillSale(region, { barcode: true });
+    await region.getByRole('button', { name: '確認', exact: true }).click();
+    const retry = region.getByRole('button', { name: '重試同一筆交易', exact: true });
+    await retry.waitFor();
+    const check = region.getByRole('button', { name: '查核交易結果', exact: true });
+    const firstId = state.posts[0].body.client_request_id;
+    let release;
+    const hold = new Promise(resolve => { release = resolve; });
+    try {
+      if (action === '查核') {
+        state.holdRecovery = hold;
+        await check.click();
+        const checking = region.getByRole('button', { name: '查核中…', exact: true });
+        await checking.waitFor();
+        assert.equal(await checking.isDisabled(), true);
+        assert.equal(await retry.isDisabled(), true);
+        await retry.evaluate(button => button.form.requestSubmit());
+        assert.equal(state.posts.length, 1);
+      } else {
+        state.holdRetry = hold;
+        const recoveryCount = state.recoveries.length;
+        await retry.click();
+        await region.getByRole('button', { name: '記錄中…', exact: true }).waitFor();
+        assert.equal(await check.isDisabled(), true);
+        await check.evaluate(button => button.click());
+        await refocusWithStaleCatalog(page, '2030-01-02T10:01:01+08:00');
+        assert.equal(state.recoveries.length, recoveryCount);
+        assert.equal(state.posts.length, 2);
+        assert.equal(state.posts[0].raw, state.posts[1].raw);
+      }
+      assert.equal(await region.getByRole('button', { name: '下一筆現場交易', exact: true }).count(), 0);
+    } finally {
+      release();
+    }
+    await assertRecorded(region);
+    await region.getByRole('button', { name: '下一筆現場交易', exact: true }).click();
+    const name = region.getByLabel('顧客姓名', { exact: true });
+    await name.fill('新一筆的顧客');
+    assert.equal(await name.inputValue(), '新一筆的顧客');
+    assert.equal(await region.locator('.admin-walk-in-result').count(), 0);
+    assert.notEqual(await page.evaluate(key => sessionStorage.getItem(key), requestKey), firstId);
+    assert.equal(state.sales.size, 1);
+    await assertClean(page, state);
+  });
+}
+
 for (const width of [390, 1280]) {
   test(`${width}px 訂單頁導航到手動開票再返回訂單，沒有內嵌表單且不建立交易`, async t => {
     const { page, region, state } = await fixture(t, { width, section: 'orders' });
@@ -412,13 +463,13 @@ test('品名目錄背景更新保留畫面選項與送出名稱，已鎖定交�
   await refocusWithStaleCatalog(page, '2030-01-02T10:00:31+08:00');
   await product.getByRole('option', { name: '合成新餐盒', exact: true }).waitFor({ state: 'attached' });
   const displayed = await product.evaluate(select => ({ value: select.value, text: select.selectedOptions[0]?.textContent }));
-  assert.deepEqual(displayed, { value: '合成餐盒', text: '合成餐盒（原選品名）' }, '目錄更名後必須保留使用者所選品名，不得顯示餐盒卻送出舊名稱');
+  assert.deepEqual(displayed, { value: 'retained', text: '合成餐盒（原選品名）' }, '目錄更名後必須保留使用者所選品名');
   assert.equal(state.posts.length, 0);
   await region.getByRole('button', { name: '確認', exact: true }).click();
   const retry = region.getByRole('button', { name: '重試同一筆交易', exact: true });
   await retry.waitFor();
   assert.equal(state.posts.length, 1);
-  assert.equal(state.posts[0].body.product_name, displayed.value);
+  assert.equal(state.posts[0].body.product_name, '合成餐盒');
   const original = state.posts[0].raw;
   state.recoveryVisible = false;
   state.activeNames = ['另一餐盒'];
@@ -431,7 +482,7 @@ test('品名目錄背景更新保留畫面選項與送出名稱，已鎖定交�
   await assertRecorded(region);
   assert.equal(state.posts.length, 2);
   assert.equal(state.posts[1].raw, original);
-  assert.equal(state.posts[1].body.product_name, displayed.value);
+  assert.equal(state.posts[1].body.product_name, '合成餐盒');
   assertImmediateSale(state.posts[1].body);
   await assertClean(page, state);
 });

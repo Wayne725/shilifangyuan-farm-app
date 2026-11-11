@@ -1465,6 +1465,8 @@ async def admin_list_meal_events(
 
 def _configured_event_values(body: MealEventCreate, *, existing: MealEvent | None = None) -> dict:
     values = body.model_dump(exclude={"offerings"})
+    values["pickup_starts_at"] = _aware(body.pickup_starts_at).astimezone(timezone.utc)
+    values["pickup_ends_at"] = _aware(body.pickup_ends_at).astimezone(timezone.utc)
     policy = body.booking_policy
     if existing is not None and "booking_policy" not in body.model_fields_set:
         policy = existing.booking_policy

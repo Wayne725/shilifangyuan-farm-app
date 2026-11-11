@@ -297,14 +297,24 @@ def refund_adapter_from_settings(settings: Settings, provider: str) -> Any:
     return LocalSandboxRefundAdapter()
 
 
+async def _purchase_point_owner(session: AsyncSession, order: Order) -> str | None:
+    if order.user_id is not None:
+        return order.user_id
+    membership_id = getattr(order, "verified_counter_membership_id", None)
+    if membership_id is None:
+        return None
+    return await session.scalar(select(Membership.user_id).where(Membership.id == membership_id))
+
+
 async def reverse_order_purchase_points(
     session: AsyncSession,
     order: Order,
     refund_id: str,
 ) -> None:
-    account = await session.scalar(
-        select(PointAccount).where(PointAccount.user_id == order.user_id)
-    )
+    owner_id = await _purchase_point_owner(session, order)
+    if owner_id is None:
+        return
+    account = await session.scalar(select(PointAccount).where(PointAccount.user_id == owner_id))
     if account is None:
         return
     earned = await session.scalar(
@@ -338,7 +348,10 @@ async def reverse_order_purchase_points(
 async def award_order_purchase_points(session: AsyncSession, order: Order) -> None:
     if order.membership_type_snapshot != MembershipType.MEMBER:
         return
-    account = await point_account(session, order.user_id)
+    owner_id = await _purchase_point_owner(session, order)
+    if owner_id is None:
+        return
+    account = await point_account(session, owner_id)
     existing = await session.scalar(select(PointTransaction.id).where(
         PointTransaction.account_id == account.id,
         PointTransaction.source_type == PointSourceType.PURCHASE,

@@ -69,5 +69,7 @@ def test_retention_index_preserves_all_rows_across_up_down_up(proposal_migration
         assert set(current.columns.keys()) == columns | {"is_public"}
         assert current.c.is_public.nullable is False
     assert snapshot() == expected
+    command.upgrade(database.config, "0055_counter_member_pricing")
+    assert table_names() == tables_before_policy | {policies.name, "walk_in_request_guards"}
     database.assert_schema_matches()
     assert snapshot() == expected
