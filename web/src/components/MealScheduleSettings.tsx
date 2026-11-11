@@ -1,12 +1,20 @@
+import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import { apiFetch, formatMoney } from "../lib/api";
+import { ApiError, apiFetch, formatMoney } from "../lib/api";
 import type { Meal, MealSchedule } from "../lib/types";
 import { DataState, LoadingLines } from "./Shared";
+import "./OrderCancellation.css";
 
 type ScheduleDraft = Omit<MealSchedule, "id" | "timezone" | "created_at">;
 type CalendarStatus = { available: boolean; from_date: string; to_date: string; message: string; source_url: string };
+type DisableScope = "generation_only" | "pause_generated";
+type ScheduleDisablePreview = {
+  preview_version: string;
+  events: Array<{ id: string; title: string; service_date: string; order_count: number; ordering_status: keyof typeof orderingLabels }>;
+};
+const orderingLabels = { draft: "草稿", paused: "已暫停預訂", closed: "已截止", open: "開放預訂", scheduled: "尚未開放" };
 const weekdays = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"];
 function scheduleCutoff(schedule: Pick<MealSchedule, "cutoff_days_before" | "cutoff_time">) {
   return schedule.cutoff_days_before < 1
@@ -33,6 +41,12 @@ export function MealScheduleSettings({ meals, onEventsChanged }: { meals: Meal[]
     onEventsChanged();
   };
   const onSaved = () => { setEditing(null); setFormKey((key) => key + 1); refresh(); };
+  const onDisabled = (scheduleId: string) => {
+    setEditing(current => current?.id === scheduleId ? null : current);
+    queryClient.setQueryData<MealSchedule[]>(["admin-meal-schedules"], current => current?.map(schedule =>
+      schedule.id === scheduleId ? { ...schedule, enabled: false } : schedule));
+    refresh();
+  };
   return <>
     {calendar.data && <div className="meal-calendar-status"><span className={`status-chip ${calendar.data.available ? "passed" : ""}`}>{calendar.data.available ? "工作日日曆已就緒" : "工作日日曆無法使用"}</span><span>{calendar.data.from_date} 至 {calendar.data.to_date}</span></div>}
     {calendar.data && !calendar.data.available && <p className="form-error" role="alert">{calendar.data.message}</p>}
@@ -41,12 +55,51 @@ export function MealScheduleSettings({ meals, onEventsChanged }: { meals: Meal[]
     {schedules.isPending && <LoadingLines count={2} />}
     {schedules.isError && <DataState kind="error" title="每日排程無法讀取" detail={schedules.error.message} onAction={() => schedules.refetch()} />}
     {schedules.data?.length === 0 && <DataState title="尚未設定每日排程" detail="先設定午餐或晚餐的餐點、份數與時間，再決定是否啟用。沒有設定就不會產生場次。" />}
-    <div className="admin-record-grid">{schedules.data?.map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} onEdit={() => setEditing(schedule)} onDone={refresh} />)}</div>
+    <div className="admin-record-grid">{schedules.data?.map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} onEdit={() => setEditing(schedule)} onDone={refresh} onDisabled={() => onDisabled(schedule.id)} />)}</div>
   </>;
 }
 
-function ScheduleCard({ schedule, onEdit, onDone }: { schedule: MealSchedule; onEdit: () => void; onDone: () => void }) {
+function ScheduleCard({ schedule, onEdit, onDone, onDisabled }: {
+  schedule: MealSchedule; onEdit: () => void; onDone: () => void; onDisabled: () => void;
+}) {
   const cutoff = scheduleCutoff(schedule);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const focusEditOnClose = useRef(false);
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<DisableScope>("generation_only");
+  const [reviewChanged, setReviewChanged] = useState(false);
+  const preview = useQuery({
+    queryKey: ["admin-meal-schedule-disable-preview", schedule.id],
+    queryFn: ({ signal }) => apiFetch<ScheduleDisablePreview>(`/v1/admin/meal-schedules/${schedule.id}/disable-preview`, { signal }),
+    enabled: open,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const disable = useMutation({
+    mutationFn: (request: { scope: DisableScope; preview_version: string }) =>
+      apiFetch<{ paused_event_count: number }>(`/v1/admin/meal-schedules/${schedule.id}/disable`, {
+        method: "POST", body: JSON.stringify(request),
+      }),
+    retry: false,
+    onSuccess: () => {
+      focusEditOnClose.current = true;
+      setOpen(false);
+      onDisabled();
+    },
+    onError: async (error) => {
+      if (!(error instanceof ApiError && error.status === 409)) return;
+      setScope("generation_only");
+      setReviewChanged(true);
+      await preview.refetch();
+      onDone();
+    },
+  });
+  const previewReady = preview.isSuccess && !preview.isFetching;
+  const pausable = preview.data?.events.filter(event => event.ordering_status === "open" || event.ordering_status === "scheduled").length ?? 0;
+  const scopeAllowed = scope === "generation_only" || pausable > 0;
+  const disableConflict = disable.error instanceof ApiError && disable.error.status === 409;
   const generate = useMutation({
     mutationFn: () => apiFetch(`/v1/admin/meal-schedules/${schedule.id}/generate`, { method: "POST" }),
     onSuccess: onDone,
@@ -61,13 +114,72 @@ function ScheduleCard({ schedule, onEdit, onDone }: { schedule: MealSchedule; on
       <div><dt>星期</dt><dd>{schedule.weekdays.map((day) => `${weekdays[day]}${day > 4 ? "（需特殊加開）" : ""}`).join("、")}</dd></div>
       <div><dt>新場次</dt><dd>{schedule.auto_publish ? "自動發布" : "僅草稿，需另行發布"}</dd></div>
     </dl>
-    <div className="form-actions"><button className="button button-quiet" type="button" onClick={onEdit}>編輯排程</button><button className="button button-quiet" type="button" disabled={!schedule.enabled || generate.isPending} onClick={() => generate.mutate()}>{generate.isPending ? "補齊中…" : "立即補齊未來場次"}</button></div>
+    <div className="form-actions">
+      <button ref={editButton} className="button button-quiet" type="button" onClick={onEdit}>編輯排程</button>
+      <button className="button button-quiet" type="button" disabled={!schedule.enabled || generate.isPending || disable.isPending}
+        onClick={() => generate.mutate()}>{generate.isPending ? "補齊中…" : "立即補齊未來場次"}</button>
+      <Dialog.Root open={open} onOpenChange={next => {
+        if (disable.isPending) return;
+        if (next) {
+          focusEditOnClose.current = false;
+          setScope("generation_only");
+          setReviewChanged(false);
+          disable.reset();
+        }
+        setOpen(next);
+      }}>
+        {schedule.enabled && <Dialog.Trigger asChild><button className="button button-quiet" type="button" disabled={generate.isPending}>停用排程</button></Dialog.Trigger>}
+        <Dialog.Portal>
+          <Dialog.Overlay className="admin-cancel-overlay" />
+          <Dialog.Content className="admin-cancel-dialog" onCloseAutoFocus={event => {
+            if (!focusEditOnClose.current && schedule.enabled) return;
+            event.preventDefault();
+            editButton.current?.focus();
+          }}>
+            <Dialog.Title>停用排程</Dialog.Title>
+            <Dialog.Description>{schedule.title} · 既有訂單保留原付款與取餐安排。</Dialog.Description>
+            {preview.isPending || preview.isFetching ? <p role="status">正在讀取停用影響…</p>
+              : preview.isError ? <>
+                <p role="alert" className="form-error">{preview.error instanceof ApiError && preview.error.status === 404
+                  ? "停用預覽暫時無法使用。" : preview.error.message}</p>
+                <button className="button button-quiet" type="button" onClick={() => void preview.refetch()}>重新讀取預覽</button>
+              </> : preview.data && <>
+                {reviewChanged && <p role="status">場次資料已更新，請重新核對停用範圍。</p>}
+                {preview.data.events.length > 0 ? <ul aria-label="已建立場次">
+                  {preview.data.events.map(event => <li key={event.id}>
+                    <time dateTime={event.service_date}>{event.service_date.replaceAll("-", "/")}</time> · {orderingLabels[event.ordering_status]} · {event.order_count} 筆訂單
+                  </li>)}
+                </ul> : <p>目前沒有已建立的未來場次。</p>}
+                {pausable > 0 ? <label className="field">
+                  <span>停用範圍</span>
+                  <select value={scope} disabled={disable.isPending} onChange={event => setScope(event.target.value === "pause_generated" ? "pause_generated" : "generation_only")}>
+                    <option value="generation_only">只停止自動建立</option>
+                    <option value="pause_generated">同時暫停 {pausable} 場的新預訂</option>
+                  </select>
+                </label> : <p>只停止自動建立新場次。</p>}
+              </>}
+            {disable.isError && !disableConflict && <p className="form-error" role="alert">{disable.error.message}</p>}
+            <div className="form-actions">
+              <Dialog.Close asChild><button className="button button-quiet" type="button" disabled={disable.isPending}>返回</button></Dialog.Close>
+              <button className="button button-primary" type="button" disabled={!previewReady || !scopeAllowed || disable.isPending}
+                onClick={() => {
+                  if (!previewReady || !preview.data || !scopeAllowed) return;
+                  disable.mutate({ scope, preview_version: preview.data.preview_version });
+                }}>{disable.isPending ? "停用中…" : "確認停用排程"}</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </div>
+    {disable.isSuccess && <p className="form-success" role="status">{disable.data.paused_event_count
+      ? `已停用排程並暫停 ${disable.data.paused_event_count} 場的新預訂。` : "已停用排程。"}</p>}
     {generate.isSuccess && <p className="form-success">已完成排程補齊，既有日期不會重複建立。</p>}
     {generate.isError && <p className="form-error">{generate.error.message}</p>}
   </article>;
 }
 
 function ScheduleForm({ initial, meals, schedules, onDone, onCancel }: { initial: MealSchedule | null; meals: Meal[]; schedules: MealSchedule[]; onDone: () => void; onCancel: () => void }) {
+  const queryClient = useQueryClient();
   const [draft, setDraft] = useState<ScheduleDraft>(() => initial ? {
     title: initial.title, location: initial.location, meal_period: initial.meal_period,
     pickup_start_time: initial.pickup_start_time.slice(0, 5), pickup_end_time: initial.pickup_end_time.slice(0, 5), ...scheduleCutoff(initial),
@@ -107,9 +219,15 @@ function ScheduleForm({ initial, meals, schedules, onDone, onCancel }: { initial
   });
   const save = useMutation({
     mutationFn: () => apiFetch<MealSchedule>(initial ? `/v1/admin/meal-schedules/${initial.id}` : "/v1/admin/meal-schedules", {
-      method: initial ? "PUT" : "POST", body: JSON.stringify(draft),
+      method: initial ? "PUT" : "POST",
+      body: JSON.stringify({ ...draft, ...(initial?.updated_at ? { expected_updated_at: initial.updated_at } : {}) }),
     }),
     onSuccess: onDone,
+    onError: error => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["admin-meal-schedules"] });
+      }
+    },
   });
   return <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); if (!invalidTime && !invalidAdvance) save.mutate(); }}>
     <div className="form-heading"><div><p className="eyebrow">DAILY MEAL SCHEDULE / 每日供餐排程</p><h2>{initial ? "編輯每日排程" : "建立每日午晚餐排程"}</h2></div><span>全部採台灣時間（Asia/Taipei）。</span></div>
@@ -133,7 +251,7 @@ function ScheduleForm({ initial, meals, schedules, onDone, onCancel }: { initial
       <label className="field"><span>每日售價</span><input required type="number" min={0} value={offering.price} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, price: Number(event.target.value) } : item) })} /></label>
       <label className="field"><span>每日份數</span><input required type="number" min={1} value={offering.capacity} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, capacity: Number(event.target.value) } : item) })} /></label>
     </div>)}
-    <label className="meal-choice"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>啟用每日自動產生場次</span></label>
+    <label className="meal-choice"><input type="checkbox" disabled={initial?.enabled === true} checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>啟用每日自動產生場次</span></label>
     <label className="meal-choice"><input type="checkbox" checked={draft.auto_publish} onChange={(event) => setDraft({ ...draft, auto_publish: event.target.checked })} /><span>新產生場次自動發布並開放預訂（未勾選僅建立草稿）</span></label>
     {save.isError && <p className="form-error">{save.error.message}</p>}
     <div className="form-actions">{initial && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}<button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || !draft.weekdays.length || !draft.offerings.length || invalidTime || invalidAdvance || save.isPending}>{save.isPending ? "儲存中…" : "儲存每日排程"}</button></div>

@@ -307,7 +307,7 @@ async function scheduleFixture(t, { admin = false } = {}) {
   const dinner = scheduledEvent({ id: 'scheduled-dinner', title: '隔離每日晚餐', meal_period: 'dinner',
     pickup_starts_at: '2026-09-17T08:30:00Z', pickup_ends_at: '2026-09-17T10:30:00Z' });
   const state = { events: [scheduledEvent(), dinner], quotes: [], orders: [], schedules: [], writes: [], reads: [], unknownApi: [], blockedExternal: [], rejectEdit: false, adminMealReads: 0, adminEventReads: 0, adminPickupOrderReads: 0,
-    submissionLookups: [], submissionResults: [], conflictOnCreate: false };
+    submissionLookups: [], submissionResults: [], conflictOnCreate: false, rejectOrderOnce: false };
   const meal = { id: 'scheduled-meal', name: '隔離每日便當', description: '隔離驗收', slug: 'isolated', price: 120, is_active: true, tax_type: 'taxable', option_groups: [] };
   await context.route('**/*', (route) => {
     const request = route.request();
@@ -383,9 +383,14 @@ async function scheduleFixture(t, { admin = false } = {}) {
         : route.fulfill({ json: { order_id: result ?? null } });
     }
     if (event && method === 'POST' && path.endsWith('/orders')) {
-      state.orders.push(request.postDataJSON());
+      const payload = request.postDataJSON();
+      state.orders.push(payload);
       if (state.conflictOnCreate) return route.fulfill({ status: 409, json: { detail: '此送單識別碼已使用，請重新確認訂單' } });
-      return route.fulfill({ json: { id: orderId } });
+      if (state.rejectOrderOnce) {
+        state.rejectOrderOnce = false;
+        return route.fulfill({ status: 503, json: { detail: '隔離測試暫未收到回應' } });
+      }
+      return route.fulfill({ json: { id: orderId, payment_method: payload.payment_method } });
     }
     if (method === 'POST' && path === paymentPath) return route.fulfill({ json: { payment_url: `${base}/isolated-meal-payment` } });
     state.unknownApi.push(`${method} ${path}`);
@@ -484,6 +489,18 @@ test('手機從日期摘要選時段後才讀完整菜單，原時段帶入一�
   assert.deepEqual(state.unknownApi, []);
 });
 
+function legacyMealSubmissionKey(paymentMethod, invoiceHandling, invoicePreference = {
+  buyerType: 'personal', buyerEmail: 'schedule@example.test', carrierType: 'cloud',
+}) {
+  const oldFingerprint = JSON.stringify({
+    userId: 'schedule-user', eventId: 'scheduled-lunch', couponCode: '', expectedTotal: 120,
+    pickupAt: '2026-09-17T03:00:00.000Z', pickupLocationId: '', needsUtensils: false,
+    items: [{ offering_id: 'scheduled-offering', quantity: 1, option_ids: [] }],
+    contactEmail: 'schedule@example.test', invoicePreference, paymentMethod, kitchenNote: '', invoiceHandling,
+  });
+  return `meal-submission:${createHash('sha256').update(oldFingerprint).digest('hex')}`;
+}
+
 for (const { name, results, submit, recover, method = 'online', handling = 'pickup_day' } of [
   { name: '找回已成立的原單', results: [orderId], submit: false, recover: true },
   { name: '未成立時沿用原識別，以新版預設送單', results: [null], submit: true, recover: false },
@@ -499,15 +516,7 @@ for (const { name, results, submit, recover, method = 'online', handling = 'pick
     state.submissionResults = [...results];
     state.conflictOnCreate = submit && recover;
     const requestId = '680456c6-b8af-4b63-83b0-1a3b5f86da43';
-    const oldFingerprint = JSON.stringify({
-      userId: 'schedule-user', eventId: 'scheduled-lunch', couponCode: '', expectedTotal: 120,
-      pickupAt: '2026-09-17T03:00:00.000Z', pickupLocationId: '', needsUtensils: false,
-      items: [{ offering_id: 'scheduled-offering', quantity: 1, option_ids: [] }],
-      contactEmail: 'schedule@example.test',
-      invoicePreference: { buyerType: 'personal', buyerEmail: 'schedule@example.test', carrierType: 'cloud' },
-      paymentMethod: method, kitchenNote: '', invoiceHandling: handling,
-    });
-    const key = `meal-submission:${createHash('sha256').update(oldFingerprint).digest('hex')}`;
+    const key = legacyMealSubmissionKey(method, handling);
     await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
     await page.evaluate(([key, id]) => sessionStorage.setItem(key, id), [key, requestId]);
     await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
@@ -527,6 +536,72 @@ for (const { name, results, submit, recover, method = 'online', handling = 'pick
     assert.equal(await page.evaluate(key => sessionStorage.getItem(key), key), results[0] === 'old_api' ? requestId : null);
   });
 }
+
+for (const { handling, defaultOnline } of [
+  { handling: 'pickup_day', defaultOnline: false },
+  { handling: 'on_payment', defaultOnline: false },
+  { handling: 'pickup_day', defaultOnline: true },
+]) {
+  test(`舊公司發票現金單待確認時先查看訂單（${handling}${defaultOnline ? '，新版預設線上付款' : ''}）`, { timeout: 25000 }, async (t) => {
+    const { page, state } = await scheduleFixture(t);
+    state.events[0].allow_cash_payment = true;
+    const requestId = '680456c6-b8af-4b63-83b0-1a3b5f86da43';
+    const key = legacyMealSubmissionKey('cash_on_pickup', handling, {
+      buyerType: 'company', buyerTaxId: '12345675', buyerName: '隔離測試公司',
+      buyerEmail: 'schedule@example.test', carrierType: 'cloud',
+    });
+    await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
+    await page.evaluate(([key, id]) => sessionStorage.setItem(key, id), [key, requestId]);
+    await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
+    if (!defaultOnline) await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
+    await page.getByRole('button', { name: defaultOnline ? '預訂並前往線上付款' : '確認預訂・現場付款', exact: true }).click();
+    await page.getByText('先前送出的便當訂單可能已成立。', { exact: false }).waitFor();
+    assert.equal(await page.getByRole('link', { name: '查看便當訂單', exact: true }).getAttribute('href'), '/meal-orders');
+    assert.equal(new URL(page.url()).pathname, '/meals/scheduled-lunch');
+    assert.deepEqual(state.orders, []);
+    assert.deepEqual(state.submissionLookups, []);
+    assert.equal(await page.evaluate(key => sessionStorage.getItem(key), key), requestId);
+
+    if (handling === 'on_payment') {
+      const separate = page.getByRole('button', { name: '另下一筆', exact: true });
+      await page.getByLabel(/餐點備註/).fill('隔離新訂單');
+      await separate.click();
+      await page.getByText('請再確認是否另下一筆。', { exact: false }).waitFor();
+      assert.deepEqual(state.orders, []);
+      await separate.click();
+      await page.waitForURL(`**/meal-orders?order_id=${orderId}`);
+      assert.equal(state.orders.length, 1);
+      assert.notEqual(state.orders[0].client_request_id, requestId);
+      assert.equal(state.orders[0].kitchen_note, '隔離新訂單');
+      assert.equal(Object.hasOwn(state.orders[0], 'invoice_handling'), false);
+      assert.equal(Object.hasOwn(state.orders[0], 'invoice_buyer_tax_id'), false);
+      assert.equal(await page.evaluate(key => sessionStorage.getItem(key), key), requestId);
+    }
+  });
+}
+
+test('首次現金便當照常送出，回應失敗後重用新版識別並清除成功紀錄', { timeout: 25000 }, async (t) => {
+  const { page, state } = await scheduleFixture(t);
+  state.events[0].allow_cash_payment = true;
+  state.rejectOrderOnce = true;
+  await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
+  await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
+  await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
+  const submit = page.getByRole('button', { name: '確認預訂・現場付款', exact: true });
+  await submit.click({ trial: true });
+  await submit.evaluate(button => { button.click(); button.click(); });
+  await page.getByText('隔離測試暫未收到回應', { exact: true }).waitFor();
+  assert.equal(state.orders.length, 1);
+  const id = state.orders[0].client_request_id;
+  const key = legacyMealSubmissionKey('cash_on_pickup');
+  const marker = key.replace('meal-submission:', 'meal-submission-current:');
+  assert.deepEqual(await page.evaluate(keys => keys.map(item => sessionStorage.getItem(item)), [key, marker]), [id, id]);
+  await submit.click();
+  await page.waitForURL(`**/meal-orders?order_id=${orderId}`);
+  assert.deepEqual(state.orders.map(order => order.client_request_id), [id, id]);
+  assert.deepEqual(state.submissionLookups, []);
+  assert.deepEqual(await page.evaluate(keys => keys.map(item => sessionStorage.getItem(item)), [key, marker]), [null, null]);
+});
 
 test('便當訂單顯示實際選定的取餐時間，舊單不捏造已選時間', { timeout: 20000 }, async (t) => {
   const { page, state } = await fixture(t, paidOrder({ pickup_at: '2026-09-14T04:05:00Z' }));

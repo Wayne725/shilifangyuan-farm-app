@@ -17,11 +17,11 @@ function event(id, date, overrides = {}) {
     pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00`,
     offerings: [{ id: 'isolated-offering', meal_id: meal.id, meal_name: meal.name, description: '', price: 120, capacity: 20, reserved_quantity: 0, paid_quantity: 0, available_quantity: 20, position: 0, is_active: true, option_groups: [] }], ...overrides };
 }
-async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [], adminEvents = [], eventOrders = {}, pauseConflict = false, capacityConflict = false } = {}) {
+async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [], adminEvents = [], eventOrders = {}, pauseConflict = false, capacityConflict = false, disablePreview = null, changedDisablePreview = null, scheduleUpdateConflict = false } = {}) {
   const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  const unknown = [], created = [], pauseRequests = [], capacityRequests = [];
+  const unknown = [], created = [], pauseRequests = [], capacityRequests = [], disableRequests = [], disablePreviewReads = [], scheduleUpdateRequests = [];
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), method = request.method();
     if (url.origin !== base) return route.abort();
@@ -37,6 +37,11 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
       if (url.pathname === '/v1/pickup-locations') return route.fulfill({ json: [] });
       if (url.pathname === '/v1/admin/meals') return route.fulfill({ json: [meal] });
       if (url.pathname === '/v1/admin/meal-schedules') return route.fulfill({ json: schedules });
+      if (/^\/v1\/admin\/meal-schedules\/[^/]+\/disable-preview$/.test(url.pathname)) {
+        disablePreviewReads.push(disablePreview?.preview_version);
+        return disablePreview ? route.fulfill({ json: disablePreview })
+          : route.fulfill({ status: 404, json: { detail: 'Not Found' } });
+      }
       if (url.pathname === '/v1/admin/meal-events') return route.fulfill({ json: adminEvents });
       const orderEvent = url.pathname.match(/^\/v1\/admin\/meal-events\/([^/]+)\/orders$/);
       if (orderEvent && Object.hasOwn(eventOrders, orderEvent[1])) return route.fulfill({ json: eventOrders[orderEvent[1]] });
@@ -46,6 +51,31 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
         return route.fulfill({ json: { service_date: date, is_workday: date === '2026-11-09', previous_workday: '2026-11-06', next_workday: date === '2026-11-09' ? '2026-11-10' : '2026-11-09', ordering_starts_at: '2026-11-05T16:00:00Z', ordering_ends_at: date === '2026-11-09' ? '2026-11-08T12:00:00Z' : '2026-11-06T12:00:00Z' } });
       }
       if (url.pathname === '/v1/admin/meal-schedules/calendar-status') return route.fulfill({ json: { available: true, from_date: '2025-01-01', to_date: '2027-12-31', message: '', source_url: 'https://data.gov.tw/dataset/14718' } });
+    }
+    const scheduleId = url.pathname.match(/^\/v1\/admin\/meal-schedules\/([^/]+)$/)?.[1];
+    if (method === 'PUT' && scheduleId && scheduleUpdateConflict) {
+      scheduleUpdateRequests.push(request.postDataJSON());
+      const schedule = schedules.find(({ id }) => id === scheduleId);
+      schedule.enabled = false;
+      schedule.updated_at = '2026-11-06T04:05:00Z';
+      return route.fulfill({ status: 409, json: { detail: '每日供餐設定已更新，請重新開啟編輯後再試' } });
+    }
+    const disableId = url.pathname.match(/^\/v1\/admin\/meal-schedules\/([^/]+)\/disable$/)?.[1];
+    if (method === 'POST' && disableId && disablePreview) {
+      const body = request.postDataJSON();
+      disableRequests.push(body);
+      if (changedDisablePreview) {
+        disablePreview = changedDisablePreview;
+        changedDisablePreview = null;
+      }
+      if (body.preview_version !== disablePreview.preview_version) {
+        return route.fulfill({ status: 409, json: { detail: '預覽資料已變動，請重新預覽' } });
+      }
+      const schedule = schedules.find(({ id }) => id === disableId);
+      schedule.enabled = false;
+      const pausedCount = body.scope === 'pause_generated'
+        ? disablePreview.events.filter(event => ['open', 'scheduled'].includes(event.ordering_status)).length : 0;
+      return route.fulfill({ json: { paused_event_count: pausedCount } });
     }
     const pauseEventId = url.pathname.match(/^\/v1\/admin\/meal-events\/([^/]+)\/ordering-pause$/)?.[1];
     const pauseEvent = pauseEventId && adminEvents.find(({ id }) => id === pauseEventId);
@@ -92,7 +122,7 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.clock.install({ time: new Date(now) });
-  return { page, unknown, created, pauseRequests, capacityRequests };
+  return { page, unknown, created, pauseRequests, capacityRequests, disableRequests, disablePreviewReads, scheduleUpdateRequests };
 }
 async function noOverflow(page) { assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true); }
 async function screenshot(page, name) {
@@ -412,5 +442,118 @@ test('既有訂單場次可追加單一餐點份數，衝突後須核對且維�
     { offeringId: 'add-capacity', body: { expected_capacity: 32, capacity: 37 } },
   ]);
   await noOverflow(page);
+  assert.deepEqual(unknown, []);
+});
+
+function scheduleForDisable() {
+  return {
+    id: 'disable-schedule', title: '隔離停用排程', location: '隔離取餐點', meal_period: 'lunch', timezone: 'Asia/Taipei',
+    pickup_start_time: '11:00', pickup_end_time: '13:00', cutoff_time: '20:00', cutoff_days_before: 1,
+    advance_days: 7, weekdays: [0, 1, 2, 3, 4], enabled: true, auto_publish: true,
+    offerings: [{ meal_id: meal.id, price: 120, capacity: 20, position: 0 }],
+  };
+}
+
+test('停用排程須預覽日期和訂單，資料變動後要重新確認暫停範圍', { timeout: 30000 }, async t => {
+  const schedule = scheduleForDisable();
+  const preview = {
+    preview_version: 'a'.repeat(64),
+    events: [
+      { id: 'open', title: '隔離午餐 11/09', service_date: '2026-11-09', ordering_status: 'open', order_count: 2 },
+      { id: 'draft', title: '隔離午餐 11/10', service_date: '2026-11-10', ordering_status: 'draft', order_count: 0 },
+    ],
+  };
+  const changed = { ...preview, preview_version: 'b'.repeat(64), events: [{ ...preview.events[0], order_count: 3 }, preview.events[1]] };
+  const { page, unknown, disableRequests, disablePreviewReads, pauseRequests } = await fixture(t, 390, {
+    admin: true, schedules: [schedule], disablePreview: preview, changedDisablePreview: changed,
+  });
+  await page.goto(`${base}/admin/meals?tab=schedules`);
+  const card = page.locator('article').filter({ has: page.getByRole('heading', { name: schedule.title, exact: true }) });
+  const edit = card.getByRole('button', { name: '編輯排程', exact: true });
+  await edit.click();
+  const enabled = page.getByRole('checkbox', { name: '啟用每日自動產生場次', exact: true });
+  assert.equal(await enabled.isChecked(), true);
+  assert.equal(await enabled.isDisabled(), true);
+  await page.getByRole('button', { name: '取消編輯', exact: true }).click();
+  await card.getByRole('button', { name: '停用排程', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '停用排程', exact: true });
+  const scope = dialog.getByRole('combobox', { name: '停用範圍', exact: true });
+  const confirm = dialog.getByRole('button', { name: '確認停用排程', exact: true });
+  await dialog.getByText('2026/11/09 · 開放預訂 · 2 筆訂單', { exact: true }).waitFor();
+  await dialog.getByText('2026/11/10 · 草稿 · 0 筆訂單', { exact: true }).waitFor();
+  assert.equal(await scope.inputValue(), 'generation_only');
+  await scope.selectOption('pause_generated');
+  assert.deepEqual(disableRequests, []);
+  assert.deepEqual(disablePreviewReads, [preview.preview_version]);
+  await confirm.click();
+  await dialog.getByText('場次資料已更新，請重新核對停用範圍。', { exact: true }).waitFor();
+  await dialog.getByText('2026/11/09 · 開放預訂 · 3 筆訂單', { exact: true }).waitFor();
+  assert.deepEqual(disablePreviewReads, [preview.preview_version, changed.preview_version]);
+  assert.equal(disableRequests.length, 1);
+  assert.equal(await scope.inputValue(), 'generation_only');
+  await scope.selectOption('pause_generated');
+  await confirm.click();
+  await card.getByText('已停用排程並暫停 1 場的新預訂。', { exact: true }).waitFor();
+  assert.equal(await card.getByRole('button', { name: '立即補齊未來場次' }).isDisabled(), true);
+  assert.equal(await card.getByRole('button', { name: '停用排程', exact: true }).count(), 0);
+  assert.deepEqual(disableRequests, [
+    { scope: 'pause_generated', preview_version: preview.preview_version },
+    { scope: 'pause_generated', preview_version: changed.preview_version },
+  ]);
+  assert.deepEqual(pauseRequests, []);
+  await noOverflow(page);
+  assert.deepEqual(unknown, []);
+});
+
+test('停用排程只有不可暫停的場次時只停止生成，舊 API 無預覽時不得送出', { timeout: 30000 }, async t => {
+  for (const supported of [true, false]) {
+    await t.test(supported ? '只停止生成' : '舊 API', async subtest => {
+      const schedule = scheduleForDisable();
+      const preview = {
+        preview_version: 'a'.repeat(64),
+        events: [{ id: 'closed', title: '隔離已截止場次', service_date: '2026-11-09', ordering_status: 'closed', order_count: 4 }],
+      };
+      const { page, unknown, disableRequests } = await fixture(subtest, 390, {
+        admin: true, schedules: [schedule], disablePreview: supported ? preview : null,
+      });
+      await page.goto(`${base}/admin/meals?tab=schedules`);
+      await page.getByRole('button', { name: '停用排程', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: '停用排程', exact: true });
+      const confirm = dialog.getByRole('button', { name: '確認停用排程', exact: true });
+      if (supported) {
+        await dialog.getByText('2026/11/09 · 已截止 · 4 筆訂單', { exact: true }).waitFor();
+        assert.equal(await dialog.getByRole('combobox', { name: '停用範圍' }).count(), 0);
+        await confirm.click();
+        await page.getByText('已停用排程。', { exact: true }).waitFor();
+        assert.deepEqual(disableRequests, [{ scope: 'generation_only', preview_version: preview.preview_version }]);
+      } else {
+        await dialog.getByRole('alert').filter({ hasText: '停用預覽暫時無法使用' }).waitFor();
+        assert.equal(await confirm.isDisabled(), true);
+        assert.equal(await dialog.getByText('目前沒有已建立的未來場次。', { exact: true }).count(), 0);
+        assert.deepEqual(disableRequests, []);
+      }
+      assert.deepEqual(unknown, []);
+    });
+  }
+});
+
+test('停用排程後拒絕另一分頁的舊編輯版本並保留輸入', { timeout: 30000 }, async t => {
+  const schedule = { ...scheduleForDisable(), updated_at: '2026-11-06T04:00:00Z' };
+  const { page, unknown, scheduleUpdateRequests, disableRequests } = await fixture(t, 390, {
+    admin: true, schedules: [schedule], scheduleUpdateConflict: true,
+  });
+  await page.goto(`${base}/admin/meals?tab=schedules`);
+  const card = page.locator('article').filter({ has: page.getByRole('heading', { name: schedule.title, exact: true }) });
+  await card.getByRole('button', { name: '編輯排程', exact: true }).click();
+  const title = page.getByLabel('排程／場次名稱', { exact: true });
+  await title.fill('保留隔離排程草稿');
+  await page.getByRole('button', { name: '儲存每日排程', exact: true }).click();
+  await page.getByText('每日供餐設定已更新，請重新開啟編輯後再試', { exact: true }).waitFor();
+  await card.getByText('排程停用 · 午餐', { exact: true }).waitFor();
+  assert.equal(await title.inputValue(), '保留隔離排程草稿');
+  assert.equal(scheduleUpdateRequests.length, 1);
+  assert.equal(scheduleUpdateRequests[0].expected_updated_at, '2026-11-06T04:00:00Z');
+  assert.equal(scheduleUpdateRequests[0].enabled, true);
+  assert.deepEqual(disableRequests, []);
   assert.deepEqual(unknown, []);
 });

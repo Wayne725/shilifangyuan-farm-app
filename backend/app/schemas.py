@@ -1635,10 +1635,52 @@ class MealScheduleInput(BaseModel):
         return self
 
 
+class MealScheduleUpdate(MealScheduleInput):
+    expected_updated_at: datetime | None = None
+
+    @field_validator("expected_updated_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("時間必須包含時區")
+        return value
+
+
 class MealScheduleRead(MealScheduleInput, ApiModel):
     id: str
     timezone: Literal["Asia/Taipei"] = "Asia/Taipei"
     created_at: datetime
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def normalize_version(cls, value: datetime) -> datetime:
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+MealScheduleOrderingStatus = Literal["draft", "paused", "closed", "open", "scheduled"]
+
+
+class MealScheduleDisablePreviewEvent(ApiModel):
+    id: str
+    title: str
+    service_date: date
+    order_count: int
+    ordering_status: MealScheduleOrderingStatus
+
+
+class MealScheduleDisablePreview(ApiModel):
+    preview_version: str
+    events: list[MealScheduleDisablePreviewEvent]
+
+
+class MealScheduleDisable(BaseModel):
+    scope: Literal["generation_only", "pause_generated"]
+    preview_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MealScheduleDisabled(ApiModel):
+    paused_event_count: int
 
 
 class MealPaymentOptionsUpdate(BaseModel):

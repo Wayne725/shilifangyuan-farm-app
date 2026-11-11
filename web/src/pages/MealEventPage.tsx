@@ -7,7 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { PaymentMethodFields } from "../components/PaymentMethodFields";
@@ -27,7 +27,7 @@ import { beginMealCheckout, invoicePreferencePayload, type InvoicePreference } f
 import { contactPhoneIsValid } from "../lib/contact-phone";
 import { taxTypeLabel } from "../lib/invoice-tax";
 import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
-import { mealSubmissionStorageKey } from "../lib/meal-submission";
+import { forgetMealSubmission, mealSubmissionStorageKey, rememberMealSubmission, unmatchedMealSubmissions } from "../lib/meal-submission";
 import "./MealEventPage.css";
 import { clearMealDraft, emptyMealDraft, mealDraftWasAdjusted, readMealDraft, reconcileMealDraft, writeMealDraft } from "../lib/meal-draft";
 import { formatMealDateTime, mealBookingDeadline, mealBookingStatus, mealOrderingOpen, mealPickupDeadline, mealPickupSchedule, mealServiceDate, pickupTimeOptions, shiftMealDate, taipeiDate, taipeiInputToIso, validPickupTime } from "../lib/meal-time";
@@ -62,6 +62,12 @@ interface MealQuote {
   pickup: { location: string; location_id: string | null; address: string; instructions: string; starts_at: string; ends_at: string };
 }
 
+interface MealSubmissionReview {
+  userId: string;
+  storageKey: string;
+  unmatched: string;
+}
+
 export function MealEventPage() {
   const { eventId } = useParams({ from: "/meals/$eventId" });
   const { pickup_at } = useSearch({ from: "/meals/$eventId" });
@@ -75,6 +81,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const notificationEmail = user?.notification_email || user?.email || "";
   const [kitchenNote, setKitchenNote] = useState("");
   const [contactPhone, setContactPhone] = useState("");
+  const checkoutInFlight = useRef(false);
   const contactPhoneReady = contactPhoneIsValid(contactPhone);
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
   const setMealBookingType = (value: "standard" | "business") => setDraft(current => ({ ...current, mealBookingType: value === "business" ? "business" : undefined }));
@@ -178,7 +185,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   });
   const checkout = useMutation({
     onMutate: captureSessionIdentityGuard,
-    mutationFn: async () => {
+    mutationFn: async (confirmation: MealSubmissionReview | undefined) => {
       if (platform.data?.orders_open === false) throw new Error(platform.data.closed_message);
       if (!user || !isCurrentSessionUser(user.id)) throw new Error("請先登入");
       const sameIdentity = captureSessionIdentityGuard();
@@ -217,6 +224,20 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       const legacyId = pendingLegacy[0]?.id;
       const currentId = sessionStore.getItem(storageKey);
       if (!sameIdentity()) throw new Error("請重新登入後確認便當訂單");
+      const reviewUnmatchedSubmission = () => {
+        const unmatched = unmatchedMealSubmissions([storageKey, ...legacyKeys]);
+        const needsReview = confirmation
+          ? confirmation.userId !== user.id || confirmation.storageKey !== storageKey || confirmation.unmatched !== unmatched
+          : Boolean(unmatched);
+        if (needsReview) {
+          return { kind: "submission_review" as const, review: { userId: user.id, storageKey, unmatched }, confirmAgain: Boolean(confirmation) };
+        }
+      };
+      if (!business && (confirmation || (!currentId && !legacyId))) {
+        const review = reviewUnmatchedSubmission();
+        if (review) return review;
+        if (confirmation && (currentId || legacyId)) return { kind: "review" as const };
+      }
       if (legacyId && (pendingLegacy.some(({ id }) => id !== legacyId) || (currentId && currentId !== legacyId))) {
         return { kind: "review" as const };
       }
@@ -228,7 +249,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         try {
           const existing = await findLegacyOrder(legacyId);
           if (existing.order_id) {
-            return { kind: "reserved" as const, orderId: existing.order_id, storageKeys: resolvedKeys };
+            return { kind: "reserved" as const, orderId: existing.order_id, storageKeys: resolvedKeys, submissionId: legacyId };
           }
         } catch (error) {
           // During a staggered release the old API has no read-only lookup route.
@@ -241,27 +262,36 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       }
       if (!sameIdentity()) throw new Error("請重新登入後確認便當訂單");
       const latestId = sessionStore.getItem(storageKey);
-      if (legacyId && latestId && latestId !== legacyId) return { kind: "review" as const };
+      if (latestId && (confirmation || (legacyId && latestId !== legacyId))) return { kind: "review" as const };
+      if (legacyKeys.some(key => {
+        const id = sessionStore.getItem(key);
+        return id && id !== legacyId;
+      })) return { kind: "review" as const };
+      if (!business && paymentMethod === "online" && !latestId && !legacyId) {
+        const review = reviewUnmatchedSubmission();
+        if (review) return review;
+      }
       // Reuse the old ID even after an empty lookup. An earlier request may still be committing.
-      const id = latestId || legacyId || crypto.randomUUID();
-      if (!sessionStore.setItem(storageKey, id)) throw new Error("瀏覽器無法儲存送單識別，請允許網站儲存資料後重試");
+      const previousId = latestId || legacyId;
+      const id = previousId || crypto.randomUUID();
+      rememberMealSubmission(sessionStore, storageKey, id, !previousId);
       try {
-        return { ...await beginMealCheckout({ ...input, clientRequestId: id }), storageKeys: resolvedKeys };
+        return { ...await beginMealCheckout({ ...input, clientRequestId: id }), storageKeys: resolvedKeys, submissionId: id };
       } catch (error) {
         if (legacyId && error instanceof ApiError && error.status === 409 && sameIdentity()) {
           const existing = await findLegacyOrder(legacyId);
-          if (existing.order_id) return { kind: "reserved" as const, orderId: existing.order_id, storageKeys: resolvedKeys };
+          if (existing.order_id) return { kind: "reserved" as const, orderId: existing.order_id, storageKeys: resolvedKeys, submissionId: legacyId };
         }
         throw error;
       }
     },
     onSuccess: (outcome, _variables, sameIdentity) => {
-      if (!sameIdentity?.()) return;
+      if (!sameIdentity?.() || outcome.kind === "submission_review") return;
       if (outcome.kind === "review") {
         window.location.assign("/meal-orders");
         return;
       }
-      for (const key of outcome.storageKeys) sessionStore.removeItem(key);
+      for (const key of outcome.storageKeys) forgetMealSubmission(sessionStore, key, outcome.submissionId);
       clearMealDraft(eventId);
       setDraft(emptyMealDraft());
       setDraftAdjusted(false);
@@ -273,7 +303,10 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       const search = new URLSearchParams({ order_id: outcome.orderId, result: "resume", message: outcome.message });
       window.location.assign(`/orders?${search.toString()}`);
     },
+    onSettled: () => { checkoutInFlight.current = false; },
   });
+  const submissionReview = !business && checkout.data?.kind === "submission_review" && checkout.data.review.userId === user?.id
+    ? checkout.data : undefined;
 
   useEffect(() => {
     if (!allowCash) setPaymentMethod("online");
@@ -321,6 +354,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     quantityReady &&
     selectionsReady &&
     invoiceReady && contactPhoneReady;
+  const checkoutDisabled = checkout.isPending || quote.isFetching || quote.isError
+    || (business ? !orderingOpen : !canOrder || !quote.data);
   const selectedMeals = activeOfferings
     .filter((offering) => (quantities[offering.id] || 0) > 0)
     .map((offering) => {
@@ -375,9 +410,12 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       };
     });
   };
-  const attemptCheckout = () => {
+  const attemptCheckout = (confirmation?: MealSubmissionReview) => {
     setSubmitted(true);
-    if (canOrder && quote.data && !quote.isFetching && !quote.isError) checkout.mutate();
+    if (canOrder && quote.data && !checkoutDisabled && !checkoutInFlight.current) {
+      checkoutInFlight.current = true;
+      checkout.mutate(confirmation);
+    }
   };
 
   return (
@@ -540,8 +578,16 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           <dl className="meal-payment-total"><div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div></dl>
           {!user ? (
             <button className="button button-primary full-width" type="button" disabled={orderingPaused || ((businessOnly || mealEvent.same_day_preparation_minutes != null) && (!orderingOpen || !pickupOptions.length))} onClick={openLogin}>登入後預訂</button>
+          ) : submissionReview ? (
+            <>
+              <p className="meal-selection-notice" role="status">
+                {submissionReview.confirmAgain ? "請再確認是否另下一筆。" : "先前送出的便當訂單可能已成立。"}{" "}
+                <Link className="text-link" to="/meal-orders" target="_blank" rel="noopener">查看便當訂單</Link>
+              </p>
+              <button className="button button-system full-width" type="button" disabled={checkoutDisabled} onClick={() => attemptCheckout(submissionReview.review)}>另下一筆</button>
+            </>
           ) : (
-            <button className="button button-system full-width" type="button" disabled={checkout.isPending || (business ? !orderingOpen || quote.isFetching || quote.isError : !canOrder || !quote.data || quote.isFetching || quote.isError)} onClick={attemptCheckout}>
+            <button className="button button-system full-width" type="button" disabled={checkoutDisabled} onClick={() => attemptCheckout()}>
               {checkout.isPending ? "建立餐點訂單中…" : business ? "送出會餐訂單（取餐當日付款）" : cashOnPickup ? "確認預訂・現場付款" : "預訂並前往線上付款"}
             </button>
           )}

@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.jobs import reconcile_once
 from app.meal_booking import meal_pickup_slots
 from app.meal_schedules import TAIPEI, generate_scheduled_meal_events
-from app.models import Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User, UserRole
+from app.models import AdminAudit, FulfillmentStatus, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User, UserRole
 from app.routers import meals as meals_module
 from app.routers.meals import meals_router
 from app.schemas import MealScheduleInput
@@ -63,6 +63,112 @@ async def test_schedules_require_admin_and_default_to_disabled(schedule_context)
     generated = await client.post(f"/v1/admin/meal-schedules/{template['id']}/generate", headers=auth_headers(admin))
     assert generated.status_code == 409
     assert await session.scalar(select(func.count(MealEvent.id))) == 0
+
+
+@pytest.mark.parametrize("scope,expected_count", [("generation_only", 0), ("pause_generated", 2)])
+async def test_disable_preview_and_scope_preserve_linked_orders_and_other_events(schedule_context, scope, expected_count):
+    client, session, admin, buyer, meal = schedule_context
+    now = datetime(2027, 3, 8, 2, tzinfo=timezone.utc)
+    with time_machine.travel(now, tick=False):
+        admin_headers, buyer_headers = auth_headers(admin), auth_headers(buyer)
+        created = await client.post("/v1/admin/meal-schedules", headers=admin_headers, json=schedule_body(
+            meal.id, enabled=True, auto_publish=True, cutoff_days_before=1, cutoff_time="20:00", advance_days=7,
+        ))
+        assert created.status_code == 201, created.text
+        template = await session.get(MealScheduleTemplate, created.json()["id"])
+        open_event, scheduled, draft, paused, closed = list(await session.scalars(
+            select(MealEvent).where(MealEvent.schedule_template_id == template.id)
+            .order_by(MealEvent.service_date).options(selectinload(MealEvent.offerings))
+        ))
+        draft.status = MealEventStatus.DRAFT
+        paused.ordering_paused_at, paused.ordering_pause_version = now, 1
+        closed.status = MealEventStatus.ORDERING_CLOSED
+        unrelated = MealEvent(title="手動場次", location="取餐區", created_by_id=admin.id,
+            status=MealEventStatus.PUBLISHED, **tomorrow_meal_timeline(now))
+        session.add(unrelated)
+        await session.commit()
+
+        join_path = f"/v1/meal-events/{open_event.id}/orders"
+        order_body = {"items": [{"offering_id": open_event.offerings[0].id, "quantity": 1}], "contact_email": buyer.email}
+        first = await client.post(join_path, headers=buyer_headers, json=order_body)
+        cancelled = await client.post(join_path, headers=buyer_headers, json=order_body)
+        assert first.status_code == cancelled.status_code == 201, (first.text, cancelled.text)
+        cancelled_order = await session.get(Order, cancelled.json()["id"])
+        cancelled_order.fulfillment_status = FulfillmentStatus.CANCELLED
+        cancelled_order.cancelled_at = now
+        await session.commit()
+
+        base = f"/v1/admin/meal-schedules/{template.id}"
+        assert (await client.get(f"{base}/disable-preview")).status_code == 401
+        assert (await client.get(f"{base}/disable-preview", headers=buyer_headers)).status_code == 403
+        preview = await client.get(f"{base}/disable-preview", headers=admin_headers)
+        assert preview.status_code == 200 and preview.headers["Cache-Control"] == "no-store"
+        assert preview.json()["events"] == [
+            {"id": event.id, "title": event.title, "service_date": event.service_date.isoformat(),
+             "order_count": 1 if event is open_event else 0, "ordering_status": status}
+            for event, status in [(open_event, "open"), (scheduled, "scheduled"), (draft, "draft"), (paused, "paused"), (closed, "closed")]
+        ]
+        payload = {"scope": scope, "preview_version": preview.json()["preview_version"]}
+        assert (await client.post(f"{base}/disable", headers=buyer_headers, json=payload)).status_code == 403
+        assert (await client.post(f"{base}/disable", headers=admin_headers, json={**payload, "scope": "cancel"})).status_code == 422
+        result = await client.post(f"{base}/disable", headers=admin_headers, json=payload)
+        assert result.status_code == 200, result.text
+        assert result.json() == {"paused_event_count": expected_count}
+        assert (await client.post(f"{base}/disable", headers=admin_headers, json=payload)).status_code == 409
+        assert (await client.get(f"{base}/disable-preview", headers=admin_headers)).status_code == 409
+        stale_edit = await client.put(base, headers=admin_headers, json=schedule_body(
+            meal.id, enabled=True, auto_publish=True, cutoff_days_before=1, cutoff_time="20:00", advance_days=7,
+            expected_updated_at=created.json()["updated_at"],
+        ))
+        assert stale_edit.status_code == 409 and "重新開啟編輯" in stale_edit.json()["detail"]
+        assert await generate_scheduled_meal_events(session, now + timedelta(days=1), template_id=template.id) == []
+
+        await session.refresh(template)
+        assert template.enabled is False and template.auto_publish is True
+        new_version = 1 if expected_count else 0
+        for event, version in [(open_event, new_version), (scheduled, new_version),
+                               (draft, 0), (paused, 1), (closed, 0), (unrelated, 0)]:
+            await session.refresh(event)
+            assert event.ordering_pause_version == version
+            assert (event.ordering_paused_at is not None) == bool(version)
+        preserved = await client.get(f"/v1/meal-orders/{first.json()['id']}", headers=buyer_headers)
+        assert preserved.json()["payment_status"] == first.json()["payment_status"]
+        assert await session.scalar(select(func.count(Order.id))) == 2
+        actions = list(await session.scalars(select(AdminAudit.action).where(
+            AdminAudit.action.in_(["meal_schedule.disable", "meal_event.ordering_pause"]),
+        )))
+        assert actions.count("meal_schedule.disable") == 1
+        assert actions.count("meal_event.ordering_pause") == expected_count
+
+
+async def test_disable_rejects_stale_preview_when_order_is_accepted(schedule_context):
+    client, session, admin, buyer, meal = schedule_context
+    with time_machine.travel(datetime(2027, 3, 8, 2, tzinfo=timezone.utc), tick=False):
+        admin_headers = auth_headers(admin)
+        created = await client.post("/v1/admin/meal-schedules", headers=admin_headers, json=schedule_body(
+            meal.id, enabled=True, auto_publish=True, cutoff_days_before=1, cutoff_time="20:00",
+        ))
+        assert created.status_code == 201, created.text
+        template = await session.get(MealScheduleTemplate, created.json()["id"])
+        base = f"/v1/admin/meal-schedules/{template.id}"
+        preview = (await client.get(f"{base}/disable-preview", headers=admin_headers)).json()
+        event_id = preview["events"][0]["id"]
+        offering_id = await session.scalar(select(MealEventOffering.id).where(MealEventOffering.meal_event_id == event_id))
+        order = await client.post(f"/v1/meal-events/{event_id}/orders", headers=auth_headers(buyer), json={
+            "items": [{"offering_id": offering_id, "quantity": 1}], "contact_email": buyer.email,
+        })
+        assert order.status_code == 201, order.text
+        stale = await client.post(f"{base}/disable", headers=admin_headers, json={
+            "scope": "pause_generated", "preview_version": preview["preview_version"],
+        })
+        assert stale.status_code == 409 and "重新預覽" in stale.json()["detail"]
+        await session.refresh(template)
+        assert template.enabled is True
+        assert await session.scalar(select(func.count(MealEvent.id)).where(MealEvent.ordering_paused_at.is_not(None))) == 0
+        assert await session.scalar(select(func.count(AdminAudit.id)).where(AdminAudit.action == "meal_schedule.disable")) == 0
+        latest = (await client.get(f"{base}/disable-preview", headers=admin_headers)).json()
+        assert latest["events"][0]["order_count"] == 1
+        assert latest["preview_version"] != preview["preview_version"]
 
 
 @pytest.mark.asyncio
