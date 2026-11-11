@@ -66,9 +66,10 @@ class SummaryPrintRequest(BaseModel):
 
 
 def _existing_batch(jobs: list[PrintJob], filters: dict) -> dict:
-    if jobs[0].snapshot["filters"] != filters:
+    batch = summary_batch_read(jobs)
+    if batch["filters"] is not None and batch["filters"] != filters:
         raise HTTPException(409, "列印識別碼已用於其他查詢條件，請重新預覽")
-    return summary_batch_read(jobs)
+    return batch
 
 
 @order_summary_router.post("/order-summary/print-jobs", status_code=201)

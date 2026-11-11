@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -170,10 +171,26 @@ async def read_summary_jobs(session: AsyncSession, request_id: str) -> list[Prin
 
 def summary_batch_read(jobs: list[PrintJob]) -> dict:
     first = jobs[0]
+    fingerprint = first.snapshot.get("fingerprint")
+    if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        fingerprint = None
+    filters = first.snapshot.get("filters")
+    try:
+        OrderSummaryFilters.model_validate(filters)
+    except ValidationError:
+        filters = None
+    summary = first.snapshot.get("summary")
+    if not isinstance(summary, dict) or any(
+        type(value) is not int or value < 0
+        for value in (
+            summary.get("order_count"), summary.get("quantity"), summary.get("product_count"),
+            summary.get("paid_order_count", 0), summary.get("pending_business_order_count", 0),
+        )
+    ):
+        summary = None
     return {"request_id": first.snapshot["request_id"], "mode": first.mode,
-            "fingerprint": first.snapshot["fingerprint"],
-            "created_at": first.created_at, "filters": first.snapshot["filters"],
-            "summary": first.snapshot["summary"],
+            "fingerprint": fingerprint, "created_at": first.created_at, "filters": filters,
+            "summary": summary,
             "pages": [{"id": job.id, "page": job.snapshot["page"], "status": job.status,
                        "last_error": job.last_error} for job in sorted(jobs, key=lambda job: job.snapshot["page"])]}
 
