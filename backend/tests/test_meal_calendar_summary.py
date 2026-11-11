@@ -52,6 +52,7 @@ async def test_public_calendar_preserves_booking_fields_and_reads_only_event_and
     special = booking_event(
         12, MealEventStatus.PICKUP_OPEN, booking_policy="special", dinner=True,
         pickup_slot_ends_at=datetime(2030, 1, 12, 10, tzinfo=timezone.utc),
+        ordering_paused_at=datetime(2030, 1, 11, 8, tzinfo=timezone.utc), ordering_pause_version=1,
         offerings=[MealEventOffering(meal=alternate, price=110, capacity=5, is_active=False)],
     )
     blocked_legacy = booking_event(13, MealEventStatus.PUBLISHED, schedule_template_id=schedule.id)
@@ -91,12 +92,13 @@ async def test_public_calendar_preserves_booking_fields_and_reads_only_event_and
     assert rows[1]["booking_starts_at"] == rows[1]["ordering_starts_at"]
     assert rows[2]["meal_period"] == "dinner"
     assert rows[2]["pickup_slots"][-1] == rows[2]["pickup_slot_ends_at"] == "2030-01-12T10:00:00Z"
+    assert rows[2]["ordering_paused"] is True and full_rows[2]["ordering_pause_version"] == 1
     assert rows[3]["new_orders_blocked_reason"]
     assert full_rows[0]["offerings"][0]["option_groups"][0]["options"]
     for summary, event in zip(rows, full_rows, strict=True):
         full_booking_fields = {
             key: value for key, value in event.items()
-            if key not in {"offerings", "allow_cash_payment", "schedule_template_id", "can_edit"}
+            if key not in {"offerings", "allow_cash_payment", "schedule_template_id", "can_edit", "ordering_pause_version"}
         }
         menu = [item for item in event["offerings"] if item["is_active"]]
         assert summary == {
