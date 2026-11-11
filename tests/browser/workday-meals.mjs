@@ -17,11 +17,11 @@ function event(id, date, overrides = {}) {
     pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00`,
     offerings: [{ id: 'isolated-offering', meal_id: meal.id, meal_name: meal.name, description: '', price: 120, capacity: 20, reserved_quantity: 0, paid_quantity: 0, available_quantity: 20, position: 0, is_active: true, option_groups: [] }], ...overrides };
 }
-async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [], adminEvents = [], eventOrders = {}, pauseConflict = false } = {}) {
+async function fixture(t, width, { events = [event('monday', '2026-11-09')], now = '2026-11-06T12:00:00+08:00', admin = false, schedules = [], adminEvents = [], eventOrders = {}, pauseConflict = false, capacityConflict = false } = {}) {
   const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
-  const unknown = [], created = [], pauseRequests = [];
+  const unknown = [], created = [], pauseRequests = [], capacityRequests = [];
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), method = request.method();
     if (url.origin !== base) return route.abort();
@@ -64,6 +64,25 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
       pauseEvent.new_orders_blocked_reason = body.paused ? '此場次暫停接受新訂單' : null;
       return route.fulfill({ json: pauseEvent });
     }
+    const capacityPath = url.pathname.match(/^\/v1\/admin\/meal-events\/([^/]+)\/offerings\/([^/]+)\/capacity$/);
+    if (method === 'PATCH' && capacityPath) {
+      const capacityEvent = adminEvents.find(({ id }) => id === capacityPath[1]);
+      const offering = capacityEvent?.offerings.find(({ id }) => id === capacityPath[2]);
+      if (!offering) return route.fulfill({ status: 404, json: { detail: '找不到餐點' } });
+      const body = request.postDataJSON();
+      capacityRequests.push({ offeringId: offering.id, body });
+      if (capacityConflict) {
+        capacityConflict = false;
+        offering.capacity += 2;
+        offering.available_quantity += 2;
+      }
+      if (body.expected_capacity !== offering.capacity) {
+        return route.fulfill({ status: 409, json: { detail: '供應份數已更新，請重新核對份數' } });
+      }
+      offering.available_quantity += body.capacity - offering.capacity;
+      offering.capacity = body.capacity;
+      return route.fulfill({ json: capacityEvent });
+    }
     if (method === 'POST' && (url.pathname === '/v1/admin/meal-events' || /^\/v1\/admin\/meal-events\/[^/]+\/duplicate$/.test(url.pathname))) {
       created.push(request.postDataJSON()); return route.fulfill({ status: 201, json: { id: 'created-special' } });
     }
@@ -73,7 +92,7 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.clock.install({ time: new Date(now) });
-  return { page, unknown, created, pauseRequests };
+  return { page, unknown, created, pauseRequests, capacityRequests };
 }
 async function noOverflow(page) { assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true); }
 async function screenshot(page, name) {
@@ -334,6 +353,64 @@ test('場次可暫停及恢復新預訂，衝突後讀取新版本並保留原�
   assert.deepEqual(pauseRequests.at(-1), { paused: false, expected_version: 6 });
   await page.goto(`${base}/shop`);
   await navigation.getByRole('link', { name: '隔離取餐點 12:00 取餐', exact: true }).waitFor();
+  await noOverflow(page);
+  assert.deepEqual(unknown, []);
+});
+
+test('既有訂單場次可追加單一餐點份數，衝突後須核對且維持暫停', { timeout: 30000 }, async t => {
+  const paused = event('paused-capacity', '2026-11-09', {
+    title: '隔離容量場次', can_edit: false, ordering_paused: true, ordering_pause_version: 1,
+    new_orders_blocked_reason: '此場次暫停接受新訂單',
+  });
+  const main = paused.offerings[0];
+  paused.offerings.push(
+    { ...main, id: 'add-capacity', meal_name: '可追加餐點', capacity: 30, available_quantity: 25, paid_quantity: 5 },
+    { ...main, id: 'inactive-capacity', meal_name: '已停售餐點', is_active: false },
+    { ...main, id: 'max-capacity', meal_name: '已達上限餐點', capacity: 100000 },
+  );
+  const editable = event('editable-capacity', '2026-11-10', { title: '隔離可編輯場次', can_edit: true });
+  const { page, unknown, capacityRequests } = await fixture(t, 390, {
+    admin: true, adminEvents: [paused, editable], capacityConflict: true,
+  });
+  await page.goto(`${base}/admin/meals?tab=events`);
+  const card = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: paused.title, exact: true }) });
+  const editableCard = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: editable.title, exact: true }) });
+  await card.getByRole('button', { name: '追加份數', exact: true }).click();
+  assert.equal(await editableCard.getByRole('button', { name: '追加份數', exact: true }).count(), 0);
+  assert.equal(await editableCard.getByRole('button', { name: '手動編輯場次', exact: true }).isEnabled(), true);
+  assert.equal(await card.getByRole('button', { name: '手動編輯場次', exact: true }).isDisabled(), true);
+
+  const form = card.getByRole('form', { name: '追加餐點份數' });
+  const offering = form.getByRole('combobox', { name: '餐點', exact: true });
+  assert.equal(await offering.getByRole('option', { name: '已停售餐點' }).count(), 0);
+  assert.equal(await offering.getByRole('option', { name: '已達上限餐點' }).count(), 0);
+  await offering.selectOption('add-capacity');
+  const addition = form.getByRole('spinbutton', { name: '增加份數' });
+  const save = form.getByRole('button', { name: '儲存份數', exact: true });
+  await addition.fill('100000');
+  assert.equal(await save.isDisabled(), true);
+  await addition.fill('5');
+  await form.getByText('目前總份數 30 · 追加後總份數 35', { exact: true }).waitFor();
+  await save.click();
+  await form.getByRole('alert').filter({ hasText: '供應份數已更新' }).waitFor();
+  await form.getByText(/目前總份數 32/).waitFor();
+  assert.equal(await save.isDisabled(), true);
+  assert.equal(capacityRequests.length, 1);
+  await form.getByRole('button', { name: '重新核對份數' }).click();
+  assert.equal(await addition.inputValue(), '');
+  assert.equal(await save.isDisabled(), true);
+  await addition.fill('5');
+  await form.getByText('目前總份數 32 · 追加後總份數 37', { exact: true }).waitFor();
+  await save.click();
+  await card.getByRole('status').filter({ hasText: '已儲存追加份數' }).waitFor();
+  await card.getByText('可追加餐點 5/37', { exact: true }).waitFor();
+  assert.equal(await card.getByText(`${main.meal_name} 0/20`, { exact: true }).isVisible(), true);
+  assert.equal(await card.getByRole('status').filter({ hasText: '新預訂已暫停' }).isVisible(), true);
+  assert.equal(await card.getByRole('button', { name: '恢復新預訂', exact: true }).isVisible(), true);
+  assert.deepEqual(capacityRequests, [
+    { offeringId: 'add-capacity', body: { expected_capacity: 30, capacity: 35 } },
+    { offeringId: 'add-capacity', body: { expected_capacity: 32, capacity: 37 } },
+  ]);
   await noOverflow(page);
   assert.deepEqual(unknown, []);
 });

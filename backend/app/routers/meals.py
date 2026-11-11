@@ -119,6 +119,7 @@ from ..schemas import (
     MealEventRead,
     MealOptionGroupRead,
     MealOptionRead,
+    MealOfferingCapacityUpdate,
     MealOfferingRead,
     MealOrderCreate,
     MealOrderingPauseUpdate,
@@ -187,6 +188,19 @@ def _meal_event_allows_edit(event: MealEvent, now: datetime) -> bool:
     return event.status == MealEventStatus.DRAFT or (
         event.status == MealEventStatus.PUBLISHED and _aware(event.ordering_ends_at) > now
     )
+
+
+def _require_meal_ordering_adjustable(event: MealEvent, now: datetime) -> None:
+    if event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}:
+        raise HTTPException(409, "此場次目前無法調整接單狀態")
+    if reason := meal_calendar_blocked_reason(event):
+        raise HTTPException(409, reason)
+    start, _ = meal_booking_window(event, business=event.business_only)
+    if not any(
+        max(start, now) < meal_order_deadline(event, slot, business=event.business_only)
+        for slot in meal_pickup_slots(event)
+    ):
+        raise HTTPException(409, "本場次已無可預訂的取餐時段")
 
 
 def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
@@ -1767,17 +1781,8 @@ async def update_meal_ordering_pause(
     stale = "接單狀態已更新，請重新整理後再試"
     if event.ordering_pause_version != body.expected_version:
         raise HTTPException(409, stale)
-    if event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}:
-        raise HTTPException(409, "此場次目前無法調整接單狀態")
-    if reason := meal_calendar_blocked_reason(event):
-        raise HTTPException(409, reason)
     now = datetime.now(timezone.utc)
-    start, _ = meal_booking_window(event, business=event.business_only)
-    if not any(
-        max(start, now) < meal_order_deadline(event, slot, business=event.business_only)
-        for slot in meal_pickup_slots(event)
-    ):
-        raise HTTPException(409, "本場次已無可預訂的取餐時段")
+    _require_meal_ordering_adjustable(event, now)
 
     can_edit = _meal_event_allows_edit(event, now) and not await session.scalar(
         select(Order.id).where(Order.meal_event_id == event.id).limit(1),
@@ -1809,6 +1814,66 @@ async def update_meal_ordering_pause(
     ))
     await session.commit()
     return _meal_event_read(event, can_edit=can_edit)
+
+
+@meals_router.patch(
+    "/v1/admin/meal-events/{event_id}/offerings/{offering_id}/capacity",
+    response_model=MealEventRead,
+)
+async def increase_meal_offering_capacity(
+    event_id: str,
+    offering_id: str,
+    body: MealOfferingCapacityUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MealEventRead:
+    event = await _load_event(session, event_id, for_update=True, refresh_existing=True)
+    if event is None:
+        raise HTTPException(404, "找不到便當場次")
+    offering = next((item for item in event.offerings if item.id == offering_id), None)
+    if offering is None:
+        raise HTTPException(404, "找不到可追加份數的餐點")
+    await session.refresh(
+        offering, ["capacity", "reserved_quantity", "paid_quantity", "is_active"], with_for_update=True,
+    )
+    if not offering.is_active:
+        raise HTTPException(404, "找不到可追加份數的餐點")
+    has_orders = event.status == MealEventStatus.PUBLISHED and await session.scalar(
+        select(Order.id).where(Order.meal_event_id == event.id).limit(1),
+    )
+    _require_meal_ordering_adjustable(event, datetime.now(timezone.utc))
+    if event.status == MealEventStatus.PUBLISHED and not has_orders:
+        raise HTTPException(409, "此場次尚無訂單，請編輯場次調整供應份數")
+
+    stale = "供應份數已更新，請重新整理後再試"
+    previous_capacity = offering.capacity
+    if previous_capacity != body.expected_capacity:
+        raise HTTPException(409, stale)
+    if body.capacity <= previous_capacity:
+        raise HTTPException(422, "新供應份數必須大於目前份數")
+    updated_id = await session.scalar(
+        update(MealEventOffering)
+        .where(MealEventOffering.id == offering.id, MealEventOffering.capacity == body.expected_capacity)
+        .values(capacity=body.capacity)
+        .returning(MealEventOffering.id)
+        .execution_options(synchronize_session="fetch"),
+    )
+    if updated_id is None:
+        raise HTTPException(409, stale)
+    session.add(AdminAudit(
+        actor_id=admin.id,
+        action="meal_event.offering_capacity_increased",
+        aggregate_type="meal_event",
+        aggregate_id=event.id,
+        reason=body.reason,
+        data={
+            "offering_id": offering.id,
+            "before": {"capacity": previous_capacity},
+            "after": {"capacity": body.capacity},
+        },
+    ))
+    await session.commit()
+    return _meal_event_read(event)
 
 
 @meals_router.post(

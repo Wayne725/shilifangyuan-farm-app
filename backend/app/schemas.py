@@ -1650,6 +1650,11 @@ class MealOrderingPauseUpdate(AdminActionReason):
     expected_version: int = Field(ge=0, strict=True)
 
 
+class MealOfferingCapacityUpdate(AdminActionReason):
+    expected_capacity: int = Field(ge=1, le=100000, strict=True)
+    capacity: int = Field(ge=1, le=100000, strict=True)
+
+
 class MealOfferingRead(ApiModel):
     id: str
     meal_id: str

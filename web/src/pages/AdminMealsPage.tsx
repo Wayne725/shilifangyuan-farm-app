@@ -216,12 +216,15 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
     {draft.booking_policy === "workday" && calendar.isError && <p className="form-error" role="alert">{calendar.error.message}</p>}{draft.booking_policy === "workday" && calendar.data?.is_workday === false && <p className="form-error" role="alert">這一天不是工作日。{calendar.data.next_workday ? `下一工作日為 ${calendar.data.next_workday}；若需加開，請選「特殊日期加開」。` : "請選其他工作日或特殊加開。"}</p>}{conflictNotice}<div className="meal-choice-grid">{activeMeals.map((meal) => <label key={meal.id} className="meal-choice"><input type="checkbox" checked={selected.has(meal.id)} onChange={() => toggleMeal(meal)} /><span><strong>{meal.name}</strong><small>{formatMoney(meal.price)}</small></span></label>)}</div>{draft.offerings.map((offering) => { const meal = meals.find((item) => item.id === offering.meal_id); return <div className="meal-offering-editor" key={offering.meal_id}><strong>{meal?.name}</strong><label className="field"><span>本場售價</span><input min={0} type="number" value={offering.price} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, price: Number(event.target.value) } : item) })} /></label><label className="field"><span>份數</span><input min={1} type="number" value={offering.capacity} onChange={(event) => setDraft({ ...draft, offerings: draft.offerings.map((item) => item.meal_id === offering.meal_id ? { ...item, capacity: Number(event.target.value) } : item) })} /></label></div>; })}{create.isError && <p className="form-error">{create.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || draft.offerings.length === 0 || Boolean(cutoffError) || create.isPending || (draft.booking_policy === "workday" && (calendar.isFetching || calendar.isError || calendar.data?.is_workday === false))}><CalendarPlus size={17} />{initial ? "儲存場次修改" : "建立草稿場次"}</button>{onCancel && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}</div></form>;
 }
 
+const MAX_OFFERING_CAPACITY = 100_000;
+
 function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal[]; onDone: () => void }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [reason, setReason] = useState("");
   const [credential, setCredential] = useState("");
   const [redeemed, setRedeemed] = useState("");
+  const [capacityDraft, setCapacityDraft] = useState<{ offeringId: string; expectedCapacity: number; additional: string } | null>(null);
   const action = useMutation({
     mutationFn: (name: "publish" | "open-pickup" | "cancel" | "complete" | "duplicate") => {
       if (name === "duplicate") return apiFetch<MealEvent>(`/v1/admin/meal-events/${event.id}/duplicate`, { method: "POST", body: JSON.stringify(eventPayload(shiftEvent(event))) });
@@ -236,6 +239,14 @@ function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal
     queryClient.invalidateQueries({ queryKey: ["meal-event", event.id] }),
     queryClient.invalidateQueries({ queryKey: ["meal-events"] }),
   ]);
+  const applyEventUpdate = async (updated: MealEvent) => {
+    await queryClient.cancelQueries({ queryKey: ["admin-meal-events"] });
+    queryClient.setQueryData<MealEvent[]>(["admin-meal-events"], (events) => events?.map((entry) => entry.id === updated.id ? updated : entry));
+    await refreshOrdering();
+  };
+  const refreshOnConflict = async (error: Error) => {
+    if (error instanceof ApiError && error.status === 409) await refreshOrdering();
+  };
   const changeOrderingPause = useMutation({
     mutationFn: (paused: boolean) => apiFetch<MealEvent>(`/v1/admin/meal-events/${event.id}/ordering-pause`, {
       method: "PATCH",
@@ -246,22 +257,85 @@ function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal
       }),
     }),
     onSuccess: async (updated) => {
-      await queryClient.cancelQueries({ queryKey: ["admin-meal-events"] });
-      queryClient.setQueryData<MealEvent[]>(["admin-meal-events"], (events) => events?.map((entry) => entry.id === updated.id ? updated : entry));
       setReason("");
-      await refreshOrdering();
+      await applyEventUpdate(updated);
     },
-    onError: async (error) => {
-      if (error instanceof ApiError && error.status === 409) await refreshOrdering();
-    },
+    onError: refreshOnConflict,
   });
-  const eventActionPending = action.isPending || changeOrderingPause.isPending;
+  const increaseCapacity = useMutation({
+    mutationFn: ({ offeringId, expectedCapacity, capacity }: { offeringId: string; expectedCapacity: number; capacity: number }) =>
+      apiFetch<MealEvent>(`/v1/admin/meal-events/${event.id}/offerings/${offeringId}/capacity`, {
+        method: "PATCH",
+        body: JSON.stringify({ expected_capacity: expectedCapacity, capacity }),
+      }),
+    onSuccess: async (updated) => {
+      setCapacityDraft(null);
+      await applyEventUpdate(updated);
+    },
+    onError: refreshOnConflict,
+  });
+  const canIncreaseCapacity = event.can_edit === false && canChangeOrderingPause;
+  const eligibleOfferings = event.offerings.filter((offering) => offering.is_active && offering.capacity < MAX_OFFERING_CAPACITY);
+  const selectedOffering = event.offerings.find(({ id }) => id === capacityDraft?.offeringId);
+  const selectedEligible = selectedOffering?.is_active === true && selectedOffering.capacity < MAX_OFFERING_CAPACITY;
+  const capacityChanged = Boolean(selectedOffering && capacityDraft && selectedOffering.capacity !== capacityDraft.expectedCapacity);
+  const capacityConflict = increaseCapacity.error instanceof ApiError && increaseCapacity.error.status === 409;
+  const needsCapacityRecheck = capacityChanged || capacityConflict;
+  const additional = Number(capacityDraft?.additional ?? "");
+  const newCapacity = (capacityDraft?.expectedCapacity ?? 0) + additional;
+  const validCapacity = canIncreaseCapacity && selectedEligible && !needsCapacityRecheck
+    && Number.isInteger(additional) && additional > 0 && newCapacity <= MAX_OFFERING_CAPACITY;
+  const selectCapacityOffering = (offering: MealEvent["offerings"][number]) => {
+    increaseCapacity.reset();
+    setCapacityDraft({ offeringId: offering.id, expectedCapacity: offering.capacity, additional: "" });
+  };
+  const eventActionPending = action.isPending || changeOrderingPause.isPending || increaseCapacity.isPending;
   const redeem = useMutation({
     mutationFn: () => apiFetch<{ order_number: string }>(`/v1/admin/meal-events/${event.id}/redeem`, { method: "POST", body: JSON.stringify(/^\d{6}$/.test(credential) ? { pickup_code: credential } : { qr_token: credential }) }),
     onSuccess: (result) => { setRedeemed(`${result.order_number} 已完成取餐`); setCredential(""); onDone(); },
   });
   return <article className="admin-review-card meal-event-admin-card">
-    <div className="review-card-copy"><span className="status-chip">{mealEventStatusLabel(event.status)}</span>{orderingPaused && <span className="status-chip" role="status">新預訂已暫停</span>}{event.business_only && <span className="status-chip">僅開放會餐</span>}<h3>{event.title}</h3><p>{event.location} · {formatMealDateTime(event.pickup_starts_at)} 至 {formatMealDateTime(event.pickup_ends_at)}</p><div className="meal-event-offerings">{event.offerings.map((offering) => <span key={offering.id}>{offering.meal_name} {offering.paid_quantity}/{offering.capacity}</span>)}</div></div>
+    <div className="review-card-copy">
+      <span className="status-chip">{mealEventStatusLabel(event.status)}</span>
+      {orderingPaused && <span className="status-chip" role="status">新預訂已暫停</span>}
+      {event.business_only && <span className="status-chip">僅開放會餐</span>}
+      <h3>{event.title}</h3>
+      <p>{event.location} · {formatMealDateTime(event.pickup_starts_at)} 至 {formatMealDateTime(event.pickup_ends_at)}</p>
+      <div className="meal-event-offerings">
+        {event.offerings.map((offering) => <span key={offering.id}>{offering.meal_name} {offering.paid_quantity}/{offering.capacity}</span>)}
+        {canIncreaseCapacity && eligibleOfferings.length > 0 && <button className="button button-quiet" type="button" disabled={eventActionPending}
+          aria-expanded={capacityDraft !== null} onClick={() => capacityDraft ? setCapacityDraft(null) : selectCapacityOffering(eligibleOfferings[0])}>追加份數</button>}
+      </div>
+      {capacityDraft && <form className="meal-capacity-form" aria-label="追加餐點份數" onSubmit={(submit) => {
+        submit.preventDefault();
+        if (validCapacity && !eventActionPending) increaseCapacity.mutate({
+          offeringId: capacityDraft.offeringId, expectedCapacity: capacityDraft.expectedCapacity, capacity: newCapacity,
+        });
+      }}>
+        <div className="field-grid two-columns">
+          <label className="field"><span>餐點</span><select value={selectedEligible && selectedOffering ? selectedOffering.id : ""} disabled={!canIncreaseCapacity || eventActionPending} onChange={(change) => {
+            const offering = eligibleOfferings.find(({ id }) => id === change.target.value);
+            if (offering) selectCapacityOffering(offering);
+          }}>
+            <option value="" disabled>請選擇餐點</option>
+            {eligibleOfferings.map((offering) => <option key={offering.id} value={offering.id}>{offering.meal_name}</option>)}
+          </select></label>
+          <label className="field"><span>增加份數</span><input required type="number" min={1} step={1} max={MAX_OFFERING_CAPACITY - capacityDraft.expectedCapacity}
+            value={capacityDraft.additional} disabled={!canIncreaseCapacity || !selectedEligible || needsCapacityRecheck || eventActionPending}
+            onChange={(change) => setCapacityDraft({ ...capacityDraft, additional: change.target.value })} /></label>
+        </div>
+        {selectedOffering && <p>目前總份數 {selectedOffering.capacity} · 追加後總份數 <output>{validCapacity ? newCapacity : "—"}</output></p>}
+        {(!canIncreaseCapacity || !selectedEligible) && <p role="status">目前無法追加此餐點的份數。</p>}
+        {(increaseCapacity.isError || capacityChanged) && <p className="form-error" role="alert">{increaseCapacity.error?.message || "供應份數已更新，請重新核對。"}</p>}
+        <div className="form-actions">
+          {needsCapacityRecheck && selectedOffering && selectedEligible && canIncreaseCapacity && <button className="button button-quiet" type="button" disabled={eventActionPending}
+            onClick={() => selectCapacityOffering(selectedOffering)}>重新核對份數</button>}
+          <button className="button button-system" type="submit" disabled={!validCapacity || eventActionPending}>{increaseCapacity.isPending ? "儲存中…" : "儲存份數"}</button>
+          <button className="button button-quiet" type="button" disabled={eventActionPending} onClick={() => setCapacityDraft(null)}>取消</button>
+        </div>
+      </form>}
+      {increaseCapacity.isSuccess && <p className="form-success" role="status">已儲存追加份數</p>}
+    </div>
     <div className="review-card-actions"><label className="field"><span>處理原因<OptionalMark /></span><input value={reason} onChange={(input) => setReason(input.target.value)} /></label><div><button type="button" disabled={eventActionPending} onClick={() => action.mutate("duplicate")}><Copy size={16} />複製至隔日</button>{canChangeOrderingPause && <button type="button" disabled={eventActionPending} onClick={() => changeOrderingPause.mutate(!orderingPaused)}>{orderingPaused ? "恢復新預訂" : "暫停新預訂"}</button>}{event.status === "draft" && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("publish")}><SealCheck size={16} />發布</button>}{["published", "ordering_closed"].includes(event.status) && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("open-pickup")}>開放取餐</button>}{event.status === "pickup_open" && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("complete")}>結束場次</button>}{!["cancelled", "completed"].includes(event.status) && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("cancel")}>取消場次</button>}<Link to="/meals/$eventId" params={{ eventId: event.id }}>查看前台</Link></div></div>
     {event.status === "pickup_open" && <form className="meal-redeem-panel" onSubmit={(submit) => { submit.preventDefault(); redeem.mutate(); }}><QrCode size={24} weight="light" /><label className="field"><span>掃描 QR token 或輸入六位取餐碼</span><input autoComplete="off" value={credential} onChange={(input) => setCredential(input.target.value.trim())} /></label><button className="button button-system" disabled={credential.length < 6 || redeem.isPending}>確認核銷</button>{redeemed && <p className="form-success">{redeemed}</p>}{redeem.isError && <p className="form-error">{redeem.error.message}</p>}</form>}
     {action.isError && <p className="form-error">{action.error.message}</p>}
