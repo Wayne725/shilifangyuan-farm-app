@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from ..admin_work_queues import InvoiceFollowupReason, admin_today_counts, invoice_followup_conditions, pending_order_cancellation, unpaid_business_order
 from ..auth import require_admin
+from ..business_meals import business_invoice_window_closed
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..invoice_timing import invoice_not_due
@@ -78,6 +79,8 @@ async def job_retry_blocker(session: AsyncSession, event: OutboxEvent, *, recove
             return "尚未到預定取餐開票日，請到期後再重試"
         if invoice and invoice.status in {InvoiceStatus.ISSUED, InvoiceStatus.VOID_PENDING, InvoiceStatus.VOIDED}:
             return "已開票或進入調整流程，請先查詢發票"
+        if business_invoice_window_closed(order):
+            return "會餐已超過取餐開票日，請查詢原發票"
         return ""
     if event.event_type == "send_email":
         kind = event.payload.get("event_type")

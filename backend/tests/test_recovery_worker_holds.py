@@ -16,12 +16,15 @@ from app.models import (
 )
 from app.printer_worker import process_print_job
 from app.printing import enqueue_cancellation_print
-from app.recovery_quarantine import RecoveryHoldActive
+from app.recovery_quarantine import (
+    Item, RecoveryHoldActive, Resolution, arm_cutover, begin_cutover, resolve_hold,
+)
 from app.recovery_work import SUMMARY_ALL_TARGET, print_job_targets
 from app.routers.operations import job_retry_blocker
 from tests.support import auth_headers, make_test_settings
 from tests.test_integrations import make_regular_order
 from tests.test_order_summary import PARAMS, line, summary_context
+from tests.test_recovery_quarantine import CHECKPOINT, RESOLUTION, decision, manifest
 from tests.test_summary_printing import BASE, create_batch, paid_order, preview, summary_print_context
 
 
@@ -208,3 +211,58 @@ async def test_legacy_summary_with_invalid_sources_holds_summaries_only(database
     assert legacy.status == "sending" and legacy.lease_until is not None
     assert fresh.status == "pending" and fresh.attempts == 0
     assert normal.status == "unknown" and normal.lease_until is None
+
+
+@pytest.mark.parametrize("field, value", [
+    ("source_versions", None), ("source_versions", ["broken legacy entry"]),
+    ("source_versions", []), ("source_versions", "wrong_sources"),
+    ("filters", None), ("fingerprint", None),
+])
+async def test_resumed_printer_skips_invalid_legacy_summary_without_stalling_later_jobs(
+    summary_print_context, field, value,
+):
+    context = summary_print_context
+    await paid_order(context, label="LEGACY-SUMMARY", items=[line(name="Old product")])
+    await paid_order(context, label="NEW-SUMMARY", items=[line(name="New product")])
+    old_batch = await create_batch(context, search="Old product")
+    new_batch = await create_batch(context, search="New product")
+    old_job = await context.session.get(PrintJob, old_batch["pages"][0]["id"])
+    new_job = await context.session.get(PrintJob, new_batch["pages"][0]["id"])
+    snapshot = dict(old_job.snapshot)
+    if value is None:
+        del snapshot[field]
+    else:
+        snapshot[field] = new_job.snapshot[field] if value == "wrong_sources" else value
+    old_job.snapshot = snapshot
+    now = datetime.now(timezone.utc)
+    old_job.created_at = now - timedelta(minutes=1)
+    cutover_id = uuid4()
+    await begin_cutover(context.session, context.admin, cutover_id, CHECKPOINT)
+    targets = print_job_targets(old_job)
+    await arm_cutover(context.session, context.admin, manifest(
+        cutover_id, decision("print_job", old_job.id), decision("print_job", new_job.id, "clear"),
+    ))
+    await context.session.commit()
+
+    # A held legacy snapshot remains available for reconciliation.
+    vendor = AsyncMock()
+    if ("print_lineage", "summary:all") in targets:
+        assert not await process_print_job(context.settings, factory=context.factory, client=vendor, now=now)
+    await context.session.refresh(old_job)
+    assert old_job.status == "pending"
+    for scope, reference in targets:
+        await resolve_hold(context.session, context.admin, Resolution(
+            cutover_id=cutover_id, target=Item(scope=scope, reference=reference),
+            outcome="confirmed_unsent", evidence_sha256=RESOLUTION,
+        ))
+    await context.session.commit()
+
+    # Confirmation releases the hold, but cannot make a broken page safe to print.
+    assert await process_print_job(context.settings, factory=context.factory, client=vendor, now=now)
+    await context.session.refresh(old_job)
+    assert old_job.status == "failed" and old_job.last_error == "summary_changed_before_send"
+    assert old_job.attempts == 0
+    assert await process_print_job(context.settings, factory=context.factory, client=vendor, now=now)
+    await context.session.refresh(new_job)
+    assert new_job.status == "simulated"
+    assert not vendor.mock_calls

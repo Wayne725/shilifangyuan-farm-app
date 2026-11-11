@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..admin_explanations import AdminExplanation
 from ..auth import get_current_user, require_admin
+from ..business_meals import business_invoice_window_closed, is_business_meal
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..domain import member_sale_is_tax_exempt
@@ -53,7 +54,6 @@ async def arrange_order_invoice(
     from .orders import load_order
     order = await load_order(session, str(order_id), lock=True, refresh=True)
     await require_unheld(session, ("order", order.id))
-    from ..business_meals import is_business_meal
     if is_business_meal(order):
         if body.handling != 'pickup_day' or (body.preferences is not None and body.preferences.invoice_buyer_type != InvoiceBuyerType.COMPANY):
             raise HTTPException(422, '會餐須以公司發票於取餐日開立')
@@ -63,6 +63,8 @@ async def arrange_order_invoice(
         raise HTTPException(409, "只有已收款且未取消的訂單可以安排開票")
     if order.invoice is not None or order.invoice_status in {InvoiceStatus.ISSUED, InvoiceStatus.VOID_PENDING, InvoiceStatus.VOIDED}:
         raise HTTPException(409, "已有開票紀錄，請查詢原發票，不可重新開立")
+    if business_invoice_window_closed(order):
+        raise HTTPException(409, "會餐已超過取餐開票日，請查詢原發票")
     due = None
     if body.handling == "pickup_day":
         if (order.sales_channel != SalesChannel.MEAL_PREORDER and getattr(order, "customer_kind", "account") != "walk_in") or order.fulfillment is None or order.fulfillment.pickup_at is None:

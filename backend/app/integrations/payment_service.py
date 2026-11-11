@@ -786,13 +786,11 @@ async def create_payment_attempt(
             raise PaymentApplicationError("請先完成物流門市或地址選擇")
 
     from ..business_meals import is_business_meal, business_payment_blocked_reason, business_payment_window
+    business_order = is_business_meal(order)
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
         if order.meal_event is None:
             raise PaymentApplicationError("便當訂單缺少場次資料")
-        if is_business_meal(order):
-            if reason := business_payment_blocked_reason(order, current):
-                raise PaymentApplicationError(reason)
-        elif not meal_payment_window_open(order, current):
+        if not business_order and not meal_payment_window_open(order, current):
             raise PaymentApplicationError("便當目前未開放預購或已截止")
 
     attempts = list(await session.scalars(select(PaymentAttempt)
@@ -806,6 +804,10 @@ async def create_payment_attempt(
             existing.superseded_at = existing.superseded_at or current
             if existing.status == PaymentStatus.PENDING:
                 existing.status = PaymentStatus.EXPIRED
+    if business_order:
+        current = now or datetime.now(timezone.utc)
+        if reason := business_payment_blocked_reason(order, current):
+            raise PaymentApplicationError(reason)
     for existing in sorted(attempts, key=lambda item: item.created_at, reverse=True):
         if is_obsolete_order_attempt(existing, order):
             continue
@@ -829,7 +831,7 @@ async def create_payment_attempt(
     expires_at = current + timedelta(
         minutes=settings.payment_reservation_minutes
     )
-    if is_business_meal(order):
+    if business_order:
         expires_at = min(expires_at, business_payment_window(order)[1])
     elif (
         order.sales_channel == SalesChannel.MEAL_PREORDER
@@ -850,8 +852,10 @@ async def create_payment_attempt(
     session.add(attempt)
     await session.flush()
 
-    if is_business_meal(order):
+    if business_order:
         await _business_meal_reservations(session, order)
+        if reason := business_payment_blocked_reason(order, now or datetime.now(timezone.utc)):
+            raise PaymentApplicationError(reason)
     elif order.sales_channel == SalesChannel.MEAL_PREORDER:
         for item in sorted(order.items, key=lambda item: item.source_meal_offering_id or item.source_product_id or item.id):
             if item.source_meal_offering_id is None:

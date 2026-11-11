@@ -16,7 +16,7 @@ from .models import FulfillmentStatus, Order, PaymentStatus, PrintJob
 from .manual_order_printing import current_manual_snapshot, load_manual_print_order, manual_print_kind, manual_print_status_error
 from .printing import (business_preparation_print_allowed, business_preparation_window_open, business_receipt_fields, confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
                        receipt_time, render_receipt_snapshot, seal_receipt_content)
-from .recovery_work import print_is_held
+from .recovery_work import print_is_held, summary_source_ids
 from .summary_printing import summary_job_is_current
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,11 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         if job is None:
             return True
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
+            return True
+        pending_summary = job.kind == "summary" and job.status == "pending"
+        if pending_summary and not (source_ids := summary_source_ids(job.snapshot)):
+            job.status, job.last_error = "failed", "summary_changed_before_send"
+            await session.commit()
             return True
         if job.kind == "reference" or job.snapshot.get("manual") or job.reprint_of_id:
             order = await load_manual_print_order(session, job.order_id)
@@ -116,8 +121,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.next_attempt_at = now + timedelta(seconds=60)
                 await session.commit()
                 return True
-        if job.kind == "summary" and job.status == "pending":
-            source_ids = [source["id"] for source in job.snapshot["source_versions"]]
+        if pending_summary:
             await session.execute(select(Order.id).where(Order.id.in_(source_ids)).order_by(Order.id).with_for_update())
             if not await summary_job_is_current(session, job, settings):
                 job.status, job.last_error = "failed", "summary_changed_before_send"

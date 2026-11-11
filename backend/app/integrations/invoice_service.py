@@ -4,15 +4,14 @@ import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..config import Settings
-from ..domain import order_shipping_tax_type
-from ..invoice_timing import invoice_handling, invoice_not_due
+from ..domain import aware, order_shipping_tax_type
+from ..invoice_timing import TAIPEI, invoice_handling, invoice_not_due
 from ..models import (
     Invoice,
     InvoiceCarrierType,
@@ -241,7 +240,7 @@ def _parse_invoice_date(value: object) -> Optional[datetime]:
         try:
             return (
                 datetime.strptime(raw, pattern)
-                .replace(tzinfo=ZoneInfo("Asia/Taipei"))
+                .replace(tzinfo=TAIPEI)
                 .astimezone(timezone.utc)
             )
         except ValueError:
@@ -408,17 +407,22 @@ def _apply_provider_query_result(
         invoice.provider_response = dict(query_result)
         return None
 
+    reported_date = query_result.get("InvoiceDate") or query_result.get("IIS_Create_Date") or ""
+    parsed_date = _parse_invoice_date(reported_date)
+    random_number = str(query_result.get("RandomNumber") or query_result.get("IIS_Random_Number") or "")
+    if invoice.invoice_number and invoice.invoice_number != existing_number:
+        raise InvoiceApplicationError("查回票號與原發票不同，請人工核對")
+    if invoice.invoice_date and parsed_date and (
+        aware(invoice.invoice_date).astimezone(TAIPEI).date() != parsed_date.astimezone(TAIPEI).date()
+    ):
+        raise InvoiceApplicationError("查回日期與原發票不同，請人工核對")
+    if invoice.random_number and random_number and invoice.random_number != random_number:
+        raise InvoiceApplicationError("查回隨機碼與原發票不同，請人工核對")
+
     provider_status = str(query_result.get("ProviderStatus", ""))
     invoice.invoice_number = existing_number
-    invoice.invoice_date = _parse_invoice_date(
-        query_result.get("InvoiceDate")
-        or query_result.get("IIS_Create_Date")
-    )
-    invoice.random_number = str(
-        query_result.get("RandomNumber")
-        or query_result.get("IIS_Random_Number")
-        or ""
-    ) or None
+    invoice.invoice_date = invoice.invoice_date or parsed_date
+    invoice.random_number = invoice.random_number or random_number or None
     invoice.provider_status = provider_status or None
     previous_status = invoice.status
     invoice.status = (
@@ -446,16 +450,8 @@ def _apply_provider_query_result(
     return InvoiceIssueResult(
         relate_number=invoice.relate_number,
         invoice_number=existing_number,
-        invoice_date=str(
-            query_result.get("InvoiceDate")
-            or query_result.get("IIS_Create_Date")
-            or ""
-        ),
-        random_number=str(
-            query_result.get("RandomNumber")
-            or query_result.get("IIS_Random_Number")
-            or ""
-        ),
+        invoice_date=str(reported_date),
+        random_number=random_number,
         raw=query_result,
     )
 

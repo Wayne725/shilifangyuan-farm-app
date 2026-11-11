@@ -65,7 +65,7 @@ async def test_void_after_refund_uses_provider_snapshot_and_never_resubmits_unce
                                 'invNo': 'AB12345678', 'invDate': '20260905', 'cancelReason': '管理員作廢', 'remark': '', 'notifyEmail': ''}
 
 
-@pytest.mark.parametrize('case', ['customer', 'unpaid', 'partial_refund', 'wrong_seller', 'wrong_number', 'not_found', 'missing_date', 'status_conflict'])
+@pytest.mark.parametrize('case', ['customer', 'unpaid', 'partial_refund', 'wrong_seller', 'wrong_number', 'not_found', 'missing_date', 'invalid_date', 'wrong_date', 'status_conflict'])
 async def test_void_rejects_unsafe_order_or_unconfirmed_provider_identity(database_session, monkeypatch, case):
     import app.routers.invoices as routes
 
@@ -83,7 +83,8 @@ async def test_void_rejects_unsafe_order_or_unconfirmed_provider_identity(databa
     async def transport(url, _envelope, _headers, _timeout):
         calls.append(url)
         assert url.endswith('/queryInvoice'), 'Unsafe request attempted to cancel invoice'
-        data = {'invNo': 'XY87654321' if case == 'wrong_number' else 'AB12345678', 'invDate': '' if case == 'missing_date' else '20260905', 'status': '0'}
+        provider_date = {'missing_date': '', 'invalid_date': '20260931', 'wrong_date': '20260906'}.get(case, '20260905')
+        data = {'invNo': 'XY87654321' if case == 'wrong_number' else 'AB12345678', 'invDate': provider_date, 'status': '0'}
         if case == 'not_found':
             data = {}
         return HTTPResponse(200, json.dumps({'statusCode': '0', 'respData': data}), {})

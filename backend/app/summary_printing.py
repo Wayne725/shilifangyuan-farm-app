@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -148,12 +149,17 @@ async def summary_job_is_current(session: AsyncSession, job: PrintJob, settings:
     if format_version not in (1, 2, SUMMARY_FORMAT_VERSION):
         return False
     try:
-        report = await build_print_summary(session, OrderSummaryFilters.model_validate(job.snapshot["filters"]))
+        filters = OrderSummaryFilters.model_validate(job.snapshot.get("filters"))
+    except ValidationError:
+        return False
+    try:
+        report = await build_print_summary(session, filters)
     except HTTPException as exc:
         if exc.status_code != 422:
             raise
         return False
-    return summary_fingerprint(report, settings, format_version=format_version) == job.snapshot["fingerprint"]
+    return (report["source_versions"] == job.snapshot.get("source_versions")
+            and summary_fingerprint(report, settings, format_version=format_version) == job.snapshot.get("fingerprint"))
 
 
 async def read_summary_jobs(session: AsyncSession, request_id: str) -> list[PrintJob]:

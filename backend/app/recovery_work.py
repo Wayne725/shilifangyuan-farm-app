@@ -72,7 +72,9 @@ def order_print_targets(order_id: str) -> tuple[tuple[str, str], ...]:
     return ("order", order_id), ("print_lineage", f"order:{order_id}")
 
 
-def _summary_source_ids(snapshot: dict) -> tuple[str, ...]:
+def summary_source_ids(snapshot: object) -> tuple[str, ...]:
+    if not isinstance(snapshot, dict):
+        return ()
     sources = snapshot.get("source_versions")
     if not isinstance(sources, list):
         return ()
@@ -93,7 +95,7 @@ def _summary_source_ids(snapshot: dict) -> tuple[str, ...]:
 def summary_print_targets(snapshot: dict) -> tuple[tuple[str, str], ...]:
     if not isinstance(snapshot, dict):
         return (SUMMARY_ALL_TARGET,)
-    sources = _summary_source_ids(snapshot)
+    sources = summary_source_ids(snapshot)
     # Without complete source IDs a regenerated summary cannot be matched to the original.
     targets = tuple(("print_lineage", f"summary-order:{identifier}") for identifier in sources) or (SUMMARY_ALL_TARGET,)
     fingerprint = snapshot.get("fingerprint")
