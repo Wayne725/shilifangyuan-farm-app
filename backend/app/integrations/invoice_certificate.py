@@ -22,6 +22,8 @@ async def retrieve_fanyu_invoice_certificate(
     session: AsyncSession,
     order_id: str,
     adapter: FanyuInvoiceAdapter,
+    *,
+    include_thermal_pdf: bool = True,
 ) -> FanyuInvoiceCertificate:
     """Read the original issued ticket without changing the invoice or submitting a print job."""
     order = await session.scalar(
@@ -60,7 +62,7 @@ async def retrieve_fanyu_invoice_certificate(
         raise InvoiceApplicationError("汎宇一維條碼與原發票隨機碼不符")
 
     pdf = None
-    if invoice.buyer_type == InvoiceBuyerType.PERSONAL:
+    if include_thermal_pdf and invoice.buyer_type == InvoiceBuyerType.PERSONAL:
         # The provider's company invoice PDF is A4, not a thermal certificate.
         pdf = await adapter.get_invoice_b2c_pdf(invoice.invoice_number, day, random_number=codes.barcode[-4:])
     return FanyuInvoiceCertificate(codes, pdf)

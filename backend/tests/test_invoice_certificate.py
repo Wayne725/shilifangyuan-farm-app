@@ -10,8 +10,13 @@ from app.integrations.common import HTTPResponse, IntegrationResponseError
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
 from app.integrations.invoice_certificate import retrieve_fanyu_invoice_certificate
 from app.integrations.invoice_service import InvoiceApplicationError
-from app.models import Invoice, InvoiceBuyerType, InvoiceStatus, OutboxEvent, PrintJob
+from app.models import (
+    Invoice, InvoiceBuyerType, InvoiceStatus, MembershipType, OutboxEvent, PaymentMethod, PaymentStatus,
+    PrintJob, User, WalkInSale,
+)
 from app.recovery_quarantine import RecoveryHoldActive, begin_cutover
+from app.routers import walk_in_sales
+from tests.support import api_test_context, auth_headers, make_test_settings
 from tests.test_fanyu_invoice import fanyu_settings
 from tests.test_integrations import make_regular_order
 from tests.test_recovery_quarantine import admin_user
@@ -87,6 +92,51 @@ async def test_fetches_original_codes_and_supported_document_without_changing_re
         assert document.thermal_pdf is None
     assert invoice.provider_response == {"keep": True}
     assert invoice.status == InvoiceStatus.ISSUED
+    assert not database_session.dirty and not database_session.new
+    assert not list(await database_session.scalars(select(OutboxEvent)))
+    assert not list(await database_session.scalars(select(PrintJob)))
+
+
+@pytest.mark.parametrize("output", ["pdf", "codes"])
+async def test_admin_can_read_original_walk_in_certificate_without_enqueuing_or_sending(
+    database_session, monkeypatch, output,
+):
+    calls = []
+    adapter = FanyuInvoiceAdapter(fanyu_settings(), provider_transport(calls))
+    order, _invoice = await issued_invoice(database_session, adapter)
+    admin = await admin_user(database_session)
+    buyer = await database_session.get(User, order.user_id)
+    monkeypatch.setattr(walk_in_sales, "invoice_adapter_from_settings", lambda _: adapter)
+    path = f"/v1/admin/walk-in-sales/{order.id}/invoice-certificate?output={output}"
+
+    async with api_test_context(database_session, [walk_in_sales.walk_in_sales_router],
+                                settings=make_test_settings(invoice_provider="fanyu")) as client:
+        assert (await client.get(path)).status_code == 401
+        assert (await client.get(path, headers=auth_headers(buyer))).status_code == 403
+        assert (await client.get(path, headers=auth_headers(admin))).status_code == 404
+        assert calls == []
+
+        order.customer_kind, order.user_id = "walk_in", None
+        order.payment_method = PaymentMethod.CASH_ON_PICKUP
+        order.payment_status = PaymentStatus.PAID
+        order.membership_type_snapshot = MembershipType.NONMEMBER
+        database_session.add(WalkInSale(order_id=order.id, operator_id=admin.id,
+                                       client_request_id=str(uuid4()), request_fingerprint="a" * 64))
+        await database_session.commit()
+        response = await client.get(path, headers=auth_headers(admin))
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "private, no-store"
+    expected_calls = ["queryInvoice", "getInvoicePrintCode"]
+    if output == "pdf":
+        assert response.content == PDF_FIXTURE
+        assert response.headers["Content-Type"] == "application/pdf"
+        assert response.headers["Content-Disposition"] == f'attachment; filename="{NUMBER}.pdf"'
+        expected_calls.append("getInvoiceB2CPDF")
+    else:
+        assert response.json() == {"invoice_number": NUMBER, "barcode": BARCODE,
+                                   "left_qrcode": QR_LEFT, "right_qrcode": QR_RIGHT}
+    assert [name for name, _ in calls] == expected_calls
     assert not database_session.dirty and not database_session.new
     assert not list(await database_session.scalars(select(OutboxEvent)))
     assert not list(await database_session.scalars(select(PrintJob)))

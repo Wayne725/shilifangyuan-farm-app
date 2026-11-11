@@ -96,6 +96,7 @@
   "GET /v1/admin/users",
   "GET /v1/admin/walk-in-sales/request/{client_request_id}",
   "GET /v1/admin/walk-in-sales/{order_id}",
+  "GET /v1/admin/walk-in-sales/{order_id}/invoice-certificate",
   "GET /v1/auth/line/pending",
   "GET /v1/auth/line/status",
   "GET /v1/auth/me",

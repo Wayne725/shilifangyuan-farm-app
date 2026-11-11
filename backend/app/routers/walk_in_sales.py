@@ -20,8 +20,13 @@ from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..domain import aware, invoice_estimated_tax_amount
-from ..integrations.invoice_service import enqueue_invoice_issue, invoice_context_from_settings
+from ..integrations.common import IntegrationError
+from ..integrations.fanyu_invoice import FanyuInvoiceAdapter
 from ..integrations.invoice import is_mobile_barcode_format
+from ..integrations.invoice_certificate import retrieve_fanyu_invoice_certificate
+from ..integrations.invoice_service import (
+    InvoiceApplicationError, enqueue_invoice_issue, invoice_adapter_from_settings, invoice_context_from_settings,
+)
 from ..integrations.payment_service import award_order_purchase_points
 from ..invoice_timing import TAIPEI, pickup_invoice_due
 from ..models import (
@@ -31,7 +36,8 @@ from ..models import (
     WalkInSale, new_id,
 )
 from ..order_numbers import allocate_order_number
-from ..rate_limit import PAYMENT_REFRESH_RULE, client_key, enforce
+from ..rate_limit import INVOICE_QUERY_RULE, PAYMENT_REFRESH_RULE, client_key, enforce
+from ..recovery_quarantine import RecoveryHoldActive
 from ..schemas import is_taiwan_tax_id
 from ..walk_in_member_pricing import (
     CounterMemberIdentity, CounterMemberQuote, CounterMemberQuoteInput, counter_member_quote,
@@ -267,6 +273,44 @@ async def get_walk_in_sale(
     if order is None:
         raise HTTPException(404, "找不到現場交易")
     return await walk_in_sale_read(session, order)
+
+
+@walk_in_sales_router.get("/{order_id}/invoice-certificate", response_class=Response)
+async def get_walk_in_invoice_certificate(
+    order_id: UUID, request: Request, output: Literal["pdf", "codes"] = "pdf",
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    headers = {"Cache-Control": "private, no-store"}
+    enforce(client_key(request, "walk-in-invoice-certificate", admin.id), INVOICE_QUERY_RULE)
+    if await session.get(WalkInSale, str(order_id)) is None:
+        raise HTTPException(404, "找不到現場交易", headers=headers)
+    if settings.invoice_provider != "fanyu":
+        raise HTTPException(409, "請使用原汎宇帳戶取得證明聯", headers=headers)
+    try:
+        adapter = invoice_adapter_from_settings(settings)
+        if not isinstance(adapter, FanyuInvoiceAdapter):
+            raise InvoiceApplicationError("請使用原汎宇帳戶取得證明聯")
+        certificate = await retrieve_fanyu_invoice_certificate(
+            session, str(order_id), adapter, include_thermal_pdf=output == "pdf",
+        )
+    except RecoveryHoldActive:
+        raise
+    except InvoiceApplicationError as exc:
+        raise HTTPException(409, str(exc), headers=headers) from exc
+    except (IntegrationError, TimeoutError, ValueError) as exc:
+        raise HTTPException(502, "無法取得原發票的列印資料", headers=headers) from exc
+
+    codes = certificate.codes
+    if output == "codes":
+        return JSONResponse({
+            "invoice_number": codes.invoice_number, "barcode": codes.barcode,
+            "left_qrcode": codes.left_qrcode, "right_qrcode": codes.right_qrcode,
+        }, headers=headers)
+    if certificate.thermal_pdf is None:
+        raise HTTPException(409, "此原票未提供熱感 PDF", headers=headers)
+    headers["Content-Disposition"] = f'attachment; filename="{codes.invoice_number}.pdf"'
+    return Response(certificate.thermal_pdf, media_type="application/pdf", headers=headers)
 
 
 @walk_in_sales_router.post("", status_code=201)

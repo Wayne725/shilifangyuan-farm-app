@@ -142,3 +142,9 @@ Primary sources：
 3. 後續評估財務與匯總報表讀取現場來源分類；歷史未分類不推測成便當或一般商品。
 4. Review 未發布 `88bb1d5c` 並接入正式資料取得 seam；仍不啟用列印。
 5. 取得並驗證同型號 WiFi 圖像／二進位傳輸證據，再完成紙本資料模型、列印工作與法定版式驗收。缺少傳輸契約時停在此阻塞，不反覆消耗紙張做已失敗的 A–H 測試。
+
+## 現場原票的取件介面
+
+`GET /v1/admin/walk-in-sales/{order_id}/invoice-certificate` 限管理員及已有汎宇原票的現場交易。每次取件以原帳戶核對原票號碼、日期和有效狀態。預設回個人票原廠熱感 PDF；`?output=codes` 只回一維條碼和左右 QR，可用於個人或公司原票。回應使用 `Cache-Control: private, no-store`。此介面只取件，未建立送印工作或更新發票。
+
+紙本開票仍須核實飛鵝傳送介面和汎宇已列印註記。財政部的無載具紙本檢測場景要求實印後的 `PrintMark=Y`，汎宇現有開票文件將 `Y` 定義為已列印。現有取件介面未提供更新該註記的契約。 [財政部自行檢測文件](https://www.einvoice.nat.gov.tw/static/ptl/ein_upload/download/9.pdf)
