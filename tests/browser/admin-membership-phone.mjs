@@ -28,6 +28,7 @@ async function fixture(t, width, { role = 'admin', status = null, previewError =
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return req.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'actor', display_name: '隔離測試使用者', email: 'actor@example.test', user_role: role } } });
+    if (path === '/v1/platform' && req.method() === 'GET') return route.fulfill({ json: { orders_open: true, closed_message: '', sales_scope: 'all' } });
     if (path === '/v1/admin/users') { state.userReads++; return route.fulfill({ json: { total: 1, items: [item()] } }); }
     if (path === '/v1/admin/users/buyer/membership-phone-check' && req.method() === 'POST') {
       state.previews.push(req.postDataJSON());

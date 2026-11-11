@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { apiFetch } from "../lib/api";
+import type { apiFetch } from "../lib/api";
 import "./RosterCsvImport.css";
 
 interface CsvEntry {
@@ -17,7 +17,7 @@ interface CsvPreview {
   error_count: number;
 }
 
-export function RosterCsvImport({ onDone }: { onDone: () => void }) {
+export function RosterCsvImport({ onDone, request }: { onDone: () => void; request: typeof apiFetch }) {
   const [preview, setPreview] = useState<CsvPreview | null>(null);
   const [busy, setBusy] = useState<"checking" | "importing" | null>(null);
   const [error, setError] = useState("");
@@ -36,17 +36,17 @@ export function RosterCsvImport({ onDone }: { onDone: () => void }) {
       setError("請選擇 2 MB 以內的 CSV 檔案");
       return;
     }
-    const request = new AbortController();
-    controller.current = request;
+    const checking = new AbortController();
+    controller.current = checking;
     setBusy("checking");
     try {
-      setPreview(await apiFetch<CsvPreview>("/v1/admin/member-roster/import/preview", {
-        method: "POST", body: file, headers: { "Content-Type": "text/csv" }, signal: request.signal,
+      setPreview(await request<CsvPreview>("/v1/admin/member-roster/import/preview", {
+        method: "POST", body: file, headers: { "Content-Type": "text/csv" }, signal: checking.signal,
       }));
     } catch (cause) {
-      if (!request.signal.aborted) setError(cause instanceof Error ? cause.message : "CSV 檢查失敗");
+      if (!checking.signal.aborted) setError(cause instanceof Error ? cause.message : "CSV 檢查失敗");
     } finally {
-      if (!request.signal.aborted) setBusy(null);
+      if (!checking.signal.aborted) setBusy(null);
     }
   }
 
@@ -55,7 +55,7 @@ export function RosterCsvImport({ onDone }: { onDone: () => void }) {
     setBusy("importing");
     setError("");
     try {
-      const result = await apiFetch<{ imported_count: number }>("/v1/admin/member-roster/import", {
+      const result = await request<{ imported_count: number }>("/v1/admin/member-roster/import", {
         method: "POST", body: JSON.stringify({ rows: preview.rows.map((row) => row.entry) }),
       });
       setPreview(null);

@@ -304,10 +304,12 @@ test('會籍獨立連結接受會籍 ID 與會員 ID',async t=>{
  const other=makeMember('membership-other','user-other','隔離其他社員');
  const {page,state,visit}=await fixture(t,{path:'/admin/social?tab=members&q=membership-target',role:'admin',memberships:[target,other]});
  await visit();
+ await page.waitForURL(url=>url.pathname==='/admin/users'&&url.searchParams.get('tab')==='members'&&url.searchParams.get('q')==='membership-target');
  const title=name=>page.getByRole('heading',{name:`${name} · 待編號`,exact:true});
  await title(target.display_name).waitFor();
  assert.equal(await title(other.display_name).count(),0);
  await page.goto(`${base}/admin/social?tab=members&q=user-other`);
+ await page.waitForURL(url=>url.pathname==='/admin/users'&&url.searchParams.get('tab')==='members'&&url.searchParams.get('q')==='user-other');
  await title(other.display_name).waitFor();
  assert.equal(await title(target.display_name).count(),0);
  assert.equal(state.writes.length,0);
