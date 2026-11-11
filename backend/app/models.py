@@ -2186,6 +2186,7 @@ class OrderItem(Base):
     source_product_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("products.id", ondelete="SET NULL"), nullable=True
     )
+    procurement_snapshot: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON(none_as_null=True), nullable=True)
     source_bundle_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("group_bundles.id", ondelete="SET NULL"), nullable=True
     )

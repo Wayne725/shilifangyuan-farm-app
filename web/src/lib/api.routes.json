@@ -87,6 +87,7 @@
   "GET /v1/admin/promotions",
   "GET /v1/admin/reconciliation-status",
   "GET /v1/admin/shipping-rates",
+  "GET /v1/admin/supplier-order-demand.csv",
   "GET /v1/admin/supplier-orders.csv",
   "GET /v1/admin/suppliers",
   "GET /v1/admin/suppliers/{supplier_id}",

@@ -37,6 +37,7 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block' });
   const state = { writes: [], reads: [], unknown: [], errors: [], conflict: false, denyRoster: false, denyExport: false, exportGate: null };
+  state.demandRequests = [];
   const ledgerMember = { id: 'membership-one', source: 'membership', member_number: entry.member_number, legal_name: entry.legal_name, email: entry.email, status: 'active' };
   let receipt;
   const emptyLists = ['/v1/products', '/v1/group-campaigns', '/v1/meal-events/calendar', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/admin/activity-refund-requests', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/notifications'];
@@ -50,6 +51,14 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
     if (path === '/v1/admin/reconciliation-status') return route.fulfill({ json: { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] } });
     if (request.method() === 'GET') {
       state.reads.push(path);
+      if (path === '/v1/admin/suppliers' && state.showSuppliers) return route.fulfill({ json: [
+        { id: 'supplier-1', business_name: '隔離供應者', is_active: true, accreditations: [], documents: [] },
+      ] });
+      if (path === '/v1/admin/supplier-order-demand.csv') {
+        state.demandRequests.push(Object.fromEntries(url.searchParams));
+        if (state.denyExport) return route.fulfill({ status: 403, json: { detail: '需要管理員權限' } });
+        return route.fulfill({ contentType: 'text/csv', body: '\ufeff商品,數量\n白米,2' });
+      }
       if (emptyLists.includes(path)) return route.fulfill({ json: [] });
       if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', sales_scope: 'all' } });
       if (path === '/v1/admin/membership/admissions') return route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0 } });
@@ -196,6 +205,39 @@ test('願望管理舊連結轉到商品，會員管理開啟指定社員的會�
   await noOverflow(page);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
+});
+
+test('供應者叫貨CSV採明確期間與供應者，歷史資料另行核對', async t => {
+  const { page, state } = await fixture(t, 390);
+  state.showSuppliers = true;
+  await page.goto(`${base}/admin/catalog?tab=suppliers`);
+  await page.getByText('供應者叫貨單', { exact: true }).click();
+  await page.getByLabel('付款日期起').fill('2030-01-03');
+  await page.getByLabel('付款日期迄').fill('2030-01-03');
+  const supplierExport = page.getByRole('button', { name: '下載叫貨參考 CSV', exact: true });
+  assert.equal(await supplierExport.isDisabled(), true);
+  const [review] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: '下載待核對 CSV', exact: true }).click(),
+  ]);
+  assert.equal(review.suggestedFilename(), '叫貨待核對-2030-01-03-2030-01-03.csv');
+  await page.getByRole('combobox', { name: '供應者', exact: true }).selectOption('supplier-1');
+  await page.getByLabel('預計到貨日').fill('2030-01-05');
+  const [download] = await Promise.all([page.waitForEvent('download'), supplierExport.click()]);
+  assert.equal(download.suggestedFilename(), '叫貨參考-2030-01-03-2030-01-03.csv');
+  state.denyExport = true;
+  await supplierExport.click();
+  await page.getByText('需要管理員權限', { exact: true }).waitFor();
+  assert.equal(await supplierExport.count(), 0);
+  assert.deepEqual(state.demandRequests, [
+    { starts_on: '2030-01-03', ends_on: '2030-01-03', scope: 'review' },
+    { starts_on: '2030-01-03', ends_on: '2030-01-03', scope: 'supplier', supplier_id: 'supplier-1', expected_arrival_on: '2030-01-05' },
+    { starts_on: '2030-01-03', ends_on: '2030-01-03', scope: 'supplier', supplier_id: 'supplier-1', expected_arrival_on: '2030-01-05' },
+  ]);
+  await noOverflow(page);
+  assert.deepEqual(state.writes, []);
+  assert.deepEqual(state.unknown, []);
+  assert.deepEqual(state.errors, []);
 });
 
 test('社員帳冊舊連結保留款項分類、社員與匯出範圍', async t => {

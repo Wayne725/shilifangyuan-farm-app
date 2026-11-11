@@ -19,6 +19,7 @@ from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
 from ..point_accounts import point_account
 from ..csv_export import csv_response
+from ..supplier_order_demand import supplier_order_demand_rows
 from ..domain import aware
 from ..models import (
     AdminAudit,
@@ -48,6 +49,7 @@ from ..models import (
     SalesChannel,
     SurplusDistribution,
     SurplusLedger,
+    Supplier,
     SystemSetting,
     TaxType,
     User,
@@ -922,4 +924,50 @@ async def supplier_orders_csv(
         f"supplier-order-{starts_on}-{ends_on}.csv",
         ["商品", "數量", "單位", "溫層", "預計到貨日", "備註"],
         [[name, int(quantity), unit, temperature.value if temperature else "未設定", expected_arrival_on, note] for name, quantity, unit, temperature in rows],
+    )
+
+
+@cooperative_router.get("/v1/admin/supplier-order-demand.csv")
+async def export_supplier_order_demand(
+    starts_on: date,
+    ends_on: date,
+    scope: Literal["supplier", "review"],
+    supplier_id: str | None = Query(None, min_length=1, max_length=36),
+    expected_arrival_on: date | None = None,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    if ends_on < starts_on:
+        raise HTTPException(422, "結束日期不可早於開始日期")
+    if scope == "review":
+        if supplier_id is not None or expected_arrival_on is not None:
+            raise HTTPException(422, "待核對清單只使用付款日期")
+        supplier_name = None
+    else:
+        if supplier_id is None or expected_arrival_on is None:
+            raise HTTPException(422, "請選擇供應者並填寫預計到貨日")
+        supplier_name = await session.scalar(select(Supplier.business_name).where(Supplier.id == supplier_id))
+        if supplier_name is None:
+            raise HTTPException(404, "找不到供應者")
+    try:
+        rows = await supplier_order_demand_rows(session, starts_on, ends_on, supplier_id=supplier_id)
+    except OverflowError as exc:
+        raise HTTPException(422, "付款日期超出可查詢範圍") from exc
+    if not rows:
+        raise HTTPException(409, "這段期間沒有待核對品項" if scope == "review" else "這段期間沒有可依下單快照歸屬此供應者的品項")
+    dates = [starts_on, ends_on]
+    date_headers = ["付款日起（台灣）", "付款日迄（台灣）"]
+    if scope == "review":
+        return csv_response(
+            f"supplier-demand-review-{starts_on}-{ends_on}.csv",
+            [*date_headers, "商品識別", "產品編號", "下單SKU", "下單品名", "單位", "待核對原因", "原訂數量"],
+            ([*dates, *row] for row in rows),
+        )
+    temperatures = {"ambient": "常溫", "chilled": "冷藏", "frozen": "冷凍"}
+    return csv_response(
+        f"supplier-demand-{starts_on}-{ends_on}.csv",
+        [*date_headers, "供應者現名（按下單歸屬）", "商品識別", "下單產品編號", "下單SKU", "下單品名", "單位", "下單溫層", "數量", "預計到貨日"],
+        ([*dates, supplier_name, product_id, product_number, sku, name, unit, temperatures.get(temperature, "未設定"),
+          quantity, expected_arrival_on]
+         for product_id, product_number, sku, name, unit, temperature, quantity in rows),
     )

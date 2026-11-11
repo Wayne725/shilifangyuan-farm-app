@@ -25,6 +25,7 @@ from ..order_history import OrderHistoryQuery, read_order_history
 from ..config import Settings, get_settings
 from ..controlled_product_payments import is_meals_test_product_order, meals_test_product_enabled, meals_test_product_pairs
 from ..sales_scope import require_sales_scope_allows
+from ..supplier_order_demand import product_procurement_snapshot
 from ..domain import (
     DomainError,
     aware,
@@ -176,14 +177,14 @@ async def quote_products(
     user: User,
     lock: bool = False,
     invoice_buyer_type: InvoiceBuyerType = InvoiceBuyerType.PERSONAL,
-) -> OrderQuoteRead:
+) -> tuple[OrderQuoteRead, dict[str, Product]]:
     query = select(Product).where(
         Product.id.in_(quantities.keys()),
         Product.is_active.is_(True),
         Product.daily_sales_enabled.is_(True),
     )
     if lock:
-        query = query.with_for_update()
+        query = query.with_for_update().execution_options(populate_existing=True)
     products = list(await session.scalars(query))
     if len(products) != len(quantities):
         raise HTTPException(status_code=422, detail="購物車包含不存在或未開放日常選購的商品")
@@ -225,13 +226,14 @@ async def quote_products(
         "items": [line.model_dump(mode="json", include={"product_id", "quantity", "unit_price", "subtotal", "tax_type"})
                   for line in sorted(lines, key=lambda line: line.product_id)],
     }
-    return OrderQuoteRead(
+    quote = OrderQuoteRead(
         confirmation_fingerprint=hashlib.sha256(json.dumps(
             confirmation, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         ).encode()).hexdigest(),
         membership_type=membership_type, member_tax_exempt=member_tax_exempt,
         tax_amount=tax_amount, amount_total=amount_total, items=lines,
     )
+    return quote, {product.id: product for product in products}
 
 
 async def load_order(
@@ -271,10 +273,11 @@ async def quote_order(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> OrderQuoteRead:
-    return await quote_products(
+    quote, _ = await quote_products(
         session, consolidate_lines(body.items), user, lock=False,
         invoice_buyer_type=body.invoice_buyer_type,
     )
+    return quote
 
 
 @orders_router.post(
@@ -358,7 +361,7 @@ async def create_order(
     }:
         raise HTTPException(status_code=422, detail="一般訂單不支援此履約方式")
     try:
-        quote = await quote_products(
+        quote, products = await quote_products(
             session, consolidate_lines(body.items), user, lock=True,
             invoice_buyer_type=body.invoice_buyer_type,
         )
@@ -429,6 +432,7 @@ async def create_order(
         items=[
             OrderItem(
                 source_product_id=line.product_id,
+                procurement_snapshot=product_procurement_snapshot(products[line.product_id]),
                 product_name=line.product_name,
                 unit_label=line.unit_label,
                 quantity=line.quantity,
