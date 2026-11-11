@@ -388,7 +388,14 @@ const memberLookupRoute = createRoute({
   component: page("./pages/MemberLookupPage", "MemberLookupPage"),
 });
 
+const policyRoutes = [
+  createRoute({ getParentRoute: () => rootRoute, path: '/privacy', component: page('./pages/PolicyPages', 'PrivacyPage') }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/terms', component: page('./pages/PolicyPages', 'TermsPage') }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/returns', component: page('./pages/PolicyPages', 'ReturnsPage') }),
+];
+
 const routeTree = rootRoute.addChildren([
+  ...policyRoutes,
   loginRoute,
   lineLoginRoute,
   lineConsentRoute,

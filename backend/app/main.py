@@ -77,6 +77,9 @@ def create_app() -> FastAPI:
         version="0.1.0",
         debug=settings.debug,
         lifespan=lifespan,
+        docs_url=None if settings.environment.strip().lower() == 'production' else '/docs',
+        redoc_url=None if settings.environment.strip().lower() == 'production' else '/redoc',
+        openapi_url=None if settings.environment.strip().lower() == 'production' else '/openapi.json',
     )
     application.add_middleware(
         CORSMiddleware,

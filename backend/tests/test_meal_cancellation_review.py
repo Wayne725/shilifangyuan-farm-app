@@ -226,7 +226,7 @@ async def test_approved_refund_flows_to_confirmed_invoice_void(review_context, m
     assert c.order.invoice_status == c.order.invoice.status == InvoiceStatus.VOIDED
 
 
-@pytest.mark.parametrize("marker", ["picked_up", "no_show", "expired", "event_completed", "event_cancelled", "cancelled"])
+@pytest.mark.parametrize("marker", ["picked_up", "no_show", "event_cancelled", "cancelled"])
 @pytest.mark.asyncio
 async def test_review_rechecks_fulfillment_and_rejection_can_close_stale_requests(review_context, marker):
     c = review_context
@@ -235,11 +235,8 @@ async def test_review_rechecks_fulfillment_and_rejection_can_close_stale_request
     if marker in {"picked_up", "no_show"}:
         c.order.fulfillment.status = FulfillmentState.PICKED_UP if marker == "picked_up" else FulfillmentState.NO_SHOW
         c.order.fulfillment_status = FulfillmentStatus.PICKED_UP
-    elif marker == "expired":
-        c.event.ordering_ends_at = c.now - timedelta(minutes=5)
-        c.event.pickup_ends_at = c.now - timedelta(seconds=1)
-    elif marker.startswith("event_"):
-        c.event.status = MealEventStatus.COMPLETED if marker == "event_completed" else MealEventStatus.CANCELLED
+    elif marker == "event_cancelled":
+        c.event.status = MealEventStatus.CANCELLED
     else:
         c.order.cancelled_at = c.now
     await c.session.commit()

@@ -22,6 +22,7 @@ export function defaultReviewDeadline(deadline: string) {
 }
 
 export function campaignOrderBlockReason(campaign: GroupCampaign, now = Date.now()) {
+  if (campaign.is_public === false) return "此共同購買已停止公開";
   if (!["recruiting", "confirmed"].includes(campaign.decision_status)) return campaign.decision_status === "pending_confirmation" ? "已截止，等待管理員審核" : "此共同購買已停止接單";
   if (!Number.isFinite(campaignTimestamp(campaign.deadline))) return "付款截止時間待確認";
   if (campaignTimestamp(campaign.deadline) <= now) return campaign.intake_status === "settling" ? "已截止，付款結算中" : "共同購買已截止";

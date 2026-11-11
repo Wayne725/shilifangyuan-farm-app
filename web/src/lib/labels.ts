@@ -54,6 +54,17 @@ export const fulfillmentStatusLabel = createLabeler({
   cancelled: "已取消",
 });
 
+export const shipmentStatusLabel = createLabeler({
+  draft: "待選擇物流",
+  selection_pending: "待選門市／地址",
+  ready_to_create: "物流已確認",
+  created: "已建立物流單",
+  in_transit: "配送中",
+  delivered: "已送達",
+  exception: "物流異常",
+  cancelled: "物流已取消",
+});
+
 export const invoiceStatusLabel = createLabeler({
   external: "合作社現場開票",
   not_eligible: "尚未符合開立條件",

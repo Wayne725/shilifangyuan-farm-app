@@ -37,11 +37,15 @@ async def test_both_heads_and_live_graph_preserve_orders_at_merged_head(migrated
     assert after_order["customer_kind"] == "account"
     assert after_order["invoice_handling"] == before_order.get("invoice_handling", "on_payment")
     assert invoice_handling(SimpleNamespace(**after_order)) == "on_payment"
-    assert await table_rows(database, "users") == before_users
+    assert await table_rows(database, "users") == [
+        {**row, "data_consent_version": None, "data_consented_at": None} for row in before_users
+    ]
     def metadata_and_single_head(config, _):
         assert ScriptDirectory.from_config(config).get_heads() == [database.head]
         command.check(config)
     await database.migrate(metadata_and_single_head, None)
     await database.migrate(command.upgrade, "head")
     assert await table_rows(database, "orders") == [after_order]
-    assert await table_rows(database, "users") == before_users
+    assert await table_rows(database, "users") == [
+        {**row, "data_consent_version": None, "data_consented_at": None} for row in before_users
+    ]

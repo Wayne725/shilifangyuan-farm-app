@@ -11,6 +11,7 @@ from ..config import Settings, get_settings
 from ..database import get_session
 from ..models import AdminAudit, SystemSetting, User
 from ..platform_settings import PLATFORM_KEY, PlatformSettings, platform_settings
+from ..public_information import PublicInformation, preserve_published_policy
 from ..sales_scope import sales_capabilities
 
 platform_router = APIRouter(tags=["platform"])
@@ -27,6 +28,7 @@ async def read_platform(response: Response, session: AsyncSession = Depends(get_
     response.headers["Cache-Control"] = "no-store"
     return {"orders_open": current.orders_open, "closed_message": current.closed_message,
             "support_phone": current.support_phone,
+            "public_information": current.public_information.model_dump() if current.public_information.published else None,
             **sales_capabilities(settings),
             "meal_cutoff_time": "20:00", "timezone": "Asia/Taipei"}
 
@@ -54,9 +56,13 @@ async def update_platform(body: PlatformUpdate, admin: User = Depends(require_ad
     if body.expected_version is not None and body.expected_version != version:
         raise HTTPException(status_code=409, detail="設定已由其他操作更新，請重新讀取後再儲存")
     previous = PlatformSettings.model_validate(row.value).model_dump()
+    await preserve_published_policy(session, PublicInformation.model_validate(previous['public_information']), admin.id)
+    if 'public_information' in body.model_fields_set:
+        await preserve_published_policy(session, body.public_information, admin.id)
     row.value = {**body.model_dump(exclude={"reason", "expected_version"}), "_version": version + 1}
-    if "support_phone" not in body.model_fields_set:
-        row.value = {**row.value, "support_phone": previous["support_phone"]}
+    for field in ('support_phone', 'public_information'):
+        if field not in body.model_fields_set:
+            row.value = {**row.value, field: previous[field]}
     row.updated_by_id = admin.id
     session.add(AdminAudit(actor_id=admin.id, action="platform.settings_updated", aggregate_type="system_setting", aggregate_id=PLATFORM_KEY,
                            reason=body.reason, data={"previous": previous, "current": row.value}))

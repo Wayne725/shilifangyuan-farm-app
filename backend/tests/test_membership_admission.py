@@ -125,6 +125,28 @@ async def test_public_questions_no_answers_and_get_never_creates_admission(admis
 
 
 @pytest.mark.asyncio
+async def test_admission_fee_and_legacy_flag_are_read_only_and_owner_scoped(admission_context):
+    from app.membership_policy import quote_membership_shares
+
+    c = admission_context
+    response = await c["client"].get(URL, headers=c["owner_headers"])
+    assert response.status_code == 200
+    declaration = response.json()["config"]["declaration"]
+    quote = quote_membership_shares(10, approved_full_time_student=False)
+    assert declaration["admission_fee_amount"] == quote.admission_fee_amount
+    assert declaration["share_unit_amount"] == quote.share_unit_amount
+    assert response.json()["has_legacy_application"] is False
+    c["session"].add(MembershipApplication(user_id=c["owner_id"], status=MembershipApplicationStatus.REJECTED))
+    await c["session"].commit()
+    response = await c["client"].get(URL, headers=c["owner_headers"])
+    assert response.status_code == 200 and response.json()["has_legacy_application"] is True
+    outsider = await c["client"].get(URL, headers=c["outsider_headers"])
+    assert outsider.status_code == 200 and outsider.json()["has_legacy_application"] is False
+    assert await c["session"].scalar(select(func.count(MembershipAdmissionRound.id))) == 0
+    assert await c["session"].scalar(select(func.count(MembershipCharge.id))) == 0
+
+
+@pytest.mark.asyncio
 async def test_phase_one_approval_is_not_membership_money_or_notification(admission_context):
     c = admission_context
     row = await submitted(c)

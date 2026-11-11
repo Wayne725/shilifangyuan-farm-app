@@ -31,6 +31,7 @@ import { useAdminOrderAccess } from "../lib/admin-order-access";
 import { shippingChannelLabels } from "../lib/commerce";
 import {
   adminPaymentStatusLabel,
+  shipmentStatusLabel,
 } from "../lib/labels";
 import type {
   Order,
@@ -165,7 +166,7 @@ export function AdminPage() {
             <OrderStatusBadge kind="payment" status={order.payment_status} />
             <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} />
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />
-            {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {order.shipment.status}</span>}
+            {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {shipmentStatusLabel(order.shipment.status)}</span>}
           </div>
           <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} invoiceTax={order.invoice_tax} invoiceStatus={order.invoice_status} />
           <AdminOrderAction

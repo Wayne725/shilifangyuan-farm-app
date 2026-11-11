@@ -12,24 +12,25 @@ const recruiting={...pending,decision_status:'recruiting',intake_status:'open',d
 async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=pending,proposal=false,proposalStatus='pending_review',timezone='Asia/Taipei'}={}) {
   const browser=await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE});t.after(()=>browser.close());
   const context=await browser.newContext({viewport:{width,height:950},timezoneId:timezone,serviceWorkers:'block',reducedMotion:'reduce'});
-  const state={campaign:structuredClone(campaign),reads:[],quotes:[],writes:[],unknown:[],errors:[],failGet:null,failWrite:null,changeOnConflict:null};
+  const state={campaign:structuredClone(campaign),reads:[],readUrls:[],quotes:[],writes:[],unknown:[],errors:[],failGet:null,failWrite:null,changeOnConflict:null};
   await context.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url()),endpoint=url.pathname,method=request.method();
     if(url.origin!==base)return route.abort();
     if(!endpoint.startsWith('/v1/'))return method==='GET'?route.continue():route.abort();
     if(endpoint==='/v1/auth/refresh')return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'訪客'}:{access_token:'isolated',user:{id:'review-user',email:'review@example.test',display_name:'隔離管理者',user_role:role,membership_type:'nonmember'}}});
-    if(method==='GET') {state.reads.push(endpoint);if(state.failGet?.path===endpoint)return route.fulfill({status:state.failGet.status,json:{detail:'隔離權限失效'}});}
+    if(method==='GET') {state.reads.push(endpoint);state.readUrls.push(url.href);if(state.failGet?.path===endpoint)return route.fulfill({status:state.failGet.status,json:{detail:'隔離權限失效'}});}
     if(endpoint==='/v1/platform')return route.fulfill({json:{orders_open:true,regular_orders_enabled:true,group_orders_enabled:true,shipping_enabled:false}});
     if(endpoint==='/v1/products')return route.fulfill({json:[product]});
     if(endpoint==='/v1/group-bundles')return route.fulfill({json:[]});
     if(endpoint==='/v1/vote-proposals')return route.fulfill({json:proposal?[{id:'proposal',target_type:'product',target_id:'product',target_name:'提案隔離白米',status:proposalStatus,threshold:10,vote_count:0,estimated_quantity:0}]:[]});
-    if(endpoint==='/v1/group-campaigns'&&method==='GET')return route.fulfill({json:[state.campaign]});
+    if(endpoint==='/v1/group-campaigns'&&method==='GET')return route.fulfill({json:url.searchParams.get('include_hidden')==='true'||state.campaign.is_public!==false?[state.campaign]:[]});
     if(endpoint==='/v1/group-campaigns/campaign'&&method==='GET')return route.fulfill({json:state.campaign});
     if(endpoint==='/v1/pickup-locations')return route.fulfill({json:[{id:'store',name:'隔離取貨點',is_active:true}]});
-    if(endpoint==='/v1/group-campaigns/campaign/quote'){state.quotes.push(request.postDataJSON());return route.fulfill({json:{quantity:1,unit_price:100,product_subtotal:100,shipping_fee:0,amount_total:100,membership_type:'nonmember'}});}
+    if(endpoint==='/v1/group-campaigns/campaign/quote'){state.quotes.push(request.postDataJSON());return route.fulfill({json:{confirmation_fingerprint:'a'.repeat(64),quantity:1,unit_price:100,product_subtotal:100,shipping_fee:0,amount_total:100,membership_type:'nonmember'}});}
     if((endpoint.startsWith('/v1/group-campaigns')||endpoint.endsWith('/admin/open-direct')||endpoint.endsWith('/admin/approve'))&&['POST','PATCH'].includes(method)) {
       const body=request.postDataJSON();state.writes.push({path:endpoint,method,body});
       if(state.failWrite){const failure=state.failWrite;if(failure.status!==401)state.failWrite=null;if(state.changeOnConflict)Object.assign(state.campaign,state.changeOnConflict);return route.fulfill({status:failure.status,json:{detail:failure.message}});}
+      if(endpoint.endsWith('/admin/visibility')){assert.equal(body.expected_updated_at,state.campaign.updated_at);state.campaign.is_public=body.is_public;state.campaign.updated_at=new Date(Date.parse(state.campaign.updated_at)+1000).toISOString();}
       if(endpoint.endsWith('/admin/confirm')){assert.equal(body.expected_threshold_version,state.campaign.threshold_version);if(state.campaign.paid_quantity<state.campaign.min_paid_quantity){assert.equal(body.allow_below_threshold,true);}Object.assign(state.campaign,{decision_status:'confirmed',can_confirm:false,can_edit_review_deadline:false,final_pickup_at:body.final_pickup_at,confirmed_paid_quantity:state.campaign.paid_quantity,confirmed_min_paid_quantity:state.campaign.min_paid_quantity,confirmed_threshold_version:state.campaign.threshold_version,confirmation_exception_reason:body.reason||null});}
       if(endpoint.endsWith('/admin/review-deadline')){assert.equal(body.expected_confirmation_deadline,state.campaign.confirmation_deadline);assert.equal(body.expected_updated_at,state.campaign.updated_at);Object.assign(state.campaign,body,{review_overdue:false});}
       return route.fulfill({json:state.campaign});
@@ -42,6 +43,7 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
 }
 const card=page=>page.getByRole('article',{name:'共同購買 截止審核隔離共同購買',exact:true});
 async function clean(page,state){assert.deepEqual(state.unknown,[]);assert.deepEqual(state.errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);}
+async function waitForAdminDenied(page,status){if(status===401)await page.getByRole('heading',{name:'共同購買管理只向管理者開放。',exact:true}).waitFor();else await page.getByText('共同購買管理權限已失效').waitFor();}
 async function openReview(page){await card(page).getByRole('button',{name:'審核成團',exact:true}).click();return card(page).getByRole('form',{name:'確認共同購買成團'});}
 
 test('建立共同購買的處理提醒日預設付款截止+72h，台灣日期不受瀏覽器時區影響',async t=>{
@@ -91,10 +93,10 @@ test('處理提醒日409保留草稿，重讀與核對後才可儲存',async t=>
   const {page,state,visit}=await fixture(t);await visit();await card(page).getByRole('button',{name:'調整處理提醒日'}).click();const form=page.getByRole('form',{name:'調整共同購買處理提醒日'});await form.getByLabel('管理員處理提醒日（台灣）').fill('2030-01-05T15:00');await form.getByLabel('調整原因').fill('延長核對時間');state.failWrite={status:409,message:'期限已更新'};state.changeOnConflict={confirmation_deadline:'2030-01-05T04:00:00Z',updated_at:'2030-01-02T02:00:01Z'};await form.getByRole('button',{name:'儲存處理提醒日'}).click();await form.getByRole('button',{name:'重新讀取處理提醒日'}).waitFor();assert.equal(await form.getByLabel('管理員處理提醒日（台灣）').inputValue(),'2030-01-05T15:00');assert.equal(await form.getByLabel('調整原因').inputValue(),'延長核對時間');await form.getByRole('button',{name:'重新讀取處理提醒日'}).click();await form.getByLabel('已核對最新提醒日，確認儲存目前輸入').waitFor();assert.equal(await form.getByRole('button',{name:'儲存處理提醒日'}).isDisabled(),true);await form.getByLabel('已核對最新提醒日，確認儲存目前輸入').check();await form.getByRole('button',{name:'儲存處理提醒日'}).click();await page.getByText('處理提醒日已更新',{exact:true}).waitFor();assert.equal(state.writes[1].body.expected_confirmation_deadline,'2030-01-05T04:00:00Z');await clean(page,state);
 });
 for(const status of [401,403])for(const cached of [false,true])test(`管理端GET ${status} ${cached?'快取後失權':'初次失權'}整區隱藏並停止重試`,async t=>{
-  const {page,state,visit}=await fixture(t);if(!cached)state.failGet={path:'/v1/group-campaigns',status};await visit();if(cached){await card(page).waitFor();await openReview(page);state.failGet={path:'/v1/group-campaigns',status};await page.clock.runFor(30100);}await page.getByText('共同購買管理權限已失效').waitFor();assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);assert.equal(await page.getByRole('form',{name:'確認共同購買成團'}).count(),0);const reads=state.reads.length;await page.clock.runFor(60100);assert.equal(state.reads.length,reads);assert.deepEqual(state.writes,[]);await clean(page,state);
+  const {page,state,visit}=await fixture(t);if(!cached)state.failGet={path:'/v1/group-campaigns',status};await visit();if(cached){await card(page).waitFor();await openReview(page);state.failGet={path:'/v1/group-campaigns',status};await page.clock.runFor(30100);}await waitForAdminDenied(page,status);assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);assert.equal(await page.getByRole('form',{name:'確認共同購買成團'}).count(),0);const reads=state.reads.filter(path=>path!=='/v1/platform').length;await page.clock.runFor(60100);assert.equal(state.reads.filter(path=>path!=='/v1/platform').length,reads);assert.deepEqual(state.writes,[]);await clean(page,state);
 });
 for(const status of [401,403])test(`管理端送審${status}隱藏全部既有資料及草稿`,async t=>{
-  const {page,state,visit}=await fixture(t);await visit();const form=await openReview(page);state.failWrite={status,message:'權限失效'};if(status===401)state.failGet={path:'/v1/group-campaigns',status};await form.getByRole('button',{name:'確認成團',exact:true}).click();await page.getByText('共同購買管理權限已失效').waitFor();assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);await clean(page,state);
+  const {page,state,visit}=await fixture(t);await visit();const form=await openReview(page);state.failWrite={status,message:'權限失效'};if(status===401)state.failGet={path:'/v1/group-campaigns',status};await form.getByRole('button',{name:'確認成團',exact:true}).click();await waitForAdminDenied(page,status);assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);await clean(page,state);
 });
 for(const role of ['guest','customer'])test(`${role}不可讀取管理資料`,async t=>{const {page,state,visit}=await fixture(t,{role});await visit();await page.getByRole('heading',{name:'共同購買管理只向管理者開放。'}).waitFor();assert.equal(state.reads.some(path=>path.includes('group-campaigns')||path.includes('vote-proposals')),false);assert.deepEqual(state.writes,[]);await clean(page,state);});
 
@@ -120,4 +122,17 @@ for(const path of ['/admin/groups','/group-votes'])test(`${path} 歷史未達投
 });
 test('歷史失敗共同購買即使有鎖定日期與零付款，仍顯示已結束原因',async t=>{
   const {page,state,visit}=await fixture(t,{campaign:{...pending,decision_status:'failed_unmet',paid_quantity:0,can_confirm:false,can_edit_review_deadline:false}});await visit();await page.getByText('此團已結束，無法修改數量設定。',{exact:true}).waitFor();assert.equal(await page.getByText('已有付款紀錄，限購與成團數量已鎖定。',{exact:true}).count(),0);assert.deepEqual(state.writes,[]);await clean(page,state);
+});
+
+for(const width of [390,1280])test(`${width}px共同購買管理含未公開資料，停止與恢復不更動成團金流`,async t=>{
+ const{page,state,visit}=await fixture(t,{width});await visit();const saved={decision:state.campaign.decision_status,intake:state.campaign.intake_status,paid:state.campaign.paid_quantity,reserved:state.campaign.reserved_quantity};
+ assert.ok(state.readUrls.some(value=>new URL(value).pathname==='/v1/group-campaigns'&&new URL(value).searchParams.get('include_hidden')==='true'));
+ await card(page).getByRole('button',{name:'停止公開',exact:true}).click();await card(page).getByRole('button',{name:'恢復公開',exact:true}).waitFor();
+ await card(page).getByRole('button',{name:'恢復公開',exact:true}).click();await card(page).getByRole('button',{name:'停止公開',exact:true}).waitFor();
+ assert.deepEqual({decision:state.campaign.decision_status,intake:state.campaign.intake_status,paid:state.campaign.paid_quantity,reserved:state.campaign.reserved_quantity},saved);
+ assert.equal(state.writes.length,2);assert.ok(state.writes.every(row=>row.path==='/v1/group-campaigns/campaign/admin/visibility'&&row.method==='PATCH'));assert.notEqual(state.writes[0].body.expected_updated_at,state.writes[1].body.expected_updated_at);await clean(page,state);
+});
+test('既有參與者可查看未公開團安排，但無法新增參加',async t=>{
+ const{page,state,visit}=await fixture(t,{role:'customer',path:'/groups/campaign',campaign:{...recruiting,is_public:false}});await visit();await page.getByText('此共同購買已停止公開',{exact:true}).first().waitFor();
+ assert.equal(await page.getByRole('button',{name:'參加並前往付款',exact:true}).isDisabled(),true);assert.deepEqual(state.quotes,[]);assert.deepEqual(state.writes,[]);await clean(page,state);
 });

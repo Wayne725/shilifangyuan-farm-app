@@ -21,7 +21,7 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
     const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
     t.after(() => browser.close());
     const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
-    if (channel === 'regular') await context.addInitScript((item) => localStorage.setItem('slf_cart', JSON.stringify([{ product: item, quantity: 1 }])), product);
+    if (channel === 'regular') await context.addInitScript((item) => localStorage.setItem('slf_cart_v2:user:line-buyer', JSON.stringify({ items: [{ product: item, quantity: 1 }] })), product);
     const writes = [], unknown = [], errors = [];
     const orderPath = channel === 'regular' ? '/v1/orders' : channel === 'meal' ? '/v1/meal-events/line-meal/orders' : '/v1/group-campaigns/line-group/join';
     await context.route('**/*', (route) => {

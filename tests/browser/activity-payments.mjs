@@ -23,7 +23,7 @@ async function fixture(t,{path='/activities',role='customer',width=1280,member=f
   if(method==='GET'){state.reads.push(p);state.readUrls.push(url.toString());if(['/v1/activity-registrations','/v1/activity-charges'].includes(p)&&!request.headers()['authorization'])state.anonymousPrivateReads.push(p);if(state.readFail?.path===p){const failure=state.readFail;if(failure.once)state.readFail=null;return route.fulfill({status:failure.status,json:{detail:'隔離權限失效'}});}}
   if(p==='/v1/platform')return route.fulfill({json:{orders_open:true}});
   if(p==='/v1/members/me')return route.fulfill({json:{membership_type:user.membership_type,membership:member?{status:'active'}:null}});
-  if(p==='/v1/activities'&&method==='GET')return route.fulfill({json:[state.activity]});
+  if(p==='/v1/activities'&&method==='GET')return route.fulfill({json:state.activity.is_public===false?[]:[state.activity]});
   if(p==='/v1/admin/activities'&&method==='GET')return route.fulfill({json:[state.activity]});
   if(p==='/v1/admin/membership/admissions'&&method==='GET')return route.fulfill({json:{items:[],total:0}});
   if(p==='/v1/activity-registrations')return route.fulfill({json:state.registration?[state.registration]:[]});
@@ -43,6 +43,7 @@ async function fixture(t,{path='/activities',role='customer',width=1280,member=f
    if(p.endsWith('/cancel-registration')){assert.equal(body.expected_revision,state.registration.revision);if(state.registration.available_actions.includes('request_refund')){state.registration.refund_request=refund;state.registration.available_actions=[];}else{state.registration.status='cancelled';state.registration.available_actions=[];}state.activity.my_registration=state.registration;return route.fulfill({json:state.registration});}
    if(p.endsWith('/payment-attempts'))return route.fulfill({json:{id:'attempt',attempt_id:'attempt',payment_url:`${base}/payment-stub`,status:'pending',expires_at:charge.expires_at}});
    if(p==='/v1/payment-attempts/attempt/refresh'){state.charges=state.charges.map(item=>({...item,payment_status:'paid',available_actions:['request_refund']}));if(state.registration){state.registration.status='registered';state.registration.charge=state.charges[0];state.registration.available_actions=['request_refund'];}return route.fulfill({json:{id:'attempt',status:'paid',activity_charge_id:'charge',expires_at:charge.expires_at}});}
+   if(p.endsWith('/visibility')){assert.equal(body.expected_updated_at,state.activity.updated_at);state.activity.is_public=body.is_public;state.activity.updated_at=new Date(Date.parse(state.activity.updated_at)+1000).toISOString();return route.fulfill({json:state.activity});}
    if(p.endsWith('/payment-settings')){assert.equal(body.expected_updated_at,state.activity.updated_at);Object.assign(state.activity,body,{updated_at:'2030-01-02T02:01:00Z'});return route.fulfill({json:state.activity});}
    if(p.endsWith('/cancellation-preview'))return route.fulfill({json:{activity_id:'activity',expected_updated_at:state.activity.updated_at,preview_token:'preview',registration_count:1,waitlist_count:2,paid_count:1,refund_amount:200}});
    if(p==='/v1/admin/activities/activity/cancel'){assert.equal(body.preview_token,'preview');assert.equal(body.approve_refunds,true);state.activity.status='cancelled';if(state.registration){state.registration.status='cancelled';state.registration.available_actions=[];}state.refunds=state.refunds.map(item=>({...item,status:'approved'}));return route.fulfill({json:state.activity});}
@@ -137,4 +138,29 @@ for(const width of [390,1440])test(`出席更正原因可留空，失敗保稿�
  assert.equal(state.registration.revision,1);assert.equal(state.registration.charge.payment_status,'paid');
  assert.equal(state.writes.length,2);assert.deepEqual(state.writes[1].body,{expected_status:'no_show',reason});
  assert.equal(await form.count(),0);await clean(page,state);
+});
+
+for(const width of [390,1280])test(`${width}px活動停止公開可恢復且不取消報名或退款`,async t=>{
+ const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width,reg:registration});await visit();
+ const saved=structuredClone({registration:state.registration,charges:state.charges,status:state.activity.status});
+ await page.getByRole('button',{name:'停止公開',exact:true}).click();await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();
+ assert.equal(state.activity.is_public,false);assert.deepEqual({registration:state.registration,charges:state.charges,status:state.activity.status},saved);
+ await page.getByRole('button',{name:'恢復公開',exact:true}).click();await page.getByRole('button',{name:'停止公開',exact:true}).waitFor();
+ assert.equal(state.writes.length,2);assert.ok(state.writes.every(row=>row.path==='/v1/admin/activities/activity/visibility'&&row.method==='PATCH'));
+ assert.notEqual(state.writes[0].body.expected_updated_at,state.writes[1].body.expected_updated_at);assert.equal(state.activity.is_public,true);await clean(page,state);
+});
+
+test('活動隱藏後離開並重整，仍可由社務管理全部清單恢復公開',async t=>{
+ const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width:390,reg:registration});await visit();
+ await page.getByRole('button',{name:'停止公開',exact:true}).click();await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();
+ const publicRead=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/activities');
+ await page.goto(`${base}/activities`);await publicRead;await page.getByRole('heading',{name:'永續活動',exact:true}).waitFor();
+ assert.equal(await page.getByRole('heading',{name:activity.title,exact:true}).count(),0);
+ await page.goto(`${base}/admin/social`);await page.getByLabel('審核範圍').selectOption('all');
+ await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();await page.reload();
+ await page.getByLabel('審核範圍').selectOption('all');await page.getByRole('button',{name:'恢復公開',exact:true}).click();
+ await page.getByRole('button',{name:'停止公開',exact:true}).waitFor();
+ assert.equal(state.activity.is_public,true);assert.equal(state.registration.status,registration.status);
+ assert.equal(state.writes.length,2);assert.ok(state.writes.every(row=>row.method==='PATCH'&&row.path==='/v1/admin/activities/activity/visibility'));
+ assert.ok(state.reads.filter(path=>path==='/v1/admin/activities').length>=3);await clean(page,state);
 });

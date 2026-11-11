@@ -141,7 +141,9 @@ async def test_real_pg_42_to_45_then_merged_head_preserves_account_and_guest_col
         await database.migrate(command.downgrade, "0044_invoice_timing")
     assert await version(database) == database.head
     assert {name: await table_rows(database, name) for name in tables} == before_refused_downgrade
-    assert await table_rows(database, "users") == before_users
+    assert await table_rows(database, "users") == [
+        {**row, "data_consent_version": None, "data_consented_at": None} for row in before_users
+    ]
 
 
 @pytest.mark.asyncio

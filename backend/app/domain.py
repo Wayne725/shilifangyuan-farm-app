@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from .config import get_settings
 from .models import (
@@ -68,6 +68,14 @@ def company_included_tax_amount(taxable_gross: int) -> int:
     return taxable_gross - sales
 
 
+def invoice_estimated_tax_amount(
+    lines: Iterable[tuple[int, TaxType]], buyer_type: InvoiceBuyerType,
+) -> int:
+    if buyer_type == InvoiceBuyerType.COMPANY:
+        return company_included_tax_amount(sum(amount for amount, tax_type in lines if tax_type == TaxType.TAXABLE))
+    return sum(included_tax_amount(amount, tax_type) for amount, tax_type in lines)
+
+
 def member_sale_is_tax_exempt(
     membership_type: MembershipType,
     invoice_buyer_type: InvoiceBuyerType,
@@ -97,10 +105,10 @@ def order_shipping_tax_type(order: Order) -> TaxType:
 
 
 def order_tax_amount(order: Order, shipping_fee: int = 0) -> int:
-    return sum(
-        included_tax_amount(item.subtotal, item.tax_type)
-        for item in order.items
-    ) + included_tax_amount(shipping_fee, order_shipping_tax_type(order))
+    return invoice_estimated_tax_amount(
+        [(item.subtotal, item.tax_type) for item in order.items]
+        + [(shipping_fee, order_shipping_tax_type(order))], order.invoice_buyer_type,
+    )
 
 
 def product_price(product: Product, membership_type: MembershipType) -> int:
@@ -308,9 +316,34 @@ def meal_cancellation_request_allowed(order: Order, now: Optional[datetime] = No
     )
 
 
+def admin_meal_cancellation_allowed(order: Order, now: Optional[datetime] = None) -> bool:
+    current = now or utcnow()
+    event = order.__dict__.get("meal_event")
+    fulfillment = order.__dict__.get("fulfillment")
+    if (order.sales_channel != SalesChannel.MEAL_PREORDER or order.cancelled_at is not None
+        or order.fulfillment_status == FulfillmentStatus.CANCELLED
+        or event is None or event.status == MealEventStatus.CANCELLED or fulfillment is None
+        or order.payment_status not in {PaymentStatus.PENDING, PaymentStatus.PAID, PaymentStatus.EXPIRED, PaymentStatus.FAILED}):
+        return False
+    if order.payment_status != PaymentStatus.PAID and order.paid_at is not None:
+        return False
+    if fulfillment.status == FulfillmentState.NO_SHOW:
+        # The closing job marks no-shows as picked_up at the legacy order level.
+        shipment = fulfillment.__dict__.get("shipment")
+        if shipment is not None and shipment.status in {
+            ShipmentStatus.CREATED, ShipmentStatus.IN_TRANSIT, ShipmentStatus.DELIVERED, ShipmentStatus.EXCEPTION,
+        }:
+            return False
+        return (order.payment_status == PaymentStatus.PAID and event.status == MealEventStatus.COMPLETED
+            and current >= aware(event.pickup_ends_at))
+    return (order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
+        and fulfillment.status in {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
+        and not order_fulfillment_is_irreversible(order))
+
+
 def admin_order_cancellation_allowed(order: Order, now: Optional[datetime] = None) -> bool:
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
-        return meal_cancellation_request_allowed(order, now) and not order_fulfillment_is_irreversible(order)
+        return admin_meal_cancellation_allowed(order, now)
     fulfillment = order.__dict__.get("fulfillment")
     return (
         order.payment_status in {PaymentStatus.PENDING, PaymentStatus.PAID}

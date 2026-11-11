@@ -14,7 +14,7 @@ async function fixture(t, { saved = null, failCount = 0, failStatus = 503, holdF
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, serviceWorkers: 'block' });
-  await context.addInitScript((item) => localStorage.setItem('slf_cart', JSON.stringify([{ product: item, quantity: 1 }])), product);
+  await context.addInitScript((item) => localStorage.setItem('slf_cart_v2:user:buyer-a', JSON.stringify({ items: [{ product: item, quantity: 1 }] })), product);
   const state = { user: buyer('buyer-a', saved), patches: [], owners: [], writes: [], unknown: [], errors: [], failCount, rejectNextAccess: false, refreshAs: null };
   let releaseFirst;
   const gate = new Promise((resolve) => { releaseFirst = resolve; });
@@ -194,6 +194,7 @@ test('已存載具預帶，未勾選不清除；明確移除保留本次輸入�
   await page.reload();
   await page.getByRole('radio', { name: 'Email 會員載具', exact: true }).waitFor();
   assert.equal(await page.getByRole('radio', { name: 'Email 會員載具', exact: true }).isChecked(), true);
+  await page.evaluate(item => localStorage.setItem('slf_cart_v2:user:buyer-b', JSON.stringify({ items: [{ product: item, quantity: 1 }] })), product);
   state.user = buyer('buyer-b', '/BBB1234');
   await page.reload();
   await barcodeInput().waitFor();
@@ -204,6 +205,7 @@ test('已存載具預帶，未勾選不清除；明確移除保留本次輸入�
 
 test('舊分頁過期後 refresh 到另一帳號，保存仍綁原帳號且拒絕改寫他人載具', async (t) => {
   const { page, state, barcodeInput, pay } = await fixture(t, { saved: '/AAA1234' });
+  await page.evaluate(item => localStorage.setItem('slf_cart_v2:user:buyer-b', JSON.stringify({ items: [{ product: item, quantity: 1 }] })), product);
   state.rejectNextAccess = true;
   state.refreshAs = buyer('buyer-b', '/BBB1234');
   await barcodeInput().fill('/NEW1234');
@@ -217,7 +219,7 @@ test('舊分頁過期後 refresh 到另一帳號，保存仍綁原帳號且拒�
   assert.equal(await barcodeInput().inputValue(), '/BBB1234');
   assert.equal(await page.getByRole('textbox', { name: '發票通知 Email', exact: true }).inputValue(), 'buyer-b@example.test');
   assert.equal(await storageOption(page).isChecked(), false);
-  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart'))), [{ product, quantity: 1 }]);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('slf_cart_v2:user:buyer-a')).items), [{ product, quantity: 1 }]);
   assert.deepEqual(state.writes, []);
 });
 

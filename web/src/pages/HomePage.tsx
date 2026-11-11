@@ -8,6 +8,8 @@ import { useCommerce } from "../context/CommerceContext";
 import { apiFetch, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import type { Activity, Product } from "../lib/types";
 import { useSocialAccess } from "../lib/social-access";
+import { activityStatusLabel } from "../lib/activities";
+import { useDeadlineClock } from "../lib/use-deadline-clock";
 
 export function HomePage() {
   const { addToCart } = useCommerce();
@@ -153,14 +155,7 @@ export function HomePage() {
         />
         <div className="agenda-strip">
           {activities.data?.slice(0, 3).map((activity, index) => (
-            <article key={activity.id}>
-              <span>0{index + 1}</span>
-              <div>
-                <small>{activityStatusLabel(activity.status)}</small>
-                <h3>{activity.title}</h3>
-                <p>{activity.description || activity.location || "永續活動資訊"}</p>
-              </div>
-            </article>
+            <HomeActivityPreview key={activity.id} activity={activity} index={index} />
           ))}
           {activities.isPending && <LoadingLines count={2} />}
           {activities.isError && (
@@ -183,13 +178,14 @@ export function HomePage() {
   );
 }
 
-function activityStatusLabel(status?: string): string {
-  return {
-    draft: "草稿",
-    pending_review: "待審核",
-    published: "開放報名",
-    rejected: "未通過",
-    cancelled: "已取消",
-    completed: "已結束",
-  }[status || ""] || "活動公告";
+function HomeActivityPreview({ activity, index }: { activity: Activity; index: number }) {
+  const now = useDeadlineClock(activity.registration_deadline);
+  return <article>
+    <span>0{index + 1}</span>
+    <div>
+      <small>{activityStatusLabel(activity, now, "開放報名")}</small>
+      <h3>{activity.title}</h3>
+      <p>{activity.description || activity.location || "永續活動資訊"}</p>
+    </div>
+  </article>;
 }

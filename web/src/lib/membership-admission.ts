@@ -34,6 +34,7 @@ export interface AdmissionConfig {
     rights: string[];
     obligations: string[];
     statement: string;
+    admission_fee_amount?: number;
     share_unit_amount: number;
     student_min_shares: number;
     student_max_shares: number;
@@ -99,6 +100,7 @@ export interface AdmissionRead {
   current_round: AdmissionRound | null;
   history: { id: string; round_number: number; status: AdmissionStatus; created_at: string; reviewed_at: string | null }[];
   profile_defaults: AdmissionProfile | null;
+  has_legacy_application?: boolean;
   can_start: boolean;
   start_blocked_reason: string | null;
 }

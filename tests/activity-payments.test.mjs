@@ -50,3 +50,24 @@ test('付款／報名／退款狀態完整中文，金流已退不顯示人工�
  for(const status of ['pending_review','approved','rejected','externally_refunded'])assert.notEqual(exports.activityRefundLabel(status),status);
  assert.equal(exports.activityRefundLabel('externally_refunded'),'金流已退款');
 });
+
+test('活動列表與首頁的報名標籤在截止當下同步關閉，時區表示不影響結果',()=>{
+ const deadline=Date.parse('2030-01-02T12:00:00Z');
+ for(const registration_deadline of ['2030-01-02T12:00:00Z','2030-01-02T20:00:00+08:00','2030-01-02T12:00:00']){
+  const activity={status:'published',registration_deadline};
+  assert.equal(exports.activityRegistrationClosed(activity,deadline-1),false);
+  assert.equal(exports.activityStatusLabel(activity,deadline-1),'報名中');
+  assert.equal(exports.activityStatusLabel(activity,deadline-1,'開放報名'),'開放報名');
+  assert.equal(exports.activityRegistrationClosed(activity,deadline),true);
+  assert.equal(exports.activityStatusLabel(activity,deadline),'報名已截止');
+  assert.equal(exports.activityStatusLabel(activity,deadline,'開放報名'),'報名已截止');
+ }
+});
+
+test('取消、完成或待審活動不會被報名期限覆蓋成開放報名',()=>{
+ for(const [status,label] of [['cancelled','已取消'],['completed','已結束'],['pending_review','待審核'],['rejected','未通過'],['draft','草稿']]){
+  const activity={status,registration_deadline:'2030-01-02T12:00:00Z'};
+  assert.equal(exports.activityStatusLabel(activity,Date.parse('2029-01-01T00:00:00Z')),label);
+  assert.equal(exports.activityStatusLabel(activity,Date.parse('2031-01-01T00:00:00Z')),label);
+ }
+});

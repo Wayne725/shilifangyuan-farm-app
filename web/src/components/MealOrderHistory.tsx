@@ -1,5 +1,6 @@
 import { OrderQuantityAmendment } from "./OrderQuantityAmendment";
 import { BusinessMealPaymentStatus } from "./BusinessMealPaymentStatus";
+import { CancellationReviewDetails } from "./CancellationReviewDetails";
 import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, Money, QrCode, Receipt } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -115,7 +116,7 @@ function MealCancellationStatus({ order }: { order: MealOrder }) {
     {request.reason && <p>申請原因：{request.reason}</p>}
     <p>申請時間：{formatDateTime(request.requested_at)}</p>
     {request.review_reason && <p>管理員回覆：{request.review_reason}</p>}
-    {request.reviewed_at && <p>審核時間：{formatDateTime(request.reviewed_at)}</p>}
+    <CancellationReviewDetails request={request} />
     <p>{request.status === "pending" ? "申請尚未核准，訂單仍依原安排處理。"
       : request.status === "approved" ? "訂單已取消；退款與發票進度請查看本頁各自的狀態。"
       : "原訂單仍依目前狀態處理。"}</p>

@@ -15,6 +15,7 @@ import { taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import type { GroupBundle, GroupCampaign, GroupVoteProposal, Product } from "../lib/types";
 import { OptionalMark } from "../components/OptionalMark";
+import { CatalogVisibilityControl } from '../components/CatalogVisibilityControl';
 
 export function AdminGroupsPage() {
   const { user, openLogin } = useAuth();
@@ -32,7 +33,7 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
     { queryKey: ["admin-products", userId], queryFn: () => apiFetch<Product[]>("/v1/products"), enabled: !revoked, retry: retryCampaignRead },
     { queryKey: ["group-bundles", userId], queryFn: () => apiFetch<GroupBundle[]>("/v1/group-bundles"), enabled: !revoked, retry: retryCampaignRead },
     { queryKey: ["group-vote-proposals", userId], queryFn: () => apiFetch<GroupVoteProposal[]>("/v1/vote-proposals"), enabled: !revoked, retry: retryCampaignRead },
-    { queryKey: ["group-campaigns", "admin", userId], queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns"), enabled: !revoked, retry: retryCampaignRead, refetchInterval: revoked ? false : 30000 },
+    { queryKey: ["group-campaigns", "admin", userId], queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns?include_hidden=true"), enabled: !revoked, retry: retryCampaignRead, refetchInterval: revoked ? false : 30000 },
   ] });
   const denied = revoked || [products, bundles, proposals, campaigns].some(query => campaignAccessDenied(query.error));
   useEffect(() => { if (denied) setRevoked(true); }, [denied]);
@@ -220,6 +221,7 @@ function CampaignAdminCard({ campaign, products, onDone, onAccessDenied }: { cam
   return <article className="admin-review-card group-proposal-card" aria-label={`共同購買 ${campaign.title}`}>
     <div className="review-card-copy"><span className="status-chip">{campaignStatusLabel(campaign, now)}</span><h3>{campaign.title}</h3><p>已付款 {campaign.paid_quantity}/{campaign.min_paid_quantity} · 保留 {campaign.reserved_quantity} · 剩餘 {campaign.available_quantity}</p><progress className="admin-progress" max={campaign.min_paid_quantity} value={campaign.paid_quantity} /><small>{campaignDateTime(campaign.deadline)} 付款截止 · {campaign.can_ship ? "可配送" : "合作社取貨"}</small></div>
     <Link to="/groups/$campaignId" params={{ campaignId: campaign.id }}>查看前台</Link>
+    <CatalogVisibilityControl kind="group" record={campaign} onDone={onDone} onDenied={onAccessDenied}/>
     <CampaignReviewPanel campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />
     <CampaignQuantityEditor campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />
   </article>;

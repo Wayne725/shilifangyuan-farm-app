@@ -21,6 +21,11 @@ export interface ActivityRegistration {
 export const activityAccessDenied = (error: unknown) => error instanceof ApiError && [401, 403].includes(error.status);
 export const retryActivityRead = (count: number, error: Error) => !activityAccessDenied(error) && count < 1;
 export const activityTime = (value?: string | null) => value ? new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`).getTime() : NaN;
+export const activityRegistrationClosed = (activity: { registration_deadline: string }, now = Date.now()) => now >= activityTime(activity.registration_deadline);
+export function activityStatusLabel(activity: { status: string; registration_deadline: string }, now = Date.now(), openLabel = '報名中') {
+  if (activity.status === 'published') return activityRegistrationClosed(activity, now) ? '報名已截止' : openLabel;
+  return { draft: '草稿', pending_review: '待審核', rejected: '未通過', cancelled: '已取消', completed: '已結束' }[activity.status] || '活動公告';
+}
 export const activityDate = (value?: string | null) => value && Number.isFinite(activityTime(value)) ? new Intl.DateTimeFormat('zh-TW', {timeZone:'Asia/Taipei', year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).format(activityTime(value)) : '—';
 export const activityMembershipLabel = (type: string) => ({member:'社員',trainee:'見習社員',nonmember:'非社員'}[type] || '非社員');
 export const activityPrice = (activity: {member_price?: number; non_member_price?: number}, type?: string) => ['member','trainee'].includes(type || '') ? activity.member_price || 0 : activity.non_member_price || 0;

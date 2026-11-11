@@ -256,6 +256,7 @@ export interface PickupLocation {
 }
 
 export interface Activity {
+  is_public?: boolean;
   id: string;
   created_by_id: string;
   title: string;
@@ -420,6 +421,7 @@ export interface MembershipApplication {
 }
 
 export interface GroupCampaign {
+  is_public?: boolean;
   id: string;
   source_proposal_id?: string | null;
   title: string;
@@ -601,6 +603,7 @@ export interface MealCancellationRequest {
   status: "pending" | "approved" | "rejected";
   requested_at: string;
   reviewed_by_id?: string | null;
+  reviewed_by_name?: string | null;
   reviewed_at?: string | null;
   review_reason?: string | null;
 }

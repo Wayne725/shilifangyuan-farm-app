@@ -2,8 +2,12 @@ import { canonicalEntryUrl } from "./lib/canonical-entry";
 
 let hasExistingDraft = false;
 try {
-  const cart: unknown = JSON.parse(window.localStorage.getItem("slf_cart") || "[]");
-  hasExistingDraft = (Array.isArray(cart) && cart.length > 0)
+  hasExistingDraft = Object.keys(window.localStorage).some(key => {
+    if (key !== "slf_cart" && !key.startsWith("slf_cart_v2:")) return false;
+    const value = JSON.parse(window.localStorage.getItem(key) || "[]");
+    const items = Array.isArray(value) ? value : value?.items;
+    return Array.isArray(items) && items.length > 0;
+  })
     || Object.keys(window.sessionStorage).some(key => key.startsWith("slf_meal_draft_v1:"));
 } catch {
   // Preserve an existing session when its local checkout state cannot be inspected.

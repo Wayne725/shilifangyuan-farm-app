@@ -1,6 +1,8 @@
 from copy import deepcopy
 
-from .membership_policy import get_public_membership_quiz
+from .membership_policy import (
+    MEMBERSHIP_ADMISSION_FEE, MEMBERSHIP_SHARE_UNIT_AMOUNT, get_public_membership_quiz,
+)
 
 
 ADMISSION_FLOW_VERSION = "education-review-v1"
@@ -45,7 +47,8 @@ _CONFIG = {
             "參加社務活動的義務。",
         ],
         "statement": "本人瞭解「有限責任臺灣城鄉永續生活消費合作社」是一種自助互助的民主經濟組織，也是社員基於實現永續生活的需要而組織的團體。因此，本人願意申請加入貴社，依本次填寫的股數認繳股金，遵守法令及章程規定，履行各項權利義務，敬請許可入社。",
-        "share_unit_amount": 100,
+        "admission_fee_amount": MEMBERSHIP_ADMISSION_FEE,
+        "share_unit_amount": MEMBERSHIP_SHARE_UNIT_AMOUNT,
         "student_min_shares": 5,
         "student_max_shares": 10,
         "general_min_shares": 10,

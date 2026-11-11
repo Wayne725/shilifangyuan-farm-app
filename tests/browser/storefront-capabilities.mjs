@@ -14,7 +14,7 @@ async function fixture(t, { platform = pickup, path = '/checkout', admin = false
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
-  await context.addInitScript((product) => localStorage.setItem('slf_cart', JSON.stringify([{ product, quantity: 1 }])), product);
+  await context.addInitScript((product) => localStorage.setItem('slf_cart_v2:user:buyer', JSON.stringify({ items: [{ product, quantity: 1 }] })), product);
   const writes = [], errors = [], unknown = [];
   let release;
   const gate = new Promise(resolve => { release = resolve; });

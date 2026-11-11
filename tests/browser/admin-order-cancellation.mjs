@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const { chromium, webkit } = createRequire(import.meta.url)('playwright');
+const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4185');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('Use isolated local fixtures only');
 const base = target.origin;
@@ -20,8 +21,32 @@ const meal = {
   items: [{ offering_id: 'offering', meal_name: '隔離蔬食便當', quantity: 1, unit_price: 120, subtotal: 120, tax_type: 'taxable', selections: [] }],
 };
 
+for (const channel of ['regular', 'meal_preorder']) {
+  for (const width of [390, 1280]) {
+    test(`${channel} ${width}px 原因留空的退單紀錄顯示處理人與時間`, async t => {
+      const { page, state } = await fixture(t, { channel, width });
+      state.order = { ...state.order, available_actions: [], cancelled_at: '2030-01-02T02:30:00Z', payment_status: 'refund_pending', fulfillment_status: 'cancelled',
+        cancellation_request: { id: 'approved-request', order_id: state.order.id, status: 'approved', reason: '', review_reason: '', requested_at: '2030-01-02T02:00:00Z', reviewed_by_id: 'admin', reviewed_by_name: '隔離核對員', reviewed_at: '2030-01-02T02:30:00Z' } };
+      if (channel === 'regular') state.order.shipment = { id: 'shipment', channel: 'home_delivery', temperature: 'ambient', status: 'in_transit', shipping_fee: 0 };
+      await page.goto(`${base}/admin?section=orders`);
+      const record = page.getByRole('region', { name: '退單審核', exact: true });
+      await record.getByRole('heading', { name: '退單已核准', exact: true }).waitFor();
+      await record.getByText('處理人：隔離核對員', { exact: true }).waitFor();
+      assert.match(await record.textContent(), /處理時間：/);
+      assert.doesNotMatch(await record.textContent(), /未記錄/);
+      assert.equal(await record.getByText('買家申請原因：', { exact: false }).count(), 0);
+      if (channel === 'regular') {
+        await page.locator('.system-state').getByText('宅配到府 · 配送中', { exact: true }).waitFor();
+        assert.equal(await page.getByText('in_transit', { exact: true }).count(), 0);
+      }
+      assert.deepEqual(state.writes, []);
+      await assertClean(page, state);
+    });
+  }
+}
+
 async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 'regular', status = 'paid' } = {}) {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block', reducedMotion: 'reduce' });
   const state = {

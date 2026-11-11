@@ -29,7 +29,7 @@ from ..domain import (
     DomainError,
     aware,
     ensure_admin_cancel_allowed,
-    included_tax_amount,
+    invoice_estimated_tax_amount,
     member_sale_is_tax_exempt,
     order_available_actions,
     order_amendment_blocked_reason,
@@ -215,7 +215,9 @@ async def quote_products(
             )
         )
     member_tax_exempt = member_sale_is_tax_exempt(membership_type, invoice_buyer_type)
-    tax_amount = sum(included_tax_amount(line.subtotal, line.tax_type) for line in lines)
+    tax_amount = invoice_estimated_tax_amount(
+        ((line.subtotal, line.tax_type) for line in lines), invoice_buyer_type,
+    )
     amount_total = sum(line.subtotal for line in lines)
     confirmation = {
         "membership_type": membership_type.value, "member_tax_exempt": member_tax_exempt,
@@ -715,6 +717,7 @@ async def review_order_cancellation(
         await _cancel_approved_order(session, order, admin, request.reason)
     request.status = result
     request.reviewed_by_id = admin.id
+    request.reviewed_by = admin
     request.reviewed_at = datetime.now(timezone.utc)
     request.review_reason = body.reason
     session.add(AdminAudit(actor_id=admin.id, action=f"order_cancellation.{result}",
@@ -741,7 +744,7 @@ async def admin_cancel_order(
     await _cancel_approved_order(session, order, admin, body.reason)
     now = datetime.now(timezone.utc)
     request = MealCancellationRequest(order=order, requested_by_id=admin.id, reason=body.reason,
-        status="approved", requested_at=now, reviewed_by_id=admin.id, reviewed_at=now, review_reason=body.reason)
+        status="approved", requested_at=now, reviewed_by_id=admin.id, reviewed_by=admin, reviewed_at=now, review_reason=body.reason)
     session.add(request)
     await session.flush()
     session.add(AdminAudit(actor_id=admin.id, action="order_cancellation.approved", aggregate_type="order", aggregate_id=order.id,

@@ -27,9 +27,11 @@ async def test_saved_invoice_tax_is_safe_and_consistent_across_order_apis(databa
     await database_session.commit()
     async with api_test_context(database_session, [*ROUTERS, operations_router, invoice_reports_router], settings=tax_settings()) as client:
         _, created = await quote_and_create(client, context)
-        assert created["tax_amount"] == 5 and created["amount_total"] == 120
+        assert created["tax_amount"] == (5 if personal else 6) and created["amount_total"] == 120
         assert created["invoice_tax"] is None
         order = await stored_order(database_session, created["id"])
+        # Preserve a historical estimate even when the actual invoice differs.
+        order.tax_amount = 5
         invoice = None
         if case != "pending":
             fixture = fanyu(personal=personal)

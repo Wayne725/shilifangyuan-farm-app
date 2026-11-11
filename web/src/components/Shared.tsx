@@ -49,7 +49,6 @@ export function ProductCard({
       <div className="product-copy">
         <div className="product-meta">
           <span>{product.supplier_name || "合作社共同選品"}</span>
-          <span>{product.sku || product.product_number || "依批次供應"}</span>
         </div>
         <h3><Link to="/products/$productId" params={{ productId: product.id }}>{product.name}</Link></h3>
         <p>{product.description || "產地與批次資訊由合作社維護。"}</p>
