@@ -1,4 +1,6 @@
+import base64
 from datetime import timedelta
+import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -15,6 +17,39 @@ from app.database import get_session
 from app.models import Order, OutboxEvent, PrintJob, User, UserRole
 from tests.support import make_test_settings
 from tests.test_integrations import make_regular_order
+
+
+@pytest.mark.parametrize("environment", ["preview", "production"])
+def test_remote_recovery_starts_without_provider_credentials(environment, monkeypatch):
+    settings = make_test_settings(
+        environment=environment,
+        recovery_mode=True,
+        database_url="postgresql+asyncpg://localhost/recovery",
+        jwt_secret="j" * 32,
+        internal_reconcile_secret="r" * 32,
+        demo_admin_password="isolated-admin-password",
+        demo_member_password="isolated-member-password",
+        demo_nonmember_password="isolated-customer-password",
+        pii_encryption_keys_json=json.dumps({"v1": base64.b64encode(b"p" * 32).decode()}),
+        pii_encryption_current_version="v1",
+    )
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    assert main_module.create_app().state.recovery_read_only
+
+    unsafe_auth = settings.model_copy(update={"jwt_secret": "short", "web_base_url": "http://localhost"})
+    with pytest.raises(RuntimeError, match="JWT_SECRET.*WEB_BASE_URL"):
+        unsafe_auth.validate_runtime_secrets()
+
+    if environment == "production":
+        unsafe_database = settings.model_copy(update={
+            "database_url": "sqlite+aiosqlite:///:memory:",
+            "pii_encryption_keys_json": "{}",
+        })
+        with pytest.raises(RuntimeError, match="PII_ENCRYPTION_KEYS_JSON.*DATABASE_URL"):
+            unsafe_database.validate_runtime_secrets()
+
+    with pytest.raises(RuntimeError, match="RESEND_API_KEY"):
+        settings.model_copy(update={"recovery_mode": False}).validate_runtime_secrets()
 
 
 @pytest.mark.asyncio
