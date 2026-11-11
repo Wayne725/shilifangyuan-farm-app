@@ -9,6 +9,7 @@ import { CloudPrintPanel } from "../components/CloudPrintPanel";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { useAdminPanelAccess } from "../lib/admin-panel-access";
+import { adminPlatformQueryKey, useAdminPlatformSettings } from "../lib/admin-platform-settings";
 import { financeDateTime, taipeiDate } from "../lib/meal-finance";
 import { shiftMealDate } from "../lib/meal-time";
 import type { KitchenList, KitchenOrder } from "../lib/meal-kitchen";
@@ -16,7 +17,25 @@ import "./AdminKitchenPage.css";
 
 const kitchenStates = { pending_confirmation: "待製作", preparing: "製作中", ready_for_pickup: "待取餐" };
 const pageSize = 50;
-const privateQueryKeys = [["meal-kitchen"], ["meal-kitchen-ticket"], ["admin-platform"], ["cloud-printer"], ["print-jobs"], ["print-job"]];
+const privateQueryKeys = [["meal-kitchen"], ["meal-kitchen-ticket"], adminPlatformQueryKey, ["cloud-printer"], ["print-jobs"], ["print-job"]];
+const printerConnections = {
+  unknown: "尚未確定",
+  browser: "瀏覽器列印",
+  usb: "USB",
+  network: "網路",
+  bluetooth: "藍牙",
+};
+
+function playKitchenTone(audio: AudioContext, duration: number) {
+  const tone = audio.createOscillator(), gain = audio.createGain();
+  tone.connect(gain);
+  gain.connect(audio.destination);
+  tone.frequency.value = 880;
+  gain.gain.value = .08;
+  tone.start();
+  tone.stop(audio.currentTime + duration);
+  return tone;
+}
 
 export function AdminKitchenPage() {
   const { user, openLogin } = useAuth();
@@ -36,8 +55,11 @@ export function AdminKitchenPage() {
   const audio = useRef<AudioContext | null>(null);
   const observed = useRef<{key: string; ids: Set<string>} | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundError, setSoundError] = useState("");
+  const [testSoundStatus, setTestSoundStatus] = useState("");
   const retryRead = (count: number) => !access.isDenied() && count < 1;
-  const soundSettings = useQuery({queryKey: ["admin-platform"], queryFn: ({ signal }) => access.request<{kitchen_sound: boolean}>("/v1/admin/platform", { signal }), enabled: isAdmin && !access.denied, retry: retryRead});
+  const { settings, draft, edit, save, busy, canSave, changed, conflict, versionReady, reload, submit } = useAdminPlatformSettings(access, isAdmin, "管理員更新廚房出單與提示音");
+  const kitchenSound = settings.data?.kitchen_sound;
   const parameters = new URLSearchParams({ service_date: serviceDate, meal_period: mealPeriod, search, fulfillment_status: fulfillmentStatus, offset: String(offset), limit: String(pageSize) });
   const list = useQuery({ queryKey: ["meal-kitchen", serviceDate, mealPeriod, search, fulfillmentStatus, offset], queryFn: ({ signal }) => access.request<KitchenList>(`/v1/admin/meal-kitchen?${parameters}`, { signal }), enabled: isAdmin && !access.denied && Boolean(serviceDate), refetchInterval: access.denied ? false : 15_000, retry: retryRead });
   const update = useMutation({
@@ -67,13 +89,9 @@ export function AdminKitchenPage() {
     if (access.isDenied() || !list.data) return;
     const key = `${serviceDate}:${mealPeriod}:${search}:${fulfillmentStatus}:${offset}`;
     const ids = new Set(list.data.items.map(order => order.id));
-    if (soundEnabled && soundSettings.data?.kitchen_sound && audio.current?.state === "running" && observed.current?.key === key && [...ids].some(id => !observed.current?.ids.has(id))) {
-      const tone = audio.current.createOscillator(), gain = audio.current.createGain();
-      tone.connect(gain); gain.connect(audio.current.destination); tone.frequency.value = 880; gain.gain.value = .08;
-      tone.start(); tone.stop(audio.current.currentTime + .3);
-    }
+    if (soundEnabled && kitchenSound && audio.current?.state === "running" && observed.current?.key === key && [...ids].some(id => !observed.current?.ids.has(id))) playKitchenTone(audio.current, .3);
     observed.current = {key, ids};
-  }, [list.data, serviceDate, mealPeriod, search, fulfillmentStatus, offset, soundEnabled, soundSettings.data, access.isDenied]);
+  }, [list.data, serviceDate, mealPeriod, search, fulfillmentStatus, offset, soundEnabled, kitchenSound, access.isDenied]);
   useEffect(() => {
     if (!access.denied) return;
     setPreviewId(null); setPrintSnapshot(null); setPrintRequested(false); setSoundEnabled(false);
@@ -83,9 +101,30 @@ export function AdminKitchenPage() {
   useEffect(() => () => { void audio.current?.close(); }, []);
   async function enableSound() {
     if (access.isDenied()) return;
-    audio.current ||= new AudioContext();
-    await audio.current.resume();
-    if (!access.isDenied()) setSoundEnabled(audio.current.state === "running");
+    setSoundError("");
+    try {
+      const context = audio.current ||= new AudioContext();
+      await context.resume();
+      if (!access.isDenied()) setSoundEnabled(context.state === "running");
+    } catch {
+      if (!access.isDenied()) setSoundError("瀏覽器未允許播放提示音");
+    }
+  }
+  async function testSound() {
+    let context: AudioContext | undefined;
+    try {
+      const previewAudio = context = new AudioContext();
+      await previewAudio.resume();
+      if (access.isDenied()) {
+        void previewAudio.close();
+        return;
+      }
+      playKitchenTone(previewAudio, .25).onended = () => void previewAudio.close();
+      setTestSoundStatus("已播放測試提示音");
+    } catch {
+      void context?.close();
+      if (!access.isDenied()) setTestSoundStatus("瀏覽器未允許播放提示音");
+    }
   }
   const choosePreview = (order: KitchenOrder) => { setPreviewId(order.id); setReprint(false); setPrintRequested(false); setPrintSnapshot(null); print.reset(); };
   const closePreview = () => { setPreviewId(null); setPrintRequested(false); setPrintSnapshot(null); print.reset(); };
@@ -96,13 +135,41 @@ export function AdminKitchenPage() {
   return <section className="admin-module-page meal-kitchen-page">
     <header className="workspace-heading"><div><p className="eyebrow">KITCHEN / 廚房</p><h1>備餐與出單</h1></div></header>
     <AdminNav />
+    <details className="kitchen-device-settings">
+      <summary>印表機與提示音</summary>
+      {settings.isPending ? <LoadingLines count={2} /> : settings.isError ? <DataState title="出單設定無法讀取" detail={settings.error.message} onAction={() => void settings.refetch()} /> :
+        <form aria-label="出單設定" onSubmit={event => { event.preventDefault(); submit(); }}>
+          <fieldset disabled={busy} aria-label="印表機與提示音設定">
+            <div className="field-grid two-columns">
+              <label className="field"><span>印表機品牌</span><input maxLength={80} value={draft.printer_brand} onChange={event => edit({ printer_brand: event.target.value })} /></label>
+              <label className="field"><span>印表機型號</span><input maxLength={80} value={draft.printer_model} onChange={event => edit({ printer_model: event.target.value })} /></label>
+              <label className="field"><span id="kitchen-printer-connection-label">連接方式</span><select aria-labelledby="kitchen-printer-connection-label" value={draft.printer_connection} onChange={event => edit({ printer_connection: event.target.value as keyof typeof printerConnections })}>
+                {Object.entries(printerConnections).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select></label>
+            </div>
+            <p>80mm 備餐單可從瀏覽器列印</p>
+            <label className="check-field"><input type="checkbox" checked={draft.kitchen_sound} onChange={event => edit({ kitchen_sound: event.target.checked })} />啟用廚房新訂單提示音</label>
+            {testSoundStatus && <p role="status">{testSoundStatus}</p>}
+            {changed && <p className="form-error" role="alert">設定已更新。重新讀取會捨棄未儲存變更。</p>}
+            {!versionReady && <p className="form-error" role="alert">設定版本尚未確認，請重新讀取後再儲存。</p>}
+            {save.isError && <p className="form-error" role="alert">{save.error.message}</p>}
+            {save.isSuccess && <p className="form-success" role="status">出單設定已儲存</p>}
+            <div className="form-actions">
+              <button className="button button-primary" disabled={!canSave}>{save.isPending ? "儲存中…" : "儲存出單設定"}</button>
+              <button className="button button-quiet" type="button" onClick={() => void testSound()}>測試提示音</button>
+              {(changed || conflict || !versionReady) && <button type="button" className="button button-quiet" disabled={busy} onClick={() => void reload()}>重新讀取最新設定</button>}
+            </div>
+          </fieldset>
+        </form>}
+    </details>
     <CloudPrintPanel access={access} />
     <form className="meal-kitchen-search" aria-label="備餐訂單查詢" onSubmit={event => {event.preventDefault(); setSearch(searchDraft.trim()); setOffset(0); closePreview();}}>
       <label className="field"><span>查詢便當訂單</span><input type="search" maxLength={100} placeholder="訂單編號、姓名、餐點、取餐地點" value={searchDraft} onChange={event => setSearchDraft(event.target.value)} /></label>
       <label className="field"><span>備餐狀態</span><select aria-label="備餐狀態" value={fulfillmentStatus} onChange={event => {setFulfillmentStatus(event.target.value); setOffset(0); closePreview();}}><option value="all">全部備餐狀態</option>{Object.entries(kitchenStates).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <div className="meal-kitchen-search-actions"><button className="button button-primary" type="submit">查詢</button><button className="button button-quiet" type="button" onClick={() => {setSearch(""); setSearchDraft(""); setFulfillmentStatus("all"); setOffset(0); closePreview();}}>清除</button></div>
     </form>
-    {soundSettings.data?.kitchen_sound && <button className="button button-quiet kitchen-sound-button" type="button" onClick={() => void enableSound()} disabled={soundEnabled}>{soundEnabled ? "新訂單提示音已啟用" : "開啟本頁新訂單提示音"}</button>}
+    {kitchenSound && <button className="button button-quiet kitchen-sound-button" type="button" onClick={() => void enableSound()} disabled={soundEnabled}>{soundEnabled ? "新訂單提示音已啟用" : "開啟本頁新訂單提示音"}</button>}
+    {kitchenSound && soundError && <p role="alert">{soundError}</p>}
     <div className="meal-kitchen-filters">
       <div className="admin-quick-buttons" role="group" aria-label="快速備餐日期">{[{ label: "今天", date: taipeiDate() }, { label: "明天", date: shiftMealDate(taipeiDate(), 1) }].map(({ label, date }) => <button className="button button-quiet" key={label} type="button" aria-pressed={serviceDate === date} onClick={() => { setServiceDate(date); setOffset(0); closePreview(); }}>{label}</button>)}</div>
       <label className="field"><span>取餐日期</span><input type="date" required value={serviceDate} onChange={(event) => { setServiceDate(event.target.value); setOffset(0); closePreview(); }} /></label>

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataState, LoadingLines } from "./Shared";
 import { ApiError, apiFetch } from "../lib/api";
 import { OptionalMark } from "./OptionalMark";
+import "./MembershipEducationSettings.css";
 
 interface EducationSettings {
   configured: boolean;
@@ -74,8 +75,8 @@ export function MembershipEducationSettings() {
     && wholeNumber(draft.retry_interval_minutes, 525600);
   const conflict = save.error instanceof ApiError && save.error.status === 409;
   const busy = save.isPending || reloading;
-  return <form onSubmit={event => { event.preventDefault(); if (valid && draft) save.mutate(draft); }}>
-    <section className="admin-settings-section" aria-labelledby="membership-education-heading">
+  return <form className="membership-education-settings" onSubmit={event => { event.preventDefault(); if (valid && draft) save.mutate(draft); }}>
+    <section aria-labelledby="membership-education-heading">
       <p className="eyebrow">MEMBERSHIP EDUCATION / 入社教育</p>
       <h2 id="membership-education-heading">測驗重考設定</h2>
       {settings.isPending ? <LoadingLines count={3} /> : settings.isError ?

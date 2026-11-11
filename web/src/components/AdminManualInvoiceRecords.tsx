@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useLocation } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatMoney } from "../lib/api";
 import { financeDateTime } from "../lib/meal-finance";
 import { invoiceStatusLabel } from "../lib/labels";
+import "../pages/AdminRecordsPage.css";
 
 interface ManualInvoiceRecord {
   id: string;
@@ -24,8 +25,9 @@ interface ManualInvoiceRecord {
 }
 
 const pageSize = 5;
+const historyAnchor = "manual-invoice-records";
 
-function ManualInvoiceRecordsList() {
+function ManualInvoiceRecordsList({ paginate }: { paginate: boolean }) {
   const { user } = useAuth();
   const [offset, setOffset] = useState(0);
   const records = useQuery({
@@ -38,12 +40,12 @@ function ManualInvoiceRecordsList() {
   });
 
   return <div className="admin-manual-invoice-content">
-    <div className="admin-manual-invoice-toolbar">
-      {records.data && <span>共 {records.data.total} 筆</span>}
+    {(paginate || records.isError) && <div className="admin-manual-invoice-toolbar">
+      {paginate && records.data && <span>共 {records.data.total} 筆</span>}
       <button className="button button-quiet" type="button" disabled={records.isFetching} onClick={() => void records.refetch()}>
         {records.isFetching ? "更新中…" : "更新紀錄"}
       </button>
-    </div>
+    </div>}
     {records.isPending ? <p role="status">正在讀取手動開票紀錄…</p>
       : records.isError ? <p className="form-error" role="alert">{records.error.message}</p>
         : records.data.items.length === 0 ? <p role="status">尚無手動開票紀錄</p>
@@ -66,7 +68,7 @@ function ManualInvoiceRecordsList() {
                 </tr>)}</tbody>
               </table>
             </div>
-            {records.data.total > pageSize && <nav className="admin-pagination" aria-label="手動開票紀錄分頁">
+            {paginate && records.data.total > pageSize && <nav className="admin-pagination" aria-label="手動開票紀錄分頁">
               <button className="button button-quiet" type="button" disabled={offset === 0 || records.isFetching} onClick={() => setOffset(Math.max(0, offset - pageSize))}>上一頁</button>
               <span>{Math.floor(offset / pageSize) + 1}／{Math.ceil(records.data.total / pageSize)}</span>
               <button className="button button-quiet" type="button" disabled={offset + pageSize >= records.data.total || records.isFetching} onClick={() => setOffset(offset + pageSize)}>下一頁</button>
@@ -75,10 +77,21 @@ function ManualInvoiceRecordsList() {
   </div>;
 }
 
+export function RecentManualInvoiceRecords() {
+  return <section className="admin-manual-invoice-recent" aria-labelledby="recent-manual-invoice-heading">
+    <header className="admin-manual-invoice-recent-header">
+      <h2 id="recent-manual-invoice-heading">近期開票紀錄</h2>
+      <Link className="text-link" to="/admin/invoices" hash={historyAnchor}>查看完整紀錄</Link>
+    </header>
+    <ManualInvoiceRecordsList paginate={false} />
+  </section>;
+}
+
 export function AdminManualInvoiceRecords() {
-  const [open, setOpen] = useState(false);
-  return <details className="admin-manual-invoice-records" onToggle={event => setOpen(event.currentTarget.open)}>
+  const linked = useLocation({ select: location => location.hash === historyAnchor });
+  const [open, setOpen] = useState(linked);
+  return <details id={historyAnchor} className="admin-manual-invoice-records" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>手動開票紀錄</summary>
-    {open && <ManualInvoiceRecordsList/>}
+    {open && <ManualInvoiceRecordsList paginate />}
   </details>;
 }

@@ -1,14 +1,12 @@
 import { Link } from "@tanstack/react-router";
 
-type Section = "orders" | "manual-invoice" | "summary" | "issues" | "suppliers" | "locations";
+type Section = "orders" | "manual-invoice" | "summary" | "issues";
 
 const items: Array<{ section: Section; label: string }> = [
   { section: "orders", label: "訂單、付款與發票" },
   { section: "manual-invoice", label: "手動開票" },
   { section: "summary", label: "訂單彙整" },
   { section: "issues", label: "問題回報" },
-  { section: "suppliers", label: "供應者與審核狀態" },
-  { section: "locations", label: "取貨點維護" },
 ];
 
 export function AdminOperationsNav({ section }: { section: Section }) {

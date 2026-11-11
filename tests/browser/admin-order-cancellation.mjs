@@ -164,7 +164,7 @@ test('管理員可設定與清空客服電話，消費者訂單跟隨已存電�
 for (const status of ['pending', 'paid']) {
   test(`管理員商品 ${status} 原因可留空，確認後才辦理退單`, async t => {
     const { page, state } = await fixture(t, { status });
-    await page.goto(`${base}/admin`);
+    await page.goto(`${base}/admin?section=orders`);
     await page.getByRole('button', { name: '辦理退單', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '確認辦理退單', exact: true });
     const confirm = dialog.getByRole('button', { name: '確認退單', exact: true });
@@ -188,7 +188,7 @@ for (const status of ['pending', 'paid']) {
 for (const path of ['/admin', '/admin/meals']) {
   test(`${path} 便當退單先待現場退款，再核對實退款`, async t => {
     const { page, state } = await fixture(t, { width: 390, channel: 'meal_preorder' });
-    await page.goto(`${base}${path}`);
+    await page.goto(`${base}${path === '/admin' ? '/admin?section=orders' : path}`);
     await page.getByRole('button', { name: '辦理退單', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '確認辦理退單', exact: true });
     await dialog.getByLabel('退單原因', { exact: true }).fill('顧客來電，尚未取餐');
@@ -244,7 +244,7 @@ test('退單錯誤保留原因及對話，歷史待審入口仍可操作', async
   const { page, state } = await fixture(t);
   state.failure = true;
   state.order.cancellation_request = { id: 'existing-request', status: 'pending', reason: '既有退單申請', requested_at: '2030-01-02T01:00:00Z' };
-  await page.goto(`${base}/admin`);
+  await page.goto(`${base}/admin?section=orders`);
   await page.getByRole('button', { name: '拒絕退單申請', exact: true }).waitFor();
   await page.getByRole('button', { name: '辦理退單', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '確認辦理退單', exact: true });

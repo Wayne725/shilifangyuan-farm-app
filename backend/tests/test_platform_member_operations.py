@@ -87,6 +87,10 @@ async def test_register_newest_before_pagination_while_export_keeps_member_numbe
     assert all('_created_at' not in row for row in items)
     filtered = await client.get('/v1/admin/member-register', headers=headers, params={'q': 'SHARES-001'})
     assert [row['id'] for row in filtered.json()['items']] == [membership.id]
+    exact = await client.get('/v1/admin/member-register', headers=headers, params={'member_number': 'SHARES-002'})
+    assert [row['member_number'] for row in exact.json()['items']] == ['SHARES-002']
+    prefix = await client.get('/v1/admin/member-register', headers=headers, params={'member_number': 'SHARES-00'})
+    assert prefix.json()['total'] == 0
     exported = await client.get('/v1/admin/member-register.csv', headers=headers)
     csv_rows = list(csv.reader(io.StringIO(exported.text.lstrip('\ufeff'))))
     assert [row[0] for row in csv_rows[1:]] == ['SHARES-001', 'SHARES-002', 'SHARES-003']
@@ -110,6 +114,11 @@ async def test_receipts_idempotent_private_and_void_without_financial_side_effec
     assert await session.scalar(select(func.count(Notification.id)).where(Notification.event_type == 'membership_payment_recorded')) == 1
     report = (await client.get('/v1/admin/membership-payments', headers=headers)).json()
     assert report['summary'] == {'received': 5000, 'refunded': 0, 'net': 5000}
+    for ledger, expected in [('membership-payments', 1), ('points-ledger', 1)]:
+        exact = await client.get(f'/v1/admin/{ledger}', headers=headers, params={'member_number': stored.member_number})
+        missing = await client.get(f'/v1/admin/{ledger}', headers=headers, params={'member_number': stored.member_number[:-1]})
+        assert exact.json()['total'] == expected
+        assert missing.json()['total'] == 0
     exported = await client.get('/v1/admin/membership-payments.csv', headers=headers)
     assert "'=PAYMENT12345" in exported.text
     path = f'/v1/admin/membership-offline-receipts/{stored.id}/void'

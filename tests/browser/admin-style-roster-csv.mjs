@@ -28,9 +28,23 @@ async function fixture(t, width, invalid = false) {
       if (emptyLists.includes(path)) return route.fulfill({ json: [] });
       if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', sales_scope: 'all' } });
       if (path === '/v1/admin/membership/admissions') return route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0 } });
+      if (path === '/v1/admin/users') return route.fulfill({ json: { items: [{
+        id: 'member-user', membership_id: 'membership-one', display_name: '測試社員', email: 'member@example.com',
+        is_active: true, membership_status: 'active', member_number: 'CSV-001', created_at: '2030-01-01T00:00:00Z',
+      }], total: 1 } });
+      if (['/v1/admin/member-register', '/v1/admin/membership-payments', '/v1/admin/points-ledger'].includes(path)) {
+        return route.fulfill({ json: { items: [], total: 0, summary: { received: 0, refunded: 0, net: 0 } } });
+      }
       if (path === '/v1/admin/printers/status') return route.fulfill({ json: { enabled: false, dry_run: true, status: 'disabled', error: null } });
       if (path === '/v1/admin/printers/jobs') return route.fulfill({ json: { items: [], total: 0, limit: 30, offset: 0 } });
       if (path === '/v1/admin/platform') return route.fulfill({ json: { kitchen_sound: false } });
+      if (path === '/v1/admin/today') return route.fulfill({ json: {
+        pending_admissions: 2, pending_order_cancellations: 3, unpaid_business_orders: 4,
+        pending_activity_refunds: 1, active_activities: 2, active_activity_registrations: 7,
+        active_campaigns: 3, pending_campaign_decisions: 1, voting_group_proposals: 2,
+        voting_member_proposals: 2, invoice_followups: 5,
+      } });
+      if (path === '/v1/admin/order-search') state.orderFilters = Object.fromEntries(url.searchParams);
       if (['/v1/admin/order-search', '/v1/admin/failed-jobs'].includes(path)) return route.fulfill({ json: { items: [], total: 0, limit: 12, offset: 0 } });
       if (path === '/v1/admin/meal-kitchen') return route.fulfill({ json: { items: [], total: 0, meal_quantity: 0, products: [] } });
       if (path === '/v1/admin/finance/meal-sales') return route.fulfill({ json: { summary: { received: 0, refunded: 0, net: 0, receipt_count: 0, refund_count: 0, paid_meal_quantity: 0, pending_refund_amount: 0 }, orders: { items: [], total: 0 }, daily: [], weekly: [], monthly: [], products: [] } });
@@ -52,6 +66,33 @@ async function fixture(t, width, invalid = false) {
   return { page, state };
 }
 
+test('願望管理舊連結轉到商品，會員帳冊三個分頁沿用同一社員編號', async t => {
+  const { page, state } = await fixture(t, 390);
+  await page.goto(`${base}/admin/social?tab=wishes`);
+  await page.waitForURL('**/admin/groups?tab=wishes');
+  await page.getByRole('heading', { name: '社員願望', exact: true }).waitFor();
+  assert.equal(state.reads.includes('/v1/wishes'), true);
+  await page.goto(`${base}/admin/users`);
+  const register = page.waitForRequest(req => new URL(req.url()).pathname === '/v1/admin/member-register');
+  await page.getByRole('navigation', { name: '測試社員的社員資料', exact: true }).getByRole('link', { name: '社員帳冊', exact: true }).click();
+  await page.getByRole('heading', { name: '社員與收款紀錄', exact: true }).waitFor();
+  await page.getByText('社員編號 CSV-001', { exact: true }).waitFor();
+  assert.equal(new URL((await register).url()).searchParams.get('member_number'), 'CSV-001');
+  for (const [name, path] of [
+    ['入社費與股金', '/v1/admin/membership-payments'], ['累積點數', '/v1/admin/points-ledger'],
+  ]) {
+    const request = page.waitForRequest(req => new URL(req.url()).pathname === path);
+    await page.getByRole('button', { name, exact: true }).click();
+    assert.equal(new URL((await request).url()).searchParams.get('member_number'), 'CSV-001');
+  }
+  const shares = page.getByRole('button', { name: '社員股籍', exact: true });
+  await shares.click();
+  await page.getByText('社員編號 CSV-001', { exact: true }).waitFor();
+  assert.equal(await shares.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.unknown, []);
+});
+
 async function noOverflow(page) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, '頁面不能水平溢出');
 }
@@ -64,6 +105,28 @@ async function screenshot(page, name) {
 }
 
 for (const width of [1440, 390]) {
+  test(`${width}px 今日待辦一次讀取數量，合計退單及會餐發票捷徑打開對應篩選`, async t => {
+    const { page, state } = await fixture(t, width);
+    await page.goto(`${base}/admin`);
+    await page.getByRole('heading', { name: '今日待辦', exact: true }).waitFor();
+    const list = page.getByRole('list', { name: '今日待辦清單' });
+    await list.getByRole('link', { name: /進行中的活動.*共 7 人次報名/ }).waitFor();
+    assert.equal(await list.getByRole('link').count(), 10);
+    assert.equal(state.reads.filter(path => path.startsWith('/v1/admin/')).join(','), '/v1/admin/today');
+    await noOverflow(page);
+    await list.getByRole('link', { name: /待審退單.*3 筆/ }).click();
+    await page.getByText('沒有符合條件的訂單。').waitFor();
+    assert.equal(state.orderFilters.cancellation_pending, 'true');
+    assert.equal(state.orderFilters.order_category, 'all');
+    await page.getByRole('link', { name: '今日待辦', exact: true }).click();
+    await list.getByRole('link', { name: /發票待合作社處理.*5 筆/ }).click();
+    await page.getByText('沒有符合條件的訂單。').waitFor();
+    assert.equal(state.orderFilters.invoice_followup, 'true');
+    assert.equal(state.orderFilters.order_category, 'meal');
+    assert.deepEqual(state.unknown, []);
+    assert.deepEqual(state.errors, []);
+  });
+
   test(`${width}px 營運選單沿用商品供應底線頁籤，功能分頁仍可操作`, { timeout: 30000 }, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin/catalog`);
@@ -102,10 +165,14 @@ for (const width of [1440, 390]) {
     await textSize.getByRole('button', { name: '標準', exact: true }).click();
     await screenshot(page, `admin-underline-${width}`);
     await noOverflow(page);
-    for (const [label, section] of [['問題回報', 'issues'], ['供應者與審核狀態', 'suppliers'], ['取貨點維護', 'locations']]) {
-      await nav.getByRole('link', { name: label, exact: true }).click();
-      await page.waitForURL(`**/admin?section=${section}`);
-      assert.equal(await nav.getByRole('link', { name: label, exact: true }).getAttribute('aria-current'), 'page');
+    const issues = nav.getByRole('link', { name: '問題回報', exact: true });
+    await issues.click();
+    await page.waitForURL('**/admin?section=issues');
+    assert.equal(await issues.getAttribute('aria-current'), 'page');
+    for (const [label, tab] of [['供應者與審核狀態', 'suppliers'], ['取貨點維護', 'locations']]) {
+      assert.equal(await nav.getByRole('link', { name: label, exact: true }).count(), 0);
+      await page.goto(`${base}/admin?section=${tab}`);
+      await page.waitForURL(`**/admin/catalog?tab=${tab}`);
       await noOverflow(page);
     }
     await page.goto(`${base}/shop`);

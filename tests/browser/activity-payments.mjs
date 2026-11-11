@@ -5,14 +5,16 @@ const {chromium}=createRequire(import.meta.url)('playwright');
 const origin=new URL(process.env.BROWSER_TEST_URL||'http://127.0.0.1:4197');
 if(!['localhost','127.0.0.1'].includes(origin.hostname)||origin.pathname!=='/')throw new Error('Isolated localhost required');
 const base=origin.origin;
+const adminActivitiesPath='/admin/social?tab=activities';
+const adminRefundsPath=adminActivitiesPath+'&view=refunds';
 const activity={id:'activity',title:'隔離走讀活動',description:'社區走讀',location:'合作社',status:'published',starts_at:'2030-01-05T02:00:00Z',ends_at:'2030-01-05T04:00:00Z',registration_deadline:'2030-01-04T02:00:00Z',capacity:2,registration_count:0,waitlist_count:0,member_price:100,non_member_price:200,payment_window_hours:24,updated_at:'2030-01-01T00:00:00Z',my_registration:null};
 const charge={id:'charge',number:'ACT-001',activity_id:'activity',registration_id:'registration',registration_revision:1,activity_title:activity.title,contact_name:'隔離報名者',contact_email:'activity@example.test',membership_type:'nonmember',amount:200,payment_status:'pending',expires_at:'2030-01-03T02:00:00Z',paid_at:null,created_at:'2030-01-02T02:00:00Z',available_actions:['pay'],refund_requests:[]};
 const registration={id:'registration',activity_id:'activity',activity_title:activity.title,starts_at:activity.starts_at,ends_at:activity.ends_at,location:'合作社',revision:1,contact_name:'隔離報名者',contact_email:'activity@example.test',status:'pending_payment',queue_position:1,charge,refund_request:null,available_actions:['cancel']};
 const refund={id:'refund',activity_charge_id:'charge',payment_attempt_id:'attempt',kind:'registration_cancellation',status:'pending_review',amount:200,reason:'無法參加',version:1,created_at:'2030-01-02T02:00:00Z'};
-async function fixture(t,{path='/activities',role='customer',width=1280,member=false,membershipType=null,reg=null,activityPatch={},charges=null,refunds=[],timezone='Asia/Taipei'}={}) {
+async function fixture(t,{path='/activities',role='customer',width=1280,member=false,membershipType=null,reg=null,activityPatch={},moreActivities=[],proposals=[],applications=[],memberships=[],charges=null,refunds=[],timezone='Asia/Taipei'}={}) {
  const browser=await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE});t.after(()=>browser.close());
  const context=await browser.newContext({viewport:{width,height:950},timezoneId:timezone,serviceWorkers:'block',reducedMotion:'reduce'});
- const state={activity:{...structuredClone(activity),...activityPatch,my_registration:structuredClone(reg)},registration:structuredClone(reg),charges:structuredClone(charges||reg?.charge&&[reg.charge]||[]),refunds:structuredClone(refunds),writes:[],reads:[],anonymousPrivateReads:[],refreshes:0,readUrls:[],unknown:[],errors:[],fail:null,readFail:null};
+ const state={activity:{...structuredClone(activity),...activityPatch,my_registration:structuredClone(reg)},applications:structuredClone(applications),registration:structuredClone(reg),charges:structuredClone(charges||reg?.charge&&[reg.charge]||[]),refunds:structuredClone(refunds),writes:[],reads:[],anonymousPrivateReads:[],refreshes:0,readUrls:[],unknown:[],errors:[],fail:null,readFail:null};
  const user={id:'user',display_name:'隔離報名者',email:'activity@example.test',notification_email:'activity@example.test',membership_type:membershipType||(member?'member':'nonmember'),membership_status:member?'active':null,user_role:role};
  await context.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url()),p=url.pathname,method=request.method();
@@ -24,8 +26,9 @@ async function fixture(t,{path='/activities',role='customer',width=1280,member=f
   if(p==='/v1/platform')return route.fulfill({json:{orders_open:true}});
   if(p==='/v1/members/me')return route.fulfill({json:{membership_type:user.membership_type,membership:member?{status:'active'}:null}});
   if(p==='/v1/activities'&&method==='GET')return route.fulfill({json:state.activity.is_public===false?[]:[state.activity]});
-  if(p==='/v1/admin/activities'&&method==='GET')return route.fulfill({json:[state.activity]});
+  if(p==='/v1/admin/activities'&&method==='GET')return route.fulfill({json:[state.activity,...moreActivities]});
   if(p==='/v1/admin/membership/admissions'&&method==='GET')return route.fulfill({json:{items:[],total:0}});
+  if(p==='/v1/admin/membership-education/settings'&&method==='GET')return route.fulfill({json:{configured:true,version:1,retry_limit:3,retry_interval_minutes:20,updated_at:null,updated_by_id:null}});
   if(p==='/v1/activity-registrations')return route.fulfill({json:state.registration?[state.registration]:[]});
   if(p==='/v1/activity-charges')return route.fulfill({json:state.charges});
   if(p==='/v1/activity-charges/charge'&&method==='GET')return route.fulfill({json:state.charges[0]||charge});
@@ -34,7 +37,10 @@ async function fixture(t,{path='/activities',role='customer',width=1280,member=f
   if(p==='/v1/admin/finance/activity-charges'){const rows=state.charges.map(item=>({...item,amount_received:200,refund_pending_review:0,refund_processing:200,amount_refunded:0,amount_net:200,transactions:[{id:'tx',merchant_trade_no:'ACTTRADE',provider:'raygate',provider_trade_no:'PROV',amount:200,status:'paid',paid_at:'2030-01-02T02:00:00',refund_status:'failed',refund_amount:200,refund_completed_at:null,refund_review_status:'approved'}]}));return route.fulfill({json:{items:rows,total:rows.length,summary:{charge_count:rows.length,amount_due:200,amount_received:200,refund_pending_review:0,refund_processing:200,amount_refunded:0,amount_net:200}}});}
   if(p==='/v1/admin/finance/activity-charges.csv')return route.fulfill({contentType:'text/csv',headers:{'Content-Disposition':'attachment;filename=activities.csv'},body:'活動,金額\n走讀,200\n'});
   if(p==='/v1/admin/finance/meal-sales')return route.fulfill({json:{summary:{received:0,refunded:0,net:0,paid_meal_quantity:0,pending_refund_amount:0},orders:{items:[],total:0},daily:[],weekly:[],monthly:[],products:[]}});
-  if(['/v1/products','/v1/notifications','/v1/admin/member-proposals','/v1/admin/membership-applications','/v1/wishes','/v1/admin/meetings','/v1/admin/members','/v1/admin/member-roster'].includes(p))return route.fulfill({json:[]});
+  if(p==='/v1/admin/member-proposals'&&method==='GET')return route.fulfill({json:proposals});
+  if(p==='/v1/admin/membership-applications'&&method==='GET')return route.fulfill({json:state.applications});
+  if(p==='/v1/admin/members'&&method==='GET')return route.fulfill({json:memberships});
+  if(['/v1/products','/v1/notifications','/v1/wishes','/v1/admin/meetings','/v1/admin/member-roster'].includes(p))return route.fulfill({json:[]});
   if(p==='/v1/auth/line/status')return route.fulfill({json:{ready:true}});
   if(method==='POST'||method==='PATCH') {
    const body=request.postData()?request.postDataJSON():null;state.writes.push({path:p,method,body});
@@ -58,7 +64,7 @@ async function fixture(t,{path='/activities',role='customer',width=1280,member=f
   state.unknown.push(`${method} ${p}`);return route.fulfill({status:404,json:{detail:'未定義隔離API'}});
  });
  const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',error=>state.errors.push(error.message));await page.clock.install({time:new Date('2030-01-02T10:00:00+08:00')});
- const visit=async()=>{await page.goto(`${base}${path}`);if(path==='/admin/social'&&role==='admin')await page.getByLabel('審核範圍').selectOption('all');if(path==='/admin/finance'&&role==='admin')await page.getByRole('tab',{name:'活動收款',exact:true}).click();};
+ const visit=async()=>{await page.goto(`${base}${path}`);if(path==='/admin/social'&&role==='admin'){await page.getByRole('tab',{name:'活動管理',exact:true}).click();await page.getByLabel('活動範圍').selectOption('all');}if(path==='/admin/finance'&&role==='admin')await page.getByRole('tab',{name:'活動收款',exact:true}).click();};
  return {page,state,visit,user};
 }
 async function clean(page,state){assert.deepEqual(state.unknown,[]);assert.deepEqual(state.errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);}
@@ -103,8 +109,8 @@ for(const role of ['guest','customer'])test(`${role}不能取得後台活動資�
 test('管理員改收費版本409保留草稿，需重讀核對',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin'});await visit();await page.getByRole('button',{name:'收費設定'}).click();await page.getByLabel('非社員價格').fill('250');state.fail={path:'/v1/admin/activities/activity/payment-settings',status:409,patch:{updated_at:'2030-01-02T00:00:00Z',non_member_price:300}};await page.getByRole('button',{name:'儲存收費設定'}).click();await page.getByRole('button',{name:'重新讀取活動設定'}).waitFor();assert.equal(await page.getByLabel('非社員價格').inputValue(),'250');await page.getByRole('button',{name:'重新讀取活動設定'}).click();await page.getByLabel('已核對最新設定，保留目前輸入').check();await page.getByRole('button',{name:'儲存收費設定'}).click();await page.waitForFunction(()=>!document.querySelector('[aria-label="活動收費設定"]'));assert.equal(state.writes[1].body.expected_updated_at,'2030-01-02T00:00:00Z');assert.equal(state.activity.non_member_price,250);await clean(page,state);});
 for(const width of [390,1280])test(`取消整場先顯示人數總額並明確核准 ${width}`,async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width,reg:{...registration,status:'registered'}});await visit();await page.getByRole('button',{name:'取消活動',exact:true}).click();await page.getByText('核准整筆退款 1 筆 · 合計 $200').waitFor();const confirm=page.getByRole('button',{name:'確認取消及退款'});assert.equal(await confirm.isDisabled(),true);await page.getByLabel('取消活動原因').fill('場地取消');await page.getByLabel('確認取消活動並核准以上退款').check();await screenshot(page,`activity-cancel-${width}`);await confirm.click();await page.getByText('已取消',{exact:true}).waitFor();assert.equal(state.writes.length,2);await clean(page,state);});
 test('整場取消409保留原因並要求更新預覽，不自動重送',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin'});await visit();await page.getByRole('button',{name:'取消活動',exact:true}).click();await page.getByLabel('取消活動原因').fill('保留原因');await page.getByLabel('確認取消活動並核准以上退款').check();state.fail={path:'/v1/admin/activities/activity/cancel',status:409};await page.getByRole('button',{name:'確認取消及退款'}).click();await page.getByText('報名或收款資料已變動，請重新預覽退款範圍。').waitFor();assert.equal(await page.getByLabel('取消活動原因').inputValue(),'保留原因');assert.equal(await page.getByRole('button',{name:'確認取消及退款'}).isDisabled(),true);assert.equal(state.writes.length,2);await clean(page,state);});
-test('單筆退款顯示版本與完整金額，核准後才離開待審',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',refunds:[refund],charges:[{...charge,payment_status:'paid'}]});await visit();const form=page.getByRole('form',{name:'審核活動退款'});await form.getByLabel('退款審核原因').fill('同意整筆退款');assert.equal(state.writes.length,0);await form.getByRole('button',{name:'確認核准退款 $200'}).click();await page.getByText('沒有符合的退款申請').waitFor();assert.equal(state.writes[0].body.expected_version,1);assert.equal(state.writes[0].body.expected_amount,200);await clean(page,state);});
-test('外部已退款僅呈現紀錄，不再給管理員核准',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',refunds:[{...refund,status:'externally_refunded'}]});await visit();await page.getByLabel('退款審核狀態').selectOption('');await page.getByText(/金流已退款 · \$200/).waitFor();assert.equal(await page.getByRole('form',{name:'審核活動退款'}).count(),0);assert.equal(state.writes.length,0);await clean(page,state);});
+test('單筆退款顯示版本與完整金額，核准後才離開待審',async t=>{const{page,state,visit}=await fixture(t,{path:adminRefundsPath,role:'admin',activityPatch:{status:'completed',is_public:false},refunds:[refund],charges:[{...charge,payment_status:'paid'}]});await visit();const form=page.getByRole('form',{name:'審核活動退款'});await form.getByLabel('退款審核原因').fill('同意整筆退款');assert.equal(state.writes.length,0);await form.getByRole('button',{name:'確認核准退款 $200'}).click();await page.getByText('沒有符合的退款申請').waitFor();assert.equal(state.writes[0].body.expected_version,1);assert.equal(state.writes[0].body.expected_amount,200);await clean(page,state);});
+test('外部已退款僅呈現紀錄，不再給管理員核准',async t=>{const{page,state,visit}=await fixture(t,{path:adminRefundsPath,role:'admin',refunds:[{...refund,status:'externally_refunded'}]});await visit();await page.getByLabel('退款審核狀態').selectOption('');await page.getByText(/金流已退款 · \$200/).waitFor();assert.equal(await page.getByRole('form',{name:'審核活動退款'}).count(),0);assert.equal(state.writes.length,0);await clean(page,state);});
 for(const status of [401,403])test(`管理員收費mutation ${status}整區隱藏`,async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin'});await visit();await page.getByRole('button',{name:'收費設定'}).click();state.fail={path:'/v1/admin/activities/activity/payment-settings',status};await page.getByRole('button',{name:'儲存收費設定'}).click();if(status===401)await page.getByRole('heading',{name:'社務管理只向管理者開放。',exact:true}).waitFor();else await page.getByText('活動管理權限已失效，請重新登入。').waitFor();assert.equal(await page.getByRole('heading',{name:activity.title}).count(),0);await clean(page,state);});
 for(const width of [390,1280])test(`活動財務獨立查詢，失敗退款不扣淨收 ${width}`,async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/finance',role:'admin',width,charges:[{...charge,payment_status:'paid'}]});await visit();const section=page.getByRole('region',{name:'活動收款報表'});await section.locator('.meal-finance-stats').getByText('原應收',{exact:true}).waitFor();await section.locator('summary').click();await page.getByText(/退款失敗待處理/).waitFor();await section.getByText('已付款 · $200 · 2030/1/2 10:00',{exact:true}).waitFor();assert.equal(await section.locator('.meal-finance-stats').getByText('淨收款',{exact:true}).locator('..').textContent(),'淨收款$200');await page.getByLabel('活動或報名者').fill('走讀');await page.getByRole('button',{name:'查詢活動收款'}).click();await screenshot(page,`activity-finance-${width}`);assert.equal(state.writes.length,0);await clean(page,state);});
 test('活動財務403後移除交易資料',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/finance',role:'admin',charges:[charge]});await visit();await page.getByText('ACT-001').waitFor();state.readFail={path:'/v1/admin/finance/activity-charges',status:403};await page.getByRole('button',{name:'更新活動收款'}).click();await page.getByText('活動財務權限已失效').waitFor();assert.equal(await page.getByText('ACT-001').count(),0);await clean(page,state);});
@@ -115,9 +121,16 @@ test('重複款待審不擋正常款取消申請',async t=>{const duplicate={...
 test('取消預覽重新讀取失敗不得沿用舊預覽核准',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin'});await visit();await page.getByRole('button',{name:'取消活動',exact:true}).click();await page.getByText('核准整筆退款 1 筆 · 合計 $200').waitFor();await page.getByLabel('取消活動原因').fill('取消活動');await page.getByLabel('確認取消活動並核准以上退款').check();state.fail={path:'/v1/admin/activities/activity/cancellation-preview',status:503};await page.getByRole('button',{name:'更新取消預覽'}).click();await page.getByText('隔離操作失敗').waitFor();assert.equal(await page.getByRole('button',{name:'確認取消及退款'}).isDisabled(),true);assert.equal(state.writes.filter(row=>row.path.endsWith('/cancel')).length,0);await clean(page,state);});
 
 test('活動收款CSV沿用已套用查詢，不受尚未送出的草稿或頁碼影響',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/finance',role:'admin',charges:[charge]});await visit();await page.getByText('ACT-001').waitFor();await page.getByLabel('活動或報名者').fill('走讀');await page.getByLabel('活動付款狀態').selectOption('paid');await page.getByRole('button',{name:'查詢活動收款'}).click();await page.getByLabel('活動或報名者').fill('未送出草稿');const waiting=page.waitForEvent('download');await page.getByRole('button',{name:'匯出活動收款 CSV'}).click();await waiting;const csv=new URL(state.readUrls.findLast(url=>url.includes('activity-charges.csv')));assert.equal(csv.searchParams.get('q'),'走讀');assert.equal(csv.searchParams.get('status'),'paid');assert.equal(csv.searchParams.has('offset'),false);await clean(page,state);});
-test('退款待審列入後台待處理數量，不誤顯示沒有待辦',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',refunds:[refund]});await visit();await page.getByText('其他及舊版待辦 1 件',{exact:true}).waitFor();assert.equal(await page.getByText('其他及舊版審核目前沒有待處理事項',{exact:true}).count(),0);await clean(page,state);});
+test('活動退款連結只讀取退款相關資料，仍可處理歷史活動的待審款項',async t=>{
+ const {page,state,visit}=await fixture(t,{path:adminRefundsPath,role:'admin',activityPatch:{status:'completed'},refunds:[refund]});
+ await visit();
+ await page.getByRole('button',{name:'確認核准退款 $200',exact:true}).waitFor();
+ assert.deepEqual(state.reads.filter(path=>path.startsWith('/v1/admin/')),['/v1/admin/activity-refund-requests']);
+ assert.equal(state.writes.length,0);
+ await clean(page,state);
+});
 
-test('取消整場會同步更新已展開名單與退款待審，不留下出席操作',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',reg:{...registration,status:'registered'},refunds:[refund]});await visit();await page.getByRole('button',{name:'報名名單',exact:true}).click();const list=page.getByRole('region',{name:'隔離走讀活動報名名單'});await list.getByRole('button',{name:'已出席',exact:true}).waitFor();await page.getByRole('form',{name:'審核活動退款'}).waitFor();await page.getByRole('button',{name:'取消活動',exact:true}).click();await page.getByLabel('取消活動原因').fill('場地取消');await page.getByLabel('確認取消活動並核准以上退款').check();await page.getByRole('button',{name:'確認取消及退款'}).click();await list.getByText(/activity@example.test · 已取消/).waitFor();assert.equal(await list.getByRole('button',{name:'已出席',exact:true}).count(),0);await page.getByText('沒有符合的退款申請').waitFor();assert.equal(await page.getByRole('form',{name:'審核活動退款'}).count(),0);assert.ok(state.reads.filter(path=>path.endsWith('/registrations')).length>=2);await clean(page,state);});
+test('取消整場會同步更新已展開名單與退款待審，不留下出席操作',async t=>{const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',reg:{...registration,status:'registered'},refunds:[refund]});await visit();await page.getByRole('button',{name:'報名名單',exact:true}).click();const list=page.getByRole('region',{name:'隔離走讀活動報名名單'});await list.getByRole('button',{name:'已出席',exact:true}).waitFor();await page.getByRole('link',{name:'活動退款',exact:true}).click();await page.getByRole('form',{name:'審核活動退款'}).waitFor();await page.getByRole('link',{name:'活動清單',exact:true}).click();await page.getByRole('button',{name:'報名名單',exact:true}).click();await list.getByRole('button',{name:'已出席',exact:true}).waitFor();await page.getByRole('button',{name:'取消活動',exact:true}).click();await page.getByLabel('取消活動原因').fill('場地取消');await page.getByLabel('確認取消活動並核准以上退款').check();await page.getByRole('button',{name:'確認取消及退款'}).click();await list.getByText(/activity@example.test · 已取消/).waitFor();assert.equal(await list.getByRole('button',{name:'已出席',exact:true}).count(),0);await page.getByRole('link',{name:'活動退款',exact:true}).click();await page.getByText('沒有符合的退款申請').waitFor();assert.equal(await page.getByRole('form',{name:'審核活動退款'}).count(),0);assert.ok(state.reads.filter(path=>path.endsWith('/registrations')).length>=2);await clean(page,state);});
 
 for(const width of [390,1440])test(`出席更正原因可留空，失敗保稿且不改繳款代次 ${width}`,async t=>{
  const {page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width,
@@ -143,24 +156,170 @@ for(const width of [390,1440])test(`出席更正原因可留空，失敗保稿�
 for(const width of [390,1280])test(`${width}px活動停止公開可恢復且不取消報名或退款`,async t=>{
  const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width,reg:registration});await visit();
  const saved=structuredClone({registration:state.registration,charges:state.charges,status:state.activity.status});
- await page.getByRole('button',{name:'停止公開',exact:true}).click();await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();
+ const start=page.getByRole('button',{name:'停止公開',exact:true});
+ const dialog=page.getByRole('dialog',{name:'停止公開活動'});
+ await start.click();
+ await dialog.getByRole('button',{name:'返回',exact:true}).click();
+ assert.equal(state.writes.length,0);
+ await start.click();
+ assert.equal(state.writes.length,0);
+ await dialog.getByRole('button',{name:'確認停止公開',exact:true}).click();
+ await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();
+ const card=page.getByRole('article').filter({has:page.getByRole('heading',{name:activity.title,exact:true})});
+ assert.deepEqual(await card.locator('.status-chip').allTextContents(),['未公開']);
+ await card.getByRole('button',{name:'報名名單',exact:true}).click();
+ await page.getByRole('region',{name:`${activity.title}報名名單`}).getByText(/隔離報名者/).waitFor();
  assert.equal(state.activity.is_public,false);assert.deepEqual({registration:state.registration,charges:state.charges,status:state.activity.status},saved);
  await page.getByRole('button',{name:'恢復公開',exact:true}).click();await page.getByRole('button',{name:'停止公開',exact:true}).waitFor();
  assert.equal(state.writes.length,2);assert.ok(state.writes.every(row=>row.path==='/v1/admin/activities/activity/visibility'&&row.method==='PATCH'));
  assert.notEqual(state.writes[0].body.expected_updated_at,state.writes[1].body.expected_updated_at);assert.equal(state.activity.is_public,true);await clean(page,state);
 });
 
-test('活動隱藏後離開並重整，仍可由社務管理全部清單恢復公開',async t=>{
- const{page,state,visit}=await fixture(t,{path:'/admin/social',role:'admin',width:390,reg:registration});await visit();
- await page.getByRole('button',{name:'停止公開',exact:true}).click();await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();
+test('活動隱藏後離開並重整，仍可從活動歷史恢復公開',async t=>{
+ const{page,state,visit}=await fixture(t,{path:adminActivitiesPath,role:'admin',width:390,reg:registration});await visit();
+ await page.getByRole('button',{name:'停止公開',exact:true}).click();
+ await page.getByRole('button',{name:'確認停止公開',exact:true}).click();
+ await page.getByRole('heading',{name:activity.title,exact:true}).waitFor({state:'hidden'});
  const publicRead=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/activities');
  await page.goto(`${base}/activities`);await publicRead;await page.getByRole('heading',{name:'永續活動',exact:true}).waitFor();
  assert.equal(await page.getByRole('heading',{name:activity.title,exact:true}).count(),0);
- await page.goto(`${base}/admin/social`);await page.getByLabel('審核範圍').selectOption('all');
+ await page.goto(`${base}${adminActivitiesPath}`);await page.getByLabel('活動範圍').selectOption('history');
  await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();await page.reload();
- await page.getByLabel('審核範圍').selectOption('all');await page.getByRole('button',{name:'恢復公開',exact:true}).click();
+ await page.getByLabel('活動範圍').selectOption('history');await page.getByRole('button',{name:'恢復公開',exact:true}).click();
+ await page.getByRole('heading',{name:activity.title,exact:true}).waitFor({state:'hidden'});
+ await page.getByLabel('活動範圍').selectOption('current');
  await page.getByRole('button',{name:'停止公開',exact:true}).waitFor();
  assert.equal(state.activity.is_public,true);assert.equal(state.registration.status,registration.status);
  assert.equal(state.writes.length,2);assert.ok(state.writes.every(row=>row.method==='PATCH'&&row.path==='/v1/admin/activities/activity/visibility'));
  assert.ok(state.reads.filter(path=>path==='/v1/admin/activities').length>=3);await clean(page,state);
+});
+
+test('停止公開版本衝突須重新確認，仍保留報名',async t=>{
+ const {page,state,visit}=await fixture(t,{path:adminActivitiesPath,role:'admin',reg:registration});
+ await visit();
+ const version='2030-01-02T02:00:00Z';
+ state.fail={path:'/v1/admin/activities/activity/visibility',status:409,patch:{updated_at:version}};
+ const start=page.getByRole('button',{name:'停止公開',exact:true});
+ const confirm=page.getByRole('button',{name:'確認停止公開',exact:true});
+ await start.click();
+ await confirm.click();
+ await page.getByText('活動資料已更新，請返回後重新確認。',{exact:true}).waitFor();
+ assert.equal(await confirm.isDisabled(),true);
+ assert.equal(state.writes.length,1);
+ await page.getByRole('dialog',{name:'停止公開活動'}).getByRole('button',{name:'返回',exact:true}).click();
+ await start.click();
+ await confirm.click();
+ await page.getByRole('heading',{name:activity.title,exact:true}).waitFor({state:'hidden'});
+ assert.deepEqual(state.writes[1].body,{is_public:false,expected_updated_at:version});
+ assert.deepEqual(state.registration,registration);
+ await clean(page,state);
+});
+
+test('活動獨立連結預設進行中，已結束與未公開活動可查看',async t=>{
+ const history=[
+  {...activity,id:'past',title:'隔離已到期活動',ends_at:'2030-01-01T04:00:00Z'},
+  {...activity,id:'hidden',title:'隔離未公開活動',is_public:false},
+ ];
+ const pending={...activity,id:'pending',title:'隔離待審活動',status:'pending_review'};
+ const {page,state,visit}=await fixture(t,{path:adminActivitiesPath,role:'admin',width:390,moreActivities:[...history,pending]});
+ await visit();
+ const title=name=>page.getByRole('heading',{name,exact:true});
+ await title(activity.title).waitFor();
+ await title(pending.title).waitFor();
+ assert.equal(await page.getByRole('tab',{name:'活動管理',exact:true}).getAttribute('aria-selected'),'true');
+ for(const item of history)assert.equal(await title(item.title).count(),0);
+ await page.getByLabel('活動範圍').selectOption('active');
+ await page.waitForURL(url=>url.searchParams.get('tab')==='activities'&&url.searchParams.get('view')==='active');
+ await title(pending.title).waitFor({state:'hidden'});
+ await title(activity.title).waitFor();
+ await page.getByLabel('活動範圍').selectOption('history');
+ await page.waitForURL(url=>url.searchParams.get('tab')==='activities'&&!url.searchParams.has('view'));
+ for(const item of history)await title(item.title).waitFor();
+ assert.equal(await title(activity.title).count(),0);
+ await page.getByLabel('活動範圍').selectOption('all');
+ await title(activity.title).waitFor();
+ for(const item of history)await title(item.title).waitFor();
+ assert.equal(state.writes.length,0);
+ await clean(page,state);
+});
+
+test('社員提案表決連結只顯示可投票項目，可切進行中及歷史',async t=>{
+ const makeProposal=(id,title,status,end='2030-01-04T02:00:00Z')=>({id,title,status,voting_ends_at:end,body:'隔離提案',created_by_name:'隔離社員',tally:{total:0}});
+ const open=makeProposal('voting','隔離表決中','voting');
+ const expired=makeProposal('expired','隔離已截止表決','voting','2030-01-01T02:00:00Z');
+ const noDeadline=makeProposal('missing','隔離未排表決','voting',null);
+ const discussion=makeProposal('discussion','隔離討論中','discussion');
+ const closed=makeProposal('closed','隔離已結案提案','closed');
+ const {page,state,visit}=await fixture(t,{path:'/admin/social?tab=proposals&view=voting',role:'admin',width:390,proposals:[open,expired,noDeadline,discussion,closed]});
+ await visit();
+ const title=name=>page.getByRole('heading',{name,exact:true});
+ const scope=page.getByLabel('提案範圍');
+ await title(open.title).waitFor();
+ assert.equal(await scope.inputValue(),'voting');
+ for(const item of [expired,noDeadline,discussion,closed])assert.equal(await title(item.title).count(),0);
+ await scope.selectOption('current');
+ await page.waitForURL(url=>url.searchParams.get('tab')==='proposals'&&!url.searchParams.has('view'));
+ await title(discussion.title).waitFor();
+ assert.equal(await title(expired.title).count(),0);
+ await scope.selectOption('history');
+ for(const item of [expired,noDeadline,closed])await title(item.title).waitFor();
+ assert.equal(await title(open.title).count(),0);
+ await page.goBack();
+ await title(open.title).waitFor();
+ assert.equal(await scope.inputValue(),'voting');
+ assert.equal(state.writes.length,0);
+ await clean(page,state);
+});
+
+test('舊版入社預設只在有待辦時顯示，已處理可查看原紀錄',async t=>{
+ const history={id:'old-history',status:'approved',profile:{legal_name:'隔離歷史申請'},documents:[]};
+ const pending={id:'old-pending',status:'needs_supplement',profile:{legal_name:'隔離補件申請'},documents:[]};
+ const {page,state,visit}=await fixture(t,{path:'/admin/social?tab=reviews',role:'admin',applications:[history]});
+ const loaded=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/admin/membership-applications');
+ await visit();
+ await loaded;
+ const legacy=page.getByRole('heading',{name:'舊版入社資料',exact:true});
+ const title=name=>page.getByRole('heading',{name,exact:true});
+ assert.equal(await page.getByLabel('審核範圍').inputValue(),'pending');
+ assert.equal(await legacy.count(),0);
+ await page.getByLabel('審核範圍').selectOption('done');
+ await legacy.waitFor();
+ await title(history.profile.legal_name).waitFor();
+ await page.getByLabel('審核範圍').selectOption('pending');
+ await legacy.waitFor({state:'hidden'});
+ state.applications.push(pending);
+ await page.reload();
+ await title(pending.profile.legal_name).waitFor();
+ assert.equal(await title(history.profile.legal_name).count(),0);
+ await page.getByLabel('審核範圍').selectOption('all');
+ await title(history.profile.legal_name).waitFor();
+ await title(pending.profile.legal_name).waitFor();
+ assert.equal(state.writes.length,0);
+ await clean(page,state);
+});
+
+test('會籍獨立連結接受會籍 ID 與會員 ID',async t=>{
+ const makeMember=(id,userId,display_name)=>({id,user_id:userId,display_name,status:'active',share_capital_amount:100,share_count:1,updated_at:'2030-01-01T00:00:00Z'});
+ const target=makeMember('membership-target','user-target','隔離目標社員');
+ const other=makeMember('membership-other','user-other','隔離其他社員');
+ const {page,state,visit}=await fixture(t,{path:'/admin/social?tab=members&q=membership-target',role:'admin',memberships:[target,other]});
+ await visit();
+ const title=name=>page.getByRole('heading',{name:`${name} · 待編號`,exact:true});
+ await title(target.display_name).waitFor();
+ assert.equal(await title(other.display_name).count(),0);
+ await page.goto(`${base}/admin/social?tab=members&q=user-other`);
+ await title(other.display_name).waitFor();
+ assert.equal(await title(target.display_name).count(),0);
+ assert.equal(state.writes.length,0);
+ await clean(page,state);
+});
+
+test('入社教育連結可直接開啟重考設定，只讀該設定',async t=>{
+ const {page,state,visit}=await fixture(t,{path:'/admin/social?tab=education',role:'admin',width:390});
+ await visit();
+ await page.getByRole('heading',{name:'測驗重考設定',exact:true}).waitFor();
+ assert.equal(await page.getByLabel('額外重考次數（不含首次）').inputValue(),'3');
+ assert.deepEqual(state.reads.filter(path=>path.startsWith('/v1/admin/')),['/v1/admin/membership-education/settings']);
+ assert.equal(state.writes.length,0);
+ await clean(page,state);
 });

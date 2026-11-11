@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..admin_work_queues import admin_today_counts, business_invoice_followup_orders, pending_order_cancellation, unpaid_business_order
 from ..auth import require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -23,7 +24,6 @@ from ..models import (
     AdminAudit,
     Order,
     OrderItem,
-    MealCancellationRequest,
     OrderFulfillment,
     OutboxEvent,
     OutboxStatus,
@@ -220,6 +220,7 @@ async def search_admin_orders(
     q: str = Query(default="", max_length=120),
     cancellation_pending: bool = False,
     business_unpaid: bool = False,
+    invoice_followup: bool = False,
     order_category: OrderCategory = "all",
     payment_status: Optional[PaymentStatus] = None,
     limit: int = Query(default=12, ge=1, le=100),
@@ -231,12 +232,13 @@ async def search_admin_orders(
     response.headers["Cache-Control"] = "no-store"
     query = select(Order).where(order_category_condition(order_category))
     if business_unpaid:
-        query = query.where(Order.meal_booking_type == "business", Order.cancelled_at.is_(None),
-            Order.payment_status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
+        query = query.where(unpaid_business_order())
+    if invoice_followup:
+        query = query.where(Order.id.in_(business_invoice_followup_orders(session, datetime.now(timezone.utc))))
     if payment_status is not None:
         query = query.where(Order.payment_status == payment_status)
     if cancellation_pending:
-        query = query.where(Order.cancellation_requests.any(MealCancellationRequest.status == "pending"))
+        query = query.where(pending_order_cancellation())
     if term := q.strip():
         query = query.where(or_(
             Order.order_number.icontains(term, autoescape=True),
@@ -256,6 +258,16 @@ async def search_admin_orders(
         selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),
     ).order_by(Order.created_at.desc(), Order.id.desc()).offset(offset).limit(limit))
     return AdminOrderPage(items=[admin_order_read(order, settings) for order in orders], total=total or 0, limit=limit, offset=offset)
+
+
+@operations_router.get("/v1/admin/today")
+async def read_admin_today(
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, int]:
+    response.headers["Cache-Control"] = "no-store"
+    return await admin_today_counts(session)
 
 
 def _cipher(settings: Settings):

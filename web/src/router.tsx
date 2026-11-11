@@ -243,16 +243,34 @@ const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
   component: page("./pages/AdminPage", "AdminPage"),
-  validateSearch: (search: Record<string, unknown>): { q?: string; section?: "orders" | "manual-invoice" | "summary" | "issues" | "suppliers" | "locations" } => ({
+  validateSearch: (search: Record<string, unknown>): { q?: string; section?: "orders" | "manual-invoice" | "summary" | "issues" | "suppliers" | "locations"; queue?: "refunds" | "business-unpaid" | "invoice" } => ({
     q: typeof search.q === "string" ? search.q.trim().slice(0, 100) : undefined,
-    section: search.section === "manual-invoice" || search.section === "summary" || search.section === "issues" || search.section === "suppliers" || search.section === "locations" ? search.section : "orders",
+    section: search.section === "orders" || search.section === "manual-invoice" || search.section === "summary" || search.section === "issues" || search.section === "suppliers" || search.section === "locations" ? search.section : undefined,
+    queue: search.queue === "refunds" || search.queue === "business-unpaid" || search.queue === "invoice" ? search.queue : undefined,
   }),
+  beforeLoad: ({ search }) => {
+    if (search.section === "suppliers" || search.section === "locations") {
+      throw redirect({ to: "/admin/catalog", search: { tab: search.section }, replace: true });
+    }
+  },
 });
 
 const adminSocialRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/social",
   component: page("./pages/AdminSocialPage", "AdminSocialPage"),
+  validateSearch: (search: Record<string, unknown>): {
+    tab?: "reviews" | "activities" | "proposals" | "wishes" | "meetings" | "members" | "roster" | "education";
+    view?: "active" | "refunds" | "voting";
+    q?: string;
+  } => ({
+    tab: search.tab === "activities" || search.tab === "proposals" || search.tab === "wishes" || search.tab === "meetings" || search.tab === "members" || search.tab === "roster" || search.tab === "education" ? search.tab : "reviews",
+    view: search.tab === "activities" && (search.view === "active" || search.view === "refunds") ? search.view : search.tab === "proposals" && search.view === "voting" ? "voting" : undefined,
+    q: search.tab === "members" && typeof search.q === "string" ? search.q.trim().slice(0, 100) : undefined,
+  }),
+  beforeLoad: ({ search }) => {
+    if (search.tab === "wishes") throw redirect({ to: "/admin/groups", search: { tab: "wishes" }, replace: true });
+  },
 });
 
 const accountRoute = createRoute({
@@ -316,6 +334,10 @@ const adminGroupsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/groups",
   component: page("./pages/AdminGroupsPage", "AdminGroupsPage"),
+  validateSearch: (search: Record<string, unknown>): { tab?: "proposals" | "campaigns" | "bundles" | "wishes"; view?: "active" | "decision" | "voting" } => ({
+    tab: search.tab === "campaigns" || search.tab === "bundles" || search.tab === "wishes" ? search.tab : "proposals",
+    view: search.tab === "campaigns" && (search.view === "active" || search.view === "decision") ? search.view : search.view === "voting" && (!search.tab || search.tab === "proposals") ? "voting" : undefined,
+  }),
 });
 
 const adminMealsRoute = createRoute({
@@ -342,7 +364,15 @@ const adminKitchenRoute = createRoute({
   component: page("./pages/AdminKitchenPage", "AdminKitchenPage"),
 });
 
-const adminRecordsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/records", component: page("./pages/AdminRecordsPage", "AdminRecordsPage") });
+const adminRecordsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/records",
+  component: page("./pages/AdminRecordsPage", "AdminRecordsPage"),
+  validateSearch: (search: Record<string, unknown>): { tab?: "members" | "payments" | "points"; member?: string } => ({
+    tab: search.tab === "payments" || search.tab === "points" ? search.tab : "members",
+    member: typeof search.member === "string" ? search.member.trim().slice(0, 100) || undefined : undefined,
+  }),
+});
 
 const adminPromotionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/promotions", component: page("./pages/AdminPromotionsPage", "AdminPromotionsPage") });
 

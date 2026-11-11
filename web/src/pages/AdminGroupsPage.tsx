@@ -1,16 +1,17 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { Buildings, CheckCircle, Package, Plus } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { AdminNav } from "../components/AdminNav";
+import { AdminWishesPanel } from "../components/AdminWishesPanel";
 import { CampaignReviewPanel } from "../components/CampaignReviewPanel";
 import { CampaignQuantityEditor } from "../components/CampaignQuantityEditor";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
-import { campaignAccessDenied, campaignDateTime, campaignScheduleError, campaignStatusLabel, defaultReviewDeadline, groupProposalStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
+import { campaignAccessDenied, campaignDateTime, campaignScheduleError, campaignStatusLabel, campaignTimestamp, defaultReviewDeadline, groupProposalStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
 import { taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import type { GroupBundle, GroupCampaign, GroupVoteProposal, Product } from "../lib/types";
@@ -27,13 +28,16 @@ export function AdminGroupsPage() {
 }
 
 function AdminGroupsWorkspace({ userId }: { userId: string }) {
+  const { tab = "proposals", view } = useSearch({ from: "/admin/groups" });
+  const navigate = useNavigate({ from: "/admin/groups" });
+  const now = useDeadlineClock();
   const queryClient = useQueryClient();
   const [revoked, setRevoked] = useState(false);
   const [products, bundles, proposals, campaigns] = useQueries({ queries: [
-    { queryKey: ["admin-products", userId], queryFn: () => apiFetch<Product[]>("/v1/products"), enabled: !revoked, retry: retryCampaignRead },
-    { queryKey: ["group-bundles", userId], queryFn: () => apiFetch<GroupBundle[]>("/v1/group-bundles"), enabled: !revoked, retry: retryCampaignRead },
-    { queryKey: ["group-vote-proposals", userId], queryFn: () => apiFetch<GroupVoteProposal[]>("/v1/vote-proposals"), enabled: !revoked, retry: retryCampaignRead },
-    { queryKey: ["group-campaigns", "admin", userId], queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns?include_hidden=true"), enabled: !revoked, retry: retryCampaignRead, refetchInterval: revoked ? false : 30000 },
+    { queryKey: ["admin-products", userId], queryFn: () => apiFetch<Product[]>("/v1/products"), enabled: !revoked && tab !== "wishes", retry: retryCampaignRead },
+    { queryKey: ["group-bundles", userId], queryFn: () => apiFetch<GroupBundle[]>("/v1/group-bundles"), enabled: !revoked && tab !== "wishes", retry: retryCampaignRead },
+    { queryKey: ["group-vote-proposals", userId], queryFn: () => apiFetch<GroupVoteProposal[]>("/v1/vote-proposals"), enabled: !revoked && tab === "proposals", retry: retryCampaignRead },
+    { queryKey: ["group-campaigns", "admin", userId], queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns?include_hidden=true"), enabled: !revoked && (tab === "campaigns" || tab === "proposals"), retry: retryCampaignRead, refetchInterval: revoked ? false : 30000 },
   ] });
   const denied = revoked || [products, bundles, proposals, campaigns].some(query => campaignAccessDenied(query.error));
   useEffect(() => { if (denied) setRevoked(true); }, [denied]);
@@ -43,22 +47,38 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
   const refreshProposals = () => queryClient.invalidateQueries({ queryKey: ["group-vote-proposals"] });
   const refreshCampaigns = () => queryClient.invalidateQueries({ queryKey: ["group-campaigns"] });
   const refreshBundles = () => queryClient.invalidateQueries({ queryKey: ["group-bundles"] });
+  const visibleProposals = (proposals.data || []).filter(proposal =>
+    view !== "voting" || (proposal.status === "voting" && campaignTimestamp(proposal.deadline) > now));
+  const visibleCampaigns = (campaigns.data || []).filter(campaign => {
+    if (view === "active") return campaign.is_public !== false && campaignTimestamp(campaign.deadline) > now
+      && ["recruiting", "confirmed"].includes(campaign.decision_status);
+    if (view === "decision") return campaign.decision_status === "pending_confirmation";
+    return true;
+  });
 
   return (
     <section className="admin-module-page">
       <header className="workspace-heading"><div><p className="eyebrow">GROUP OPERATIONS / 共同購買管理</p><h1>需求投票與正式共同購買</h1></div></header>
       <AdminNav />
-      <Tabs.Root className="admin-social-tabs" defaultValue="proposals">
-        <Tabs.List className="tab-list" aria-label="共同購買管理分類"><Tabs.Trigger value="proposals">提案審核</Tabs.Trigger><Tabs.Trigger value="campaigns">正式共同購買</Tabs.Trigger><Tabs.Trigger value="bundles">固定套組</Tabs.Trigger></Tabs.List>
+      <Tabs.Root className="admin-social-tabs" value={tab} onValueChange={value => {
+        const nextTab = value === "campaigns" || value === "bundles" || value === "wishes" ? value : "proposals";
+        void navigate({ search: { tab: nextTab }, resetScroll: false });
+      }}>
+        <Tabs.List className="tab-list" aria-label="共同購買管理分類"><Tabs.Trigger value="proposals">提案審核</Tabs.Trigger><Tabs.Trigger value="campaigns">正式共同購買</Tabs.Trigger><Tabs.Trigger value="bundles">固定套組</Tabs.Trigger><Tabs.Trigger value="wishes">願望管理</Tabs.Trigger></Tabs.List>
         <Tabs.Content className="tab-content" value="proposals">
-          <AdminGroupSection title="共同購買提案" count={proposals.data?.length || 0} pending={proposals.isPending} error={proposals.error?.message}>
-            <div className="admin-review-list">{proposals.data?.map((proposal) => <GroupProposalReview key={proposal.id} proposal={proposal} campaign={campaigns.data?.find((campaign) => campaign.source_proposal_id === proposal.id)} products={products.data || []} bundles={bundles.data || []} onAccessDenied={onAccessDenied} onDone={() => { refreshProposals(); refreshCampaigns(); }} />)}</div>
+          <label className="field social-review-scope"><span>提案範圍</span><select value={view === "voting" ? view : ""} onChange={event => void navigate({ search: { tab: "proposals", view: event.target.value === "voting" ? "voting" : undefined }, resetScroll: false })}><option value="">全部</option><option value="voting">投票中</option></select></label>
+          <AdminGroupSection title="共同購買提案" count={visibleProposals.length} pending={proposals.isPending} error={proposals.error?.message}>
+            <div className="admin-review-list">{visibleProposals.map((proposal) => <GroupProposalReview key={proposal.id} proposal={proposal} campaign={campaigns.data?.find((campaign) => campaign.source_proposal_id === proposal.id)} products={products.data || []} bundles={bundles.data || []} onAccessDenied={onAccessDenied} onDone={() => { refreshProposals(); refreshCampaigns(); }} />)}</div>
           </AdminGroupSection>
         </Tabs.Content>
         <Tabs.Content className="tab-content" value="campaigns">
           <CampaignCreateForm products={products.data || []} bundles={bundles.data || []} onAccessDenied={onAccessDenied} onDone={refreshCampaigns} />
-          <AdminGroupSection title="正式共同購買" count={campaigns.data?.length || 0} pending={campaigns.isPending} error={campaigns.error?.message}>
-            <div className="admin-review-list">{campaigns.data?.map((campaign) => <CampaignAdminCard key={campaign.id} campaign={campaign} products={products.data || []} onAccessDenied={onAccessDenied} onDone={refreshCampaigns} />)}</div>
+          <label className="field social-review-scope"><span>共同購買範圍</span><select value={view === "active" || view === "decision" ? view : ""} onChange={event => {
+            const value = event.target.value;
+            void navigate({ search: { tab: "campaigns", view: value === "active" || value === "decision" ? value : undefined }, resetScroll: false });
+          }}><option value="">全部</option><option value="active">進行中</option><option value="decision">待確認成團</option></select></label>
+          <AdminGroupSection title="正式共同購買" count={visibleCampaigns.length} pending={campaigns.isPending} error={campaigns.error?.message}>
+            <div className="admin-review-list">{visibleCampaigns.map((campaign) => <CampaignAdminCard key={campaign.id} campaign={campaign} products={products.data || []} onAccessDenied={onAccessDenied} onDone={refreshCampaigns} />)}</div>
           </AdminGroupSection>
         </Tabs.Content>
         <Tabs.Content className="tab-content" value="bundles">
@@ -67,6 +87,7 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
             <div className="admin-record-grid">{bundles.data?.map((bundle) => <article className="admin-record-card" key={bundle.id}><Package size={22} weight="light" /><span className="status-chip passed">啟用</span><h3>{bundle.name}</h3><p>{bundle.items.map((item) => `${item.product_name} × ${item.quantity}`).join("、")}</p><dl><div><dt>社員價</dt><dd>{formatMoney(bundle.member_price)}</dd></div><div><dt>一般價</dt><dd>{formatMoney(bundle.nonmember_price)}</dd></div></dl></article>)}</div>
           </AdminGroupSection>
         </Tabs.Content>
+        <Tabs.Content className="tab-content" value="wishes"><AdminWishesPanel /></Tabs.Content>
       </Tabs.Root>
     </section>
   );

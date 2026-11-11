@@ -85,6 +85,7 @@
   "GET /v1/admin/supplier-orders.csv",
   "GET /v1/admin/suppliers",
   "GET /v1/admin/suppliers/{supplier_id}",
+  "GET /v1/admin/today",
   "GET /v1/admin/users",
   "GET /v1/admin/walk-in-sales/request/{client_request_id}",
   "GET /v1/admin/walk-in-sales/{order_id}",

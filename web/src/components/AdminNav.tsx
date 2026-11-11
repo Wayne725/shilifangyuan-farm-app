@@ -9,16 +9,19 @@ const groups = [
 ] as const;
 
 export function AdminNav() {
-  const pathname = useLocation({select: location => location.pathname});
-  const current = groups.find(group => group.links.some(link => link.to === pathname)) || groups[0];
+  const location = useLocation();
+  const { pathname, search } = location;
+  const today = pathname === "/admin" && !search.section && !search.q && !search.queue;
+  const current = today ? undefined : groups.find(group => group.links.some(link => link.to === pathname));
   return <div className="admin-navigation">
     <div className="admin-navigation-toolbar">
     <nav className="admin-workspace-links" aria-label="管理工作台分類">
-      {groups.map(group => <Link key={group.label} to={group.links[0].to} activeOptions={{exact: true}} className={group === current ? "active" : ""} aria-current={group === current ? "true" : undefined}>{group.label}</Link>)}
+      <Link to="/admin" search={{}} className={today ? "active" : ""} aria-current={today ? "page" : undefined}>今日待辦</Link>
+      {groups.map(group => <Link key={group.label} to={group.links[0].to} search={group.links[0].to === "/admin" ? { section: "orders" } : undefined} className={group === current ? "active" : ""} aria-current={group === current ? "true" : undefined}>{group.label}</Link>)}
     </nav>
     </div>
-    <nav className="admin-section-links" aria-label={`${current.label}功能`}>
-      {current.links.map(link => <Link key={link.to} to={link.to} activeOptions={{exact: true, includeSearch: false}} activeProps={{className: "active", "aria-current": "page"}}>{link.label}</Link>)}
-    </nav>
+    {current && <nav className="admin-section-links" aria-label={`${current.label}功能`}>
+      {current.links.map(link => <Link key={link.to} to={link.to} search={link.to === "/admin" ? { section: "orders" } : undefined} activeOptions={{exact: true, includeSearch: false}} activeProps={{className: "active", "aria-current": "page"}}>{link.label}</Link>)}
+    </nav>}
   </div>;
 }

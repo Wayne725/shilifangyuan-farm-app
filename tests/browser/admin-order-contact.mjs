@@ -13,15 +13,16 @@ const order = {
   payment_method: 'online', payment_status: 'paid', invoice_status: 'issued', fulfillment_status: 'pending_confirmation',
   amount_total: 120, tax_amount: 6, created_at: '2030-01-02T01:00:00Z', available_actions: [],
   customer_name: '隔離聯絡人', contact_phone: '0912345678', contact_phone_status: 'available', contact_email: 'contact@example.test',
+  invoice_buyer_tax_id: '15989995', invoice_buyer_name: '隔離報帳單位',
   items: [{ id: 'item', product_name: '隔離白米', quantity: 1, unit_label: '袋', unit_price: 120, subtotal: 120, tax_type: 'taxable' }],
 };
 
-async function fixture(t, { width = 1280, channel = 'regular', lateResponse = false, contactEmail = order.contact_email } = {}) {
+async function fixture(t, { width = 1280, channel = 'regular', bookingType = 'standard', lateResponse = false, contactEmail = order.contact_email } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
   const state = { status: 200, reads: [], unknown: [], errors: [], consoleErrors: [], apiRequests: [], release: null };
-  const payload = { items: [{ ...order, sales_channel: channel, contact_email: contactEmail }], total: 1, limit: 12, offset: 0 };
+  const payload = { items: [{ ...order, sales_channel: channel, meal_booking_type: bookingType, contact_email: contactEmail }], total: 1, limit: 12, offset: 0 };
   if (lateResponse) await context.addInitScript(() => {
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -93,17 +94,22 @@ async function assertNoPrivateContact(page, state, loggedOut = false) {
   assert.equal(await page.getByText(order.customer_name, { exact: true }).count(), 0);
   assert.equal(await page.getByRole('link', { name: order.contact_phone, exact: true }).count(), 0);
   assert.equal(await page.getByRole('link', { name: order.contact_email, exact: true }).count(), 0);
+  assert.equal(await page.getByText(order.invoice_buyer_tax_id, { exact: true }).count(), 0);
+  assert.equal(await page.getByText(order.invoice_buyer_name, { exact: true }).count(), 0);
   assert.equal(await page.getByRole('navigation', { name: '訂單分頁' }).count(), 0);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
 }
 
-for (const [channel, width] of [['regular', 1280], ['meal_preorder', 390]]) {
-  test(`${channel} 後台顯示合成訂購者、電話與 Email，窄螢幕不溢出`, async t => {
-    const { page, state } = await fixture(t, { channel, width });
+for (const [channel, bookingType, width] of [['regular', 'standard', 1280], ['meal_preorder', 'standard', 390], ['meal_preorder', 'business', 390]]) {
+  test(`${channel} ${bookingType} 後台顯示聯絡資料，會餐另顯示報帳資料`, async t => {
+    const { page, state } = await fixture(t, { channel, bookingType, width });
     assert.equal(await page.getByText(order.customer_name, { exact: true }).count(), 1);
     assert.equal(await page.getByRole('link', { name: order.contact_phone, exact: true }).getAttribute('href'), `tel:${order.contact_phone}`);
     assert.equal(await page.getByRole('link', { name: order.contact_email, exact: true }).getAttribute('href'), `mailto:${order.contact_email}`);
+    const contact = page.locator('.admin-order-contact');
+    assert.equal(await contact.getByText(order.invoice_buyer_tax_id, { exact: true }).count(), bookingType === 'business' ? 1 : 0);
+    assert.equal(await contact.getByText(order.invoice_buyer_name, { exact: true }).count(), bookingType === 'business' ? 1 : 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     assert.deepEqual(state.errors, []);
     assert.deepEqual(state.unknown, []);
@@ -112,7 +118,8 @@ for (const [channel, width] of [['regular', 1280], ['meal_preorder', 390]]) {
 
 for (const status of [401, 403]) {
   test(`後台訂單 200 → ${status} 清除已顯示的個資`, async t => {
-    const { page, state } = await fixture(t);
+    const { page, state } = await fixture(t, { channel: 'meal_preorder', bookingType: 'business' });
+    assert.equal(await page.getByText(order.invoice_buyer_tax_id, { exact: true }).count(), 1);
     state.status = status;
     await focusStaleQuery(page);
     await assertNoPrivateContact(page, state, status === 401);

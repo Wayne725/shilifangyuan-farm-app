@@ -40,6 +40,15 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
     if (path.startsWith('/v1/admin/')) state.adminRequests.push(`${request.method()} ${path}`);
     if (path === '/v1/admin/meals') return route.fulfill({ json: state.activeNames.map((name, index) => ({ id: `isolated-meal-${index}`, name, is_active: true })) });
     if (path === '/v1/admin/order-search') return route.fulfill({ json: { items: [], total: 0, limit: 12, offset: 0 } });
+    if (request.method() === 'GET' && path === '/v1/admin/manual-invoice-records') {
+      const items = Array.from(state.sales.values(), ({ sale }) => ({
+        id: sale.order_id, ...sale, amount: sale.amount_total,
+        recorded_at: '2030-01-02T01:00:00Z', operator_name: '隔離店員',
+        action: 'walk_in_sale.collected', handling: sale.invoice_handling,
+        invoice_status: 'pending', reason: '現場客人收款',
+      }));
+      return route.fulfill({ json: { items, total: items.length } });
+    }
     if (request.method() === 'GET' && path.startsWith('/v1/admin/walk-in-sales/request/')) {
       const id = path.split('/').at(-1);
       state.recoveries.push(id);
@@ -53,7 +62,7 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
       if (existing && existing.raw !== raw) return route.fulfill({ status: 409, json: { detail: '同一編號不得變更交易內容' } });
       const sale = existing?.sale || {
         order_id: 'isolated-walk-in-order', order_number: 'O2030010201', amount_total: body.unit_price * body.quantity,
-        invoice_handling: body.invoice_handling, invoice_issue_after: null,
+        invoice_handling: body.invoice_handling, invoice_issue_after: null, sale_category: body.sale_category,
       };
       state.sales.set(body.client_request_id, { raw, sale });
       if (state.posts.length === 1 && firstResponse === 'abort') return route.abort('failed');
@@ -163,6 +172,8 @@ async function refocusWithStaleCatalog(page, at) {
 
 test('手機手動開票直接填表後確認，固定即時開票且不帶入店員載具與 Email', async t => {
   const { page, region, state } = await fixture(t, { width: 390 });
+  const recent = page.getByRole('region', { name: '近期開票紀錄', exact: true });
+  await recent.getByText('尚無手動開票紀錄', { exact: true }).waitFor();
   assert.equal(await region.getByLabel('發票通知 Email', { exact: true }).inputValue(), '');
   assert.equal(await region.getByRole('checkbox', { name: '結帳時儲存此手機條碼供下次使用' }).count(), 0);
   await fillSale(region, { barcode: true });
@@ -171,6 +182,7 @@ test('手機手動開票直接填表後確認，固定即時開票且不帶入�
   await capture(page, 'manual-invoice-390-filled');
   await region.getByRole('button', { name: '確認', exact: true }).click();
   await assertRecorded(region);
+  await recent.getByRole('link', { name: 'O2030010201', exact: true }).waitFor();
   assert.equal(state.posts.length, 1);
   const body = state.posts[0].body;
   assertImmediateSale(body);

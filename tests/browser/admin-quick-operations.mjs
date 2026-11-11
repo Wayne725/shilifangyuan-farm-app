@@ -33,6 +33,7 @@ async function fixture(t, width) {
     if (!path.startsWith('/v1/')) return req.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'admin', user_role: 'admin', display_name: '測試管理員', email: 'admin@example.com' } } });
     if (req.method() === 'GET') {
+      if (path === '/v1/platform') return route.fulfill({json: {orders_open: true, closed_message: '', sales_scope: 'all'}});
       if (path === '/v1/admin/printers/status') return route.fulfill({json: {enabled: false, dry_run: true, status: 'disabled', error: null}});
       if (path === '/v1/admin/printers/jobs') return route.fulfill({json: {items: [], total: 0}});
       if (path === '/v1/admin/platform') return route.fulfill({json:{orders_open:true,closed_message:'',printer_brand:'',printer_model:'',printer_connection:'unknown',kitchen_sound:false,invoice_provider:'fanyu'}});
@@ -115,7 +116,7 @@ for (const width of [1440, 390]) {
   });
   test(`${width}px 核對按鈕直接查詢並在區塊顯示結果，內容保留內距`, async (t) => {
     const { page, state } = await fixture(t, width);
-    await page.goto(`${base}/admin`);
+    await page.goto(`${base}/admin?section=orders`);
     await page.getByText('查詢發票', { exact: true }).click();
     const invoice = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢發票', { exact: true }) });
     await Promise.all([
@@ -232,7 +233,7 @@ for (const width of [1440, 390]) {
   });
   test(`${width}px 付款發票查詢與退單原因可略過，確認才申請退款`, async (t) => {
     const { page, state } = await fixture(t, width);
-    await page.goto(`${base}/admin`);
+    await page.goto(`${base}/admin?section=orders`);
     await page.getByText('查詢發票', { exact: true }).click();
     await responseAfter(page, (r) => r.url().endsWith('/invoice/query'), () => page.getByRole('button', { name: '查詢開立狀態', exact: true }).click());
     await page.getByText('查詢付款', { exact: true }).click();
@@ -268,7 +269,7 @@ for (const width of [1440, 390]) {
 
 test('查詢中停用按鈕避免重送，失敗顯示在原區塊且不保留舊成功提示', async (t) => {
   const { page, state } = await fixture(t, 390);
-  await page.goto(`${base}/admin`);
+  await page.goto(`${base}/admin?section=orders`);
   await page.getByText('查詢發票', { exact: true }).click();
   const invoice = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢發票', { exact: true }) });
   state.holdQuery = true;
@@ -291,7 +292,7 @@ test('查詢中停用按鈕避免重送，失敗顯示在原區塊且不保留�
 
 test('自訂查詢原因保留輸入，填寫時不查詢，明確送出一次', async (t) => {
   const { page, state } = await fixture(t, 390);
-  await page.goto(`${base}/admin`);
+  await page.goto(`${base}/admin?section=orders`);
   await page.getByText('查詢付款', { exact: true }).click();
   const payment = page.locator('.admin-extra-actions').filter({ has: page.getByText('查詢付款', { exact: true }) });
   await payment.getByText('其他查詢原因', { exact: true }).click();
@@ -309,7 +310,7 @@ test('自訂查詢原因保留輸入，填寫時不查詢，明確送出一次',
 test('人工作廢只對已退款訂單顯示，原因選擇不送出，最後按鈕才核對作廢', async (t) => {
   const { page, state } = await fixture(t, 390);
   state.refunded = true;
-  await page.goto(`${base}/admin`);
+  await page.goto(`${base}/admin?section=orders`);
   await page.getByText('發票作廢處理', { exact: true }).click();
   assert.equal(await page.getByRole('button', { name: '人工作廢／核對汎宇結果', exact: true }).isEnabled(), true);
   await page.getByRole('combobox', { name: '人工處理原因', exact: true }).selectOption({ label: '全額退款' });
