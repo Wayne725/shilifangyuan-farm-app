@@ -38,6 +38,9 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block' });
   const state = { writes: [], reads: [], unknown: [], errors: [], conflict: false, denyRoster: false, denyExport: false, exportGate: null };
   state.demandRequests = [];
+  const adjustments = new Map();
+  state.pointBalance = 9;
+  state.pointAdjustments = adjustments;
   const ledgerMember = { id: 'membership-one', source: 'membership', member_number: entry.member_number, legal_name: entry.legal_name, email: entry.email, status: 'active' };
   let receipt;
   const emptyLists = ['/v1/products', '/v1/group-campaigns', '/v1/meal-events/calendar', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/admin/activity-refund-requests', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/notifications'];
@@ -49,6 +52,30 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
     const path = url.pathname;
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-csv-test', user: { id: 'test-user', email: 'user@example.com', display_name: '隔離測試帳號', user_role: role } } });
     if (path === '/v1/admin/reconciliation-status') return route.fulfill({ json: { current: null, last_success: null, long_running: false, stale_after_seconds: 300, backlog: [] } });
+    const adjustmentPath = `${pointsUrl}/member-user/adjustments`;
+    if (state.allowPointAdjustments && path === adjustmentPath && request.method() === 'POST') {
+      const body = request.postDataJSON();
+      state.writes.push({ path, body });
+      const known = adjustments.get(body.request_id);
+      if (known) return route.fulfill({ status: 201, json: known });
+      if (body.expected_balance !== state.pointBalance) {
+        return route.fulfill({ status: 409, headers: { 'X-Error-Code': 'point_balance_changed' }, json: { detail: '點數餘額已變更，請重新預覽' } });
+      }
+      const record = { id: body.request_id, user_id: 'member-user', member_number: 'CSV-001', amount: body.amount,
+        balance_before: state.pointBalance, balance_after: state.pointBalance + body.amount };
+      state.pointBalance = record.balance_after;
+      adjustments.set(body.request_id, record);
+      if (state.dropAdjustmentResponse) {
+        state.dropAdjustmentResponse = false;
+        return route.abort('failed');
+      }
+      return route.fulfill({ status: 201, json: record });
+    }
+    if (state.allowPointAdjustments && path.startsWith(`${adjustmentPath}/`) && request.method() === 'GET') {
+      state.reads.push(path);
+      const record = adjustments.get(path.split('/').at(-1));
+      return route.fulfill(record ? { json: record } : { status: 404, json: { detail: '尚未找到這筆點數調整' } });
+    }
     if (request.method() === 'GET') {
       state.reads.push(path);
       if (path === '/v1/admin/suppliers' && state.showSuppliers) return route.fulfill({ json: [
@@ -85,7 +112,9 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
         const member = url.searchParams.get('member_number');
         const q = path === `${pointsUrl}.csv` || legacyPoints ? '' : url.searchParams.get('q') || '';
         const items = pointEntries.filter(row => (!member || row.member_number === member) &&
-          `${row.member_number} ${row.name} ${row.email}`.toLowerCase().includes(q.toLowerCase()));
+          `${row.member_number} ${row.name} ${row.email}`.toLowerCase().includes(q.toLowerCase()))
+          .map(row => state.allowPointAdjustments && row.user_id === 'member-user'
+            ? { ...row, can_adjust: true, balance: state.pointBalance } : row);
         if (path === pointsUrl) return route.fulfill({ json: { items, total: items.length, ...(legacyPoints ? {} : { applied_query: q }) } });
         if (state.denyExport) return route.fulfill({ status: 403, json: { detail: '需要管理員權限' } });
         const csv = ['社員編號,姓名,Email,累積點數', ...items.map(row => [row.member_number, row.name, row.email, row.balance].join(','))].join('\n');
@@ -147,6 +176,73 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
   page.setDefaultTimeout(10000);
   return { page, state };
 }
+
+for (const recover of ['lookup', 'retry']) test(`點數調整遺失回應後重整，依原社員與識別恢復單筆入帳 ${recover}`, async t => {
+  const { page, state } = await fixture(t, 390);
+  state.allowPointAdjustments = true;
+  state.dropAdjustmentResponse = true;
+  await page.goto(`${base}/admin/users?tab=records&ledger=points`);
+  const open = page.getByRole('button', { name: '調整點數', exact: true });
+  await open.click();
+  const panel = page.getByRole('region', { name: '調整社員點數' });
+  await panel.getByText('測試社員 · 社員編號 CSV-001', { exact: true }).waitFor();
+  await panel.getByLabel('增減點數').fill('+7');
+  await panel.getByLabel('調整原因').fill('僅合成驗證原因');
+  await panel.getByRole('button', { name: '預覽調整' }).click();
+  await panel.getByText('+7', { exact: true }).waitFor();
+  assert.deepEqual(state.writes, []);
+  await panel.getByRole('button', { name: '確認調整' }).click();
+  await panel.getByText('尚未確認入帳，請查詢入帳結果或重試原調整。', { exact: true }).waitFor();
+  assert.equal(state.pointBalance, 16);
+  assert.equal(await page.evaluate(() => Object.values(sessionStorage).some(value => typeof value === 'string' && value.includes('僅合成驗證原因'))), false);
+  await page.reload();
+  await open.click();
+  await panel.getByText('這筆調整的入帳結果待確認。', { exact: true }).waitFor();
+  assert.equal(await panel.getByRole('button', { name: '重試原調整' }).isDisabled(), true);
+  if (recover === 'lookup') {
+    await panel.getByRole('button', { name: '查詢入帳結果' }).click();
+  } else {
+    await panel.getByLabel('原調整原因').fill('不同的內容');
+    await panel.getByRole('button', { name: '重試原調整' }).click();
+    await panel.getByText('請輸入與原提交相同的調整原因。', { exact: true }).waitFor();
+    assert.equal(state.writes.length, 1);
+    await panel.getByLabel('原調整原因').fill('僅合成驗證原因');
+    await panel.getByRole('button', { name: '重試原調整' }).click();
+  }
+  await page.getByText('社員 CSV-001 已調整 +7 點。', { exact: true }).waitFor();
+  assert.equal(state.writes.length, recover === 'lookup' ? 1 : 2);
+  assert.equal(state.pointAdjustments.size, 1);
+  if (recover === 'lookup') assert.ok(state.reads.includes(`${pointsUrl}/member-user/adjustments/${state.writes[0].body.request_id}`));
+  else assert.deepEqual(state.writes[0].body, state.writes[1].body);
+  assert.equal(await page.getByRole('row', { name: /測試社員/ }).getByText('16', { exact: true }).count(), 1);
+  await noOverflow(page);
+  assert.deepEqual(state.unknown, []);
+  assert.deepEqual(state.errors, []);
+});
+
+test('點數扣減遇到餘額變更時需重新預覽後才可確認', async t => {
+  const { page, state } = await fixture(t, 1280);
+  state.allowPointAdjustments = true;
+  await page.goto(`${base}/admin/users?tab=records&ledger=points&member=CSV-001`);
+  await page.getByRole('button', { name: '調整點數', exact: true }).click();
+  const panel = page.getByRole('region', { name: '調整社員點數' });
+  await panel.getByLabel('增減點數').fill('-15');
+  await panel.getByRole('button', { name: '預覽調整' }).click();
+  state.pointBalance = 10;
+  await panel.getByRole('button', { name: '確認調整' }).click();
+  await panel.getByText('點數餘額已變更，請重新預覽', { exact: true }).waitFor();
+  await page.getByRole('row', { name: /測試社員/ }).getByText('10', { exact: true }).waitFor();
+  await panel.getByRole('button', { name: '預覽調整' }).click();
+  await panel.getByText('-5', { exact: true }).waitFor();
+  await panel.getByRole('button', { name: '確認調整' }).click();
+  await page.getByText('社員 CSV-001 已調整 -15 點。', { exact: true }).waitFor();
+  assert.deepEqual(state.writes.map(row => row.body.expected_balance), [9, 10]);
+  assert.notEqual(state.writes[0].body.request_id, state.writes[1].body.request_id);
+  assert.equal(state.pointBalance, -5);
+  assert.equal(state.pointAdjustments.size, 1);
+  assert.deepEqual(state.unknown, []);
+  assert.deepEqual(state.errors, []);
+});
 
 test('願望管理舊連結轉到商品，會員管理開啟指定社員的會籍、名冊與帳冊', async t => {
   const { page, state } = await fixture(t, 390);

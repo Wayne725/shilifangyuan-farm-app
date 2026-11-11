@@ -6,10 +6,11 @@ import { ApiError, formatMoney, type apiFetch, type downloadApiFile } from "../l
 import { financeDateTime } from "../lib/meal-finance";
 import "../pages/AdminRecordsPage.css";
 import { OptionalMark } from "./OptionalMark";
+import { MemberPointAdjustment, signedPoints } from "./MemberPointAdjustment";
 
 type Person = { id: string; source: "membership" | "roster"; member_number: string; legal_name: string; email: string; phone: string; status: string; share_certificate_number?: string; share_count?: number; share_capital_amount?: number; share_paid_on?: string };
 type Receipt = { id: string; source: "online" | "offline"; member_number: string; name: string; kind: string; amount: number; received: number; refunded: number; net: number; status: string; paid_at?: string; receipt_number?: string; payment_method: string; reference?: string };
-type Point = { user_id: string; member_number: string | null; name: string; email: string; balance: number };
+type Point = { user_id: string; member_number: string | null; name: string; email: string; balance: number; can_adjust?: boolean };
 type PointLedger = { items: Point[]; total: number; applied_query?: string };
 const statuses: Record<string, string> = { active: "正式社員", inactive: "未啟用", suspended: "已移除會籍", trainee: "見習社員", pending: "待繳款", paid: "已收款", refund_pending: "退款處理中", refunded: "已退款", voided: "已作廢", failed: "未完成" };
 const methods: Record<string, string> = { cash: "現金", bank_transfer: "轉帳", other: "其他", ecpay: "綠界", sandbox: "測試金流" };
@@ -27,8 +28,10 @@ export function AdminRecordsPanel({ adminId, request, downloadFile, tab, member,
   } });
   const [q, setQ] = useState(""), [search, setSearch] = useState("");
   const [status, setStatus] = useState(member ? "all" : "active"), [kind, setKind] = useState("all"), [start, setStart] = useState(""), [end, setEnd] = useState(""), [offset, setOffset] = useState(0);
-  useEffect(() => { setQ(""); setSearch(""); setOffset(0); }, [tab]);
   const [target, setTarget] = useState<Person | null>(null), [voidTarget, setVoidTarget] = useState<Receipt | null>(null), [voidReason, setVoidReason] = useState("");
+  const [pointTargetId, setPointTargetId] = useState<string | null>(null);
+  const [pointNotice, setPointNotice] = useState("");
+  useEffect(() => { setQ(""); setSearch(""); setOffset(0); setPointTargetId(null); setPointNotice(""); }, [tab]);
   const client = useQueryClient();
   const params = new URLSearchParams({ q: search, limit: "30", offset: String(offset) });
   const pointParams = new URLSearchParams();
@@ -67,6 +70,7 @@ export function AdminRecordsPanel({ adminId, request, downloadFile, tab, member,
   const visiblePointRows = search && points.data?.applied_query !== search
     ? pointRows.filter(row => `${row.member_number ?? ""} ${row.name} ${row.email}`.toLowerCase().includes(search.toLowerCase()))
     : pointRows;
+  const pointTarget = visiblePointRows.find((row) => row.user_id === pointTargetId && row.can_adjust);
   return <section className="admin-records-page"><h2>社員與收款紀錄</h2>
     <nav className="admin-quick-buttons" aria-label="社員帳冊分類">{([ ["members", "社員股籍"], ["payments", "入社費與股金"], ["points", "累積點數"] ] as const).map(([value, label]) => <button className="button button-quiet" aria-pressed={tab === value} key={value} onClick={() => openLedger(value)}>{label}</button>)}</nav>
     {member && <div className="admin-quick-buttons"><span>社員編號 {member}</span><Link className="text-link" to="/admin/users" search={{ tab: "records", ledger: tab === "members" ? undefined : tab }}>清除社員篩選</Link></div>}
@@ -80,9 +84,19 @@ export function AdminRecordsPanel({ adminId, request, downloadFile, tab, member,
       <p role="status">共 {tab === "points" ? visiblePointRows.length : total} 筆紀錄</p><div className="admin-records-table" tabIndex={0} role="region" aria-label="帳冊明細">
       {tab === "members" && <table><thead><tr>{["社員編號", "姓名／Email", "會籍", "股號", "股數", "股金", "繳股日期", "操作"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{members.data?.items.map(row => <tr key={`${row.source}-${row.id}`}><td>{row.member_number}</td><td>{row.legal_name}<br/>{row.email}</td><td>{statuses[row.status] || row.status}</td><td>{row.share_certificate_number || "—"}</td><td>{row.share_count ?? "—"}</td><td>{formatMoney(row.share_capital_amount || 0)}</td><td>{row.share_paid_on || "—"}</td><td><button className="button button-quiet" onClick={() => setTarget(row)}>登錄線下收款</button></td></tr>)}</tbody></table>}
       {tab === "payments" && <table><thead><tr>{["收款日期／收據", "社員", "款項", "實收", "退款", "狀態", "方式／收款資訊", "操作"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{payments.data?.items.map(row => <tr key={`${row.source}-${row.id}`}><td>{row.paid_at ? financeDateTime(row.paid_at) : "未收款"}<br/>{row.receipt_number || "—"}</td><td>{row.member_number}<br/>{row.name}</td><td>{row.kind === "admission_fee" ? "入社費" : "股金"}</td><td>{formatMoney(row.received)}</td><td>{formatMoney(row.refunded)}</td><td>{statuses[row.status] || row.status}</td><td>{methods[row.payment_method] || row.payment_method}<br/>{row.reference || "—"}</td><td>{row.source === "offline" && row.status !== "voided" ? <button className="button button-quiet" onClick={() => {setVoidTarget(row); voidReceipt.reset();}}>作廢紀錄</button> : row.source === "online" ? "線上金流" : "已作廢"}</td></tr>)}</tbody></table>}
-      {tab === "points" && <table><thead><tr><th>社員編號</th><th>姓名</th><th>Email</th><th>累積點數</th></tr></thead><tbody>{visiblePointRows.map(row => <tr key={row.user_id}><td>{row.member_number}</td><td>{row.name}</td><td>{row.email}</td><td>{row.balance}</td></tr>)}</tbody></table>}
+      {tab === "points" && <table><thead><tr><th>社員編號</th><th>姓名</th><th>Email</th><th>累積點數</th><th>操作</th></tr></thead><tbody>{visiblePointRows.map(row => <tr key={row.user_id}><td>{row.member_number}</td><td>{row.name}</td><td>{row.email}</td><td>{row.balance}</td><td>{row.can_adjust && <button type="button" className="button button-quiet" onClick={() => { setPointNotice(""); setPointTargetId(row.user_id); }}>調整點數</button>}</td></tr>)}</tbody></table>}
       </div>{tab !== "points" && total > 30 && <nav className="admin-pagination" aria-label="帳冊分頁"><button className="button button-quiet" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一頁</button><span>{Math.floor(offset / 30) + 1}／{Math.ceil(total / 30)}</span><button className="button button-quiet" disabled={offset + 30 >= total} onClick={() => setOffset(offset + 30)}>下一頁</button></nav>}
     </>}
+    {tab === "points" && pointNotice && <p role="status">{pointNotice}</p>}
+    {tab === "points" && pointTarget?.member_number && <MemberPointAdjustment key={pointTarget.user_id}
+      adminId={adminId} target={{ ...pointTarget, member_number: pointTarget.member_number }} request={request}
+      onClose={() => setPointTargetId(null)} onStale={() => client.invalidateQueries({ queryKey: ["points-ledger"] })}
+      onSaved={(receipt) => {
+        setPointTargetId((current) => current === receipt.user_id ? null : current);
+        setPointNotice(`社員 ${receipt.member_number} 已調整 ${signedPoints(receipt.amount)} 點。`);
+        void client.invalidateQueries({ queryKey: ["points-ledger"] });
+        void client.invalidateQueries({ queryKey: ["my-points", receipt.user_id] });
+      }} />}
     {target && <ReceiptForm request={request} target={target} onClose={() => setTarget(null)} onSaved={() => {setTarget(null); openLedger("payments"); void client.invalidateQueries({queryKey: ["membership-payments"]});}}/>}
     {voidTarget && <form className="admin-records-form" onSubmit={event => {event.preventDefault(); voidReceipt.mutate();}}><h2>作廢線下收款紀錄</h2><p>{voidTarget.receipt_number} · {formatMoney(voidTarget.amount)}</p><label className="field"><span>作廢原因<OptionalMark /></span><input maxLength={1000} value={voidReason} onChange={event => setVoidReason(event.target.value)}/></label>{voidReceipt.isError && <p role="alert">{voidReceipt.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={voidReceipt.isPending}>確認作廢紀錄</button><button type="button" className="button button-quiet" onClick={() => setVoidTarget(null)}>取消</button></div></form>}
     </section>;

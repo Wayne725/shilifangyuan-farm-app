@@ -20,6 +20,9 @@ from ..integrations.notifications import NotificationCommand, NotificationServic
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..meal_booking import TAIPEI
 from ..member_claims import roster_aad
+from ..member_point_adjustments import (
+    MemberPointAdjustment, MemberPointAdjustmentReceipt, adjust_member_points, read_member_point_adjustment,
+)
 from ..models import (AdminAudit, MemberProfile, MemberRosterEntry, Membership, MembershipCharge,
     MembershipChargeStatus, MembershipOfflineReceipt, MembershipStatus, PaymentStatus, PointAccount, PointTransaction,
     Refund, RefundStatus, User)
@@ -287,7 +290,9 @@ async def _point_rows(session, member_number="", q=""):
         searchable = func.coalesce(Membership.member_number, "") + " " + User.display_name + " " + email
         statement = statement.where(searchable.icontains(q, autoescape=True))
     rows = (await session.execute(statement)).all()
-    return [{"user_id": user.id, "name": user.display_name, "email": user.email or user.notification_email or "", "member_number": membership.member_number, "balance": int(points)} for user, membership, points in rows]
+    return [{"user_id": user.id, "name": user.display_name, "email": user.email or user.notification_email or "",
+             "member_number": membership.member_number, "balance": int(points),
+             "can_adjust": bool(user.is_active and membership.member_number)} for user, membership, points in rows]
 
 
 @member_reports_router.get("/points-ledger")
@@ -305,6 +310,26 @@ async def list_point_balances(
 @member_reports_router.get("/points-ledger.csv")
 async def export_point_balances(member_number: str = Query(default="", max_length=100), admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await _export_point_balances(session, admin, member_number)
+
+
+@member_reports_router.post("/points-ledger/{user_id}/adjustments", status_code=201, response_model=MemberPointAdjustmentReceipt)
+async def post_point_adjustment(user_id: str, body: MemberPointAdjustment, response: Response,
+                                admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        result = await adjust_member_points(session, user_id, admin.id, body)
+        await session.commit()
+        return result
+    except Exception:
+        await session.rollback()
+        raise
+
+
+@member_reports_router.get("/points-ledger/{user_id}/adjustments/{request_id}", response_model=MemberPointAdjustmentReceipt)
+async def point_adjustment_receipt(user_id: str, request_id: UUID, response: Response,
+                                  admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    response.headers["Cache-Control"] = "no-store"
+    return await read_member_point_adjustment(session, user_id, admin.id, request_id)
 
 
 @member_reports_router.get("/points-ledger/filtered.csv")

@@ -12,6 +12,7 @@
 .admin-records-totals dd { margin: 10px 0 0; font-size: 1.5rem; }
 .admin-records-form { margin-top: 40px; padding: clamp(20px, 4vw, 48px); border: 1px solid var(--line); display: grid; gap: 24px; background: var(--paper); }
 .admin-records-form h2, .admin-records-form p { margin: 0; }
+.member-point-adjustment > form { display: grid; gap: 16px; }
 .admin-manual-invoice-records { margin-block: 20px; border-block: 1px solid var(--line); }
 .admin-manual-invoice-records > summary { padding-block: 14px; cursor: pointer; font-weight: 600; }
 .admin-manual-invoice-recent { margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
