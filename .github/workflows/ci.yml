@@ -254,6 +254,13 @@ jobs:
             tests/browser/admin-manual-invoice-records.mjs \
             tests/browser/admin-invoice-issue.mjs \
             2>&1 | tee browser-evidence/commerce.log
+          node --test --test-concurrency=1 --test-timeout=45000 \
+            --test-name-pattern='平台設定背景更新|平台設定保存409|廚房與平台各自儲存' \
+            tests/browser/frontend-recovery.mjs 2>&1 | tee -a browser-evidence/commerce.log
+          if [[ "$BROWSER_ENGINE" == chromium ]]; then
+            node --test --test-concurrency=1 --test-timeout=45000 \
+              tests/browser/admin-style-roster-csv.mjs 2>&1 | tee -a browser-evidence/commerce.log
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
