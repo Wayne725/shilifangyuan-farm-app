@@ -374,6 +374,21 @@ class FanyuInvoiceAdapter:
             "ProviderResponse": response,
         }
 
+    async def query_invoice_detail(
+        self, invoice_number: str, invoice_date: str, *, buyer_type: str,
+    ) -> Mapping[str, Any]:
+        if not INVOICE_NUMBER_PATTERN.fullmatch(invoice_number) or not re.fullmatch(r"[0-9]{8}", invoice_date):
+            raise ValueError("Invalid invoice number or date")
+        datetime.strptime(invoice_date, "%Y%m%d")
+        if buyer_type not in {"personal", "company"}:
+            raise ValueError("Invalid invoice buyer type")
+        return await self._request(
+            "/queryInvoiceDetail",
+            {"invNo": invoice_number, "invDate": invoice_date,
+             "process_type": "B" if buyer_type == "company" else "C", "sellerID": self.settings.seller_id},
+            read_only=True,
+        )
+
     async def cancel_invoice(
         self,
         *,

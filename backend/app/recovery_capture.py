@@ -5,6 +5,7 @@ import asyncio
 import os
 from pathlib import Path
 import stat
+from typing import Literal
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
@@ -12,7 +13,10 @@ from pydantic import ValidationError
 
 from .config import get_settings
 from .integrations.common import IntegrationError
+from .integrations.fanyu_invoice import FanyuInvoiceAdapter
+from .integrations.invoice_service import invoice_adapter_from_settings
 from .integrations.payment_service import raygate_payment_adapter_from_settings
+from .recovery_invoice_proof import FanyuCaptureRequest, capture_fanyu_proof
 from .recovery_operator import _write_private_json
 from .recovery_payment_proof import MAX_PROOF_BYTES, RayGateCaptureRequest, capture_raygate_proof
 
@@ -28,16 +32,26 @@ def _load_signer(path: Path) -> Ed25519PrivateKey:
     return key
 
 
-async def run(request_path: Path, signer_path: Path, output: Path) -> None:
+async def run(
+    request_path: Path, signer_path: Path, output: Path, *, provider: Literal["raygate", "fanyu"] = "raygate",
+) -> None:
     settings = get_settings()
     if not settings.recovery_mode:
-        raise ValueError("請在雷門唯讀擷取模式執行")
+        raise ValueError("請在唯讀擷取模式執行")
     with request_path.open("rb") as handle:
         raw = handle.read(MAX_PROOF_BYTES + 1)
     if len(raw) > MAX_PROOF_BYTES:
         raise ValueError("擷取需求檔案過大")
-    request = RayGateCaptureRequest.model_validate_json(raw)
-    proof = await capture_raygate_proof(request, raygate_payment_adapter_from_settings(settings), _load_signer(signer_path))
+    signer = _load_signer(signer_path)
+    if provider == "fanyu":
+        adapter = invoice_adapter_from_settings(settings)
+        if not isinstance(adapter, FanyuInvoiceAdapter):
+            raise ValueError("請設定原汎宇發票帳戶")
+        proof = await capture_fanyu_proof(FanyuCaptureRequest.model_validate_json(raw), adapter, signer)
+    else:
+        proof = await capture_raygate_proof(
+            RayGateCaptureRequest.model_validate_json(raw), raygate_payment_adapter_from_settings(settings), signer,
+        )
     _write_private_json(output, proof.model_dump(mode="json"))
 
 
@@ -46,11 +60,12 @@ def main() -> None:
     parser.add_argument("request", type=Path)
     parser.add_argument("signer", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--provider", choices=("raygate", "fanyu"), default="raygate")
     args = parser.parse_args()
     try:
-        asyncio.run(run(args.request, args.signer, args.output))
+        asyncio.run(run(args.request, args.signer, args.output, provider=args.provider))
     except (IntegrationError, OSError, TypeError, ValidationError, ValueError):
-        parser.exit(1, "無法擷取雷門對帳證明，請核對查單權限、擷取需求與簽署設定。\n")
+        parser.exit(1, "無法擷取對帳證明，請核對查單權限、擷取需求與簽署設定。\n")
     print("對帳證明已儲存")
 
 
