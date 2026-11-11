@@ -57,7 +57,9 @@ async def test_weekend_monday_quote_order_amendment_and_checkout_share_window(wo
     assert event["booking_policy"] == "workday"
     assert datetime.fromisoformat(event["booking_starts_at"].replace("Z", "+00:00")) == datetime(2026, 11, 6, tzinfo=TAIPEI)
     with time_machine.travel(datetime(2026, 11, day, 12, tzinfo=TAIPEI), tick=False):
-        assert (await client.post(f"/v1/meal-events/{event['id']}/quote", json=body)).status_code == 200
+        session.expunge_all()
+        initial_quote = await client.post(f"/v1/meal-events/{event['id']}/quote", json=body)
+        assert initial_quote.status_code == 200, initial_quote.text
         created = await client.post(f"/v1/meal-events/{event['id']}/orders", json=body, headers=auth_headers(buyer))
         assert created.status_code == 201, created.text
         order = await session.get(Order, created.json()["id"])
@@ -248,6 +250,12 @@ async def test_admin_windows_are_normalized_audited_and_cannot_downgrade(workday
     same_day = await client.post("/v1/admin/meal-events", json=event_body(meal,
         booking_policy="special", ordering_starts_at="2026-11-09T00:00:00+08:00"), headers=auth_headers(admin))
     assert same_day.status_code == 422
+    session.expunge_all()
+    reloaded = await client.get(f"/v1/meal-events/{event['id']}")
+    assert reloaded.status_code == 200, reloaded.text
+    persisted = reloaded.json()
+    assert datetime.fromisoformat(persisted["pickup_starts_at"]) == datetime(2026, 11, 9, 11, tzinfo=TAIPEI)
+    assert datetime.fromisoformat(persisted["pickup_ends_at"]) == datetime(2026, 11, 9, 13, 30, tzinfo=TAIPEI)
 
 
 async def test_workday_cash_reservation_survives_online_cutoff_until_pickup(workday_context):
