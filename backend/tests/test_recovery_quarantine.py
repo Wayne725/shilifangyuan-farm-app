@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+import json
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,10 +15,12 @@ import app.routers.payments as payments
 from app.config import get_settings
 from app.integrations.payment_service import SQLAlchemyPaymentCallbackRepository, create_payment_attempt
 from app.integrations.raygate import RAYGATE_IDENTIFIER, RayGateAdapter, hash_digest
-from app.models import AdminAudit, ExternalEvent, OutboxEvent, OutboxStatus, PrintJob, RecoveryHold, User, UserRole
+from app.models import (AdminAudit, ExternalEvent, OrderNumberCounter, OutboxEvent, OutboxStatus, PrintJob,
+                        RecoveryCutover, RecoveryHold, User, UserRole)
+from app.order_numbers import allocate_order_number
 from app.recovery_operator import export_inventory
 from app.recovery_quarantine import (
-    Item, Manifest, RecoveryHoldActive, Resolution, arm_cutover, begin_cutover, has_active_hold,
+    Item, Manifest, OrderNumberCheckpoint, RecoveryHoldActive, Resolution, arm_cutover, begin_cutover, has_active_hold,
     payment_targets, provider_payment_reference, resolve_hold,
 )
 from tests.support import api_test_context, make_test_settings
@@ -31,8 +36,16 @@ def decision(scope, reference, disposition="hold"):
     return {"target": {"scope": scope, "reference": reference}, "disposition": disposition, "evidence_sha256": PROOF}
 
 
-def manifest(cutover_id, *decisions):
-    return Manifest(cutover_id=cutover_id, checkpoint_sha256=CHECKPOINT, decisions=list(decisions))
+def taipei_date():
+    return datetime.now(ZoneInfo("Asia/Taipei")).date()
+
+
+def manifest(cutover_id, *decisions, meal=0, regular=0):
+    return Manifest(cutover_id=cutover_id, checkpoint_sha256=CHECKPOINT, decisions=list(decisions),
+                    order_number_checkpoint=OrderNumberCheckpoint(
+                        business_date=taipei_date(), meal_last_value=meal, regular_last_value=regular,
+                        evidence_sha256=PROOF,
+                    ))
 
 
 async def admin_user(session):
@@ -66,6 +79,60 @@ async def test_unarmed_cutover_stays_read_only_when_flag_is_removed(database_ses
     await arm_cutover(database_session, actor, manifest(cutover))
     await database_session.commit()
     assert not await database.check_database_connection()
+
+
+async def test_missing_or_stale_order_number_checkpoint_cannot_arm(database_session):
+    actor = await admin_user(database_session)
+    cutover = uuid4()
+    await begin_cutover(database_session, actor, cutover, CHECKPOINT)
+    empty = Manifest(cutover_id=cutover, checkpoint_sha256=CHECKPOINT, decisions=[])
+    with pytest.raises(ValueError, match="最後已發單號"):
+        await arm_cutover(database_session, actor, empty)
+    stale = OrderNumberCheckpoint(business_date=taipei_date() - timedelta(days=1),
+                                  meal_last_value=0, regular_last_value=0, evidence_sha256=PROOF)
+    with pytest.raises(ValueError, match="台北營業日"):
+        await arm_cutover(database_session, actor, empty.model_copy(update={"order_number_checkpoint": stale}))
+    assert await has_active_hold(database_session)
+    assert await database_session.scalar(select(func.count()).select_from(OrderNumberCounter)) == 0
+
+
+async def test_arm_advances_only_the_verified_taipei_counters(database_session):
+    actor = await admin_user(database_session)
+    cutover = uuid4()
+    today = taipei_date()
+    yesterday = today - timedelta(days=1)
+    database_session.add_all([
+        OrderNumberCounter(prefix="M", business_date=today, last_value=8),
+        OrderNumberCounter(prefix="M", business_date=yesterday, last_value=99),
+    ])
+    await begin_cutover(database_session, actor, cutover, CHECKPOINT)
+    await database_session.commit()
+    with pytest.raises(ValueError, match="小於"):
+        await arm_cutover(database_session, actor, manifest(cutover, meal=7, regular=9))
+    assert await database_session.get(OrderNumberCounter, ("O", today)) is None
+    assert await has_active_hold(database_session)
+    accepted = manifest(cutover, meal=10, regular=6)
+    assert await arm_cutover(database_session, actor, accepted) == 0
+    await database_session.commit()
+    assert await arm_cutover(database_session, actor, accepted) == 0
+    assert await allocate_order_number(database_session, "M") == f"M{today:%Y%m%d}11"
+    assert await allocate_order_number(database_session, "O") == f"O{today:%Y%m%d}07"
+    assert (await database_session.get(OrderNumberCounter, ("M", yesterday))).last_value == 99
+    record = await database_session.scalar(select(AdminAudit).where(AdminAudit.action == "recovery.cutover_armed"))
+    assert record.data["order_number_checkpoint"] == accepted.order_number_checkpoint.model_dump(mode="json")
+
+
+async def test_old_armed_manifest_remains_idempotent(database_session):
+    actor = await admin_user(database_session)
+    cutover = uuid4()
+    raw = {"cutover_id": str(cutover), "checkpoint_sha256": CHECKPOINT, "decisions": []}
+    digest = sha256(json.dumps(raw, separators=(",", ":")).encode()).hexdigest()
+    database_session.add(RecoveryCutover(
+        id=str(cutover), checkpoint_sha256=CHECKPOINT, created_by_id=actor.id,
+        armed_at=datetime.now(timezone.utc), manifest_sha256=digest,
+    ))
+    await database_session.commit()
+    assert await arm_cutover(database_session, actor, Manifest.model_validate(raw)) == 0
 
 
 async def test_complete_manifest_persists_holds_and_requires_safe_resolution(database_session, tmp_path, monkeypatch):

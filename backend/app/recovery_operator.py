@@ -41,6 +41,7 @@ async def export_inventory(session: AsyncSession, actor: User, cutover_id: UUID,
     payload = {
         "cutover_id": cutover.id,
         "checkpoint_sha256": cutover.checkpoint_sha256,
+        "order_number_checkpoint": None,
         "decisions": [
             {"target": {"scope": scope, "reference": reference}, "disposition": "hold", "evidence_sha256": None}
             for scope, reference in sorted(entries)

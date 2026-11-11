@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from datetime import date
 from hashlib import sha256
 from typing import Annotated, Literal
 import re
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import or_, select, tuple_, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import (
-    AdminAudit, Invoice, OutboxEvent, OutboxStatus, PaymentAttempt, PaymentStatus, PrintJob,
+    AdminAudit, Invoice, OrderNumberCounter, OutboxEvent, OutboxStatus, PaymentAttempt, PaymentStatus, PrintJob,
     RecoveryCutover, RecoveryHold, Refund, User, UserRole, utcnow,
 )
 
@@ -20,6 +24,7 @@ Scope = Literal[
     "activity_charge", "membership_charge", "provider_payment",
 ]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+SequenceFloor = Annotated[int, Field(strict=True, ge=0, le=2**63 - 2)]
 PENDING_PAYMENTS = frozenset({PaymentStatus.PENDING, PaymentStatus.FAILED, PaymentStatus.EXPIRED,
                               PaymentStatus.REFUND_PENDING, PaymentStatus.LATE_PAID_REFUND_REQUIRED})
 FINAL_PRINT_STATES = ("printed", "simulated")
@@ -150,10 +155,18 @@ class Decision(QuarantineInput):
     evidence_sha256: Digest
 
 
+class OrderNumberCheckpoint(QuarantineInput):
+    business_date: date
+    meal_last_value: SequenceFloor
+    regular_last_value: SequenceFloor
+    evidence_sha256: Digest
+
+
 class Manifest(QuarantineInput):
     cutover_id: UUID
     checkpoint_sha256: Digest
     decisions: list[Decision]
+    order_number_checkpoint: OrderNumberCheckpoint | None = None
 
     @model_validator(mode="after")
     def reject_duplicate_targets(self):
@@ -226,6 +239,30 @@ async def _existing_targets(session: AsyncSession, target: Target) -> set[Target
     return payment_targets(row)
 
 
+async def _apply_order_number_checkpoint(session: AsyncSession, checkpoint: OrderNumberCheckpoint) -> None:
+    floors = {"M": checkpoint.meal_last_value, "O": checkpoint.regular_last_value}
+    counters = await session.scalars(
+        select(OrderNumberCounter).where(OrderNumberCounter.business_date == checkpoint.business_date)
+        .order_by(OrderNumberCounter.prefix).with_for_update().execution_options(populate_existing=True)
+    )
+    if any(row.last_value > floors[row.prefix] for row in counters):
+        raise ValueError("已核對的單號小於還原副本的流水號")
+
+    insert = {"postgresql": pg_insert, "sqlite": sqlite_insert}[session.get_bind().dialect.name]
+    for prefix, last_value in floors.items():
+        if last_value == 0:
+            continue
+        statement = insert(OrderNumberCounter).values(
+            prefix=prefix, business_date=checkpoint.business_date, last_value=last_value,
+        ).on_conflict_do_update(
+            index_elements=["prefix", "business_date"],
+            set_={"last_value": last_value},
+            where=OrderNumberCounter.last_value <= last_value,
+        ).returning(OrderNumberCounter.last_value)
+        if await session.scalar(statement) is None:
+            raise ValueError("已核對的單號小於還原副本的流水號")
+
+
 async def arm_cutover(session: AsyncSession, actor: User, manifest: Manifest) -> int:
     _require_admin(actor)
     key = str(manifest.cutover_id)
@@ -233,11 +270,16 @@ async def arm_cutover(session: AsyncSession, actor: User, manifest: Manifest) ->
     if row is None or row.checkpoint_sha256 != manifest.checkpoint_sha256:
         raise ValueError("還原切點與隔離清單不一致")
     ordered = manifest.model_copy(update={"decisions": sorted(manifest.decisions, key=lambda decision: decision.target.key())})
-    digest = sha256(ordered.model_dump_json().encode()).hexdigest()
+    digest = sha256(ordered.model_dump_json(exclude_none=True).encode()).hexdigest()
     if row.armed_at:
         if row.manifest_sha256 != digest:
             raise ValueError("已封存的隔離清單無法覆寫")
         return 0
+    number_checkpoint = ordered.order_number_checkpoint
+    if number_checkpoint is None:
+        raise ValueError("須核對恢復營業當日的最後已發單號")
+    if number_checkpoint.business_date != utcnow().astimezone(ZoneInfo("Asia/Taipei")).date():
+        raise ValueError("流水號證據須為封存當日的台北營業日")
     current = await inventory(session)
     decisions = {decision.target.key(): decision for decision in manifest.decisions}
     if current.keys() - decisions.keys():
@@ -260,11 +302,16 @@ async def arm_cutover(session: AsyncSession, actor: User, manifest: Manifest) ->
             for item in targets:
                 Item(scope=item[0], reference=item[1])
                 held.setdefault(item, decision.evidence_sha256)
+    await _apply_order_number_checkpoint(session, number_checkpoint)
     for (scope, reference), evidence in held.items():
         session.add(RecoveryHold(cutover_id=key, scope=scope, reference=reference, evidence_sha256=evidence))
     row.manifest_sha256 = digest
     row.armed_at = utcnow()
-    _audit(session, actor, key, "recovery.cutover_armed", {"manifest_sha256": digest, "hold_count": len(held)})
+    _audit(session, actor, key, "recovery.cutover_armed", {
+        "manifest_sha256": digest,
+        "hold_count": len(held),
+        "order_number_checkpoint": number_checkpoint.model_dump(mode="json"),
+    })
     await session.flush()
     return len(held)
 
