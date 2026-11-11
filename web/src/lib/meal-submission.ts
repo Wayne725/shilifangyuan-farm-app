@@ -11,3 +11,9 @@ export function mealSubmissionFingerprint(userId: string, input: MealSubmission)
     ...(mealBookingType === "business" ? { mealBookingType } : {}),
     ...(invoiceHandling && invoiceHandling !== legacyInvoiceHandling ? { invoiceHandling } : {}), invoicePreference });
 }
+
+export async function mealSubmissionStorageKey(userId: string, input: MealSubmission): Promise<string> {
+  const fingerprint = mealSubmissionFingerprint(userId, input);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprint));
+  return `meal-submission:${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+}

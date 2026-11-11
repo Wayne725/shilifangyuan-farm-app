@@ -1765,6 +1765,10 @@ class MealOptionSelectionRead(ApiModel):
     price_delta: int
 
 
+class MealOrderSubmissionRead(ApiModel):
+    order_id: str | None
+
+
 class MealOrderQuoteItemRead(ApiModel):
     offering_id: str
     meal_id: str

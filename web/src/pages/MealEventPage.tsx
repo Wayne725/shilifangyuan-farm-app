@@ -7,7 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
 import { PaymentMethodFields } from "../components/PaymentMethodFields";
@@ -22,12 +22,12 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { sessionStore } from "../lib/browser-storage";
-import { apiFetch, formatMoney } from "../lib/api";
+import { ApiError, apiFetch, captureSessionIdentityGuard, formatMoney, isCurrentSessionUser } from "../lib/api";
 import { beginMealCheckout, invoicePreferencePayload, type InvoicePreference } from "../lib/commerce";
 import { contactPhoneIsValid } from "../lib/contact-phone";
 import { taxTypeLabel } from "../lib/invoice-tax";
 import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
-import { mealSubmissionFingerprint } from "../lib/meal-submission";
+import { mealSubmissionStorageKey } from "../lib/meal-submission";
 import "./MealEventPage.css";
 import { clearMealDraft, emptyMealDraft, mealDraftWasAdjusted, readMealDraft, reconcileMealDraft, writeMealDraft } from "../lib/meal-draft";
 import { formatMealDateTime, mealBookingDeadline, mealBookingStatus, mealOrderingOpen, mealPickupDeadline, mealPickupSchedule, mealServiceDate, pickupTimeOptions, shiftMealDate, taipeiDate, taipeiInputToIso, validPickupTime } from "../lib/meal-time";
@@ -76,7 +76,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const [kitchenNote, setKitchenNote] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const contactPhoneReady = contactPhoneIsValid(contactPhone);
-  const submission = useRef<{storageKey: string; id: string} | null>(null);
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
   const setMealBookingType = (value: "standard" | "business") => setDraft(current => ({ ...current, mealBookingType: value === "business" ? "business" : undefined }));
   const [standardPaymentMethod, setPaymentMethod] = useState<"online" | "cash_on_pickup">("online");
@@ -178,9 +177,11 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       invoiceReady,
   });
   const checkout = useMutation({
+    onMutate: captureSessionIdentityGuard,
     mutationFn: async () => {
       if (platform.data?.orders_open === false) throw new Error(platform.data.closed_message);
-      if (!user) throw new Error("請先登入");
+      if (!user || !isCurrentSessionUser(user.id)) throw new Error("請先登入");
+      const sameIdentity = captureSessionIdentityGuard();
       if (!quantityReady) throw new Error("會餐至少需訂 2 份");
       if (!contactPhoneReady) throw new Error("請輸入完整手機號碼或含區碼的市話");
       const submittedAt = Date.now();
@@ -189,9 +190,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       }
       if (!validPickupTime(pickupAt, event.data, submittedAt, mealBookingType)) throw new Error("請重新選擇可預訂的半小時取餐時段");
       if (!pickupLocationReady) throw new Error("請選擇可用的取餐點");
-      if (paymentMethod === "online") {
-        await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
-      }
       const input = {
         ...(business ? { mealBookingType: "business" as const, invoiceHandling: "pickup_day" as const } : {}),
         eventId,
@@ -207,16 +205,63 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         kitchenNote: kitchenNote.trim(),
         ...(contactPhone.trim() ? { contactPhone: contactPhone.replace(/\s/g, "") } : {}),
       };
-      const fingerprint = mealSubmissionFingerprint(user.id, input);
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fingerprint));
-      const storageKey = `meal-submission:${Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("")}`;
-      const id = sessionStore.getItem(storageKey) || crypto.randomUUID();
+      const legacyTimings = cashOnPickup ? ["pickup_day", "on_payment"] as const : ["pickup_day"] as const;
+      const [storageKey, ...legacyKeys] = await Promise.all([
+        mealSubmissionStorageKey(user.id, input),
+        ...(!business ? legacyTimings.map(invoiceHandling => mealSubmissionStorageKey(user.id, { ...input, invoiceHandling })) : []),
+      ]);
+      const pendingLegacy = legacyKeys.flatMap(key => {
+        const id = sessionStore.getItem(key);
+        return id ? [{ key, id }] : [];
+      });
+      const legacyId = pendingLegacy[0]?.id;
+      const currentId = sessionStore.getItem(storageKey);
+      if (!sameIdentity()) throw new Error("請重新登入後確認便當訂單");
+      if (legacyId && (pendingLegacy.some(({ id }) => id !== legacyId) || (currentId && currentId !== legacyId))) {
+        return { kind: "review" as const };
+      }
+      const resolvedKeys = [storageKey, ...pendingLegacy.map(({ key }) => key)];
+      const findLegacyOrder = (id: string) => apiFetch<{ order_id: string | null }>(
+        `/v1/meal-events/${eventId}/order-submissions/${encodeURIComponent(id)}`,
+      );
+      if (legacyId) {
+        try {
+          const existing = await findLegacyOrder(legacyId);
+          if (existing.order_id) {
+            return { kind: "reserved" as const, orderId: existing.order_id, storageKeys: resolvedKeys };
+          }
+        } catch (error) {
+          // During a staggered release the old API has no read-only lookup route.
+          if (error instanceof ApiError && error.status === 404) return { kind: "review" as const };
+          throw error;
+        }
+      }
+      if (paymentMethod === "online") {
+        await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
+      }
+      if (!sameIdentity()) throw new Error("請重新登入後確認便當訂單");
+      const latestId = sessionStore.getItem(storageKey);
+      if (legacyId && latestId && latestId !== legacyId) return { kind: "review" as const };
+      // Reuse the old ID even after an empty lookup. An earlier request may still be committing.
+      const id = latestId || legacyId || crypto.randomUUID();
       if (!sessionStore.setItem(storageKey, id)) throw new Error("瀏覽器無法儲存送單識別，請允許網站儲存資料後重試");
-      submission.current = {storageKey, id};
-      return beginMealCheckout({...input, clientRequestId: submission.current.id});
+      try {
+        return { ...await beginMealCheckout({ ...input, clientRequestId: id }), storageKeys: resolvedKeys };
+      } catch (error) {
+        if (legacyId && error instanceof ApiError && error.status === 409 && sameIdentity()) {
+          const existing = await findLegacyOrder(legacyId);
+          if (existing.order_id) return { kind: "reserved" as const, orderId: existing.order_id, storageKeys: resolvedKeys };
+        }
+        throw error;
+      }
     },
-    onSuccess: (outcome) => {
-      if (submission.current) sessionStore.removeItem(submission.current.storageKey);
+    onSuccess: (outcome, _variables, sameIdentity) => {
+      if (!sameIdentity?.()) return;
+      if (outcome.kind === "review") {
+        window.location.assign("/meal-orders");
+        return;
+      }
+      for (const key of outcome.storageKeys) sessionStore.removeItem(key);
       clearMealDraft(eventId);
       setDraft(emptyMealDraft());
       setDraftAdjusted(false);

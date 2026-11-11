@@ -290,6 +290,46 @@ async def test_existing_standard_pickup_day_order_replays_without_changing_sched
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_policy", ["pickup_day", "on_payment"])
+async def test_meal_submission_lookup_is_read_only_and_scoped(cash_context, legacy_policy):
+    c = cash_context
+    request_id = str(uuid4())
+    if legacy_policy == "pickup_day":
+        order_id = await seed_scheduled_cash_order(c, request_id=request_id)
+    else:
+        created = await create_cash(c, invoice_handling=legacy_policy, client_request_id=request_id)
+        assert created.status_code == 201, created.text
+        order_id = created.json()["id"]
+
+    def path(event_id, submission_id):
+        return f"/v1/meal-events/{event_id}/order-submissions/{submission_id}"
+
+    matched = await c.client.get(path(c.event.id, request_id), headers=auth_headers(c.buyer))
+    assert matched.status_code == 200 and matched.json() == {"order_id": order_id}
+    assert matched.headers["Cache-Control"] == "no-store"
+
+    for event_id, submission_id, actor in (
+        (c.event.id, request_id, c.admin),
+        (str(uuid4()), request_id, c.buyer),
+        (c.event.id, str(uuid4()), c.buyer),
+    ):
+        missing = await c.client.get(path(event_id, submission_id), headers=auth_headers(actor))
+        assert missing.status_code == 200 and missing.json() == {"order_id": None}
+        assert missing.headers["Cache-Control"] == "no-store"
+
+    assert (await c.client.get(path(c.event.id, request_id))).status_code == 401
+    invalid = await c.client.get(path(c.event.id, "not-a-uuid"), headers=auth_headers(c.buyer))
+    assert invalid.status_code == 422
+
+    conflicting_retry = await create_cash(c, client_request_id=request_id)
+    assert conflicting_retry.status_code == 409
+    order = await c.session.get(Order, order_id)
+    assert order.invoice_handling == legacy_policy
+    assert await c.session.scalar(select(func.count(Order.id))) == 1
+    assert c.event.offerings[0].reserved_quantity == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("payment_method,legacy_policy", [("online", "on_payment"), ("cash_on_pickup", "external")])
 async def test_predeployment_lost_response_replays_explicit_legacy_policy_without_second_order(cash_context, payment_method, legacy_policy):
     c = cash_context

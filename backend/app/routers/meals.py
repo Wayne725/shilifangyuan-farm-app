@@ -5,8 +5,9 @@ import json
 import secrets
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any, Literal, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import false, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -127,6 +128,7 @@ from ..schemas import (
     MealOrderQuoteRead,
     MealOrderRead,
     MealOrderSearchFilters,
+    MealOrderSubmissionRead,
     MealOperationsSummary,
     MealPickupCredentialRead,
     MealPickupRedemptionRead,
@@ -878,6 +880,28 @@ async def quote_meal_order(
             "ends_at": event.pickup_ends_at,
         },
     )
+
+
+@meals_router.get(
+    "/v1/meal-events/{event_id}/order-submissions/{client_request_id}",
+    response_model=MealOrderSubmissionRead,
+)
+async def read_meal_order_submission(
+    event_id: str,
+    client_request_id: UUID,
+    response: Response,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MealOrderSubmissionRead:
+    response.headers["Cache-Control"] = "no-store"
+    order_id = await session.scalar(select(Order.id).where(
+        Order.user_id == user.id,
+        Order.client_request_id == str(client_request_id),
+        Order.meal_event_id == event_id,
+        Order.sales_channel == SalesChannel.MEAL_PREORDER,
+        Order.meal_booking_type == "standard",
+    ))
+    return MealOrderSubmissionRead(order_id=order_id)
 
 
 @meals_router.post(

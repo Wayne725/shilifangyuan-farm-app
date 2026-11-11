@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
@@ -305,7 +306,8 @@ async function scheduleFixture(t, { admin = false } = {}) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'America/Los_Angeles', serviceWorkers: 'block' });
   const dinner = scheduledEvent({ id: 'scheduled-dinner', title: '隔離每日晚餐', meal_period: 'dinner',
     pickup_starts_at: '2026-09-17T08:30:00Z', pickup_ends_at: '2026-09-17T10:30:00Z' });
-  const state = { events: [scheduledEvent(), dinner], quotes: [], orders: [], schedules: [], writes: [], reads: [], unknownApi: [], blockedExternal: [], rejectEdit: false, adminMealReads: 0, adminEventReads: 0, adminPickupOrderReads: 0 };
+  const state = { events: [scheduledEvent(), dinner], quotes: [], orders: [], schedules: [], writes: [], reads: [], unknownApi: [], blockedExternal: [], rejectEdit: false, adminMealReads: 0, adminEventReads: 0, adminPickupOrderReads: 0,
+    submissionLookups: [], submissionResults: [], conflictOnCreate: false };
   const meal = { id: 'scheduled-meal', name: '隔離每日便當', description: '隔離驗收', slug: 'isolated', price: 120, is_active: true, tax_type: 'taxable', option_groups: [] };
   await context.route('**/*', (route) => {
     const request = route.request();
@@ -373,8 +375,16 @@ async function scheduleFixture(t, { admin = false } = {}) {
         pickup: { location: event.location, starts_at: event.pickup_starts_at, ends_at: event.pickup_ends_at },
         items: [{ offering_id: 'scheduled-offering', meal_name: meal.name, quantity: 1, base_price: 120, option_price: 0, unit_price: 120, subtotal: 120, selections: [] }] } });
     }
+    if (event && method === 'GET' && path.includes('/order-submissions/')) {
+      state.submissionLookups.push(path.split('/').at(-1));
+      const result = state.submissionResults.shift();
+      return result === 'old_api'
+        ? route.fulfill({ status: 404, json: { detail: 'Not Found' } })
+        : route.fulfill({ json: { order_id: result ?? null } });
+    }
     if (event && method === 'POST' && path.endsWith('/orders')) {
       state.orders.push(request.postDataJSON());
+      if (state.conflictOnCreate) return route.fulfill({ status: 409, json: { detail: '此送單識別碼已使用，請重新確認訂單' } });
       return route.fulfill({ json: { id: orderId } });
     }
     if (method === 'POST' && path === paymentPath) return route.fulfill({ json: { payment_url: `${base}/isolated-meal-payment` } });
@@ -473,6 +483,50 @@ test('手機從日期摘要選時段後才讀完整菜單，原時段帶入一�
   assert.equal(state.orders[0].payment_method, 'online');
   assert.deepEqual(state.unknownApi, []);
 });
+
+for (const { name, results, submit, recover, method = 'online', handling = 'pickup_day' } of [
+  { name: '找回已成立的原單', results: [orderId], submit: false, recover: true },
+  { name: '未成立時沿用原識別，以新版預設送單', results: [null], submit: true, recover: false },
+  { name: '舊請求先完成時找回原單', results: [null, orderId], submit: true, recover: true },
+  { name: '舊 API 暫時無查詢入口時開啟訂單中心', results: ['old_api'], submit: false, recover: false },
+  { name: '現場付款的取餐日開票找回原單', results: [orderId], submit: false, recover: true, method: 'cash_on_pickup' },
+  { name: '現場付款的收款後開票找回原單', results: [orderId], submit: false, recover: true, method: 'cash_on_pickup', handling: 'on_payment' },
+]) {
+  test(`一般便當更新後重試舊開票請求，${name}`, { timeout: 25000 }, async (t) => {
+    const { page, state } = await scheduleFixture(t);
+    const cash = method === 'cash_on_pickup';
+    state.events[0].allow_cash_payment = cash;
+    state.submissionResults = [...results];
+    state.conflictOnCreate = submit && recover;
+    const requestId = '680456c6-b8af-4b63-83b0-1a3b5f86da43';
+    const oldFingerprint = JSON.stringify({
+      userId: 'schedule-user', eventId: 'scheduled-lunch', couponCode: '', expectedTotal: 120,
+      pickupAt: '2026-09-17T03:00:00.000Z', pickupLocationId: '', needsUtensils: false,
+      items: [{ offering_id: 'scheduled-offering', quantity: 1, option_ids: [] }],
+      contactEmail: 'schedule@example.test',
+      invoicePreference: { buyerType: 'personal', buyerEmail: 'schedule@example.test', carrierType: 'cloud' },
+      paymentMethod: method, kitchenNote: '', invoiceHandling: handling,
+    });
+    const key = `meal-submission:${createHash('sha256').update(oldFingerprint).digest('hex')}`;
+    await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
+    await page.evaluate(([key, id]) => sessionStorage.setItem(key, id), [key, requestId]);
+    await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
+    if (cash) await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
+    await page.getByRole('button', { name: cash ? '確認預訂・現場付款' : '預訂並前往線上付款', exact: true }).click();
+    if (submit && !recover) {
+      await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
+    } else {
+      await page.waitForURL(recover ? `**/meal-orders?order_id=${orderId}` : '**/meal-orders');
+    }
+    assert.deepEqual(state.submissionLookups, results.map(() => requestId));
+    assert.equal(state.orders.length, Number(submit));
+    if (submit) {
+      assert.equal(state.orders[0].client_request_id, requestId);
+      assert.equal(Object.hasOwn(state.orders[0], 'invoice_handling'), false);
+    }
+    assert.equal(await page.evaluate(key => sessionStorage.getItem(key), key), results[0] === 'old_api' ? requestId : null);
+  });
+}
 
 test('便當訂單顯示實際選定的取餐時間，舊單不捏造已選時間', { timeout: 20000 }, async (t) => {
   const { page, state } = await fixture(t, paidOrder({ pickup_at: '2026-09-14T04:05:00Z' }));
