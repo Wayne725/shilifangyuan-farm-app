@@ -194,7 +194,7 @@ test('當日一般便當只顯示來得及備餐的時段，切到會餐後保�
   await navigation.getByRole('button', { name: '11/7 週六，可預訂', exact: true }).waitFor();
   assert.equal(await navigation.getByRole('link', { name: '隔離取餐點 11:30 取餐', exact: true }).count(), 0);
   await navigation.getByRole('link', { name: '隔離取餐點 12:00 取餐', exact: true }).click();
-  const pickupTime = page.getByLabel('預計取餐時間（台灣時間）', { exact: true });
+  const pickupTime = page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true });
   await pickupTime.waitFor();
   assert.equal(await pickupTime.inputValue(), `${date}T12:00`);
   assert.deepEqual(await pickupTime.locator('option').evaluateAll(options => options.map(option => option.value)), [

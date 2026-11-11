@@ -356,16 +356,15 @@ async def test_same_day_update_preserves_omitted_opt_in_and_allows_explicit_disa
 
 async def test_same_day_cannot_publish_after_last_preparation_deadline(workday_context):
     client, _session, admin, _buyer, meal = workday_context
-    headers = auth_headers(admin)
     created = await client.post(
         "/v1/admin/meal-events",
         json=event_body(meal, same_day_preparation_minutes=120, ordering_ends_at="2026-11-09T12:00:00+08:00"),
-        headers=headers,
+        headers=auth_headers(admin),
     )
     assert created.status_code == 201, created.text
     path = f"/v1/admin/meal-events/{created.json()['id']}/publish"
     with time_machine.travel(datetime(2026, 11, 9, 11, tzinfo=TAIPEI), tick=False):
-        response = await client.post(path, headers=headers)
+        response = await client.post(path, headers=auth_headers(admin))
     assert response.status_code == 409, response.text
     assert "已無可預訂的取餐時段" in response.json()["detail"]
 
