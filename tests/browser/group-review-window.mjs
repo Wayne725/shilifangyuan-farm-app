@@ -6,19 +6,26 @@ const target=new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4197');
 if (!['localhost','127.0.0.1'].includes(target.hostname) || target.pathname !== '/' || target.username || target.password) throw new Error('Only isolated local tests');
 const base=target.origin;
 const now='2030-01-02T10:00:00+08:00';
+const adminCampaignList='/v1/group-campaigns?include_hidden=true';
+const adminWorkspaceReads=new Set(['/v1/products','/v1/group-bundles','/v1/vote-proposals',adminCampaignList]);
 const product={id:'product',name:'原始團購白米',category:'蔬果',description:'隔離商品',unit:'袋',member_price:90,nonmember_price:100,stock_quantity:30,is_active:true,can_ship:false,allowed_shipping_channels:[]};
 const pending={id:'campaign',title:'截止審核隔離共同購買',description:'隔離測試',target_type:'product',target_id:'product',member_price:90,nonmember_price:100,min_paid_quantity:10,supply_cap:30,per_user_cap:5,paid_quantity:12,reserved_quantity:0,available_quantity:18,deadline:'2030-01-01T04:00:00Z',confirmation_deadline:'2030-01-04T04:00:00Z',estimated_pickup_start:'2030-01-06T04:00:00Z',estimated_pickup_end:'2030-01-07T04:00:00Z',decision_status:'pending_confirmation',intake_status:'closed',threshold_version:2,updated_at:'2030-01-01T05:00:00Z',review_overdue:false,can_confirm:true,can_edit_review_deadline:true,confirmation_blocked_reason:null,can_ship:false,allowed_shipping_channels:[],core_locked_at:'2030-01-01T00:00:00Z'};
 const recruiting={...pending,decision_status:'recruiting',intake_status:'open',deadline:'2030-01-03T04:00:00Z',confirmation_deadline:'2030-01-06T04:00:00Z',estimated_pickup_start:'2030-01-07T04:00:00Z',estimated_pickup_end:'2030-01-08T04:00:00Z',can_confirm:false};
 async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=pending,proposal=false,proposalStatus='pending_review',timezone='Asia/Taipei'}={}) {
   const browser=await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE});t.after(()=>browser.close());
   const context=await browser.newContext({viewport:{width,height:950},timezoneId:timezone,serviceWorkers:'block',reducedMotion:'reduce'});
-  const state={campaign:structuredClone(campaign),reads:[],readUrls:[],quotes:[],writes:[],unknown:[],errors:[],failGet:null,failWrite:null,changeOnConflict:null};
+  const state={campaign:structuredClone(campaign),reads:[],readUrls:[],unauthenticatedAdminReads:[],quotes:[],writes:[],unknown:[],errors:[],failGet:null,failWrite:null,changeOnConflict:null};
   await context.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url()),endpoint=url.pathname,method=request.method();
     if(url.origin!==base)return route.abort();
     if(!endpoint.startsWith('/v1/'))return method==='GET'?route.continue():route.abort();
     if(endpoint==='/v1/auth/refresh')return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'訪客'}:{access_token:'isolated',user:{id:'review-user',email:'review@example.test',display_name:'隔離管理者',user_role:role,membership_type:'nonmember'}}});
-    if(method==='GET') {state.reads.push(endpoint);state.readUrls.push(url.href);if(state.failGet?.path===endpoint)return route.fulfill({status:state.failGet.status,json:{detail:'隔離權限失效'}});}
+    if(method==='GET') {
+      const readPath=endpoint+url.search;
+      state.reads.push(endpoint);state.readUrls.push(url.href);
+      if(path==='/admin/groups'&&adminWorkspaceReads.has(readPath)&&!request.headers().authorization)state.unauthenticatedAdminReads.push(readPath);
+      if(state.failGet?.path===readPath)return route.fulfill({status:state.failGet.status,json:{detail:'隔離權限失效'}});
+    }
     if(endpoint==='/v1/platform')return route.fulfill({json:{orders_open:true,regular_orders_enabled:true,group_orders_enabled:true,shipping_enabled:false}});
     if(endpoint==='/v1/products')return route.fulfill({json:[product]});
     if(endpoint==='/v1/group-bundles')return route.fulfill({json:[]});
@@ -93,10 +100,29 @@ test('處理提醒日409保留草稿，重讀與核對後才可儲存',async t=>
   const {page,state,visit}=await fixture(t);await visit();await card(page).getByRole('button',{name:'調整處理提醒日'}).click();const form=page.getByRole('form',{name:'調整共同購買處理提醒日'});await form.getByLabel('管理員處理提醒日（台灣）').fill('2030-01-05T15:00');await form.getByLabel('調整原因').fill('延長核對時間');state.failWrite={status:409,message:'期限已更新'};state.changeOnConflict={confirmation_deadline:'2030-01-05T04:00:00Z',updated_at:'2030-01-02T02:00:01Z'};await form.getByRole('button',{name:'儲存處理提醒日'}).click();await form.getByRole('button',{name:'重新讀取處理提醒日'}).waitFor();assert.equal(await form.getByLabel('管理員處理提醒日（台灣）').inputValue(),'2030-01-05T15:00');assert.equal(await form.getByLabel('調整原因').inputValue(),'延長核對時間');await form.getByRole('button',{name:'重新讀取處理提醒日'}).click();await form.getByLabel('已核對最新提醒日，確認儲存目前輸入').waitFor();assert.equal(await form.getByRole('button',{name:'儲存處理提醒日'}).isDisabled(),true);await form.getByLabel('已核對最新提醒日，確認儲存目前輸入').check();await form.getByRole('button',{name:'儲存處理提醒日'}).click();await page.getByText('處理提醒日已更新',{exact:true}).waitFor();assert.equal(state.writes[1].body.expected_confirmation_deadline,'2030-01-05T04:00:00Z');await clean(page,state);
 });
 for(const status of [401,403])for(const cached of [false,true])test(`管理端GET ${status} ${cached?'快取後失權':'初次失權'}整區隱藏並停止重試`,async t=>{
-  const {page,state,visit}=await fixture(t);if(!cached)state.failGet={path:'/v1/group-campaigns',status};await visit();if(cached){await card(page).waitFor();await openReview(page);state.failGet={path:'/v1/group-campaigns',status};await page.clock.runFor(30100);}await waitForAdminDenied(page,status);assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);assert.equal(await page.getByRole('form',{name:'確認共同購買成團'}).count(),0);const reads=state.reads.filter(path=>path!=='/v1/platform').length;await page.clock.runFor(60100);assert.equal(state.reads.filter(path=>path!=='/v1/platform').length,reads);assert.deepEqual(state.writes,[]);await clean(page,state);
+  const {page,state,visit}=await fixture(t);
+  if(cached){
+    await visit();
+    const form=await openReview(page);
+    await form.waitFor();
+  }
+  const deniedRead=page.waitForResponse(response=>response.request().method()==='GET'&&response.url()===`${base}${adminCampaignList}`&&response.status()===status);
+  state.failGet={path:adminCampaignList,status};
+  if(cached)await page.clock.runFor(30100);
+  else await visit();
+  await deniedRead;
+  await waitForAdminDenied(page,status);
+  assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);
+  assert.equal(await page.getByRole('form',{name:'確認共同購買成團'}).count(),0);
+  await page.clock.runFor(60100);
+  assert.deepEqual(state.unauthenticatedAdminReads,[]);
+  const expectedReads=Number(cached)+(status===401?2:1);
+  assert.equal(state.readUrls.filter(url=>url===`${base}${adminCampaignList}`).length,expectedReads);
+  assert.deepEqual(state.writes,[]);
+  await clean(page,state);
 });
 for(const status of [401,403])test(`管理端送審${status}隱藏全部既有資料及草稿`,async t=>{
-  const {page,state,visit}=await fixture(t);await visit();const form=await openReview(page);state.failWrite={status,message:'權限失效'};if(status===401)state.failGet={path:'/v1/group-campaigns',status};await form.getByRole('button',{name:'確認成團',exact:true}).click();await waitForAdminDenied(page,status);assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);await clean(page,state);
+  const {page,state,visit}=await fixture(t);await visit();const form=await openReview(page);state.failWrite={status,message:'權限失效'};if(status===401)state.failGet={path:adminCampaignList,status};await form.getByRole('button',{name:'確認成團',exact:true}).click();await waitForAdminDenied(page,status);assert.equal(await page.getByText('截止審核隔離共同購買',{exact:true}).count(),0);await clean(page,state);
 });
 for(const role of ['guest','customer'])test(`${role}不可讀取管理資料`,async t=>{const {page,state,visit}=await fixture(t,{role});await visit();await page.getByRole('heading',{name:'共同購買管理只向管理者開放。'}).waitFor();assert.equal(state.reads.some(path=>path.includes('group-campaigns')||path.includes('vote-proposals')),false);assert.deepEqual(state.writes,[]);await clean(page,state);});
 
