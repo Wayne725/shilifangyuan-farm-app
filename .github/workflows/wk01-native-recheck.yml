@@ -1,0 +1,52 @@
+name: WebKit diagnostic recheck
+
+on:
+  push:
+    branches: [codex/wk01-recheck-20261112]
+
+jobs:
+  webkit-failure-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      VITE_API_BASE_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: backend/.python-version
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Verify diagnostic controls
+        run: python -B -m unittest discover -s scripts/ci/tests -p 'test_run_wk01_native.py'
+      - name: Install locked frontend and WebKit
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps webkit
+      - name: Build isolated frontend
+        run: pnpm build
+      - name: Diagnose one original WebKit case
+        timeout-minutes: 2
+        run: python -B scripts/ci/run_wk01_native.py --evidence-dir browser-evidence/wk01-native
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webkit-failure-diagnostic
+          path: |
+            browser-evidence/wk01-native/summary.json
+            browser-evidence/wk01-native/timeline.json
+            browser-evidence/wk01-native/manifest.json
+          if-no-files-found: error
+          retention-days: 7
