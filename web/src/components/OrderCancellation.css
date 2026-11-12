@@ -8,6 +8,9 @@
 .admin-cancel-close { position: absolute; top: 16px; right: 16px; }
 .order-cancellation-contact { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 24px; }
 .order-cancellation-contact .button { max-width: 100%; white-space: normal; text-align: left; }
+.meal-disaster-events { list-style: none; margin-block: 20px; padding: 0; }
+.meal-disaster-events > li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px; border-block-start: 1px solid var(--line); }
+.meal-disaster-events > li p { margin: 0; }
 @media (max-width: 600px) {
   .admin-cancel-dialog { padding: 24px 20px; }
   .admin-cancel-dialog .form-actions > .button { flex: 1; }

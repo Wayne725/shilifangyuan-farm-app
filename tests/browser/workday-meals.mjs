@@ -165,6 +165,7 @@ test('假日後週二與管理員週末加開均能切換，不會自行補出�
 test('管理員預設採後端工作日，週末須明確改特殊加開才可建立', { timeout: 30000 }, async t => {
   const { page, unknown, created } = await fixture(t, 390, { admin: true });
   await page.goto(`${base}/admin/meals?tab=events`);
+  await page.getByText('建立便當場次', { exact: true }).filter({ visible: true }).click();
   const form = page.locator('form').filter({ has: page.getByRole('heading', { name: '建立便當場次', exact: true }) });
   await form.getByLabel('取餐開始（台灣時間）', { exact: true }).waitFor().catch(async error => { t.diagnostic(await page.locator('body').innerText()); t.diagnostic(JSON.stringify(unknown)); throw error; });
   await page.waitForFunction(() => [...document.querySelectorAll('label')].find(e => e.textContent === '取餐開始（台灣時間）')?.querySelector('input')?.value === '2026-11-09T11:00');
@@ -215,6 +216,7 @@ test('每日排程預設週一至五，既有週六與當天截單設定顯示�
 test('管理員須明確填入當日截止與備餐時間才建立單場設定', { timeout: 30000 }, async t => {
   const { page, unknown, created } = await fixture(t, 390, { admin: true });
   await page.goto(`${base}/admin/meals?tab=events`);
+  await page.getByText('建立便當場次', { exact: true }).filter({ visible: true }).click();
   const form = page.locator('form').filter({ has: page.getByRole('heading', { name: '建立便當場次', exact: true }) });
   const sameDay = form.getByRole('checkbox', { name: '開放當日訂餐（僅線上付款）', exact: true });
   await sameDay.waitFor();
@@ -303,6 +305,7 @@ test('週六場次可手動只開放會餐，場次卡與複製草稿保留會�
   });
   const { page, unknown, created } = await fixture(t, 390, { admin: true, adminEvents: [existing] });
   await page.goto(`${base}/admin/meals?tab=events`);
+  await page.getByText('建立便當場次', { exact: true }).filter({ visible: true }).click();
   const form = page.locator('form').filter({ has: page.getByRole('heading', { name: '建立便當場次', exact: true }) });
   const businessOnly = form.getByRole('checkbox', { name: '僅開放會餐', exact: true });
   await businessOnly.waitFor();

@@ -6108,6 +6108,39 @@ p {
   position: relative;
 }
 
+.meal-event-create {
+  margin-bottom: 1.25rem;
+}
+
+.meal-event-create > summary {
+  width: fit-content;
+  padding-block: 0.65rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.meal-event-search {
+  padding-block: 1rem;
+  border-block: 1px solid var(--line-strong);
+}
+
+.meal-event-results,
+.meal-event-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.meal-event-results {
+  justify-content: space-between;
+  padding-block: 0.75rem;
+}
+
+.meal-event-results p {
+  margin: 0;
+}
+
 .meal-event-admin-card > .admin-master-form,
 .meal-event-admin-card > .form-actions,
 .meal-event-admin-card > .meal-event-pickup-orders {

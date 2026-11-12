@@ -157,6 +157,7 @@
   "PATCH /v1/admin/activities/{activity_id}",
   "PATCH /v1/admin/activities/{activity_id}/payment-settings",
   "PATCH /v1/admin/activities/{activity_id}/visibility",
+  "PATCH /v1/admin/meal-events/{event_id}/archive",
   "PATCH /v1/admin/meal-events/{event_id}/offerings/{offering_id}/capacity",
   "PATCH /v1/admin/meal-events/{event_id}/ordering-pause",
   "PATCH /v1/admin/meal-events/{event_id}/payment-options",

@@ -1755,6 +1755,14 @@ class MealEventRead(MealEventBookingRead):
     can_edit: bool = False
 
 
+class AdminMealEventRead(MealEventRead):
+    archived_at: Optional[datetime] = None
+
+
+class MealEventArchiveUpdate(BaseModel):
+    archived: bool
+
+
 class MealOrderLineInput(BaseModel):
     offering_id: str
     quantity: int = Field(ge=1, le=99)
@@ -2075,6 +2083,9 @@ class MealDisasterEvent(ApiModel):
     paid_count: int
     paid_total: int
     blocked: bool
+    ordering_paused: bool
+    ordering_pause_version: int
+    ordering_pause_blocked_reason: str | None
 
 
 class MealDisasterPreview(ApiModel):

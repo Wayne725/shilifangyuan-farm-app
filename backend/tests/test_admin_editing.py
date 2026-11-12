@@ -9,8 +9,8 @@ from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.member_claims import attach_roster_membership, roster_aad
 from app.models import (
     Activity, ActivityRegistration, ActivityRegistrationStatus, ActivityStatus, AdminAudit,
-    MealScheduleTemplate, MeetingCategory, MeetingResolution, MemberProfile, MemberRosterEntry, Membership, MembershipStatus,
-    Notification, OutboxEvent, Product, User, UserRole,
+    Invoice, InvoiceStatus, MealEventStatus, MealScheduleTemplate, MeetingCategory, MeetingResolution,
+    MemberProfile, MemberRosterEntry, Membership, MembershipStatus, Notification, OutboxEvent, Product, User, UserRole,
 )
 from app.routers.admin_users import admin_users_router
 from app.routers.auth import auth_router
@@ -276,3 +276,47 @@ async def test_product_archive_is_recoverable_without_republishing(editing_conte
     assert restored.status_code == 200 and restored.json()["archived_at"] is None
     assert restored.json()["is_active"] is False
     assert (await _audit(session, "product.archive_update")).data["after"]["archived_at"] is None
+
+
+@pytest.mark.parametrize("event_status", [MealEventStatus.COMPLETED, MealEventStatus.CANCELLED])
+async def test_terminal_meal_event_archive_preserves_order_and_invoice_history(booking_context, event_status):
+    client, session, buyer, admin, event, order_body = booking_context
+    headers = auth_headers(admin)
+    event_url = f"/v1/meal-events/{event.id}"
+    admin_url = f"/v1/admin/meal-events/{event.id}"
+    archive_url = f"{admin_url}/archive"
+    assert (await client.patch(archive_url, headers=headers, json={"archived": True})).status_code == 409
+
+    order = await client.post(f"{event_url}/orders", headers=auth_headers(buyer), json=order_body)
+    assert order.status_code == 201, order.text
+    order_id = order.json()["id"]
+    invoice = Invoice(order_id=order_id, relate_number="ARCHIVEMEAL0001", status=InvoiceStatus.ISSUED,
+                      invoice_number="AB12345678", total_amount=order.json()["amount_total"])
+    session.add(invoice)
+    event.status = event_status
+    await session.commit()
+
+    assert (await client.patch(archive_url, headers=auth_headers(buyer), json={"archived": True})).status_code == 403
+    archived = await client.patch(archive_url, headers=headers, json={"archived": True})
+    assert archived.status_code == 200, archived.text
+    archived_at = archived.json()["archived_at"]
+    assert archived_at and archived.json()["status"] == event_status.value
+    repeated = await client.patch(archive_url, headers=headers, json={"archived": True})
+    assert repeated.status_code == 200 and repeated.json()["archived_at"] == archived_at
+    events = await client.get("/v1/admin/meal-events", headers=headers)
+    assert events.json()[0]["archived_at"] == archived_at
+    public_detail = await client.get(event_url)
+    assert public_detail.status_code == 200 and "archived_at" not in public_detail.json()
+    orders = await client.get(f"{admin_url}/orders", headers=headers)
+    assert orders.status_code == 200 and [entry["id"] for entry in orders.json()] == [order_id]
+    await session.refresh(invoice)
+    assert invoice.order_id == order_id and invoice.invoice_number == "AB12345678"
+
+    restored = await client.patch(archive_url, headers=headers, json={"archived": False})
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["archived_at"] is None and restored.json()["status"] == event_status.value
+    audits = list(await session.scalars(select(AdminAudit).where(
+        AdminAudit.aggregate_id == event.id, AdminAudit.action == "meal_event.archive_update",
+    ).order_by(AdminAudit.created_at)))
+    assert [row.actor_id for row in audits] == [admin.id, admin.id]
+    assert [row.data["after"]["archived_at"] is None for row in audits] == [False, True]

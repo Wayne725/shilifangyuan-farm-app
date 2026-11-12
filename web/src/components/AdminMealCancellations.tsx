@@ -99,7 +99,7 @@ function CancellationReviewCard({ item }: { item: MealCancellationQueueItem }) {
     {request.reason && <p className="meal-cancellation-reason">退單原因：{request.reason}</p>}
     {request.review_reason && !request.initiated_by_admin && <p className="meal-cancellation-reason">審核理由：{request.review_reason}</p>}
     <CancellationReviewDetails request={request} />
-    <details className="admin-extra-actions"><summary>更多訂單資料</summary><p>{item.customer_email}・{order.meal_event_title}</p><p>履約：{order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "已結束" : order.fulfillment_status === "preparing" ? "製作中" : order.fulfillment_status === "picked_up" ? "已取餐" : "供餐中"}</p><p>申請時間：{formatDateTime(request.requested_at)}</p></details>
+    <details className="admin-extra-actions"><summary>更多訂單資料</summary><p>{item.customer_email}・{order.meal_event_title}</p><p>履約：{order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "取餐時段已結束" : order.fulfillment_status === "preparing" ? "製作中" : order.fulfillment_status === "picked_up" ? "已取餐" : "供餐中"}</p><p>申請時間：{formatDateTime(request.requested_at)}</p></details>
     {request.status === "pending" && !["expired", "failed"].includes(order.payment_status) && <>
       {!item.can_approve && <p>已取消或已結束履約，無法核准。</p>}
       {!decision && <div className="form-actions">
