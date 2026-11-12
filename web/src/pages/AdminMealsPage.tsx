@@ -1,5 +1,6 @@
 import { MealDisasterCancellation } from "../components/MealDisasterCancellation";
 import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
+import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
 import { BowlFood, Buildings, CalendarPlus, Copy, SealCheck } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -91,9 +92,9 @@ export function AdminMealsPage() {
           </details>
           {events.isPending && <LoadingLines count={4} />}
           {events.isError && <DataState kind="error" title="便當場次無法讀取" detail={events.error.message} />}
-          {events.data && <MealEventList events={events.data} meals={meals.data || []} onDone={refreshEvents} />}
+          {events.data && <MealEventList key={routeSearch.date || "all"} initialDate={routeSearch.date} events={events.data} meals={meals.data || []} onDone={refreshEvents} />}
         </Tabs.Content>
-        <Tabs.Content className="tab-content" value="disaster"><MealDisasterCancellation onDone={refreshEvents} /></Tabs.Content>
+        <Tabs.Content className="tab-content" value="disaster"><MealDisasterCancellation mealEvents={events.data} mealEventsError={events.error?.message} onDone={refreshEvents} /></Tabs.Content>
         <Tabs.Content className="tab-content" value="schedules"><MealScheduleSettings meals={meals.data || []} events={events.data || []} onEventsChanged={refreshEvents} /></Tabs.Content>
         <Tabs.Content className="tab-content" value="meals">
           <MealCreateForm onDone={refreshMeals} />
@@ -114,9 +115,13 @@ function adminMealEventLabel(status: string) {
   return status === "pickup_open" ? "供餐中" : mealEventStatusLabel(status);
 }
 
-function MealEventList({ events, meals, onDone }: { events: MealEvent[]; meals: Meal[]; onDone: () => void }) {
-  const [draft, setDraft] = useState(emptyEventSearch);
-  const [search, setSearch] = useState(emptyEventSearch);
+function mealEventIsFinal(event: MealEvent) {
+  return event.status === "cancelled" || event.status === "completed";
+}
+
+function MealEventList({ initialDate, events, meals, onDone }: { initialDate?: string; events: MealEvent[]; meals: Meal[]; onDone: () => void }) {
+  const [draft, setDraft] = useState({ ...emptyEventSearch, date: initialDate ?? "" });
+  const [search, setSearch] = useState(draft);
   const [page, setPage] = useState(1);
   const [archiveMessage, setArchiveMessage] = useState("");
   const queryClient = useQueryClient();
@@ -129,7 +134,7 @@ function MealEventList({ events, meals, onDone }: { events: MealEvent[]; meals: 
     onSuccess: async (event) => {
       await queryClient.cancelQueries({ queryKey: ["admin-meal-events"] });
       queryClient.setQueryData<MealEvent[]>(["admin-meal-events"], (entries) => entries?.map((entry) => entry.id === event.id ? event : entry));
-      setArchiveMessage(event.archived_at ? `已封存「${event.title}」` : `已還原「${event.title}」`);
+      setArchiveMessage(event.archived_at ? `已封存「${event.title}」` : `已取消封存「${event.title}」`);
       onDone();
     },
     onError: () => onDone(),
@@ -138,7 +143,7 @@ function MealEventList({ events, meals, onDone }: { events: MealEvent[]; meals: 
   const keyword = search.query.trim().toLowerCase();
   const matches = events.filter((event) => {
     if (Boolean(event.archived_at) !== (search.status === "archived")) return false;
-    if (search.status === "paused" && !event.ordering_paused) return false;
+    if (search.status === "paused" && (!event.ordering_paused || mealEventIsFinal(event))) return false;
     if (eventStatuses.includes(search.status) && search.status !== event.status) return false;
     if (search.date && mealServiceDate(event) !== search.date) return false;
     return !keyword || [event.title, event.location].some((value) => value.toLowerCase().includes(keyword));
@@ -310,6 +315,7 @@ const MAX_OFFERING_CAPACITY = 100_000;
 function MealEventCard({ event, meals, onDone, onArchive, archiving }: { event: MealEvent; meals: Meal[]; onDone: () => void; onArchive: () => void; archiving: boolean }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [reason, setReason] = useState("");
   const [capacityDraft, setCapacityDraft] = useState<{ offeringId: string; expectedCapacity: number; additional: string } | null>(null);
   const action = useMutation({
@@ -317,9 +323,18 @@ function MealEventCard({ event, meals, onDone, onArchive, archiving }: { event: 
       if (name === "duplicate") return apiFetch<MealEvent>(`/v1/admin/meal-events/${event.id}/duplicate`, { method: "POST", body: JSON.stringify(eventPayload(shiftEvent(event))) });
       return apiFetch<MealEvent>(`/v1/admin/meal-events/${event.id}/${name}`, { method: "POST", body: JSON.stringify(name === "cancel" ? { reason } : reason.trim() ? { reason } : {}) });
     },
-    onSuccess: () => { setReason(""); onDone(); },
+    onSuccess: async (updated, name) => {
+      if (name === "cancel") {
+        await queryClient.cancelQueries({ queryKey: ["admin-meal-events"] });
+        queryClient.setQueryData<MealEvent[]>(["admin-meal-events"], (events) => events?.map((entry) => entry.id === updated.id ? updated : entry));
+        setConfirmCancel(false);
+      }
+      setReason("");
+      onDone();
+    },
   });
-  const orderingPaused = event.ordering_paused === true;
+  const isFinal = mealEventIsFinal(event);
+  const orderingPaused = !isFinal && event.ordering_paused === true;
   const canChangeOrderingPause = mealCanChangeOrderingPause(event);
   const refreshOrdering = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ["admin-meal-events"] }),
@@ -382,6 +397,7 @@ function MealEventCard({ event, meals, onDone, onArchive, archiving }: { event: 
       <span className="status-chip">{adminMealEventLabel(event.status)}</span>
       {event.archived_at && <span className="status-chip">已封存</span>}
       {orderingPaused && <span className="status-chip" role="status">新預訂已暫停</span>}
+      {orderingPaused && !canChangeOrderingPause && <p>目前沒有可恢復的預訂時段。</p>}
       {event.business_only && <span className="status-chip">僅開放會餐</span>}
       <h3>{event.title}</h3>
       <p>{event.location} · {formatMealDateTime(event.pickup_starts_at)} 至 {formatMealDateTime(event.pickup_ends_at)}</p>
@@ -420,13 +436,44 @@ function MealEventCard({ event, meals, onDone, onArchive, archiving }: { event: 
       </form>}
       {increaseCapacity.isSuccess && <p className="form-success" role="status">已儲存追加份數</p>}
     </div>
-    <div className="review-card-actions"><label className="field"><span>處理原因<OptionalMark /></span><input value={reason} onChange={(input) => setReason(input.target.value)} /></label><div><button type="button" disabled={eventActionPending} onClick={() => action.mutate("duplicate")}><Copy size={16} />複製至隔日</button>{canChangeOrderingPause && <button type="button" disabled={eventActionPending} onClick={() => changeOrderingPause.mutate(!orderingPaused)}>{orderingPaused ? "恢復新預訂" : "暫停新預訂"}</button>}{event.status === "draft" && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("publish")}><SealCheck size={16} />發布</button>}{!["draft", "cancelled", "completed"].includes(event.status) && Date.parse(event.pickup_ends_at) <= Date.now() && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("complete")}>結束場次</button>}{!["cancelled", "completed"].includes(event.status) && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("cancel")}>取消場次</button>}<Link to="/meals/$eventId" params={{ eventId: event.id }}>查看前台</Link></div></div>
-    {action.isError && <p className="form-error">{action.error.message}</p>}
-    {changeOrderingPause.isError && <p className="form-error" role="alert">{changeOrderingPause.error.message}</p>}
-    <div className="form-actions"><button className="button button-quiet" type="button" disabled={event.can_edit !== true || eventActionPending} onClick={() => setEditing(!editing)}>{editing ? "收起場次編輯" : "手動編輯場次"}</button>{event.can_edit !== true && <span className="field-help">已有訂單或場次已截止，不能修改原場次。</span>}
-      {["completed", "cancelled"].includes(event.status) && <button className="button button-quiet" type="button" disabled={eventActionPending || archiving} onClick={onArchive}>{event.archived_at ? "還原場次" : "封存場次"}</button>}
+    <div className="review-card-actions">
+      {!isFinal && <label className="field"><span>處理原因<OptionalMark /></span><input value={reason} onChange={(input) => setReason(input.target.value)} /></label>}
+      <div>
+        <button type="button" disabled={eventActionPending} onClick={() => action.mutate("duplicate")}><Copy size={16} />複製至隔日</button>
+        {canChangeOrderingPause && <button type="button" disabled={eventActionPending} onClick={() => changeOrderingPause.mutate(!orderingPaused)}>{orderingPaused ? "恢復新預訂" : "暫停新預訂"}</button>}
+        {event.status === "draft" && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("publish")}><SealCheck size={16} />發布</button>}
+        {!isFinal && event.status !== "draft" && Date.parse(event.pickup_ends_at) <= Date.now() && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("complete")}>結束場次</button>}
+        {!isFinal && <Dialog.Root open={confirmCancel} onOpenChange={open => {
+          if (action.isPending) return;
+          if (open) action.reset();
+          setConfirmCancel(open);
+        }}>
+          <Dialog.Trigger asChild><button type="button" disabled={eventActionPending}>取消場次</button></Dialog.Trigger>
+          <Dialog.Portal>
+            <Dialog.Overlay className="admin-cancel-overlay" />
+            <Dialog.Content className="admin-cancel-dialog">
+              <Dialog.Title>取消「{event.title}」</Dialog.Title>
+              <Dialog.Description>系統會取消本場訂單，並為已付款的訂單安排退款。此操作無法復原。</Dialog.Description>
+              {action.isError && <p className="form-error" role="alert">{action.error.message}</p>}
+              <div className="form-actions">
+                <Dialog.Close asChild><button className="button button-quiet" type="button" disabled={action.isPending}>返回</button></Dialog.Close>
+                <button className="button button-primary" type="button" disabled={action.isPending} onClick={() => action.mutate("cancel")}>{action.isPending ? "處理中…" : "取消場次並退款"}</button>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>}
+        <Link to="/meals/$eventId" params={{ eventId: event.id }}>查看前台</Link>
+      </div>
     </div>
-    {editing && <EventCreateForm key={event.id} meals={meals} initial={event} onCancel={() => setEditing(false)} onDone={() => { setEditing(false); onDone(); }} />}
+    {action.isError && !confirmCancel && <p className="form-error">{action.error.message}</p>}
+    {changeOrderingPause.isError && <p className="form-error" role="alert">{changeOrderingPause.error.message}</p>}
+    <div className="form-actions">
+      {!isFinal && <button className="button button-quiet" type="button" disabled={event.can_edit !== true || eventActionPending} onClick={() => setEditing(!editing)}>{editing ? "收起場次編輯" : "手動編輯場次"}</button>}
+      {!isFinal && event.can_edit !== true && <span className="field-help">已有訂單或場次已截止，不能修改原場次。</span>}
+      {isFinal && <button className="button button-quiet" type="button" disabled={eventActionPending || archiving} onClick={onArchive}>{event.archived_at ? "取消封存" : "封存場次"}</button>}
+    </div>
+    {event.status === "cancelled" && Date.parse(event.pickup_ends_at) > Date.now() && <p>如需重新供餐，請建立新場次。</p>}
+    {editing && !isFinal && <EventCreateForm key={event.id} meals={meals} initial={event} onCancel={() => setEditing(false)} onDone={() => { setEditing(false); onDone(); }} />}
     {event.business_only && <p className="meal-payment-options">取餐當日線上付款</p>}
     {event.same_day_preparation_minutes != null && <p className="meal-payment-options">當日訂餐 · 線上付款</p>}
     <EventPickupOrders eventId={event.id} />

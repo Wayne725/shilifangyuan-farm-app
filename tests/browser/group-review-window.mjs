@@ -11,7 +11,7 @@ const adminWorkspaceReads=new Set(['/v1/products','/v1/group-bundles','/v1/vote-
 const product={id:'product',name:'原始團購白米',category:'蔬果',description:'隔離商品',unit:'袋',member_price:90,nonmember_price:100,stock_quantity:30,is_active:true,can_ship:false,allowed_shipping_channels:[]};
 const pending={id:'campaign',title:'截止審核隔離共同購買',description:'隔離測試',target_type:'product',target_id:'product',member_price:90,nonmember_price:100,min_paid_quantity:10,supply_cap:30,per_user_cap:5,paid_quantity:12,reserved_quantity:0,available_quantity:18,deadline:'2030-01-01T04:00:00Z',confirmation_deadline:'2030-01-04T04:00:00Z',estimated_pickup_start:'2030-01-06T04:00:00Z',estimated_pickup_end:'2030-01-07T04:00:00Z',decision_status:'pending_confirmation',intake_status:'closed',threshold_version:2,updated_at:'2030-01-01T05:00:00Z',review_overdue:false,can_confirm:true,can_edit_review_deadline:true,confirmation_blocked_reason:null,can_ship:false,allowed_shipping_channels:[],core_locked_at:'2030-01-01T00:00:00Z'};
 const recruiting={...pending,decision_status:'recruiting',intake_status:'open',deadline:'2030-01-03T04:00:00Z',confirmation_deadline:'2030-01-06T04:00:00Z',estimated_pickup_start:'2030-01-07T04:00:00Z',estimated_pickup_end:'2030-01-08T04:00:00Z',can_confirm:false};
-async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=pending,proposal=false,proposalStatus='pending_review',timezone='Asia/Taipei'}={}) {
+async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=pending,proposal=false,proposalStatus='pending_review',proposalRows,timezone='Asia/Taipei'}={}) {
   const browser=await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE});t.after(()=>browser.close());
   const context=await browser.newContext({viewport:{width,height:950},timezoneId:timezone,serviceWorkers:'block',reducedMotion:'reduce'});
   const state={campaign:structuredClone(campaign),reads:[],readUrls:[],unauthenticatedAdminReads:[],quotes:[],writes:[],unknown:[],errors:[],failGet:null,failWrite:null,changeOnConflict:null};
@@ -29,7 +29,7 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
     if(endpoint==='/v1/platform')return route.fulfill({json:{orders_open:true,regular_orders_enabled:true,group_orders_enabled:true,shipping_enabled:false}});
     if(endpoint==='/v1/products')return route.fulfill({json:[product]});
     if(endpoint==='/v1/group-bundles')return route.fulfill({json:[]});
-    if(endpoint==='/v1/vote-proposals')return route.fulfill({json:proposal?[{id:'proposal',target_type:'product',target_id:'product',target_name:'提案隔離白米',status:proposalStatus,threshold:10,vote_count:0,estimated_quantity:0}]:[]});
+    if(endpoint==='/v1/vote-proposals')return route.fulfill({json:proposalRows ?? (proposal?[{id:'proposal',target_type:'product',target_id:'product',target_name:'提案隔離白米',status:proposalStatus,threshold:10,vote_count:0,estimated_quantity:0}]:[])});
     if(endpoint==='/v1/group-campaigns'&&method==='GET')return route.fulfill({json:url.searchParams.get('include_hidden')==='true'||state.campaign.is_public!==false?[state.campaign]:[]});
     if(endpoint==='/v1/group-campaigns/campaign'&&method==='GET')return route.fulfill({json:state.campaign});
     if(endpoint==='/v1/pickup-locations')return route.fulfill({json:[{id:'store',name:'隔離取貨點',is_active:true}]});
@@ -52,6 +52,54 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
 const card=page=>page.getByRole('article',{name:'共同購買 截止審核隔離共同購買',exact:true});
 async function clean(page,state){assert.deepEqual(state.unknown,[]);assert.deepEqual(state.errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);}
 async function waitForAdminDenied(page,status){if(status===401)await page.getByRole('heading',{name:'共同購買管理只向管理者開放。',exact:true}).waitFor();else await page.getByText('共同購買管理權限已失效').waitFor();}
+
+test('手機團購提案可依標題和台灣日期查詢並分頁', async t => {
+  const proposalBase = {
+    target_type: 'product', target_id: 'product', status: 'rejected',
+    threshold: 10, vote_count: 0, estimated_quantity: 0, created_at: '2030-01-02T02:00:00Z',
+  };
+  const proposalRows = [
+    ...Array.from({ length: 10 }, (_, index) => ({
+      ...proposalBase, id: `history-${index}`, target_name: `歷史提案 ${index + 1}`,
+    })),
+    { ...proposalBase, id: 'midnight', target_name: '烏龍 Tea', status: 'pending_review', created_at: '2030-01-01T16:00:00Z' },
+    { ...proposalBase, id: 'before-midnight', target_name: '紅茶 Tea', status: 'voting', created_at: '2030-01-01T15:59:59Z', deadline: '2030-01-03T00:00:00Z' },
+    { ...proposalBase, id: 'expired', target_name: '花茶 Tea', status: 'voting', created_at: '2029-12-31T16:00:00Z', deadline: '2030-01-01T00:00:00Z' },
+  ];
+  const { page, state, visit } = await fixture(t, {
+    width: 390, timezone: 'America/New_York', path: '/admin/groups?tab=proposals', proposalRows,
+  });
+  await visit();
+  const list = page.locator('.admin-review-list');
+  const pagination = page.getByRole('navigation', { name: '團購提案分頁' });
+  await pagination.getByText('第 1／2 頁').waitFor();
+  assert.equal(await list.getByRole('article').count(), 10);
+  assert.equal(await pagination.getByRole('button', { name: '上一頁' }).isDisabled(), true);
+  await pagination.getByRole('button', { name: '下一頁' }).click();
+  await pagination.getByText('第 2／2 頁').waitFor();
+  assert.equal(await list.getByRole('article').count(), 3);
+
+  const search = page.getByRole('form', { name: '查詢共同購買提案' });
+  await search.getByRole('searchbox', { name: '提案標題' }).fill(' TEA ');
+  await search.getByLabel('提案日期起').fill('2030-01-02');
+  await search.getByLabel('提案日期迄').fill('2030-01-01');
+  await page.getByRole('alert').getByText('結束日期不可早於開始日期').waitFor();
+  assert.equal(await search.getByRole('button', { name: '查詢提案' }).isDisabled(), true);
+  await search.getByLabel('提案日期迄').fill('2030-01-02');
+  await search.getByRole('button', { name: '查詢提案' }).click();
+  await list.getByText(/2030\/01\/02 提案/).waitFor();
+  assert.deepEqual(await list.getByRole('heading', { level: 3 }).allTextContents(), ['烏龍 Tea']);
+  assert.equal(await pagination.count(), 0);
+  assert.equal(await list.getByRole('button', { name: '通過並開放投票' }).isEnabled(), true);
+
+  await search.getByRole('button', { name: '清除查詢' }).click();
+  await pagination.getByText('第 1／2 頁').waitFor();
+  await search.getByLabel('提案範圍').selectOption('voting');
+  await list.getByRole('heading', { name: '紅茶 Tea' }).waitFor();
+  assert.deepEqual(await list.getByRole('heading', { level: 3 }).allTextContents(), ['紅茶 Tea']);
+  assert.deepEqual(state.writes, []);
+  await clean(page, state);
+});
 
 test('已截止且有付款的共同購買可更正公開說明', async t => {
   const { page, state, visit } = await fixture(t, { width: 390 });
