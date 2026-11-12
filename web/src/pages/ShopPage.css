@@ -24,6 +24,32 @@
   margin: 0;
 }
 
+.meal-date-button[data-service-notice] {
+  flex-basis: calc(6rem + 32px);
+}
+
+.meal-date-button[data-service-notice] .meal-date-status {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.meal-date-disruption {
+  display: block;
+}
+
+.meal-pickup-notices {
+  margin: 8px 0 0;
+  padding: 0;
+  color: var(--clay);
+  list-style: none;
+}
+
+.meal-pickup-notices li {
+  padding-block: 8px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 680px) {
   .shop-product-filters {
     grid-template-columns: minmax(0, 1fr);

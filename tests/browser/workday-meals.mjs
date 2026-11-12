@@ -332,8 +332,8 @@ test('週六場次可手動只開放會餐，場次卡與複製草稿保留會�
   await duplicated;
   assert.equal(created[1].business_only, true);
   assert.equal(created[1].allow_cash_payment, false);
-  await card.getByRole('button', { name: '手動編輯場次' }).click();
-  const editForm = card.locator('form').filter({ has: page.getByRole('heading', { name: '手動編輯便當場次', exact: true }) });
+  await card.getByRole('button', { name: '編輯場次' }).click();
+  const editForm = page.getByRole('form', { name: '編輯便當場次', exact: true });
   assert.equal(await editForm.getByRole('checkbox', { name: '僅開放會餐' }).isChecked(), true);
   await noOverflow(page);
   assert.deepEqual(unknown, []);
@@ -413,8 +413,8 @@ test('既有訂單場次可追加單一餐點份數，衝突後須核對且維�
   const editableCard = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: editable.title, exact: true }) });
   await card.getByRole('button', { name: '追加份數', exact: true }).click();
   assert.equal(await editableCard.getByRole('button', { name: '追加份數', exact: true }).count(), 0);
-  assert.equal(await editableCard.getByRole('button', { name: '手動編輯場次', exact: true }).isEnabled(), true);
-  assert.equal(await card.getByRole('button', { name: '手動編輯場次', exact: true }).isDisabled(), true);
+  assert.equal(await editableCard.getByRole('button', { name: '編輯場次', exact: true }).isEnabled(), true);
+  assert.equal(await card.getByRole('button', { name: '編輯場次', exact: true }).isDisabled(), true);
 
   const form = card.getByRole('form', { name: '追加餐點份數' });
   const offering = form.getByRole('combobox', { name: '餐點', exact: true });

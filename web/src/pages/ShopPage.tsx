@@ -10,8 +10,8 @@ import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
 import { ApiError, apiFetch, formatDate } from "../lib/api";
 import { campaignOrderBlockReason, campaignStatusLabel } from "../lib/group-campaigns";
-import { mealMenuAvailability } from "../lib/meal-time";
-import type { GroupCampaign, MealCalendarEvent, MealEvent, Product } from "../lib/types";
+import { mealMenuAvailability, taipeiDate } from "../lib/meal-time";
+import type { GroupCampaign, MealCalendarEvent, MealDisasterAnnouncement, MealEvent, Product } from "../lib/types";
 import "./ShopPage.css";
 
 const productsPerPage = 12;
@@ -88,14 +88,16 @@ export function ShopPage() {
   });
   const announcements = useQuery({
     queryKey: ["meal-announcements"],
-    queryFn: ({ signal }) => apiFetch<Array<{ service_date: string; periods: string[]; message: string }>>("/v1/meal-announcements", { signal }),
+    queryFn: ({ signal }) => apiFetch<MealDisasterAnnouncement[]>("/v1/meal-announcements", { signal }),
     enabled: activeTab === "meals",
     refetchInterval: 60000,
   });
-  const upcomingMeals = meals.data?.filter((meal) =>
+  const today = taipeiDate(now);
+  const currentAnnouncements = announcements.data?.filter((notice) => notice.service_date >= today && notice.periods.length > 0) ?? [];
+  const upcomingMeals = meals.isSuccess ? meals.data.filter((meal) =>
     !["draft", "cancelled", "completed"].includes(meal.status)
       && new Date(meal.pickup_ends_at).getTime() > now,
-  ) || [];
+  ) : [];
   const pageTitle = activeTab === "meals" ? "我要訂餐" : activeTab === "groups" ? "共同購買" : "日常選品";
 
   if (platform.data?.orders_open === false) return <StorefrontClosed message={platform.data.closed_message} />;
@@ -108,11 +110,6 @@ export function ShopPage() {
         {activeTab === "meals" && <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link></nav>}
       </section>
 
-      {activeTab === "meals" && Boolean(announcements.data?.length) && <section className="meal-shop-actions" aria-label="供餐公告">
-        {announcements.data?.map((notice, index) => <p key={`${notice.service_date}-${index}`} role="status">
-          <strong>{notice.service_date} {notice.periods.includes("lunch") ? "午餐" : ""}{notice.periods.includes("dinner") ? " 晚餐" : ""}</strong> · {notice.message}
-        </p>)}
-      </section>}
       <Tabs.Root className="market-tabs" value={activeTab} onValueChange={(next) => {
         if (next === "meals" || next === "groups" || next === "products") {
           void navigate({ search: (previous) => ({ ...previous, tab: next }), resetScroll: false });
@@ -248,7 +245,9 @@ export function ShopPage() {
             eyebrow="MEAL PREORDER / 便當預訂"
             title="選取餐時間"
           />
-          {meals.isSuccess && <MealDateNavigation events={upcomingMeals} now={now} />}
+          {(meals.isSuccess || currentAnnouncements.length > 0) && (
+            <MealDateNavigation events={upcomingMeals} announcements={currentAnnouncements} now={now} />
+          )}
           {meals.isPending && <LoadingLines count={2} />}
           {meals.isError && (
             <DataState

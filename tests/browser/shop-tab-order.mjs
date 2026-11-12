@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
@@ -28,7 +29,7 @@ const event = {
 const calendarPath = '/v1/meal-events/calendar';
 const originalListPath = '/v1/meal-events';
 
-async function fixture(t, { width = 390, calendarStatus = 200, products = [] } = {}) {
+async function fixture(t, { width = 390, calendarStatus = 200, products = [], announcements = [], events = [event] } = {}) {
     const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
     t.after(() => browser.close());
     const context = await browser.newContext({
@@ -47,17 +48,17 @@ async function fixture(t, { width = 390, calendarStatus = 200, products = [] } =
           return route.fulfill({ status: 401, json: { detail: '隔離測試未登入' } });
         }
         if (url.pathname === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
-        if (url.pathname === '/v1/meal-announcements') return route.fulfill({ json: [] });
+        if (url.pathname === '/v1/meal-announcements') return route.fulfill({ json: announcements });
         if (method === 'GET' && url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (method === 'GET' && url.pathname === calendarPath) {
           mealReads.push(calendarPath);
           return calendarStatus === 200
-            ? route.fulfill({ json: mealCalendarFixture([event]) })
+            ? route.fulfill({ json: mealCalendarFixture(events) })
             : route.fulfill({ status: calendarStatus, json: { detail: '隔離摘要回應' } });
         }
         if (method === 'GET' && url.pathname === originalListPath) {
           mealReads.push(originalListPath);
-          return route.fulfill({ json: [event] });
+          return route.fulfill({ json: events });
         }
         if (method === 'GET' && url.pathname === '/v1/products') return route.fulfill({ json: products });
         const selectedProduct = products.find(product => url.pathname === `/v1/products/${product.id}`);
@@ -143,6 +144,59 @@ for (const width of [1440, 390]) {
   });
 }
 
+test('手機取餐日期內顯示停餐餐別，保留未停餐的時段並更新已復供狀態', { timeout: 30000 }, async t => {
+  const announcements = [
+    { service_date: '2030-01-01', periods: ['lunch'], message: '前一日停餐' },
+    { service_date: '2030-01-02', periods: ['dinner', 'lunch'], message: '颱風暫停供餐' },
+    { service_date: '2030-01-03', periods: ['dinner'], message: '晚間因颱風暫停供餐', cancelled_event_ids: ['isolated-dinner'] },
+  ];
+  const dinnerEvent = {
+    ...event, id: 'isolated-dinner', title: '隔離晚餐', meal_period: 'dinner',
+    pickup_starts_at: '2030-01-03T16:30:00+08:00', pickup_ends_at: '2030-01-03T18:30:00+08:00',
+    pickup_slots: ['2030-01-03T17:00:00+08:00'],
+  };
+  const otherDinner = { ...dinnerEvent, id: 'other-dinner', location: '另一取餐點' };
+  const { page, mutations, unknownApi } = await fixture(t, { announcements, events: [event, dinnerEvent, otherDinner] });
+  await page.goto(`${base}/shop`);
+  const calendar = page.getByRole('region', { name: '便當日期與取餐時間' });
+  const dates = calendar.getByRole('group', { name: '取餐日期' });
+  const notices = calendar.getByRole('list', { name: '停餐資訊' });
+  const partial = dates.getByRole('button', { name: '1/3 週四，可預訂，部分晚餐停供', exact: true });
+  const stopped = dates.getByRole('button', { name: '1/2 週三，颱風暫停供餐', exact: true });
+  const lunch = calendar.getByRole('link', { name: '合作社取餐點 11:30 取餐', exact: true });
+  const dinner = calendar.getByRole('link', { name: '合作社取餐點 17:00 取餐', exact: true });
+  await partial.waitFor();
+  assert.equal(await partial.getAttribute('aria-pressed'), 'true');
+  await notices.getByText('部分晚餐 · 晚間因颱風暫停供餐', { exact: true }).waitFor();
+  await lunch.waitFor();
+  await calendar.getByRole('link', { name: '另一取餐點 17:00 取餐', exact: true }).waitFor();
+  assert.equal(await dinner.count(), 0);
+  assert.equal(await dates.getByRole('button', { name: /^1\/1 / }).count(), 0);
+  assert.equal(await page.getByRole('region', { name: '供餐公告' }).count(), 0);
+
+  await stopped.click();
+  await notices.getByText('午餐、晚餐 · 颱風暫停供餐', { exact: true }).waitFor();
+  assert.equal(await calendar.getByRole('link').count(), 0);
+  assert.equal(await page.getByText('這一天的取餐時段尚未開放').count(), 0);
+  if (process.env.BROWSER_SCREENSHOT_DIR) {
+    await mkdir(process.env.BROWSER_SCREENSHOT_DIR, { recursive: true });
+    await calendar.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/meal-disaster-date-mobile.png`, animations: 'disabled' });
+  }
+
+  await partial.click();
+  announcements.pop();
+  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/v1/meal-announcements');
+  await page.clock.fastForward(61_000);
+  await refreshed;
+  await dates.getByRole('button', { name: '1/3 週四，可預訂', exact: true }).waitFor();
+  assert.equal(await notices.count(), 0);
+  await lunch.waitFor();
+  await dinner.waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(mutations, []);
+  assert.deepEqual(unknownApi, []);
+});
+
 test('摘要 404 時使用舊版清單，保留相同時段入口', async t => {
   const { page, mealReads, unknownApi } = await fixture(t, { calendarStatus: 404 });
   await page.goto(`${base}/shop`);
@@ -153,11 +207,20 @@ test('摘要 404 時使用舊版清單，保留相同時段入口', async t => {
   assert.deepEqual(unknownApi, []);
 });
 
-test('摘要 503 顯示錯誤並沿用重試，無額外完整清單請求', async t => {
-  const { page, mealReads, unknownApi } = await fixture(t, { calendarStatus: 503 });
+test('摘要 503 保留已讀取的停餐資訊與重試，無額外完整清單請求', async t => {
+  const { page, mealReads, unknownApi } = await fixture(t, {
+    calendarStatus: 503,
+    announcements: [{ service_date: '2030-01-02', periods: ['lunch'], message: '颱風暫停供餐' }],
+  });
   await page.goto(`${base}/shop`);
   await page.getByRole('heading', { name: '餐期資料暫時不可用', exact: true }).waitFor();
-  assert.ok(mealReads.length > 0);
+  const calendar = page.getByRole('region', { name: '便當日期與取餐時間' });
+  await calendar.getByRole('button', { name: '1/2 週三，颱風暫停供餐', exact: true }).waitFor();
+  await calendar.getByRole('list', { name: '停餐資訊' }).getByText('午餐 · 颱風暫停供餐', { exact: true }).waitFor();
+  assert.equal(await calendar.getByRole('link').count(), 0);
+  const retried = page.waitForResponse(response => new URL(response.url()).pathname === calendarPath);
+  await page.getByRole('button', { name: '重新連線', exact: true }).click();
+  assert.equal((await retried).status(), 503);
   assert.ok(mealReads.every(path => path === calendarPath));
   assert.deepEqual(unknownApi, []);
 });

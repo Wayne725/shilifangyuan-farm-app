@@ -44,7 +44,12 @@ export function MealDisasterCancellation({ mealEvents, mealEventsError, onDone }
     mutationFn: (token: string) => apiFetch<Result>("/v1/admin/meal-disaster/cancel", {
       method: "POST", body: JSON.stringify({ ...selection, preview_token: token, reason, announcement }),
     }),
-    onSuccess: () => { setConfirm(false); preview.reset(); onDone(); },
+    onSuccess: () => {
+      setConfirm(false);
+      changeOrderingPause.reset();
+      preview.mutate(selection);
+      onDone();
+    },
   });
   const changeOrderingPause = useMutation({
     mutationFn: (event: EventPreview) => apiFetch<MealEvent>(`/v1/admin/meal-events/${event.id}/ordering-pause`, {
@@ -124,6 +129,8 @@ export function MealDisasterCancellation({ mealEvents, mealEventsError, onDone }
       <ul className="meal-disaster-events" role="list" aria-label="已取消場次">
         {cancelledEvents.map(event => <li key={event.id}>
           <p>{event.title} · {mealPeriod(event) === "lunch" ? "午餐" : "晚餐"} · 已取消</p>
+          <Link to="/admin/meals" search={{ tab: "events", date, rebuild: event.id }}
+            aria-label={`為「${event.title}」建立補開草稿`} className="button button-quiet">建立補開草稿</Link>
         </li>)}
       </ul>
       <p>已取消的場次保留原訂單及退款紀錄。</p>

@@ -129,6 +129,7 @@ from ..schemas import (
     MealDisasterResult,
     MealDisasterSelection,
     MealEventCreate,
+    MealEventDraftCreate,
     MealEventRead,
     MealOptionGroupRead,
     MealOptionRead,
@@ -731,13 +732,14 @@ async def _unique_pickup_code(session: AsyncSession) -> str:
     raise HTTPException(status_code=503, detail="暫時無法產生取餐碼")
 
 
+PUBLIC_MEAL_EVENT_STATUSES = (
+    MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSED, MealEventStatus.PICKUP_OPEN,
+)
+
+
 def _public_meal_event_query(settings: Settings, *columns):
     query = select(MealEvent, *columns).where(
-        MealEvent.status.in_([
-            MealEventStatus.PUBLISHED,
-            MealEventStatus.ORDERING_CLOSED,
-            MealEventStatus.PICKUP_OPEN,
-        ])
+        MealEvent.status.in_(PUBLIC_MEAL_EVENT_STATUSES),
     )
     if settings.environment.strip().lower() == "production":
         query = query.where(MealEvent.id.not_in(DEMO_MEAL_EVENT_IDS))
@@ -1897,10 +1899,20 @@ async def archive_meal_event(
     return _admin_meal_event_read(event)
 
 
-def _configured_event_values(body: MealEventCreate, *, existing: MealEvent | None = None) -> dict:
-    values = body.model_dump(exclude={"offerings"})
+def _configured_event_values(
+    body: MealEventCreate, *, existing: MealEvent | None = None, pickup_source: MealEvent | None = None,
+) -> dict:
+    values = body.model_dump(exclude={"offerings", "replaces_event_id"})
     values["pickup_starts_at"] = _aware(body.pickup_starts_at).astimezone(timezone.utc)
     values["pickup_ends_at"] = _aware(body.pickup_ends_at).astimezone(timezone.utc)
+    pickup_config = existing or pickup_source
+    if pickup_config is not None:
+        keep_slots = (existing is not None and existing.schedule_template_id is not None) or (
+            values["pickup_starts_at"] == _aware(pickup_config.pickup_starts_at)
+            and values["pickup_ends_at"] == _aware(pickup_config.pickup_ends_at)
+        )
+        values["meal_period"] = pickup_config.meal_period if keep_slots else None
+        values["pickup_slot_ends_at"] = pickup_config.pickup_slot_ends_at if keep_slots else None
     policy = body.booking_policy
     if existing is not None and "booking_policy" not in body.model_fields_set:
         policy = existing.booking_policy
@@ -1935,12 +1947,7 @@ def _configured_event_values(body: MealEventCreate, *, existing: MealEvent | Non
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     if same_day or business_only:
-        candidate = MealEvent(
-            **values,
-            service_date=service_date,
-            meal_period=existing.meal_period if existing is not None else None,
-            pickup_slot_ends_at=existing.pickup_slot_ends_at if existing is not None else None,
-        )
+        candidate = MealEvent(**values, service_date=service_date)
         slots = meal_pickup_slots(candidate)
         if business_only and not slots:
             raise HTTPException(422, "此場次沒有可預訂的取餐時段")
@@ -1953,17 +1960,45 @@ def _configured_event_values(body: MealEventCreate, *, existing: MealEvent | Non
     return values
 
 
+def _meal_service_coverage(event: MealEvent) -> tuple[date, str, str]:
+    return meal_service_date(event), meal_period(event), event.location.strip().casefold()
+
+
+def _meal_event_replacements():
+    source_id = AdminAudit.data["replaces_event_id"].as_string()
+    return select(source_id, MealEvent).join(
+        MealEvent, MealEvent.id == AdminAudit.aggregate_id,
+    ).where(
+        AdminAudit.action == "meal_event.create",
+        AdminAudit.aggregate_type == "meal_event",
+        source_id.is_not(None),
+    )
+
+
 @meals_router.post(
     "/v1/admin/meal-events",
     response_model=MealEventRead,
     status_code=status.HTTP_201_CREATED,
 )
 async def admin_create_meal_event(
-    body: MealEventCreate,
+    body: MealEventDraftCreate,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MealEventRead:
-    values = _configured_event_values(body)
+    source = None
+    if body.replaces_event_id is not None:
+        source = await session.scalar(select(MealEvent).where(MealEvent.id == body.replaces_event_id).with_for_update())
+        if source is None:
+            raise HTTPException(404, "找不到原便當場次")
+        if source.status != MealEventStatus.CANCELLED:
+            raise HTTPException(409, "僅已取消的場次可另建替代場次")
+    return await _create_meal_event(body, admin, session, source=source)
+
+
+async def _create_meal_event(
+    body: MealEventCreate, admin: User, session: AsyncSession, *, source: MealEvent | None = None,
+) -> MealEventRead:
+    values = _configured_event_values(body, pickup_source=source)
     meal_ids = {offering.meal_id for offering in body.offerings}
     meals = (
         await session.scalars(
@@ -1984,6 +2019,16 @@ async def admin_create_meal_event(
             for offering in body.offerings
         ],
     )
+    if source is not None:
+        if _remaining_meal_ordering_start(event, datetime.now(timezone.utc)) is None:
+            raise HTTPException(422, "補開場次已無可預訂的時段，請調整供餐日期或時間")
+        coverage = _meal_service_coverage(event)
+        replacements = await session.execute(_meal_event_replacements().where(
+            AdminAudit.data["replaces_event_id"].as_string() == source.id,
+            MealEvent.status != MealEventStatus.CANCELLED,
+        ))
+        if any(_meal_service_coverage(replacement) == coverage for _, replacement in replacements):
+            raise HTTPException(409, "相同日期、餐別與取餐地點已有替代場次")
     session.add(event)
     await session.flush()
     session.add(
@@ -2001,6 +2046,7 @@ async def admin_create_meal_event(
                 "service_date": _aware(event.pickup_starts_at).astimezone(TAIPEI).date().isoformat(),
                 "ordering_starts_at": _aware(event.ordering_starts_at).isoformat(),
                 "ordering_ends_at": _aware(event.ordering_ends_at).isoformat(),
+                **({"replaces_event_id": source.id} if source is not None else {}),
             },
         )
     )
@@ -2031,10 +2077,7 @@ async def admin_update_meal_event(
     if event.status == MealEventStatus.PUBLISHED:
         if _aware(values["ordering_ends_at"]) <= datetime.now(timezone.utc):
             raise HTTPException(422, "已發布場次的訂購截止時間不得設為過去")
-        candidate = MealEvent(
-            **values, service_date=event.service_date, meal_period=event.meal_period,
-            pickup_slot_ends_at=event.pickup_slot_ends_at,
-        )
+        candidate = MealEvent(**values, service_date=event.service_date)
         if not meal_pickup_slots(candidate):
             raise HTTPException(422, "此場次沒有可預訂的取餐時段")
     meal_ids = {offering.meal_id for offering in body.offerings}
@@ -2086,7 +2129,7 @@ async def duplicate_meal_event(
         offering.meal_id for offering in body.offerings
     }.issubset(source_meal_ids):
         raise HTTPException(status_code=422, detail="複製場次不可加入新餐點")
-    return await admin_create_meal_event(body, admin, session)
+    return await _create_meal_event(body, admin, session)
 
 
 @meals_router.post(
@@ -2521,6 +2564,7 @@ async def cancel_meal_disaster(
         raise HTTPException(409, "場次或訂單已變動，請重新預覽")
     if any(event.blocked for event in preview.events):
         raise HTTPException(409, "有場次已完成取餐，請重新選擇餐別")
+    public_event_ids = [event.id for event, _ in plan if event.status in PUBLIC_MEAL_EVENT_STATUSES]
     for event, orders in plan:
         await _cancel_meal_event_orders(session, event, orders, admin, settings, body.reason)
     session.add(AdminAudit(
@@ -2528,6 +2572,7 @@ async def cancel_meal_disaster(
         reason=body.reason, data={
             "service_date": body.service_date.isoformat(), "periods": sorted(body.periods),
             "announcement": body.announcement.strip(), "event_ids": [event.id for event, _ in plan],
+            "public_event_ids": public_event_ids,
         },
     ))
     await session.commit()
@@ -2539,17 +2584,77 @@ async def cancel_meal_disaster(
 
 
 @meals_router.get("/v1/meal-announcements", response_model=list[MealDisasterAnnouncement])
-async def list_meal_announcements(session: AsyncSession = Depends(get_session)) -> list[MealDisasterAnnouncement]:
-    today = datetime.now(TAIPEI).date().isoformat()
-    rows = await session.scalars(select(AdminAudit.data).where(
+async def list_meal_announcements(
+    response: Response, session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
+) -> list[MealDisasterAnnouncement]:
+    response.headers["Cache-Control"] = "no-store"
+    today = datetime.now(TAIPEI).date()
+    service_date = AdminAudit.data["service_date"].as_string()
+    rows = list(await session.scalars(select(AdminAudit.data).where(
         AdminAudit.action == "meal_disaster.cancel",
-        AdminAudit.data["service_date"].as_string() >= today,
-        AdminAudit.data["announcement"].as_string() != "",
-    ).order_by(AdminAudit.data["service_date"].as_string(), AdminAudit.created_at.desc()).limit(10))
+        service_date >= today.isoformat(),
+    ).order_by(service_date, AdminAudit.created_at.desc(), AdminAudit.id.desc())))
+    cancelled_ids = {event_id for row in rows for event_id in row.get("event_ids", [])}
+    if not cancelled_ids:
+        return []
+
+    cancelled_query = select(MealEvent).where(
+        MealEvent.id.in_(cancelled_ids), MealEvent.status == MealEventStatus.CANCELLED,
+    )
+    if settings.environment.strip().lower() == "production":
+        cancelled_query = cancelled_query.where(MealEvent.id.not_in(DEMO_MEAL_EVENT_IDS))
+    cancelled = {event.id: event for event in await session.scalars(cancelled_query)}
+    if not cancelled:
+        return []
+
+    restored = await _restored_meal_events(session, cancelled, today)
+    affected_periods: dict[tuple[str, str], tuple[str, set[str]]] = {}
+    for row in rows:
+        day = row["service_date"]
+        message = row.get("announcement", "").strip() or "颱風暫停供餐"
+        public_ids = set(row.get("public_event_ids", []))
+        for event_id in row.get("event_ids", []):
+            event = cancelled.get(event_id)
+            if event is None or event.id in restored or meal_service_date(event).isoformat() != day:
+                continue
+            period = meal_period(event)
+            _, event_ids = affected_periods.setdefault((day, period), (message, set()))
+            if event_id in public_ids:
+                event_ids.add(event_id)
+
+    grouped: dict[tuple[str, str], tuple[list[str], set[str]]] = {}
+    for (day, period), (message, event_ids) in affected_periods.items():
+        periods, all_event_ids = grouped.setdefault((day, message), ([], set()))
+        periods.append(period)
+        all_event_ids.update(event_ids)
+
     return [
-        MealDisasterAnnouncement(service_date=row["service_date"], periods=row["periods"], message=row["announcement"])
-        for row in rows
+        MealDisasterAnnouncement(
+            service_date=day, periods=sorted(periods), message=message, cancelled_event_ids=sorted(event_ids),
+        )
+        for (day, message), (periods, event_ids) in list(grouped.items())[:10]
     ]
+
+
+async def _restored_meal_events(
+    session: AsyncSession, cancelled: dict[str, MealEvent], today: date,
+) -> set[str]:
+    start = datetime.combine(today, time.min, TAIPEI).astimezone(timezone.utc)
+    replacement_rows = list(await session.execute(_meal_event_replacements().where(
+        MealEvent.pickup_starts_at >= start,
+        MealEvent.status != MealEventStatus.DRAFT,
+    )))
+    events = {**cancelled, **{event.id: event for _, event in replacement_rows}}
+    sources = {event.id: source_id for source_id, event in replacement_rows}
+    restored = set()
+    for source_id, replacement in replacement_rows:
+        if replacement.status == MealEventStatus.CANCELLED:
+            continue
+        coverage = _meal_service_coverage(replacement)
+        while source_id in events and source_id not in restored and _meal_service_coverage(events[source_id]) == coverage:
+            restored.add(source_id)
+            source_id = sources.get(source_id)
+    return restored
 
 
 @meals_router.post(
