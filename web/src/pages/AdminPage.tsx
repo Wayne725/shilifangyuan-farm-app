@@ -218,7 +218,7 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
               {order.invoice_followup_reason ? invoiceFollowupCopy[order.invoice_followup_reason].label : "發票待合作社處理"}
             </span>}
             <OrderStatusBadge kind="payment" status={order.payment_status} />
-            <OrderStatusBadge kind="fulfillment" status={displayedFulfillmentStatus(order)} />
+            <OrderStatusBadge kind="fulfillment" status={displayedFulfillmentStatus(order)} label={pickupFulfillmentLabel(order)} />
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />
             {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {shipmentStatusLabel(order.shipment.status)}</span>}
           </div>
@@ -274,6 +274,12 @@ function displayedFulfillmentStatus(order: Order) {
   return order.fulfillment_status;
 }
 
+function pickupFulfillmentLabel(order: Order) {
+  if (order.fulfillment_method !== "cooperative_pickup" || order.payment_status !== "paid") return;
+  if (order.fulfillment_status === "pending_confirmation") return "待備貨";
+  if (order.fulfillment_status === "ready_for_pickup") return "待取貨";
+}
+
 function AdminOrderAction({
   order,
   logisticsReady,
@@ -323,7 +329,7 @@ function AdminOrderAction({
       fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("delivered")}>模擬已送達</button>;
     }
   } else if (order.fulfillment_status === "preparing") {
-    fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("ready_for_pickup")}>標記可領取</button>;
+    fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("ready_for_pickup")}>標記待取貨</button>;
   } else if (order.fulfillment_status === "ready_for_pickup") {
     fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("picked_up")}>完成取貨</button>;
   }

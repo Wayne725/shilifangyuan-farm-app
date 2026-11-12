@@ -178,7 +178,8 @@ async function refocusWithStaleCatalog(page, at) {
 
 test('手機手動開票直接填表後確認，固定即時開票且不帶入店員載具與 Email', async t => {
   const { page, region, state } = await fixture(t, { width: 390 });
-  const recent = page.getByRole('region', { name: '近期開票紀錄', exact: true });
+  const recent = page.locator('details.admin-manual-invoice-recent');
+  await recent.locator('summary').click();
   await recent.getByText('尚無手動開票紀錄', { exact: true }).waitFor();
   assert.equal(await region.getByLabel('發票通知 Email', { exact: true }).inputValue(), '');
   assert.equal(await region.getByRole('checkbox', { name: '結帳時儲存此手機條碼供下次使用' }).count(), 0);

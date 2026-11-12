@@ -78,13 +78,14 @@ function ManualInvoiceRecordsList({ paginate }: { paginate: boolean }) {
 }
 
 export function RecentManualInvoiceRecords() {
-  return <section className="admin-manual-invoice-recent" aria-labelledby="recent-manual-invoice-heading">
-    <header className="admin-manual-invoice-recent-header">
-      <h2 id="recent-manual-invoice-heading">近期開票紀錄</h2>
+  const [open, setOpen] = useState(false);
+  return <details className="admin-manual-invoice-records admin-manual-invoice-recent" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary>近期開票紀錄</summary>
+    {open && <>
       <Link className="text-link" to="/admin/invoices" hash={historyAnchor}>查看完整紀錄</Link>
-    </header>
-    <ManualInvoiceRecordsList paginate={false} />
-  </section>;
+      <ManualInvoiceRecordsList paginate={false} />
+    </>}
+  </details>;
 }
 
 export function AdminManualInvoiceRecords() {

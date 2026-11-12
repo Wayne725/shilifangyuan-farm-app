@@ -27,13 +27,13 @@ async function fixture(t, { width = 1280, role = 'admin', mode = 'records', path
   if (exactOrders) rows[0].order_number = 'O2030010210';
   const selectedOrder = {
     id: rows[0].order_id, order_number: rows[0].order_number, sales_channel: 'regular', payment_method: 'online',
-    fulfillment_method: 'coop_pickup', payment_status: 'paid', invoice_status: 'issued', fulfillment_status: 'pending_confirmation',
+    fulfillment_method: 'cooperative_pickup', payment_status: 'paid', invoice_status: 'issued', fulfillment_status: 'pending_confirmation',
     customer_name: '原單聯絡人', contact_email: 'target@example.test', contact_phone_status: 'missing',
     amount_total: 120, tax_amount: 0, created_at: '2030-01-02T01:00:00Z', available_actions: ['cancel'], items: [],
   };
   const similarOrder = {
     ...selectedOrder, id: 'order-similar', order_number: 'O20300102100', customer_name: '相似編號聯絡人',
-    contact_email: 'similar@example.test', created_at: '2030-01-02T02:00:00Z',
+    contact_email: 'similar@example.test', created_at: '2030-01-02T02:00:00Z', fulfillment_status: 'ready_for_pickup',
   };
   const invoice = {
     ...selectedOrder, order_id: selectedOrder.id, invoice_number: 'AB12345678', status: 'issued',
@@ -140,9 +140,16 @@ for (const width of [1280, 390]) {
   });
 }
 
-test('手動開票直接顯示最近五筆，完整紀錄入口可接續查閱舊資料', async t => {
+test('手機手動開票的近期紀錄預設收合，展開後可查最近五筆與完整紀錄', async t => {
   const { page, records, state } = await fixture(t, { width: 390, path: '/admin?section=manual-invoice' });
-  const recent = page.getByRole('region', { name: '近期開票紀錄', exact: true });
+  const recent = page.locator('details.admin-manual-invoice-recent');
+  const summary = recent.locator('summary');
+  await summary.waitFor();
+  assert.equal(await recent.getAttribute('open'), null);
+  assert.equal(await recent.locator('table').count(), 0);
+  assert.deepEqual(state.reads, []);
+  await summary.focus();
+  await summary.press('Enter');
   await recent.getByRole('link', { name: 'O2030010201', exact: true }).waitFor();
   assert.deepEqual(state.reads, [{ limit: '5', offset: '0' }]);
   assert.equal(await recent.locator('tbody tr').count(), 5);
@@ -150,6 +157,11 @@ test('手動開票直接顯示最近五筆，完整紀錄入口可接續查閱�
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   const history = recent.getByRole('link', { name: '查看完整紀錄', exact: true });
   assert.equal(await history.getAttribute('href'), '/admin/invoices#manual-invoice-records');
+  if (process.env.RECORDS_TEST_ARTIFACT_DIR) await recent.screenshot({ path: `${process.env.RECORDS_TEST_ARTIFACT_DIR}/recent-invoice-open-390.png` });
+  await summary.click();
+  await recent.locator('table').waitFor({ state: 'detached' });
+  if (process.env.RECORDS_TEST_ARTIFACT_DIR) await recent.screenshot({ path: `${process.env.RECORDS_TEST_ARTIFACT_DIR}/recent-invoice-closed-390.png` });
+  await summary.click();
   await history.click();
   await records.getByRole('link', { name: 'O2030010201', exact: true }).waitFor();
   await records.getByRole('button', { name: '下一頁', exact: true }).click();
@@ -186,7 +198,9 @@ for (const [label, path, legacyOrderApi, width] of [
     const { page, state } = await fixture(t, { path, width, exactOrders: true, legacyOrderApi });
     let link;
     if (label === '手動開票') {
-      link = page.getByRole('region', { name: '近期開票紀錄', exact: true }).getByRole('link', { name: 'O2030010210', exact: true });
+      const recent = page.locator('details.admin-manual-invoice-recent');
+      await recent.locator('summary').click();
+      link = recent.getByRole('link', { name: 'O2030010210', exact: true });
     } else if (label === '發票清單') {
       link = page.getByRole('link', { name: '開啟訂單與發票', exact: true });
     } else {
@@ -197,6 +211,8 @@ for (const [label, path, legacyOrderApi, width] of [
     const cards = page.locator('.operations-list article');
     await cards.getByText('原單聯絡人', { exact: true }).waitFor();
     assert.equal(await cards.count(), 1);
+    await cards.getByLabel('履約：待備貨', { exact: true }).waitFor();
+    await cards.getByRole('button', { name: '進入備貨', exact: true }).waitFor();
     assert.equal(await cards.getByText('O20300102100', { exact: true }).count(), 0);
     assert.equal(await cards.getByRole('button', { name: '辦理退單', exact: true }).count(), 1);
     assert.equal(new URL(page.url()).searchParams.get('order_id'), 'order-0');
@@ -212,6 +228,8 @@ for (const [label, path, legacyOrderApi, width] of [
       await page.getByRole('button', { name: '搜尋', exact: true }).click();
       await cards.getByText('相似編號聯絡人', { exact: true }).waitFor();
       assert.equal(await cards.count(), 2);
+      await cards.getByLabel('履約：待取貨', { exact: true }).waitFor();
+      await cards.getByRole('button', { name: '完成取貨', exact: true }).waitFor();
       assert.equal(state.orderReads.at(-1).order_id, undefined);
     }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
