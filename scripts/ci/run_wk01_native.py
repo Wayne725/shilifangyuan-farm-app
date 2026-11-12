@@ -24,7 +24,7 @@ FIXTURE = ROOT / 'tests/browser/checkout-recovery.mjs'
 PUBLIC_HELPER = ROOT / 'tests/browser/checkout-event-evidence.mjs'
 CASE = '總額相同但品項單價或稅別已變，仍須重新確認'
 PINS = {
-    FIXTURE: 'd807ab1166ac56a7a06d53c7235e057843dc01682ce3636f913668b0f6d9d7ed',
+    FIXTURE: '9c2eb41f64f598cc605d68566652367e771c0bc2fc302b28cb1281fabca6de6a',
     PUBLIC_HELPER: '23116b4bf74c393895f98638a9da75927132a02ec5c8235fe94522258d968af7',
     OBSERVER: '1a0ad5d7767ec39322ea4df0180f5e23e5e0690fec285e555c1b1ca582a7ce4c',
 }
