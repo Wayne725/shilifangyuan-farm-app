@@ -18,6 +18,7 @@ from .models import (
 from .integrations.invoice_service import (
     enqueue_invoice_adjustment_after_refund, enqueue_invoice_issue,
 )
+from .integrations.notifications import NotificationCommand, NotificationService, SQLAlchemyNotificationRepository
 from .integrations.payment_service import (
     PaymentApplicationError, award_order_purchase_points,
     reverse_order_purchase_points,
@@ -153,6 +154,12 @@ async def confirm_cash_refund(
     await cancel_unissued_invoice_jobs(session, order)
     await reverse_order_purchase_points(session, order, refund.id)
     enqueue_invoice_adjustment_after_refund(session, order, refund)
+    if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        await NotificationService(SQLAlchemyNotificationRepository(session)).publish(NotificationCommand(
+            user_id=order.user_id, event_type="refund_completed", title="現金退款完成",
+            body=f"訂單 {order.order_number} 已全額退款 NT${amount}。",
+            data={"order_id": order.id}, email=order.contact_email, dedupe_key=f"refund:{refund.id}",
+        ))
     session.add(AdminAudit(actor_id=actor_id, action="order.cash_refund", aggregate_type="order", aggregate_id=order.id, reason=reason, data={"amount": amount, "refund_id": refund.id}))
 
 

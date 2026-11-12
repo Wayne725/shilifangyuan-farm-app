@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings
+from .contact_phone import decrypt_contact_phone
 from .business_meals import is_business_meal
 from .integrations.common import IntegrationError
 from .integrations.feie import FeieError, configured_region
@@ -87,10 +88,8 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
         add("＊＊ 補印 ＊＊", "CB")
     if snapshot.get("dry_run"):
         add("＊＊ 模擬列印 ＊＊", "BOLD")
-    if snapshot.get("pickup_code") and snapshot.get("kind") != "reference":
-        add(f"取餐碼 {snapshot['pickup_code']}", "CB")
     add(f"訂單：{snapshot['order_number']}")
-    add(f"顧客：{snapshot['customer_name']}", "L", "BOLD")
+    add(f"訂購者：{snapshot['customer_name']}", "CB")
     if snapshot.get("customer_phone"):
         add(f"電話：{snapshot['customer_phone']}")
     elif snapshot.get("customer_email"):
@@ -248,15 +247,6 @@ async def fresh_receipt_snapshot(session: AsyncSession, snapshot: dict, order: O
     return result
 
 
-def _contact_phone(ciphertext: str | None, aad: str, settings: Settings) -> str | None:
-    if not ciphertext:
-        return None
-    try:
-        return pii_cipher_from_settings(settings).decrypt_text(ciphertext, associated_data=aad).strip() or None
-    except IntegrationError:
-        return None
-
-
 def order_print_snapshot(order: Order, customer_name: str, contact: dict | None = None) -> dict:
     fulfillment = order.fulfillment
     pickup = (fulfillment.pickup_at or fulfillment.pickup_starts_at) if fulfillment else None
@@ -311,11 +301,11 @@ async def enqueue_order_print(session: AsyncSession, order: Order, user: User, s
     if not settings.printer_enabled:
         return None
     fulfillment = order.fulfillment
-    phone = _contact_phone(fulfillment.recipient_phone_encrypted,
+    phone = decrypt_contact_phone(fulfillment.recipient_phone_encrypted,
                            f"order-fulfillment:{fulfillment.id}:recipient_phone", settings)
     if phone is None:
         ciphertext = await session.scalar(select(MemberProfile.phone_encrypted).where(MemberProfile.user_id == order.user_id))
-        phone = _contact_phone(ciphertext, f"member-profile:{order.user_id}", settings)
+        phone = decrypt_contact_phone(ciphertext, f"member-profile:{order.user_id}", settings)
     contact = {"customer_email": order.contact_email}
     if phone:
         try:

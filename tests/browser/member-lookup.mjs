@@ -33,6 +33,8 @@ async function fixture(t, width, { signedIn = false, rejected = false, start = '
       return route.fulfill(rejected ? { status: 409, json: { detail: '社員資料無法核對，請確認電話號碼與 Email' } } : { json: { authorization_url: `${base}/isolated-authorize` } });
     }
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: false } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events/calendar'].includes(path)) return route.fulfill({ json: [] });
     state.unknown.push(`${request.method()} ${path}`);

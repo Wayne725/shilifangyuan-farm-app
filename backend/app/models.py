@@ -362,6 +362,7 @@ class User(Base):
     )
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, unique=True, index=True)
     notification_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    meal_contact_phone_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     saved_mobile_barcode: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -1855,6 +1856,7 @@ class MealScheduleTemplate(Base):
     cutoff_days_before: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     advance_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     weekdays: Mapped[list[int]] = mapped_column(JSON)
+    saturday_business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
     auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     offerings: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
@@ -2182,6 +2184,10 @@ class MealCancellationRequest(Base):
     order: Mapped["Order"] = relationship(back_populates="cancellation_requests")
     requested_by: Mapped["User"] = relationship(foreign_keys=[requested_by_id])
     reviewed_by: Mapped[Optional["User"]] = relationship(foreign_keys=[reviewed_by_id], lazy="selectin")
+
+    @property
+    def initiated_by_admin(self) -> bool:
+        return self.requested_by_id == self.reviewed_by_id and self.requested_at == self.reviewed_at
 
     @property
     def reviewed_by_name(self) -> Optional[str]:

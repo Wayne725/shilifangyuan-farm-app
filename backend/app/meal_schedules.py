@@ -6,8 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order
-from .meal_booking import TAIPEI, _aware, meal_schedule_has_pickup_slots, workday_booking_window
-from .workday_calendar import CalendarUnavailable, is_workday
+from .meal_booking import MEAL_ORDER_CUTOFF, TAIPEI, _aware, meal_schedule_has_pickup_slots, workday_booking_window
+from .workday_calendar import CalendarUnavailable, is_saturday_catering_day, is_workday
 
 
 async def _convert_unordered_legacy_events(session, template, today, report):
@@ -98,11 +98,12 @@ async def generate_scheduled_meal_events(
                 break
             service_date = today + timedelta(days=offset)
             try:
+                business_only = template.saturday_business_only and is_saturday_catering_day(service_date)
                 workday = is_workday(service_date)
             except CalendarUnavailable:
                 report["calendar_unavailable"] += 1
                 break
-            if not workday or service_date.weekday() not in template.weekdays:
+            if not business_only and (not workday or service_date.weekday() not in template.weekdays):
                 continue
             pickup_start = datetime.combine(service_date, pickup_start_time, TAIPEI)
             pickup_end = datetime.combine(service_date, pickup_end_time, TAIPEI)
@@ -114,7 +115,12 @@ async def generate_scheduled_meal_events(
                 TAIPEI,
             )
             try:
-                ordering_start, cutoff = workday_booking_window(service_date, cutoff)
+                if business_only:
+                    friday = service_date - timedelta(days=1)
+                    ordering_start = datetime.combine(friday, time.min, TAIPEI)
+                    cutoff = datetime.combine(friday, MEAL_ORDER_CUTOFF, TAIPEI)
+                else:
+                    ordering_start, cutoff = workday_booking_window(service_date, cutoff)
             except CalendarUnavailable:
                 report["calendar_unavailable"] += 1
                 continue
@@ -129,7 +135,8 @@ async def generate_scheduled_meal_events(
                 schedule_template_id=template.id,
                 service_date=service_date,
                 meal_period=template.meal_period,
-                booking_policy="workday",
+                booking_policy="special" if business_only else "workday",
+                business_only=business_only,
                 ordering_starts_at=ordering_start.astimezone(timezone.utc),
                 ordering_ends_at=cutoff.astimezone(timezone.utc),
                 pickup_starts_at=pickup_start.astimezone(timezone.utc),

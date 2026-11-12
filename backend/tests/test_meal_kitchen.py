@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import func, select
 
 import app.meal_kitchen as kitchen
+from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.models import AdminAudit, FulfillmentState, MealEventStatus, OrderFulfillment, PaymentStatus
 from app.routers.meal_kitchen import meal_kitchen_router
 from tests.support import api_test_context, auth_headers, make_test_settings
@@ -37,11 +38,18 @@ async def change(c, status, order_id=None):
 @pytest.mark.asyncio
 async def test_list_uses_actual_pickup_time_and_warns_pending_cancellation(kitchen_context):
     c = kitchen_context
+    c.order.fulfillment.recipient_phone_encrypted = pii_cipher_from_settings(make_test_settings()).encrypt_text(
+        "0912345678", associated_data=f"order-fulfillment:{c.order.fulfillment.id}:recipient_phone",
+    )
+    await c.session.commit()
     result = await read(c)
     assert result["total"] == 2 and result["meal_quantity"] == 4
     assert [order["id"] for order in result["items"]] == [c.order.id, c.orders["ready"].id]
     assert result["items"][1]["pending_cancellation"]["reason"] == "新申請"
     assert result["items"][0]["pickup_at"].endswith(("Z", "+00:00"))
+    assert result["items"][0]["contact_phone"] == "0912345678"
+    ticket = await c.client.get(f"/v1/admin/meal-kitchen/orders/{c.order.id}/ticket", headers=auth_headers(c.admin))
+    assert ticket.json()["contact_phone"] == "0912345678"
     assert (await read(c, meal_period="dinner"))["total"] == 2
     assert (await read(c, meal_period="lunch"))["total"] == 0
     first = await read(c, limit=1)

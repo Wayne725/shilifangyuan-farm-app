@@ -70,7 +70,7 @@ async function fixture(t, initialOrder) {
     if (url.pathname === '/isolated-meal-payment') {
       return route.fulfill({
         contentType: 'text/html; charset=utf-8',
-        body: `<!doctype html><meta charset="utf-8"><h1>隔離付款頁</h1><a href="/orders?order_id=${orderId}&payment=paid">返回取餐憑證</a>`,
+        body: `<!doctype html><meta charset="utf-8"><h1>隔離付款頁</h1><a href="/orders?order_id=${orderId}&payment=paid">返回餐點訂單</a>`,
       });
     }
     if (!url.pathname.startsWith('/v1/')) return route.continue();
@@ -121,17 +121,11 @@ async function fixture(t, initialOrder) {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
+  await page.clock.install({ time: new Date("2026-09-14T02:00:00Z") });
   await page.goto(`${base}/meal-orders`);
   await page.locator('.order-detail-head .order-number').filter({ hasText: orderNumber }).waitFor();
   const qr = page.getByLabel(`訂單 ${orderNumber} 取餐 QR Code`, { exact: true });
   return { page, state, qr };
-}
-
-async function visibleCredential(page, qr, code = pickupCode) {
-  await qr.waitFor();
-  assert.equal(await qr.locator('svg').count(), 1);
-  await page.getByText(code, { exact: true }).waitFor();
-  assert.match(code, /^\d{6}$/);
 }
 
 async function noCredential(page, qr) {
@@ -145,22 +139,23 @@ async function verifyIsolation(page, state) {
   assert.doesNotMatch(await page.locator('.meal-orders-page').innerText(), /測試金流|測試付款|展示付款/);
 }
 
-test('便當待付款經隔離付款頁回來，顯示六位取餐碼、QR 與已開立發票', { timeout: 30000 }, async (t) => {
+test('便當待付款經隔離付款頁回來，保留已開立發票且不查詢取餐碼或 QR', { timeout: 30000 }, async (t) => {
   const { page, state, qr } = await fixture(t, mealOrder());
-  await page.getByRole('heading', { name: '付款後顯示取餐憑證', exact: true }).waitFor();
+  await page.getByRole('button', { name: '前往付款 $120', exact: true }).waitFor();
   assert.equal(state.credentialReads, 0);
   await noCredential(page, qr);
   await verifyIsolation(page, state);
   await page.getByRole('button', { name: '前往付款 $120', exact: true }).click();
   await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
   state.order = paidOrder();
-  await page.getByRole('link', { name: '返回取餐憑證', exact: true }).click();
+  await page.getByRole('link', { name: '返回餐點訂單', exact: true }).click();
   await page.waitForURL(`${base}/meal-orders?order_id=${orderId}`);
-  await visibleCredential(page, qr);
+  await noCredential(page, qr);
   const invoice = page.getByRole('region', { name: '電子發票', exact: true });
   await invoice.getByText('已開立', { exact: true }).waitFor();
   assert.match(await invoice.innerText(), /AB12345678/);
   assert.match(await invoice.innerText(), /9\/14.*11:00/);
+  await captureMealScreenshot(page, 'meal-paid-without-code-mobile.png');
   assert.deepEqual(state.mutations, [{ path: paymentPath }]);
   await verifyIsolation(page, state);
 });
@@ -168,7 +163,7 @@ test('便當待付款經隔離付款頁回來，顯示六位取餐碼、QR 與�
 for (const [invoiceStatus, label] of [['pending', '開立處理中'], ['failed', '開立待處理']]) {
   test(`付款成功但發票 ${invoiceStatus}，仍可取餐且不要求重新付款`, { timeout: 20000 }, async (t) => {
     const { page, state, qr } = await fixture(t, paidOrder({ invoice_status: invoiceStatus, invoice_number: null, invoice_date: null }));
-    await visibleCredential(page, qr);
+    await noCredential(page, qr);
     const invoice = page.getByRole('region', { name: '電子發票', exact: true });
     await invoice.getByText(label, { exact: true }).waitFor();
     assert.match(await invoice.innerText(), /不影響已付款訂單的取餐資格；請勿為了發票重新付款/);
@@ -178,54 +173,29 @@ for (const [invoiceStatus, label] of [['pending', '開立處理中'], ['failed',
   });
 }
 
-for (const [label, update] of [
-  ['已取消', { cancelled_at: '2026-09-14T03:01:00Z', fulfillment_status: 'cancelled', available_actions: [] }],
-  ['退款中', { payment_status: 'refund_pending', available_actions: [] }],
-  ['已退款', { payment_status: 'refunded', available_actions: [] }],
-  ['已核銷', { fulfillment_status: 'picked_up', available_actions: [] }],
-]) {
-  test(`已顯示取餐碼後變為${label}，輪詢與重整均不保留舊 QR`, { timeout: 25000 }, async (t) => {
-    const { page, state, qr } = await fixture(t, paidOrder());
-    await visibleCredential(page, qr);
-    // 保留已快取的碼，確認終止狀態本身就能讓前端撤下憑證。
-    state.order = { ...state.order, ...update };
-    await noCredential(page, qr);
-    await page.getByText('為避免重複核銷，這筆訂單目前不顯示取餐憑證。', { exact: true }).waitFor();
-    const readsAfterInvalidation = state.credentialReads;
-    await page.reload();
-    await page.locator('.order-detail-head .order-number').filter({ hasText: orderNumber }).waitFor();
-    await noCredential(page, qr);
-    assert.equal(state.credentialReads, readsAfterInvalidation);
-    assert.deepEqual(state.mutations, []);
-    await verifyIsolation(page, state);
-  });
-}
-
-test('取餐憑證補查回覆 409 時立即移除舊 QR，重新查詢成功才顯示新碼', { timeout: 25000 }, async (t) => {
-  const { page, state, qr } = await fixture(t, paidOrder());
-  await visibleCredential(page, qr);
-  state.credentialStatus = 409;
+test('取餐時間結束後顯示已結束，沒有取餐碼、核銷文字或自助退單', { timeout: 20000 }, async (t) => {
+  const { page, state, qr } = await fixture(t, paidOrder({ fulfillment_status: 'no_show' }));
+  await page.clock.fastForward(4 * 60 * 60 * 1000);
+  await page.getByText('已結束', { exact: true }).waitFor();
   await noCredential(page, qr);
-  await page.getByText('此取餐憑證已失效，請核對訂單狀態', { exact: true }).waitFor();
-  state.credentialStatus = 200;
-  state.credential = { order_id: orderId, pickup_code: '628415', qr_token: 'isolated-revalidated-token' };
-  await page.getByRole('button', { name: '重新查詢', exact: true }).click();
-  await visibleCredential(page, qr, '628415');
-  assert.equal(await page.getByText(pickupCode, { exact: true }).count(), 0);
-  assert.deepEqual(state.mutations, []);
+  assert.doesNotMatch(await page.locator('.meal-orders-page').innerText(), /逾時未取|核銷|可領取|取餐碼/);
+  assert.equal(await page.getByText('申請退單', { exact: true }).count(), 0);
+  assert.equal(state.credentialReads, 0);
   await verifyIsolation(page, state);
 });
 
-test('已付款便當僅電話聯絡退單，不自行取消或撤下取餐 QR', { timeout: 20000 }, async (t) => {
-  const { page, state, qr } = await fixture(t, paidOrder());
-  await visibleCredential(page, qr);
-  const phone = page.getByRole('button', { name: '退單聯絡電話尚未設定', exact: true });
-  await phone.waitFor();
-  assert.equal(await phone.isDisabled(), true);
-  assert.equal(await page.getByRole('button', { name: /申請取消|取消這筆便當|確認取消|送出退單申請/ }).count(), 0);
-  assert.equal(await qr.isVisible(), true);
-  assert.deepEqual(state.mutations, []);
-  assert.equal(state.order.payment_status, 'paid');
+test('會餐訂單顯示統編和抬頭，並保留付款失敗原因', { timeout: 20000 }, async (t) => {
+  const { page, state, qr } = await fixture(t, mealOrder({
+    meal_booking_type: 'business', invoice_buyer_tax_id: '24536806', invoice_buyer_name: '隔離測試公司',
+    payment_opens_at: '2026-09-13T16:00:00Z', payment_closes_at: '2026-09-14T16:00:00Z',
+  }));
+  await page.evaluate(({ id }) => sessionStorage.setItem(`slf_meal_payment_issue:buyer-isolated:${id}`, '隔離金流暫時無法建立付款'), { id: orderId });
+  await page.reload();
+  await page.getByText('統編：24536806', { exact: true }).waitFor();
+  await page.getByText('抬頭：隔離測試公司', { exact: true }).waitFor();
+  await page.getByRole('alert').filter({ hasText: '無法開啟付款頁：隔離金流暫時無法建立付款' }).waitFor();
+  await noCredential(page, qr);
+  assert.equal(state.credentialReads, 0);
   await verifyIsolation(page, state);
 });
 
@@ -240,7 +210,7 @@ test('便當付款返回保留查款輪詢，確認成功後選取原訂單而�
   state.order = paidOrder();
   state.refreshStatus = 'paid';
   await page.waitForURL(`${base}/meal-orders?order_id=${orderId}`);
-  await visibleCredential(page, qr);
+  await noCredential(page, qr);
   await page.locator('.order-detail-head .order-number').filter({ hasText: orderNumber }).waitFor();
   assert.deepEqual(state.mutations, []);
   await verifyIsolation(page, state);
@@ -318,13 +288,39 @@ async function scheduleFixture(t, { admin = false } = {}) {
     const path = url.pathname;
     const method = request.method();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-schedule-token', user: { id: 'schedule-user', email: 'schedule@example.test', display_name: '隔離使用者', user_role: admin ? 'admin' : 'customer' } } });
+    if (method === 'GET' && path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: state.phone === undefined ? '0912345678' : state.phone } });
+    if (method === 'GET' && path === '/v1/meal-announcements') return route.fulfill({ json: state.announcements || [] });
     if (method === 'GET' && path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (method === 'GET' && path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { pending_cancellation: 0, refund_attention: 0, invoice_attention: 0, today_pickup: 0 } });
-    if (method === 'GET' && path === '/v1/admin/meal-orders') return route.fulfill({ json: { items: [], total: 0, limit: 20, offset: 0 } });
-    if (method === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/orders', '/v1/meal-orders', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
+    if (method === 'GET' && path === '/v1/admin/meal-orders') {
+      const items = state.adminOrders || [];
+      return route.fulfill({ json: { items, total: items.length, limit: 20, offset: 0 } });
+    }
+    if (method === 'GET' && path === '/v1/meal-orders') return route.fulfill({ json: state.savedOrder ? [state.savedOrder] : [] });
+    if (method === 'GET' && path === `/v1/meal-orders/${orderId}` && state.savedOrder) return route.fulfill({ json: state.savedOrder });
+    if (method === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/orders', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
     if (method === 'GET' && path === '/v1/meal-events/calendar') {
       state.reads.push(path);
       return route.fulfill({ json: mealCalendarFixture(state.events) });
+    }
+    if (method === 'POST' && path === '/v1/admin/meal-disaster/preview') {
+      state.writes.push({ path, payload: request.postDataJSON() });
+      return route.fulfill({ json: { preview_token: 'a'.repeat(64), events: state.events.map(event => ({
+        id: event.id, title: event.title, period: event.meal_period, order_count: 3, paid_count: 1, paid_total: 120, blocked: false,
+      })) } });
+    }
+    if (method === 'POST' && path === '/v1/admin/meal-disaster/cancel') {
+      const payload = request.postDataJSON();
+      state.writes.push({ path, payload });
+      state.announcements = [{ service_date: payload.service_date, periods: payload.periods, message: payload.announcement }];
+      return route.fulfill({ json: { cancelled_event_count: 2, order_count: 6, paid_count: 2, paid_total: 240 } });
+    }
+    if (method === 'PATCH' && path.endsWith('/ordering-pause')) {
+      const payload = request.postDataJSON();
+      state.writes.push({ path, payload });
+      const event = state.events.find(item => path.includes(item.id));
+      Object.assign(event, { ordering_paused: payload.paused, ordering_pause_version: 1 });
+      return route.fulfill({ json: event });
     }
     if (method === 'GET' && path === '/v1/admin/meal-events') {
       state.adminEventReads++;
@@ -340,7 +336,7 @@ async function scheduleFixture(t, { admin = false } = {}) {
       return route.fulfill({ json: state.events[0] });
     }
     if (method === 'GET' && path === '/v1/admin/meal-calendar') return route.fulfill({ json: { service_date: '2026-09-17', is_workday: true, previous_workday: '2026-09-16', next_workday: '2026-09-18', ordering_starts_at: '2026-09-15T16:00:00Z', ordering_ends_at: '2026-09-16T12:00:00Z' } });
-    if (method === 'GET' && path === '/v1/admin/meal-schedules/calendar-status') return route.fulfill({ json: { available: true, from_date: '2025-01-01', to_date: '2027-12-31', message: '', source_url: 'https://data.gov.tw/dataset/14718' } });
+    if (method === 'GET' && path === '/v1/admin/meal-schedules/calendar-status') return route.fulfill({ json: { available: true, from_date: '2025-01-01', to_date: '2027-12-31', message: '', source_url: 'https://data.gov.tw/dataset/14718', update_year: state.calendarUpdateYear } });
     if (method === 'GET' && path === '/v1/admin/meal-schedules') return route.fulfill({ json: state.schedules });
     if (method === 'POST' && path === '/v1/admin/meal-schedules') {
       const payload = request.postDataJSON();
@@ -361,7 +357,7 @@ async function scheduleFixture(t, { admin = false } = {}) {
     }
     if (method === 'GET' && path === '/v1/admin/meal-events/scheduled-lunch/orders') {
       state.adminPickupOrderReads++;
-      return route.fulfill({ json: [paidOrder({ pickup_at: '2026-09-17T04:05:00Z' })] });
+      return route.fulfill({ json: [paidOrder({ pickup_at: '2026-09-17T04:05:00Z', customer_name: '隔離買家', customer_email: 'buyer@example.test', contact_phone: '0912345678' })] });
     }
     const event = state.events.find((candidate) => path === `/v1/meal-events/${candidate.id}` || path.startsWith(`/v1/meal-events/${candidate.id}/`));
     if (event && method === 'GET' && path === `/v1/meal-events/${event.id}`) {
@@ -392,7 +388,10 @@ async function scheduleFixture(t, { admin = false } = {}) {
       }
       return route.fulfill({ json: { id: orderId, payment_method: payload.payment_method } });
     }
-    if (method === 'POST' && path === paymentPath) return route.fulfill({ json: { payment_url: `${base}/isolated-meal-payment` } });
+    if (method === 'POST' && path === paymentPath) {
+      if (state.paymentError) return route.fulfill({ status: 503, json: { detail: state.paymentError } });
+      return route.fulfill({ json: { payment_url: `${base}/isolated-meal-payment` } });
+    }
     state.unknownApi.push(`${method} ${path}`);
     return route.fulfill({ status: 404, json: { detail: '未定義的隔離 API' } });
   });
@@ -663,7 +662,7 @@ test('每日午晚餐排程預設週一至五且停用，須明確啟用及自�
 test('便當管理者可依場次查看所選取餐時間，僅展開時查詢訂單', { timeout: 20000 }, async (t) => {
   const { page, state } = await scheduleFixture(t, { admin: true });
   await page.goto(`${base}/admin/meals`);
-  await page.getByRole('tab', { name: '場次與核銷', exact: true }).click();
+  await page.getByRole('tab', { name: '場次', exact: true }).click();
   const event = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
   await event.getByRole('heading', { name: '隔離每日午餐', exact: true }).waitFor();
   assert.equal(state.adminPickupOrderReads, 0);
@@ -671,15 +670,17 @@ test('便當管理者可依場次查看所選取餐時間，僅展開時查詢�
   const orders = event.getByRole('region', { name: '本場訂單與取餐時間', exact: true });
   await orders.getByRole('heading', { name: orderNumber, exact: true }).waitFor();
   assert.match(await orders.innerText(), /預計取餐：.*9\/17.*12:05/);
+  assert.match(await orders.innerText(), /隔離買家.*buyer@example.test.*0912345678/);
   assert.equal(state.adminPickupOrderReads, 1);
+  await captureMealScreenshot(page, 'meal-roster-contacts-mobile.png');
   assert.deepEqual(state.writes, []);
   assert.deepEqual(state.unknownApi, []);
 });
 
-test('便當後台每30秒更新場次，開放取餐時自動出現核銷且保留未儲存編輯', { timeout: 20000 }, async (t) => {
+test('便當後台每30秒更新場次，供餐狀態更新時仍隱藏核銷且保留未儲存編輯', { timeout: 20000 }, async (t) => {
   const { page, state } = await scheduleFixture(t, { admin: true });
   await page.goto(`${base}/admin/meals`);
-  await page.getByRole('tab', { name: '場次與核銷', exact: true }).click();
+  await page.getByRole('tab', { name: '場次', exact: true }).click();
   const card = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
   await card.getByRole('button', { name: '手動編輯場次', exact: true }).click();
   await card.getByLabel('場次名稱', { exact: true }).fill('尚未儲存的午餐修改');
@@ -689,7 +690,8 @@ test('便當後台每30秒更新場次，開放取餐時自動出現核銷且保
   const eventReads = state.adminEventReads;
   state.events[0] = { ...state.events[0], status: 'pickup_open', can_edit: false };
   await page.clock.fastForward(30000);
-  await card.getByRole('button', { name: '確認核銷', exact: true }).waitFor();
+  await card.getByText('供餐中', { exact: true }).waitFor();
+  assert.equal(await card.getByRole('button', { name: '確認核銷', exact: true }).count(), 0);
   assert.equal(await card.getByLabel('場次名稱', { exact: true }).inputValue(), '尚未儲存的午餐修改');
   assert.equal(await card.getByLabel('取餐地點', { exact: true }).inputValue(), '尚未儲存的取餐地點');
   assert.ok(state.adminEventReads > eventReads);
@@ -722,7 +724,7 @@ test('便當跨台灣午夜自動改顯示新明天，瀏覽器時區不同也�
 test('便當保留手動更新，409保存輸入且後端can_edit為false時不允許修改', { timeout: 25000 }, async (t) => {
   const { page, state } = await scheduleFixture(t, { admin: true });
   await page.goto(`${base}/admin/meals`);
-  await page.getByRole('tab', { name: '場次與核銷', exact: true }).click();
+  await page.getByRole('tab', { name: '場次', exact: true }).click();
   const card = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
   await card.getByRole('button', { name: '手動編輯場次', exact: true }).click();
   await card.getByLabel('場次名稱', { exact: true }).fill('手動更新午餐');
@@ -842,5 +844,101 @@ test('循環排程預設固定午晚餐與前一天20點截單，不覆寫自訂
   assert.equal(state.writes[1].payload.pickup_end_time, '18:00');
   assert.equal(state.writes[1].payload.cutoff_time, '20:00');
   assert.equal(state.writes[1].payload.cutoff_days_before, 1);
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('手機尺寸沒有電話的便當帳號須先填電話', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t);
+  state.phone = null;
+  await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
+  await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
+  const phone = page.getByRole('textbox', { name: '聯絡電話', exact: true });
+  assert.equal(await phone.getAttribute('required'), '');
+  const submit = page.getByRole('button', { name: '預訂並前往線上付款', exact: true });
+  assert.equal(await submit.isDisabled(), true);
+  await phone.fill('0912345678');
+  await submit.waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button =>
+    button.textContent.trim() === '預訂並前往線上付款' && !button.disabled));
+  await captureMealScreenshot(page, 'meal-contact-phone-mobile.png');
+  await submit.click();
+  await page.waitForURL('**/isolated-meal-payment');
+  assert.equal(state.orders[0].contact_phone, '0912345678');
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('手機尺寸颱風停餐先顯示午晚餐與退款，確認後公告', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  await page.goto(`${base}/admin/meals?tab=disaster`);
+  await page.getByRole('button', { name: '預覽影響場次' }).click();
+  await page.getByText(/隔離每日晚餐.*3 筆訂單/).waitFor();
+  await page.getByRole('button', { name: '確認停餐', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByText(/將退款 2 筆、共 \$240，無法復原/).waitFor();
+  assert.equal(state.writes.length, 1);
+  await captureMealScreenshot(page, 'meal-disaster-confirm-mobile.png');
+  await dialog.getByRole('button', { name: '取消場次並退款', exact: true }).click();
+  await page.getByText(/已取消 2 個場次、6 筆訂單/).waitFor();
+  assert.equal(state.writes[1].payload.reason, '颱風停止上班上課');
+  assert.deepEqual(state.writes[1].payload.periods, ['lunch', 'dinner']);
+  await page.goto(`${base}/shop?tab=meals`);
+  await page.getByRole('region', { name: '供餐公告' }).getByText(/颱風期間暫停供餐/).waitFor();
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('手機尺寸便當建立付款失敗，原訂單保留原因並可重新付款', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t);
+  state.savedOrder = mealOrder({ pickup_start: state.events[0].pickup_starts_at, pickup_end: state.events[0].pickup_ends_at });
+  state.paymentError = '隔離金流維護中';
+  await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
+  await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
+  await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
+  await page.waitForURL(`**/meal-orders?order_id=${orderId}`);
+  await page.getByRole('alert').filter({ hasText: '隔離金流維護中' }).waitFor();
+  await captureMealScreenshot(page, 'meal-payment-retry-mobile.png');
+  state.paymentError = null;
+  await page.getByRole('button', { name: '前往付款 $120', exact: true }).click();
+  await page.waitForURL('**/isolated-meal-payment');
+  assert.equal(state.orders.length, 1);
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('排程手機畫面顯示週六會餐並可停用單週', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  state.calendarUpdateYear = 2028;
+  state.events.push(scheduledEvent({
+    id: 'saturday-business', title: '隔離週六會餐', business_only: true, schedule_template_id: 'sat-template',
+    service_date: '2026-09-19', ordering_starts_at: '2026-09-17T16:00:00Z', ordering_ends_at: '2026-09-18T12:00:00Z',
+    pickup_starts_at: '2026-09-19T03:00:00Z', pickup_ends_at: '2026-09-19T05:30:00Z',
+  }));
+  await page.goto(`${base}/admin/meals?tab=schedules`);
+  await page.getByRole('checkbox', { name: '週六・只接受會餐' }).waitFor();
+  assert.equal(await page.getByRole('link', { name: '請更新 2028 年官方日曆' }).getAttribute('href'), 'https://data.gov.tw/dataset/14718');
+  const list = page.getByRole('region', { name: '接下來的週六會餐' });
+  await list.getByText('隔離週六會餐').waitFor();
+  await captureMealScreenshot(page, 'meal-saturday-schedule-mobile.png');
+  await list.getByRole('button', { name: '停用這週預訂' }).click();
+  await list.getByRole('button', { name: '恢復這週預訂' }).waitFor();
+  assert.equal(state.writes[0].path, '/v1/admin/meal-events/saturday-business/ordering-pause');
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('手機後台便當查詢顯示聯絡方式、特殊場次與單一退單原因', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  state.adminOrders = [{
+    customer_name: '隔離買家', customer_email: 'buyer@example.test', meal_period: null,
+    order: mealOrder({ contact_phone: '0912345678', cancelled_at: '2026-09-14T01:00:00Z', available_actions: [],
+      cancellation_request: { id: 'cancelled-order', initiated_by_admin: true, status: 'approved',
+        reason: '現場無法供餐', review_reason: '現場無法供餐', requested_at: '2026-09-14T01:00:00Z' },
+    }),
+  }];
+  await page.goto(`${base}/admin/meals?tab=orders`);
+  const card = page.locator('.meal-operation-order');
+  await card.getByText('隔離買家 · buyer@example.test · 0912345678', { exact: true }).waitFor();
+  await card.getByText(/特殊場次/).waitFor();
+  await card.getByText('查看餐點、發票與退單明細', { exact: true }).click();
+  await card.getByText('退單原因：現場無法供餐', { exact: true }).waitFor();
+  assert.equal(await card.getByText(/現場無法供餐/).count(), 1);
+  await captureMealScreenshot(page, 'meal-admin-contacts-mobile.png');
   assert.deepEqual(state.unknownApi, []);
 });

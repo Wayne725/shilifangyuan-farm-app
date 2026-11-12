@@ -89,7 +89,7 @@ async def test_disable_preview_and_scope_preserve_linked_orders_and_other_events
         await session.commit()
 
         join_path = f"/v1/meal-events/{open_event.id}/orders"
-        order_body = {"items": [{"offering_id": open_event.offerings[0].id, "quantity": 1}], "contact_email": buyer.email}
+        order_body = {"items": [{"offering_id": open_event.offerings[0].id, "quantity": 1}], "contact_phone": "0912345678", "contact_email": buyer.email}
         first = await client.post(join_path, headers=buyer_headers, json=order_body)
         cancelled = await client.post(join_path, headers=buyer_headers, json=order_body)
         assert first.status_code == cancelled.status_code == 201, (first.text, cancelled.text)
@@ -155,7 +155,7 @@ async def test_disable_rejects_stale_preview_when_order_is_accepted(schedule_con
         event_id = preview["events"][0]["id"]
         offering_id = await session.scalar(select(MealEventOffering.id).where(MealEventOffering.meal_event_id == event_id))
         order = await client.post(f"/v1/meal-events/{event_id}/orders", headers=auth_headers(buyer), json={
-            "items": [{"offering_id": offering_id, "quantity": 1}], "contact_email": buyer.email,
+            "items": [{"offering_id": offering_id, "quantity": 1}], "contact_phone": "0912345678", "contact_email": buyer.email,
         })
         assert order.status_code == 201, order.text
         stale = await client.post(f"{base}/disable", headers=admin_headers, json={
@@ -295,7 +295,7 @@ async def preorder_context(schedule_context):
     )
     session.add(event)
     await session.commit()
-    body = {"items": [{"offering_id": event.offerings[0].id, "quantity": 1}], "contact_email": buyer.email}
+    body = {"items": [{"offering_id": event.offerings[0].id, "quantity": 1}], "contact_phone": "0912345678", "contact_email": buyer.email}
     yield client, session, admin, buyer, event, body
 
 
@@ -515,7 +515,7 @@ async def test_old_schedule_without_pickup_slots_can_be_read_disabled_and_correc
         session.add(prior_event)
         await session.commit()
         existing = await client.post(f"/v1/meal-events/{prior_event.id}/orders", json={
-            "contact_email": buyer.email, "items": [{"offering_id": prior_event.offerings[0].id, "quantity": 1}],
+            "contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": prior_event.offerings[0].id, "quantity": 1}],
         }, headers=auth_headers(buyer))
         assert existing.status_code == 201, existing.text
 

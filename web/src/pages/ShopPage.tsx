@@ -86,6 +86,12 @@ export function ShopPage() {
     enabled: activeTab === "meals",
     refetchInterval: 60_000,
   });
+  const announcements = useQuery({
+    queryKey: ["meal-announcements"],
+    queryFn: ({ signal }) => apiFetch<Array<{ service_date: string; periods: string[]; message: string }>>("/v1/meal-announcements", { signal }),
+    enabled: activeTab === "meals",
+    refetchInterval: 60000,
+  });
   const upcomingMeals = meals.data?.filter((meal) =>
     !["draft", "cancelled", "completed"].includes(meal.status)
       && new Date(meal.pickup_ends_at).getTime() > now,
@@ -102,6 +108,11 @@ export function ShopPage() {
         {activeTab === "meals" && <nav className="meal-shop-actions" aria-label="便當常用功能"><Link className="button button-quiet" to="/meal-orders">我的便當訂單</Link></nav>}
       </section>
 
+      {activeTab === "meals" && Boolean(announcements.data?.length) && <section className="meal-shop-actions" aria-label="供餐公告">
+        {announcements.data?.map((notice, index) => <p key={`${notice.service_date}-${index}`} role="status">
+          <strong>{notice.service_date} {notice.periods.includes("lunch") ? "午餐" : ""}{notice.periods.includes("dinner") ? " 晚餐" : ""}</strong> · {notice.message}
+        </p>)}
+      </section>}
       <Tabs.Root className="market-tabs" value={activeTab} onValueChange={(next) => {
         if (next === "meals" || next === "groups" || next === "products") {
           void navigate({ search: (previous) => ({ ...previous, tab: next }), resetScroll: false });

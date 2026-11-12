@@ -31,6 +31,8 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
       if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
       if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'line-buyer', display_name: 'LINE顧客', email: null, notification_email: saved ? 'saved@example.com' : null, membership_type: 'nonmember', user_role: 'customer' } } });
       if (request.method() === 'GET') {
+        if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+        if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
         if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
         if (path === '/v1/orders') return route.fulfill({ json: [] });

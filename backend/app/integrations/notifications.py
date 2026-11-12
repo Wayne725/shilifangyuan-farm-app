@@ -14,6 +14,8 @@ from ..models import Notification, OutboxEvent, new_id
 
 EMAIL_EVENT_TYPES = {
     "meal.business_payment_reminder",
+    "meal_event_cancelled",
+    "meal_event_refund_requested",
     "group.settlement_pending",
     "group.review_ready",
     "group.review_overdue",

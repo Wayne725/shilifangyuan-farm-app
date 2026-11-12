@@ -25,6 +25,7 @@ from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..integrations.common import IntegrationError
 from ..invoice_tax_summary import invoice_tax_summary
 from ..database import get_session
+from ..contact_phone import decrypt_contact_phone, normalize_contact_phone
 from ..order_numbers import allocate_order_number
 from ..order_history import OrderHistoryQuery, read_order_history
 from ..printing import enqueue_order_print, enqueue_cancellation_print
@@ -35,6 +36,7 @@ from ..domain import (
     invoice_estimated_tax_amount,
     member_sale_is_tax_exempt,
     admin_meal_cancellation_allowed,
+    meal_cancellation_request_allowed,
     order_available_actions,
     order_amendment_blocked_reason,
     sale_tax_type,
@@ -83,6 +85,7 @@ from ..models import (
     InvoiceStatus,
     Meal,
     MealCancellationRequest,
+    MemberProfile,
     MealEvent,
     MealEventOffering,
     MealEventStatus,
@@ -117,6 +120,11 @@ from ..schemas import (
     MealEventActionRequest,
     MealEventCalendarRead,
     MealEventCancelRequest,
+    MealDisasterAnnouncement,
+    MealDisasterCancel,
+    MealDisasterPreview,
+    MealDisasterResult,
+    MealDisasterSelection,
     MealEventCreate,
     MealEventRead,
     MealOptionGroupRead,
@@ -127,6 +135,7 @@ from ..schemas import (
     MealOrderingPauseUpdate,
     MealOrderQuoteRead,
     MealOrderRead,
+    MealContactRead,
     MealOrderSearchFilters,
     MealOrderSubmissionRead,
     MealOperationsSummary,
@@ -334,6 +343,7 @@ async def _meal_order_read(
     viewer_is_admin: bool = False,
     *,
     offering_meal_ids: Optional[dict[str, str]] = None,
+    settings: Settings | None = None,
 ) -> MealOrderRead:
     offering_ids = {
         item.source_meal_offering_id
@@ -375,8 +385,19 @@ async def _meal_order_read(
             onsite_payment = {"method": attempt.provider_response.get("collection_method", "cash"),
                 "reference": attempt.provider_response.get("reference", ""), "paid_at": _aware(attempt.paid_at).isoformat()}
     from ..business_meals import business_payment_fields
+    contact_phone = None
+    if viewer_is_admin:
+        contact_phone = decrypt_contact_phone(
+            fulfillment.recipient_phone_encrypted, f"order-fulfillment:{fulfillment.id}:recipient_phone",
+            settings or get_settings(),
+        )
     return MealOrderRead(
         **business_payment_fields(order),
+        customer_name=order.user.display_name if viewer_is_admin and order.user else None,
+        customer_email=order.contact_email if viewer_is_admin else None,
+        contact_phone=contact_phone,
+        invoice_buyer_tax_id=order.invoice_buyer_tax_id if order.meal_booking_type == "business" else None,
+        invoice_buyer_name=order.invoice_buyer_name if order.meal_booking_type == "business" else None,
         invoice_tax=invoice_tax_summary(order.__dict__.get("invoice")),
         kitchen_note=order.kitchen_note,
         onsite_payment=onsite_payment,
@@ -568,6 +589,7 @@ def _meal_order_query():
         select(Order)
         .where(Order.sales_channel == SalesChannel.MEAL_PREORDER)
         .options(
+            selectinload(Order.user),
             selectinload(Order.items).selectinload(
                 OrderItem.selected_options
             ),
@@ -579,6 +601,31 @@ def _meal_order_query():
             selectinload(Order.payment_attempts),
         )
     )
+
+
+async def _saved_meal_contact(session: AsyncSession, user: User, settings: Settings) -> str | None:
+    ciphertext = user.meal_contact_phone_encrypted
+    aad = f"meal-contact:{user.id}"
+    if not ciphertext:
+        ciphertext = await session.scalar(select(MemberProfile.phone_encrypted).where(MemberProfile.user_id == user.id))
+        aad = f"member-profile:{user.id}"
+    if not ciphertext:
+        return None
+    try:
+        return normalize_contact_phone(pii_cipher_from_settings(settings).decrypt_text(ciphertext, associated_data=aad))
+    except (IntegrationError, ValueError):
+        return None
+
+
+@meals_router.get("/v1/meal-checkout/contact", response_model=MealContactRead)
+async def get_meal_checkout_contact(
+    response: Response,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MealContactRead:
+    response.headers["Cache-Control"] = "private, no-store"
+    return MealContactRead(phone=await _saved_meal_contact(session, user, settings))
 
 
 @meals_router.get(
@@ -602,13 +649,16 @@ async def admin_list_meal_event_orders(
     event_id: str,
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> list[MealOrderRead]:
     if await session.get(MealEvent, event_id) is None:
         raise HTTPException(status_code=404, detail="找不到便當場次")
     orders = list(await session.scalars(
-        _meal_order_query().where(Order.meal_event_id == event_id).order_by(Order.created_at.desc(), Order.id.desc())
+        _meal_order_query().where(Order.meal_event_id == event_id)
+        .outerjoin(Order.fulfillment)
+        .order_by(func.coalesce(OrderFulfillment.pickup_at, OrderFulfillment.pickup_starts_at).nulls_last(), Order.created_at.desc(), Order.id.desc())
     ))
-    return [await _meal_order_read(session, order, True) for order in orders]
+    return [await _meal_order_read(session, order, True, settings=settings) for order in orders]
 
 
 @meals_router.get(
@@ -785,11 +835,16 @@ async def quote_meal_order(
     )
     total = 0
     lines = []
-    seen: set[str] = set()
+    quantities: dict[str, int] = {}
+    seen: set[tuple[str, tuple[str, ...]]] = set()
     for requested in body.items:
-        if requested.offering_id in seen:
-            raise HTTPException(status_code=422, detail="同一便當不可重複")
-        seen.add(requested.offering_id)
+        key = (requested.offering_id, tuple(sorted(requested.option_ids)) if business else ())
+        if key in seen:
+            raise HTTPException(status_code=422, detail="相同便當和選項請合併份數")
+        seen.add(key)
+        quantities[requested.offering_id] = quantities.get(requested.offering_id, 0) + requested.quantity
+        if quantities[requested.offering_id] > 99:
+            raise HTTPException(422, "每種便當最多可訂 99 份")
         offering = by_id.get(requested.offering_id)
         if offering is None:
             raise HTTPException(status_code=404, detail="找不到便當品項")
@@ -797,7 +852,7 @@ async def quote_meal_order(
             validate_meal_preorder(
                 event,
                 offering,
-                requested.quantity,
+                quantities[requested.offering_id],
                 now,
             )
         except DomainError as exc:
@@ -928,15 +983,13 @@ async def create_meal_order(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> MealOrderRead:
-    fingerprint_body = body.model_dump(mode="json", exclude={"client_request_id"})
+    fingerprint_body = body.model_dump(mode="json", exclude={"client_request_id", "contact_phone"})
     if body.meal_booking_type == "standard":
         fingerprint_body.pop("meal_booking_type")
     # Default preferences must preserve fingerprints created before these fields existed.
     legacy_invoice_handling = "external" if body.payment_method == PaymentMethod.CASH_ON_PICKUP else "on_payment"
     if body.invoice_handling in {None, legacy_invoice_handling}:
         fingerprint_body.pop("invoice_handling")
-    if body.contact_phone is None:
-        fingerprint_body.pop("contact_phone")
     if body.pickup_location_id is None:
         fingerprint_body.pop("pickup_location_id")
     if not body.needs_utensils:
@@ -970,8 +1023,10 @@ async def create_meal_order(
     quote = await quote_meal_order(event_id, body, session, settings, user)
     if body.expected_total is not None and body.expected_total != quote.amount_total:
         raise HTTPException(status_code=409, detail="價格或優惠已變動，請重新確認訂單明細")
+    contact_phone = body.contact_phone or await _saved_meal_contact(session, user, settings)
+    if contact_phone is None:
+        raise HTTPException(422, "請填寫聯絡電話")
     by_id = {offering.id: offering for offering in event.offerings}
-    quote_by_offering = {item.offering_id: item for item in quote.items}
     now = datetime.now(timezone.utc)
     order_id = new_id()
     order_number = await allocate_order_number(session, "M", now)
@@ -1033,9 +1088,9 @@ async def create_meal_order(
                 product_name=by_id[requested.offering_id].meal.name,
                 unit_label="份",
                 quantity=requested.quantity,
-                unit_price=quote_by_offering[requested.offering_id].unit_price,
-                subtotal=quote_by_offering[requested.offering_id].subtotal,
-                tax_type=quote_by_offering[requested.offering_id].tax_type,
+                unit_price=quoted.unit_price,
+                subtotal=quoted.subtotal,
+                tax_type=quoted.tax_type,
                 selected_options=[
                     OrderItemOption(
                         source_meal_option_id=selection.option_id,
@@ -1045,13 +1100,11 @@ async def create_meal_order(
                         position=position,
                     )
                     for position, selection in enumerate(
-                        quote_by_offering[
-                            requested.offering_id
-                        ].selections
+                        quoted.selections
                     )
                 ],
             )
-            for requested in body.items
+            for requested, quoted in zip(body.items, quote.items, strict=True)
         ],
         fulfillment=OrderFulfillment(
             method=FulfillmentMethod.EVENT_PICKUP,
@@ -1078,16 +1131,18 @@ async def create_meal_order(
         if existing is not None:
             return existing
         raise
-    if body.contact_phone:
-        try:
-            cipher = pii_cipher_from_settings(settings)
-            order.fulfillment.recipient_phone_encrypted = cipher.encrypt_text(
-                body.contact_phone,
-                associated_data=f"order-fulfillment:{order.fulfillment.id}:recipient_phone",
+    try:
+        cipher = pii_cipher_from_settings(settings)
+        order.fulfillment.recipient_phone_encrypted = cipher.encrypt_text(
+            contact_phone, associated_data=f"order-fulfillment:{order.fulfillment.id}:recipient_phone",
+        )
+        order.fulfillment.encryption_key_version = cipher.current_version
+        if body.contact_phone:
+            user.meal_contact_phone_encrypted = cipher.encrypt_text(
+                contact_phone, associated_data=f"meal-contact:{user.id}",
             )
-            order.fulfillment.encryption_key_version = cipher.current_version
-        except IntegrationError as exc:
-            raise HTTPException(status_code=503, detail="聯絡電話目前無法安全儲存，請稍後再試") from exc
+    except IntegrationError as exc:
+        raise HTTPException(status_code=503, detail="聯絡電話目前無法安全儲存，請稍後再試") from exc
     qr_token = _pickup_qr_payload(order)
     order.fulfillment.pickup_qr_token_hash = hashlib.sha256(
         qr_token.encode("utf-8")
@@ -1116,7 +1171,7 @@ def _cancellation_request_read(request: MealCancellationRequest) -> MealCancella
         reviewed_by_id=request.reviewed_by_id,
         reviewed_by_name=request.reviewed_by_name,
         reviewed_at=_aware(request.reviewed_at) if request.reviewed_at else None,
-        review_reason=request.review_reason,
+        review_reason=request.review_reason, initiated_by_admin=request.initiated_by_admin,
     )
 
 
@@ -1144,7 +1199,19 @@ async def request_meal_cancellation(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> MealCancellationRequestRead:
-    raise HTTPException(status_code=403, detail="退單請致電客服，由管理員協助辦理")
+    order = await _locked_cancellation_order(session, order_id)
+    if order.user_id != user.id:
+        raise HTTPException(404, "找不到便當訂單")
+    existing = next((item for item in order.cancellation_requests if item.status == "pending"), None)
+    if existing is not None:
+        return _cancellation_request_read(existing)
+    if not meal_cancellation_request_allowed(order):
+        raise HTTPException(409, "此訂單已無法自行申請退單，請聯絡合作社")
+    request = MealCancellationRequest(order_id=order.id, requested_by_id=user.id, reason=body.reason, status="pending")
+    session.add(request)
+    await session.commit()
+    await session.refresh(request)
+    return _cancellation_request_read(request)
 
 
 @meals_router.get("/v1/admin/meal-cancellation-requests", response_model=MealCancellationQueueRead)
@@ -1191,10 +1258,11 @@ async def admin_search_meal_orders(
     filters: Annotated[MealOrderSearchFilters, Query()],
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> MealAdminOrderPage:
     orders, total = await search_meal_orders(session, filters)
     return MealAdminOrderPage(items=[{
-        "order": await _meal_order_read(session, order, True),
+        "order": await _meal_order_read(session, order, True, settings=settings),
         "customer_name": order.user.display_name,
         "customer_email": order.contact_email,
         "meal_period": order.meal_event.meal_period,
@@ -2134,36 +2202,39 @@ async def cancel_meal_event(
         MealEventStatus.COMPLETED,
     }:
         raise HTTPException(status_code=409, detail="此場次目前不可取消")
-    orders = (
-        await session.scalars(
-            select(Order)
-            .where(Order.meal_event_id == event.id)
-            .options(
-                selectinload(Order.items),
-                selectinload(Order.fulfillment),
-                selectinload(Order.reservations),
-                selectinload(Order.invoice),
-            )
-            .with_for_update()
-        )
-    ).all()
-    if any(
-        order.fulfillment_status == FulfillmentStatus.PICKED_UP
-        or (
-            order.fulfillment is not None
-            and order.fulfillment.status == FulfillmentState.PICKED_UP
-        )
-        for order in orders
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="已有訂單完成取餐，不可取消整場",
-        )
+    orders = await _event_orders_for_cancellation(session, [event.id], lock=True)
+    await _cancel_meal_event_orders(session, event, orders, admin, settings, body.reason)
+    await session.commit()
+    wake_printer()
+    return _meal_event_read(event)
+
+
+async def _event_orders_for_cancellation(session: AsyncSession, event_ids: list[str], *, lock: bool) -> list[Order]:
+    query = (
+        select(Order).where(Order.meal_event_id.in_(event_ids))
+        .options(selectinload(Order.items), selectinload(Order.fulfillment),
+                 selectinload(Order.reservations), selectinload(Order.invoice))
+        .order_by(Order.id)
+    )
+    return list(await session.scalars(query.with_for_update() if lock else query))
+
+
+def _was_picked_up(order: Order) -> bool:
+    return order.fulfillment_status == FulfillmentStatus.PICKED_UP or (
+        order.fulfillment is not None and order.fulfillment.status == FulfillmentState.PICKED_UP
+    )
+
+
+async def _cancel_meal_event_orders(
+    session: AsyncSession, event: MealEvent, orders: list[Order], admin: User, settings: Settings, reason: str,
+) -> None:
+    if any(_was_picked_up(order) for order in orders):
+        raise HTTPException(409, "已有訂單完成取餐，不可取消整場")
 
     now = datetime.now(timezone.utc)
     event.status = MealEventStatus.CANCELLED
     event.cancelled_at = now
-    event.cancellation_reason = body.reason
+    event.cancellation_reason = reason
     for order in orders:
         if order.cancelled_at is not None:
             continue
@@ -2174,7 +2245,7 @@ async def cancel_meal_event(
         elif order.payment_status == PaymentStatus.PENDING:
             order.payment_status = PaymentStatus.EXPIRED
         order.cancelled_at = now
-        order.cancellation_reason = body.reason
+        order.cancellation_reason = reason
         await cancel_unissued_invoice_jobs(session, order)
         order.fulfillment_status = FulfillmentStatus.CANCELLED
         if order.fulfillment is not None:
@@ -2185,7 +2256,7 @@ async def cancel_meal_event(
                     session,
                     order=order,
                     amount=order.amount_total,
-                    reason=f"便當場次取消：{body.reason}" if body.reason else "",
+                    reason=f"便當場次取消：{reason}" if reason else "",
                     requested_by_id=admin.id,
                     allow_unbound_local_completion=(
                         allow_local_refund_without_payment_attempt(settings)
@@ -2208,7 +2279,7 @@ async def cancel_meal_event(
                 title=(
                     ("現金退款待現場退還" if order.payment_method == PaymentMethod.CASH_ON_PICKUP else "便當場次取消退款已送出")
                     if refund_queued
-                    else "便當場次取消退款紀錄已建立"
+                    else "便當場次取消，已全額退款"
                 ),
                 body=(
                     (f"「{event.title}」已取消，訂單 {order.order_number} 待人員實際退還現金 NT${order.amount_total}。"
@@ -2217,14 +2288,21 @@ async def cancel_meal_event(
                     if refund_queued
                     else (
                         f"「{event.title}」已取消，訂單 {order.order_number} "
-                        f"已建立 NT${order.amount_total} 的 Sandbox 退款紀錄。"
+                        f"已全額退款 NT${order.amount_total}。"
                     )
                 ),
                 data={"meal_event_id": event.id, "order_id": order.id},
                 dedupe_key=f"meal-event-refund:{event.id}:{order.id}",
                 event_type=(
-                    "refund_requested" if refund_queued else "refund_completed"
+                    "meal_event_refund_requested" if refund_queued else "refund_completed"
                 ),
+            )
+        else:
+            await _publish_meal_refund_notification(
+                session, order, title="便當訂單已取消",
+                body=f"「{event.title}」停止供餐，訂單 {order.order_number} 已取消。",
+                data={"meal_event_id": event.id, "order_id": order.id},
+                dedupe_key=f"meal-event-cancelled:{event.id}:{order.id}", event_type="meal_event_cancelled",
             )
         await enqueue_cancellation_print(session, order, settings)
     session.add(
@@ -2233,12 +2311,105 @@ async def cancel_meal_event(
             action="meal_event.cancel",
             aggregate_type="meal_event",
             aggregate_id=event.id,
-            reason=body.reason,
+            reason=reason,
         )
     )
+
+
+async def _meal_disaster_plan(
+    session: AsyncSession, body: MealDisasterSelection, *, lock: bool = False,
+) -> tuple[MealDisasterPreview, list[tuple[MealEvent, list[Order]]]]:
+    start = datetime.combine(body.service_date, time.min, TAIPEI).astimezone(timezone.utc)
+    end = start + timedelta(days=1)
+    query = (
+        select(MealEvent).where(
+            MealEvent.pickup_starts_at >= start,
+            MealEvent.pickup_starts_at < end,
+            MealEvent.status.notin_([MealEventStatus.CANCELLED, MealEventStatus.COMPLETED]),
+        ).order_by(MealEvent.id)
+    )
+    events = [
+        event for event in await session.scalars(query.with_for_update() if lock else query)
+        if meal_period(event) in body.periods
+    ]
+    by_event: dict[str, list[Order]] = {event.id: [] for event in events}
+    if events:
+        for order in await _event_orders_for_cancellation(session, list(by_event), lock=lock):
+            by_event[order.meal_event_id].append(order)
+    event_summaries = []
+    fingerprint = []
+    for event in events:
+        orders = by_event[event.id]
+        active = [order for order in orders if order.cancelled_at is None]
+        paid = [order for order in active if order.payment_status == PaymentStatus.PAID]
+        blocked = any(_was_picked_up(order) for order in orders)
+        event_summaries.append({
+            "id": event.id, "title": event.title, "period": meal_period(event),
+            "order_count": len(active), "paid_count": len(paid),
+            "paid_total": sum(order.amount_total for order in paid), "blocked": blocked,
+        })
+        fingerprint.append([event.id, event.title, event.status.value, blocked, [
+            [order.id, order.revision, order.payment_status.value, order.amount_total] for order in active
+        ]])
+    token = hashlib.sha256(json.dumps(
+        [body.service_date.isoformat(), sorted(body.periods), fingerprint], ensure_ascii=False,
+    ).encode()).hexdigest()
+    return MealDisasterPreview(events=event_summaries, preview_token=token), [
+        (event, by_event[event.id]) for event in events
+    ]
+
+
+@meals_router.post("/v1/admin/meal-disaster/preview", response_model=MealDisasterPreview)
+async def preview_meal_disaster(
+    body: MealDisasterSelection,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MealDisasterPreview:
+    preview, _ = await _meal_disaster_plan(session, body)
+    return preview
+
+
+@meals_router.post("/v1/admin/meal-disaster/cancel", response_model=MealDisasterResult)
+async def cancel_meal_disaster(
+    body: MealDisasterCancel,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MealDisasterResult:
+    preview, plan = await _meal_disaster_plan(session, body, lock=True)
+    if preview.preview_token != body.preview_token or not plan:
+        raise HTTPException(409, "場次或訂單已變動，請重新預覽")
+    if any(event.blocked for event in preview.events):
+        raise HTTPException(409, "有場次已完成取餐，請重新選擇餐別")
+    for event, orders in plan:
+        await _cancel_meal_event_orders(session, event, orders, admin, settings, body.reason)
+    session.add(AdminAudit(
+        actor_id=admin.id, action="meal_disaster.cancel", aggregate_type="meal_event", aggregate_id=plan[0][0].id,
+        reason=body.reason, data={
+            "service_date": body.service_date.isoformat(), "periods": sorted(body.periods),
+            "announcement": body.announcement.strip(), "event_ids": [event.id for event, _ in plan],
+        },
+    ))
     await session.commit()
     wake_printer()
-    return _meal_event_read(event)
+    return MealDisasterResult(
+        cancelled_event_count=len(plan), order_count=sum(event.order_count for event in preview.events),
+        paid_count=sum(event.paid_count for event in preview.events), paid_total=sum(event.paid_total for event in preview.events),
+    )
+
+
+@meals_router.get("/v1/meal-announcements", response_model=list[MealDisasterAnnouncement])
+async def list_meal_announcements(session: AsyncSession = Depends(get_session)) -> list[MealDisasterAnnouncement]:
+    today = datetime.now(TAIPEI).date().isoformat()
+    rows = await session.scalars(select(AdminAudit.data).where(
+        AdminAudit.action == "meal_disaster.cancel",
+        AdminAudit.data["service_date"].as_string() >= today,
+        AdminAudit.data["announcement"].as_string() != "",
+    ).order_by(AdminAudit.data["service_date"].as_string(), AdminAudit.created_at.desc()).limit(10))
+    return [
+        MealDisasterAnnouncement(service_date=row["service_date"], periods=row["periods"], message=row["announcement"])
+        for row in rows
+    ]
 
 
 @meals_router.post(
@@ -2252,7 +2423,7 @@ async def complete_meal_event(
     session: AsyncSession = Depends(get_session),
 ) -> MealEventRead:
     event = await _load_event(session, event_id, for_update=True)
-    if event is None or event.status != MealEventStatus.PICKUP_OPEN:
+    if event is None or event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.ORDERING_CLOSED, MealEventStatus.PICKUP_OPEN}:
         raise HTTPException(status_code=409, detail="此場次目前不可結束")
     now = datetime.now(timezone.utc)
     if _aware(event.pickup_ends_at) > now:

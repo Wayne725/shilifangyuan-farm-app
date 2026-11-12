@@ -2068,7 +2068,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
 
     order_payload = {
         "items": [{"offering_id": offering_id, "quantity": 1}],
-        "contact_email": applicant.email,
+        "contact_phone": "0912345678", "contact_email": applicant.email,
         "invoice_carrier_type": "ecpay",
     }
     quote = await client.post(
@@ -2106,7 +2106,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     assert created_order.json()["paid_at"] is None
     assert created_order.json()["pickup_code"] is None
     assert created_order.json()["pickup_qr_payload"] is None
-    assert created_order.json()["available_actions"] == ["amend_quantities", "pay"]
+    assert created_order.json()["available_actions"] == ["amend_quantities", "pay", "request_cancellation"]
 
     pending_order = await client.get(
         f"/v1/meal-orders/{created_order.json()['id']}",
@@ -2157,7 +2157,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         json={"reason": "行程異動"},
         headers=auth_headers(applicant),
     )
-    assert cancelled.status_code == 403
+    assert cancelled.status_code == 201 and cancelled.json()["status"] == "pending"
     assert offering.reserved_quantity == 1
     approved = await client.post(
         f"/v1/admin/meal-orders/{created_order.json()['id']}/cancel",
@@ -2388,7 +2388,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
             f"/v1/meal-events/{event_id}/orders",
             json={
                 "items": [{"offering_id": offering_id, "quantity": 1}],
-                "contact_email": user.email,
+                "contact_phone": "0912345678", "contact_email": user.email,
                 "invoice_carrier_type": "ecpay",
             },
             headers=auth_headers(user),
@@ -2420,7 +2420,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
         json={"reason": "臨時有事"},
         headers=auth_headers(applicant),
     )
-    assert buyer_cancel.status_code == 403
+    assert buyer_cancel.status_code == 201 and buyer_cancel.json()["status"] == "pending"
     assert buyer_order.payment_status == PaymentStatus.PAID
     approved = await client.post(
         f"/v1/admin/meal-orders/{buyer_order.id}/cancel",
@@ -2468,7 +2468,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
             "items": [
                 {"offering_id": event_offering.id, "quantity": 1}
             ],
-            "contact_email": applicant.email,
+            "contact_phone": "0912345678", "contact_email": applicant.email,
             "invoice_carrier_type": "ecpay",
         },
         headers=auth_headers(applicant),
@@ -2754,7 +2754,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
         f"/v1/meal-events/{event_id}/quote",
         json={
             "items": [{"offering_id": offering_id, "quantity": 1}],
-            "contact_email": applicant.email,
+            "contact_phone": "0912345678", "contact_email": applicant.email,
         },
     )
     assert missing_required.status_code == 422
@@ -2768,7 +2768,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
                 "option_ids": [sushi_id, soda_id],
             }
         ],
-        "contact_email": applicant.email,
+        "contact_phone": "0912345678", "contact_email": applicant.email,
     }
     quote = await client.post(
         f"/v1/meal-events/{event_id}/quote",

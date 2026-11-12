@@ -295,25 +295,13 @@ def meal_cancellation_request_allowed(order: Order, now: Optional[datetime] = No
     current = now or utcnow()
     event = order.__dict__.get("meal_event")
     fulfillment = order.__dict__.get("fulfillment")
-    from .business_meals import is_business_meal
-    if is_business_meal(order) and order.payment_status in {PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}:
-        return (
-            order.cancelled_at is None
-            and order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
-            and fulfillment is not None
-            and fulfillment.status in {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
-            and event is not None and event.status != MealEventStatus.CANCELLED
-        )
+    if event is None or fulfillment is None:
+        return False
+    pickup = fulfillment.pickup_at or fulfillment.pickup_starts_at or event.pickup_starts_at
     return (
-        order.sales_channel == SalesChannel.MEAL_PREORDER
-        and order.payment_status in {PaymentStatus.PENDING, PaymentStatus.PAID}
-        and order.cancelled_at is None
-        and order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
-        and fulfillment is not None
-        and fulfillment.status in {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
-        and event is not None
-        and event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}
-        and current < aware(event.pickup_ends_at)
+        current < aware(pickup)
+        and event.status != MealEventStatus.COMPLETED
+        and admin_meal_cancellation_allowed(order, current)
     )
 
 
@@ -534,6 +522,10 @@ def order_available_actions(
             }
         ):
             actions.append("advance_shipment")
+    if not viewer_is_admin and is_meal and meal_cancellation_request_allowed(order, current) and not any(
+        request.status == "pending" for request in order.__dict__.get("cancellation_requests", [])
+    ):
+        actions.append("request_cancellation")
     return list(dict.fromkeys(actions))
 
 

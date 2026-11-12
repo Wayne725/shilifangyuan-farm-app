@@ -281,7 +281,7 @@ async def test_failed_refund_creation_keeps_application_and_order_unchanged(revi
 async def test_permissions_validation_queue_search_and_generic_cancel_bypass(review_context):
     c = review_context
     path = f"/v1/meal-orders/{c.order.id}/cancellation-requests"
-    assert (await c.client.post(path, json={"reason": "他人訂單"}, headers=auth_headers(c.other))).status_code == 403
+    assert (await c.client.post(path, json={"reason": "他人訂單"}, headers=auth_headers(c.other))).status_code == 404
     for reason in ["", "  ", "x" * 2001]:
         assert (await c.client.post(path, json={"reason": reason}, headers=auth_headers(c.buyer))).status_code == 422
     request = await submit(c)

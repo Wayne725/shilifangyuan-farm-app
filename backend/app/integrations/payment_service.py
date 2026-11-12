@@ -1992,7 +1992,9 @@ class SQLAlchemyPaymentCallbackRepository:
                     title="退款完成",
                     body=(
                         f"訂單 {order.order_number} 第 {attempt.order_revision} 版付款 NT${refund.amount} 已退回，請依訂單中心最新狀態辦理。"
-                        if obsolete_refund else f"NT${refund.amount} 已由金流確認退款完成。"
+                        if obsolete_refund else f"訂單 {order.order_number} 已全額退款 NT${refund.amount}。"
+                        if order is not None and order.cancelled_at is not None and refund.amount == order.amount_total
+                        else f"NT${refund.amount} 已由金流確認退款完成。"
                     ),
                     data={
                         "order_id": attempt.order_id,
@@ -2001,7 +2003,7 @@ class SQLAlchemyPaymentCallbackRepository:
                         "refund_purpose": refund.purpose,
                         "order_revision": attempt.order_revision if order else None,
                     },
-                    email=owner.email if notify_email else None,
+                    email=(order.contact_email if order is not None else owner.email) if notify_email else None,
                     dedupe_key=f"refund:{refund.id}",
                 )
             )

@@ -27,10 +27,14 @@ test("生活消費保留商品、團購、便當、付款與物流", () => {
   for (const marker of ["/v1/products", "/v1/group-campaigns", "/v1/meal-events", "beginCheckout", "beginGroupCheckout", "beginMealCheckout", "shippingEligibility", "selection-link"]) assert.match(source + commerce, new RegExp(marker.replaceAll("/", "\\/")));
 });
 
-test("便當端到端包含取餐 QR 與管理端核銷", () => {
-  assert.match(source, /QRCodeSVG/);
-  assert.match(source, /pickup-credential/);
-  assert.match(source, /meal-events\/\$\{event\.id\}\/redeem/);
+test("便當畫面隱藏取餐碼和核銷，保留訂單與場次路由", async () => {
+  const history = await readFile(new URL("../web/src/components/MealOrderHistory.tsx", import.meta.url), "utf8");
+  const admin = await readFile(new URL("../web/src/pages/AdminMealsPage.tsx", import.meta.url), "utf8");
+  const routes = await readFile(new URL("../web/src/lib/api.routes.json", import.meta.url), "utf8");
+  assert.doesNotMatch(history, /QRCodeSVG|pickup-credential|取餐碼/);
+  assert.doesNotMatch(admin, /meal-redeem-panel|確認核銷/);
+  assert.match(routes, /\/v1\/meal-orders\/\{order_id\}\/pickup-credential/);
+  assert.match(routes, /\/v1\/admin\/meal-events\/\{event_id\}\/redeem/);
   assert.match(router, /path: "\/meal-orders"/);
   assert.match(router, /path: "\/admin\/meals"/);
 });

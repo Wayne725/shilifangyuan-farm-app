@@ -20,6 +20,8 @@ for (const width of [1440, 390]) {
       if (!path.startsWith('/v1/')) return route.continue();
       if (path === '/v1/auth/refresh') return route.fulfill({json: {access_token: 'isolated', user: {id: 'admin', user_role: 'admin', display_name: '管理員', email: 'admin@example.test', membership_type: 'member'}}});
       if (['/v1/products', '/v1/meal-events', '/v1/group-campaigns'].includes(path)) return route.fulfill({json: []});
+      if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+      if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
       if (path === '/v1/platform') return route.fulfill({json: {orders_open: true}});
       if (path === '/v1/auth/line/status') return route.fulfill({json: {ready: true}});
       if (path === '/v1/admin/invoice-register') {

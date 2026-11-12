@@ -1,10 +1,9 @@
 import { OrderQuantityAmendment } from "./OrderQuantityAmendment";
 import { BusinessMealPaymentStatus } from "./BusinessMealPaymentStatus";
 import { CancellationReviewDetails } from "./CancellationReviewDetails";
-import { ArrowLeft, BowlFood, Clock, CreditCard, MapPin, Money, QrCode, Receipt } from "@phosphor-icons/react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { ArrowLeft, BowlFood, Clock, MapPin, Money, Receipt } from "@phosphor-icons/react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 
 import { OrderSearch } from "../components/OrderSearch";
@@ -17,8 +16,9 @@ import { openOrderHandoff } from "../lib/checkout-navigation";
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import { createOrderPayment } from "../lib/commerce";
 import { taxTypeLabel } from "../lib/invoice-tax";
+import { sessionStore } from "../lib/browser-storage";
 import { formatMealDate, formatMealDateTime } from "../lib/meal-time";
-import type { MealOrder, MealPickupCredential } from "../lib/types";
+import type { MealOrder } from "../lib/types";
 
 export function MealOrderHistory({ orderId, embedded = false }: { orderId?: string; embedded?: boolean }) {
   const { user, openLogin, isAuthReady } = useAuth();
@@ -28,16 +28,29 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
   const orders = useOrderHistory<MealOrder>("meal", user?.id, query, payment, selectedId, orderId);
   const visibleOrders = orders.items;
   const selected = visibleOrders.find((order) => order.id === selectedId) || visibleOrders[0];
-  const credentialAvailable = Boolean(selected?.payment_status === "paid" && !selected.cancelled_at && selected.pickup_code && !["picked_up", "no_show", "cancelled"].includes(selected.fulfillment_status));
-  const credentialQuery = useQuery({
-    queryKey: ["meal-pickup-credential", user?.id, selected?.id, selected?.payment_status, selected?.fulfillment_status],
-    queryFn: ({ signal }) => apiFetch<MealPickupCredential>(`/v1/meal-orders/${selected?.id}/pickup-credential`, { signal }),
-    enabled: Boolean(selected?.id && credentialAvailable),
-    refetchInterval: credentialAvailable ? 5000 : false,
-    retry: false,
+  const client = useQueryClient();
+  const [reason, setReason] = useState("");
+  const [now, setNow] = useState(Date.now);
+  const cancelled = useMutation({
+    mutationFn: (orderId: string) => apiFetch(`/v1/meal-orders/${orderId}/cancellation-requests`, {
+      method: "POST", body: JSON.stringify({ reason: reason.trim() }),
+    }),
+    onSuccess: () => {
+      setReason("");
+      void client.invalidateQueries({ queryKey: ["meal-orders"] });
+      orders.refresh();
+    },
   });
-  const credential = { ...credentialQuery, data: credentialAvailable && !credentialQuery.isError ? credentialQuery.data : undefined };
-  const pay = useMutation({ mutationFn: createOrderPayment, onSuccess: (url, orderId) => openOrderHandoff(url, orderId) });
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const paymentIssue = user && selected && selected.payment_status !== "paid"
+    ? sessionStore.getItem(`slf_meal_payment_issue:${user.id}:${selected.id}`) : null;
+  const pay = useMutation({ mutationFn: createOrderPayment, onSuccess: (url, orderId) => {
+    if (user) sessionStore.removeItem(`slf_meal_payment_issue:${user.id}:${orderId}`);
+    openOrderHandoff(url, orderId);
+  } });
 
 
   useEffect(() => {
@@ -50,7 +63,7 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
 
 
   if (!isAuthReady) return <section className="orders-page meal-orders-page" aria-label="正在恢復登入"><LoadingLines count={3} /></section>;
-  if (!user) return <section className="account-gate meal-orders-page"><BowlFood size={45} weight="light" /><h1>我的便當訂單</h1><p>登入後可查看餐點明細、付款狀態與取餐碼。</p><button className="button button-primary" type="button" onClick={openLogin}>登入查看訂單</button><Link className="text-link" to="/shop" search={{ tab: "meals" }}>先查看可預訂餐點</Link></section>;
+  if (!user) return <section className="account-gate meal-orders-page"><BowlFood size={45} weight="light" /><h1>我的便當訂單</h1><p>登入後可查看餐點明細及付款狀態。</p><button className="button button-primary" type="button" onClick={openLogin}>登入查看訂單</button><Link className="text-link" to="/shop" search={{ tab: "meals" }}>先查看可預訂餐點</Link></section>;
 
   return (
     <section className={embedded ? "meal-orders-embedded" : "orders-page meal-orders-page"}>
@@ -71,14 +84,27 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
         <div><Clock size={20} /><span>預計取餐時間（台灣時間）</span><strong>{selected.pickup_at ? formatMealDateTime(selected.pickup_at) : "舊訂單未指定時間，請於供餐時段內取餐"}</strong></div>
       </div>
       <p className="meal-kitchen-note"><strong>餐具：</strong>{selected.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
-      <section className="meal-order-lines" aria-label="訂單餐點明細"><h3>餐點明細</h3><div className="order-lines">{selected.items.map((item, index) => <div key={item.offering_id}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.meal_name}</strong><small>{item.quantity} 份 × {formatMoney(item.unit_price)} · {taxTypeLabel(item.tax_type)}{item.selections.length > 0 && <em>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</em>}</small><b>{formatMoney(item.subtotal)}</b></div>)}</div></section>
+      <section className="meal-order-lines" aria-label="訂單餐點明細"><h3>餐點明細</h3><div className="order-lines">{selected.items.map((item, index) => <div key={item.order_item_id || `${item.offering_id}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item.meal_name}</strong><small>{item.quantity} 份 × {formatMoney(item.unit_price)} · {taxTypeLabel(item.tax_type)}{item.selections.length > 0 && <em>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</em>}</small><b>{formatMoney(item.subtotal)}</b></div>)}</div></section>
       {selected.kitchen_note && <p className="meal-kitchen-note"><strong>餐點備註：</strong>{selected.kitchen_note}</p>}
       {selected.promotion && <p className="meal-order-discount">{selected.promotion.name} · 已折抵 {formatMoney(selected.promotion.discount)}</p>}
-      {selected.meal_booking_type === "business" && <span className="status-chip">會餐 · 統編報帳</span>}
+      {selected.meal_booking_type === "business" && <section aria-label="會餐發票資料">
+        <span className="status-chip">會餐 · 統編報帳</span>
+        {selected.invoice_buyer_tax_id && <p>統編：{selected.invoice_buyer_tax_id}</p>}
+        {selected.invoice_buyer_name && <p>抬頭：{selected.invoice_buyer_name}</p>}
+      </section>}
       <p className="meal-order-payment-status" aria-live="polite">付款狀態：<strong>{paymentStatus(selected.payment_status)}</strong></p>
       <OrderQuantityAmendment key={selected.id} order={selected} disabled={pay.isPending} />
       <MealCancellationStatus order={selected} />
-      {credential.data ? <div className="pickup-ticket"><span className="status-chip passed">{["ready", "ready_for_pickup"].includes(selected.fulfillment_status) ? "可取餐" : "取餐碼已生效"}</span><div className="pickup-qr" aria-label={`訂單 ${selected.order_number} 取餐 QR Code`}><QRCodeSVG value={credential.data.qr_token} size={168} level="H" marginSize={2} /></div><small>六位取餐碼</small><strong>{credential.data.pickup_code}</strong><p>到現場出示 QR 或告知六位取餐碼；取餐完成後，這組取餐碼會失效。</p></div> : credentialAvailable ? <div className="credential-pending"><QrCode size={34} weight="light" /><h3>{credential.isError ? "取餐碼暫時無法讀取" : "正在查詢取餐碼"}</h3><p>{credential.error?.message || "系統正在確認這組取餐碼是否仍可使用。"}</p><button className="button button-quiet" type="button" onClick={() => credential.refetch()}>重新查詢</button></div> : <MealOrderState order={selected} onPay={() => pay.mutate(selected.id)} paying={pay.isPending} />}
+      {paymentIssue && <p className="form-error" role="alert">無法開啟付款頁：{paymentIssue}</p>}
+      <MealOrderState order={selected} ended={now >= Date.parse(selected.pickup_end)} onPay={() => pay.mutate(selected.id)} paying={pay.isPending} />
+      {selected.available_actions.includes("request_cancellation") && now < Date.parse(selected.pickup_at || selected.pickup_start) && <details key={selected.id}>
+        <summary>申請退單</summary>
+        <form onSubmit={(event) => { event.preventDefault(); if (reason.trim()) cancelled.mutate(selected.id); }}>
+          <label className="field"><span>退單原因</span><textarea required maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+          <button type="submit" className="button button-quiet" disabled={cancelled.isPending || !reason.trim()}>送出退單申請</button>
+          {cancelled.isError && <p className="form-error" role="alert">{cancelled.error.message}</p>}
+        </form>
+      </details>}
       <MealInvoiceStatus order={selected} />
       <InvoiceTaxSummary variant="card" items={selected.items} memberTaxExempt={selected.member_tax_exempt_snapshot} taxAmount={selected.tax_amount} invoiceTax={selected.invoice_tax} invoiceStatus={selected.invoice_status} />
       <p className="meal-order-created-at">下單時間：{formatDateTime(selected.created_at)}</p>
@@ -90,21 +116,21 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
   );
 }
 
-function MealOrderState({ order, onPay, paying }: { order: MealOrder; onPay: () => void; paying: boolean }) {
-  if (order.meal_booking_type === "business" && !order.cancelled_at && ["pending", "failed", "expired"].includes(order.payment_status)) {
-    return <BusinessMealPaymentStatus order={order} onPay={onPay} paying={paying} />;
+function MealOrderState({ order, ended, onPay, paying }: { order: MealOrder; ended: boolean; onPay: () => void; paying: boolean }) {
+  if (order.cancelled_at || order.fulfillment_status === "cancelled") return <p>訂單已取消</p>;
+  if (order.meal_booking_type === "business" && ["pending", "failed", "expired"].includes(order.payment_status)) {
+    return <>{ended && <p>已結束</p>}<BusinessMealPaymentStatus order={order} onPay={onPay} paying={paying} /></>;
   }
-  if (order.payment_method === "cash_on_pickup" && order.payment_status === "pending" && !order.cancelled_at && !["picked_up", "no_show", "cancelled"].includes(order.fulfillment_status)) {
-    return <div className="credential-pending cash-payment-pending"><Money size={34} weight="light" /><h3>預訂成功・待現場付款</h3><p>已保留餐點，尚未確認收款。應付金額 {formatMoney(order.amount_total)}。</p></div>;
+  if (ended) return <p>已結束</p>;
+  if (order.payment_method === "cash_on_pickup" && order.payment_status === "pending") {
+    return <div className="credential-pending cash-payment-pending"><Money size={34} weight="light" /><h3>預訂成功・待現場付款</h3><p>應付金額 {formatMoney(order.amount_total)}。</p></div>;
   }
-  if (order.payment_method === "cash_on_pickup" && order.payment_status === "refund_pending") {
-    return <div className="credential-pending"><Money size={34} weight="light" /><h3>待現場退款</h3><p>退款尚未完成，等待合作社確認。</p></div>;
+  if (order.available_actions.includes("pay")) {
+    return <button className="button button-primary" type="button" disabled={paying} onClick={onPay}>
+      {paying ? "準備付款頁…" : `前往付款 ${formatMoney(order.amount_total)}`}
+    </button>;
   }
-  if (order.payment_method && order.payment_method !== "online" && order.payment_status === "pending") {
-    return <div className="credential-pending"><BowlFood size={34} weight="light" /><h3>{fulfillmentStatus(order.fulfillment_status)}</h3><p>此現場付款訂單目前無法付款或取得取餐憑證，請聯絡合作社確認。</p></div>;
-  }
-  if (order.payment_status === "pending" && order.available_actions.includes("pay")) return <div className="credential-pending"><CreditCard size={34} weight="light" /><h3>付款後顯示取餐憑證</h3><p>付款確認成功後，這裡會顯示 QR 與六位取餐碼。發票狀態會另外更新。</p><button className="button button-primary" type="button" disabled={paying} onClick={onPay}>{paying ? "準備付款頁…" : `前往付款 ${formatMoney(order.amount_total)}`}</button></div>;
-  return <div className="credential-pending"><BowlFood size={34} weight="light" /><h3>{fulfillmentStatus(order.fulfillment_status)}</h3><p>為避免重複核銷，這筆訂單目前不顯示取餐憑證。</p></div>;
+  return null;
 }
 
 function MealCancellationStatus({ order }: { order: MealOrder }) {
@@ -113,9 +139,9 @@ function MealCancellationStatus({ order }: { order: MealOrder }) {
   const labels = { pending: "退單申請待審核", approved: "退單申請已核准", rejected: "退單申請未核准" };
   return <section className="meal-cancellation-card" aria-label="退單審核進度">
     <h3>{labels[request.status]}</h3>
-    {request.reason && <p>申請原因：{request.reason}</p>}
+    {request.reason && <p>{request.initiated_by_admin ? "退單原因" : "申請原因"}：{request.reason}</p>}
     <p>申請時間：{formatDateTime(request.requested_at)}</p>
-    {request.review_reason && <p>管理員回覆：{request.review_reason}</p>}
+    {request.review_reason && !request.initiated_by_admin && <p>管理員回覆：{request.review_reason}</p>}
     <CancellationReviewDetails request={request} />
     <p>{request.status === "pending" ? "申請尚未核准，訂單仍依原安排處理。"
       : request.status === "approved" ? "訂單已取消；退款與發票進度請查看本頁各自的狀態。"
@@ -129,4 +155,3 @@ function MealInvoiceStatus({ order }: { order: MealOrder }) {
 }
 
 function paymentStatus(status: string) { return { pending: "待付款", paid: "已付款", refunded: "已退款", refund_pending: "退款中", late_paid_refund_required: "付款晚到，退款處理中", expired: "已逾期", failed: "付款失敗" }[status] || status; }
-function fulfillmentStatus(status: string) { return { pending: "取餐憑證尚未生效", preparing: "餐點製作中", picked_up: "已完成取餐", no_show: "逾時未取", cancelled: "訂單已取消", ready: "取餐憑證目前無法使用", ready_for_pickup: "取餐憑證目前無法使用" }[status] || status; }

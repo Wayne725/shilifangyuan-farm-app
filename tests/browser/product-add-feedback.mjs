@@ -25,6 +25,8 @@ async function fixture(t, width, path, { stock = 20, initialStock = 100, initial
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ status: signedIn ? 200 : 401, json: signedIn ? { access_token: 'isolated-cart', user: { id: 'cart-buyer', email: 'buyer@example.test', display_name: '隔離購物者', user_role: 'customer', membership_type: membershipType } } : { detail: '未登入的隔離購物者' } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/products') return route.fulfill({ json: [item, soldOut] });
     if (path === `/v1/products/${product.id}`) return route.fulfill({ json: item });

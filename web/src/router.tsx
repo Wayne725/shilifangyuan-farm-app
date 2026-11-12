@@ -358,7 +358,7 @@ const adminMealsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/meals",
   validateSearch: (search: Record<string, unknown>): { tab?: string; q?: string; order_id?: string } => ({
-    tab: typeof search.tab === "string" && ["orders", "cancellations", "events", "schedules", "meals"].includes(search.tab) ? search.tab : undefined,
+    tab: typeof search.tab === "string" && ["orders", "cancellations", "events", "schedules", "disaster", "meals"].includes(search.tab) ? search.tab : undefined,
     q: typeof search.q === "string" ? search.q.slice(0, 100) : undefined,
     order_id: search.tab === "cancellations" && typeof search.order_id === "string" && search.order_id.length > 0 && search.order_id.length <= 36
       ? search.order_id : undefined,

@@ -66,7 +66,7 @@ async def cash_api(postgres_sessions):
 def order_body(event, buyer, payment_method="cash_on_pickup"):
     return {
         "items": [{"offering_id": event["offerings"][0]["id"], "quantity": 1}],
-        "contact_email": buyer.email,
+        "contact_phone": "0912345678", "contact_email": buyer.email,
         "payment_method": payment_method,
         "invoice_carrier_type": "cloud",
     }

@@ -71,7 +71,7 @@ async def test_two_day_cutoff_schedule_generates_bookable_wednesday(workday_cont
         assert event.service_date == date(2026, 11, 11)
         assert meal_booking_window(event) == (datetime(2026, 11, 9, tzinfo=TAIPEI), datetime(2026, 11, 9, 20, tzinfo=TAIPEI))
         offering = await session.scalar(select(MealEventOffering).where(MealEventOffering.meal_event_id == event.id))
-        body = {"contact_email": buyer.email, "pickup_at": "2026-11-11T11:30:00+08:00",
+        body = {"contact_phone": "0912345678", "contact_email": buyer.email, "pickup_at": "2026-11-11T11:30:00+08:00",
                 "items": [{"offering_id": offering.id, "quantity": 1}]}
         quoted = await client.post(f"/v1/meal-events/{event.id}/quote", json=body)
         assert quoted.status_code == 200, quoted.text

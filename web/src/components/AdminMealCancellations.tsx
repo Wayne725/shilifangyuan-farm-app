@@ -97,9 +97,9 @@ function CancellationReviewCard({ item }: { item: MealCancellationQueueItem }) {
     <ul>{order.items.map((meal, index) => <li key={`${meal.offering_id}-${index}`}>{meal.meal_name} × {meal.quantity}{meal.selections.length > 0 && `（${meal.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join("、")}）`}</li>)}</ul>
     <p><strong>{formatMoney(order.amount_total)}</strong>・{paymentLabels[order.payment_status] || order.payment_status}・發票{invoiceLabels[order.invoice_status] || order.invoice_status}</p>
     {request.reason && <p className="meal-cancellation-reason">退單原因：{request.reason}</p>}
-    {request.review_reason && <p className="meal-cancellation-reason">審核理由：{request.review_reason}</p>}
+    {request.review_reason && !request.initiated_by_admin && <p className="meal-cancellation-reason">審核理由：{request.review_reason}</p>}
     <CancellationReviewDetails request={request} />
-    <details className="admin-extra-actions"><summary>更多訂單資料</summary><p>{item.customer_email}・{order.meal_event_title}</p><p>履約：{order.cancelled_at ? "已取消" : order.fulfillment_status === "preparing" ? "製作中" : order.fulfillment_status === "ready" ? "待取餐" : order.fulfillment_status === "picked_up" ? "已取餐" : order.fulfillment_status === "no_show" ? "逾時未取" : "尚未取餐"}</p><p>申請時間：{formatDateTime(request.requested_at)}</p></details>
+    <details className="admin-extra-actions"><summary>更多訂單資料</summary><p>{item.customer_email}・{order.meal_event_title}</p><p>履約：{order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "已結束" : order.fulfillment_status === "preparing" ? "製作中" : order.fulfillment_status === "picked_up" ? "已取餐" : "供餐中"}</p><p>申請時間：{formatDateTime(request.requested_at)}</p></details>
     {request.status === "pending" && <>
       {!item.can_approve && <p>已取消或已結束履約，無法核准。</p>}
       {!decision && <div className="form-actions">

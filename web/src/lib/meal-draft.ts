@@ -6,6 +6,7 @@ export interface MealDraft {
   mealBookingType?: "business";
   quantities: Record<string, number>;
   selections: Record<string, Record<string, string[]>>;
+  portionSelections?: Record<string, Record<string, string[]>[]>;
   pickupAt: string;
   pickupLocationId: string;
   needsUtensils: boolean;
@@ -22,6 +23,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function readSelections(value: unknown): Record<string, string[]> {
+  return Object.fromEntries(Object.entries(isRecord(value) ? value : {})
+    .filter(([, options]) => Array.isArray(options))
+    .map(([group, options]) => [group, [...new Set((options as unknown[]).filter((option): option is string => typeof option === "string"))]]));
+}
+
 export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraft {
   try {
     const value: unknown = JSON.parse((storage ?? sessionStore).getItem(storageKey(eventId)) || "null");
@@ -34,16 +41,16 @@ export function readMealDraft(eventId: string, storage?: DraftStorage): MealDraf
     const selections = Object.fromEntries(
       Object.entries(isRecord(value.selections) ? value.selections : {})
         .filter(([, groups]) => isRecord(groups))
-        .map(([id, groups]) => [id, Object.fromEntries(
-          Object.entries(groups as Record<string, unknown>)
-            .filter(([, options]) => Array.isArray(options))
-            .map(([groupId, options]) => [groupId, [...new Set((options as unknown[]).filter((option): option is string => typeof option === "string"))]]),
-        )]),
+        .map(([id, groups]) => [id, readSelections(groups)]),
     );
+    const portionSelections = Object.fromEntries(Object.entries(isRecord(value.portionSelections) ? value.portionSelections : {})
+      .filter(([, portions]) => Array.isArray(portions))
+      .map(([id, portions]) => [id, (portions as unknown[]).slice(0, 99).map(readSelections)]));
     return {
       ...(value.mealBookingType === "business" ? { mealBookingType: "business" } : {}),
       quantities,
       selections,
+      ...(Object.keys(portionSelections).length ? { portionSelections } : {}),
       pickupAt: typeof value.pickupAt === "string" ? value.pickupAt : "",
       pickupLocationId: typeof value.pickupLocationId === "string" ? value.pickupLocationId : "",
       needsUtensils: value.needsUtensils === true,
@@ -62,7 +69,7 @@ export function writeMealDraft(eventId: string, draft: MealDraft, storage?: Draf
     }
     target.setItem(storageKey(eventId), JSON.stringify({
       ...(draft.mealBookingType === "business" ? { mealBookingType: "business" } : {}),
-      quantities: draft.quantities, selections: draft.selections, pickupAt: draft.pickupAt,
+      quantities: draft.quantities, selections: draft.selections, portionSelections: draft.portionSelections, pickupAt: draft.pickupAt,
       pickupLocationId: draft.pickupLocationId, needsUtensils: draft.needsUtensils,
     }));
   } catch {
@@ -90,16 +97,22 @@ export function reconcileMealDraft(draft: MealDraft, event: MealEvent, now = Dat
     const quantity = Math.min(draft.quantities[offering.id] || 0, offering.available_quantity, 99);
     if (quantity <= 0) continue;
     next.quantities[offering.id] = quantity;
-    const groups: Record<string, string[]> = {};
-    for (const group of offering.option_groups) {
-      if (!group.is_active) continue;
-      const allowed = new Set(group.options.filter((option) => option.is_active).map((option) => option.id));
-      const options = [...new Set(draft.selections[offering.id]?.[group.id] || [])]
-        .filter((id) => allowed.has(id))
-        .slice(0, group.max_selections);
-      if (options.length) groups[group.id] = options;
-    }
+    const clean = (input: Record<string, string[]> = {}) => {
+      const groups: Record<string, string[]> = {};
+      for (const group of offering.option_groups) {
+        if (!group.is_active) continue;
+        const allowed = new Set(group.options.filter((option) => option.is_active).map((option) => option.id));
+        const options = [...new Set(input[group.id] || [])].filter((id) => allowed.has(id)).slice(0, group.max_selections);
+        if (options.length) groups[group.id] = options;
+      }
+      return groups;
+    };
+    const groups = clean(draft.selections[offering.id]);
     if (Object.keys(groups).length) next.selections[offering.id] = groups;
+    const portions = draft.portionSelections?.[offering.id];
+    if (portions && quantity > 1 && (event.business_only || draft.mealBookingType === "business")) {
+      (next.portionSelections ??= {})[offering.id] = Array.from({ length: quantity }, (_, index) => clean(portions[index] ?? groups));
+    }
   }
   if (event.ordering_paused || pickupTimeOptions(event, now, draft.mealBookingType).some((option) => option.value === draft.pickupAt)) {
     next.pickupAt = draft.pickupAt;

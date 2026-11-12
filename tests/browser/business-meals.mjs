@@ -32,6 +32,8 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
     if (!path.startsWith('/v1/')) return route.continue();
     state.reads.push(`${request.method()} ${path}${url.search}`);
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'synthetic-token', user: { id: 'synthetic-buyer', email: 'buyer@example.test', display_name: '隔離買家', membership_type: 'nonmember', user_role: role } } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, support_phone: '071234567', closed_message: '' } });
     if (path === '/v1/notifications' || path === '/v1/pickup-locations') return route.fulfill({ json: [] });
     if (path === '/v1/products' || path === '/v1/group-campaigns') return route.fulfill({ json: [] });
@@ -261,4 +263,24 @@ test('廚房清單與數量彙總可辨識會餐及未付款', async t => {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
+});
+
+test('手機尺寸的會餐可為同款兩份選不同主食並各自送單', async t => {
+  const { page, state } = await fixture(t);
+  await page.goto(`${base}/meals/${event.id}?pickup_at=2030-01-02T11%3A00`);
+  await page.getByRole('radio', { name: '會餐（統編報帳）' }).check();
+  const increase = page.getByRole('button', { name: '增加合成便當', exact: true });
+  await increase.click();
+  await increase.click();
+  await page.getByRole('checkbox', { name: '每份分開選' }).check();
+  await page.getByRole('combobox', { name: '合成便當 第 1 份 主食', exact: true }).selectOption('rice-0');
+  await page.getByRole('combobox', { name: '合成便當 第 2 份 主食', exact: true }).selectOption('rice-1');
+  await page.getByLabel('統一編號', { exact: true }).fill('15989995');
+  const quoted = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/quote'));
+  await page.getByLabel('公司名稱', { exact: true }).fill('隔離單位');
+  await quoted;
+  if (process.env.BROWSER_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/business-per-portion-mobile.png`, fullPage: true });
+  await page.getByRole('button', { name: '送出會餐訂單（取餐當日付款）' }).click();
+  await page.waitForURL('**/meal-orders?order_id=business-order');
+  assert.deepEqual(state.posts[0].body.items.map(({ quantity, option_ids }) => [quantity, option_ids]), [[1, ['rice-0']], [1, ['rice-1']]]);
 });

@@ -37,7 +37,7 @@
 .meal-kitchen-ticket { width: 80mm; max-width: 100%; padding: 5mm; background: #fff; color: #000; margin: 24px auto 0; font-family: "Noto Sans TC", sans-serif; font-size: 1rem; line-height: 1.6; }
 .meal-kitchen-ticket h2 { font-size: 1.25rem; text-align: center; }
 .meal-kitchen-ticket p { margin: 8px 0; overflow-wrap: anywhere; }
-.meal-kitchen-ticket-order { font-size: 1.25rem; font-weight: 700; }
+.meal-kitchen-ticket-order, .meal-kitchen-ticket-customer { font-size: 1.25rem; font-weight: 700; }
 .meal-kitchen-ticket ul { list-style: none; margin: 12px 0; padding: 0; border-block: 1px dashed #000; }
 .meal-kitchen-ticket li { padding: 10px 0; break-inside: avoid; }
 .meal-kitchen-ticket-reprint { display: block; text-align: center; font-size: 1.375rem; }

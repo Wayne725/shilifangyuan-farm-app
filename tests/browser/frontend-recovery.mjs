@@ -24,6 +24,8 @@ async function fixture(t, { kind = 'member', admin = false, width = 390, handler
     if (await handler?.(route, url, request, state)) return;
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-recovery', user } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: kind, membership: { status: kind === 'member' ? 'active' : kind, member_number: 'ISOLATED-MEMBER' }, directory: { is_public: false } } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: platform });
     if (path === '/v1/admin/platform') return route.fulfill({ json: platform });
     if (path === '/v1/admin/membership-education/settings') return route.fulfill({ json: { configured: true, version: 1, retry_limit: 2, retry_interval_minutes: 0, updated_at: null, updated_by_id: null } });

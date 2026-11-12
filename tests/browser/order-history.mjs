@@ -211,16 +211,13 @@ test('餐點也以25筆分頁，場次未載頁搜尋與舊ID回復仍可用', a
   assert.equal(state.reads.at(-1).q, '午餐場次1 偏遠餐廳');
 });
 
-test('已付待取餐保留credential輪詢，取餐完成後不再顯示有效QR', async t => {
+test('已付便當顯示付款狀態，重新查單時仍不取用取餐碼或 QR', async t => {
   const { page, state } = await fixture(t, { kind: 'meal', count: 1, active: [1], clock: true });
-  await page.getByLabel('訂單 HISTORY-1 取餐 QR Code', { exact: true }).waitFor();
+  await page.locator('.meal-order-payment-status').getByText('已付款', { exact: true }).waitFor();
   await page.bringToFront();
   await page.clock.runFor(5100); await new Promise(resolve => setTimeout(resolve, 100));
-  assert.ok(state.credentials.length >= 2);
-  state.orders[0].fulfillment_status = 'picked_up';
-  await page.clock.runFor(5100); await new Promise(resolve => setTimeout(resolve, 100));
-  await page.getByText('已完成取餐', { exact: true }).waitFor();
-  assert.equal(await page.getByLabel('訂單 HISTORY-1 取餐 QR Code', { exact: true }).count(), 0);
+  assert.deepEqual(state.credentials, []);
+  assert.doesNotMatch(await page.locator('.meal-order-detail').innerText(), /取餐碼|QR Code|123456/);
 });
 
 test('管理員我的歷史singleGET也帶own_only，舊URL他人單不得混成本人單', async t => {

@@ -1601,7 +1601,8 @@ class MealScheduleInput(BaseModel):
     cutoff_time: time = time(20)
     cutoff_days_before: int = Field(default=1, ge=0, le=29)
     advance_days: int = Field(default=7, ge=1, le=30)
-    weekdays: List[int] = Field(default_factory=lambda: list(range(5)), min_length=1, max_length=7)
+    weekdays: List[int] = Field(default_factory=lambda: list(range(5)), max_length=7)
+    saturday_business_only: bool = False
     enabled: bool = False
     auto_publish: bool = False
     offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
@@ -1628,6 +1629,8 @@ class MealScheduleInput(BaseModel):
             raise ValueError("訂購截止必須早於取餐結束")
         if self.advance_days <= self.cutoff_days_before:
             raise ValueError("預開天數必須大於提前截單天數")
+        if not self.weekdays and not self.saturday_business_only:
+            raise ValueError("請至少選擇一個供餐日")
         if len(set(self.weekdays)) != len(self.weekdays) or any(day < 0 or day > 6 for day in self.weekdays):
             raise ValueError("供餐星期必須為不重複的 0 至 6")
         if len({item.meal_id for item in self.offerings}) != len(self.offerings):
@@ -1892,6 +1895,11 @@ class MealCancellationRequestRead(ApiModel):
     reviewed_by_name: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     review_reason: Optional[str] = None
+    initiated_by_admin: bool = False
+
+
+class MealContactRead(ApiModel):
+    phone: Optional[str] = None
 
 
 class MealOrderRead(ApiModel):
@@ -1908,6 +1916,11 @@ class MealOrderRead(ApiModel):
     amendments: List[OrderAmendmentRead] = Field(default_factory=list)
     kitchen_note: Optional[str] = None
     onsite_payment: Optional[dict] = None
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    invoice_buyer_tax_id: Optional[str] = None
+    invoice_buyer_name: Optional[str] = None
     payment_method: PaymentMethod = PaymentMethod.ONLINE
     promotion: Optional[dict] = None
     id: str
@@ -2032,6 +2045,45 @@ class MealEventActionRequest(BaseModel):
 
 class MealEventCancelRequest(BaseModel):
     reason: AdminExplanation = Field(default="", max_length=2000)
+
+
+class MealDisasterSelection(BaseModel):
+    service_date: date = Field(ge=date(2, 1, 1), le=date(9998, 12, 31))
+    periods: set[Literal["lunch", "dinner"]] = Field(min_length=1, max_length=2)
+
+
+class MealDisasterCancel(MealDisasterSelection):
+    preview_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: AdminExplanation = Field(default="颱風停止上班上課", max_length=2000)
+    announcement: str = Field(default="", max_length=120)
+
+
+class MealDisasterEvent(ApiModel):
+    id: str
+    title: str
+    period: Literal["lunch", "dinner"]
+    order_count: int
+    paid_count: int
+    paid_total: int
+    blocked: bool
+
+
+class MealDisasterPreview(ApiModel):
+    events: list[MealDisasterEvent]
+    preview_token: str
+
+
+class MealDisasterResult(ApiModel):
+    cancelled_event_count: int
+    order_count: int
+    paid_count: int
+    paid_total: int
+
+
+class MealDisasterAnnouncement(ApiModel):
+    service_date: date
+    periods: list[Literal["lunch", "dinner"]]
+    message: str
 
 
 class OrderFulfillmentRead(ApiModel):

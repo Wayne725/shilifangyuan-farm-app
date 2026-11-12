@@ -56,7 +56,7 @@ async def test_edits_update_live_choices_and_prices_but_preserve_order_snapshots
     assert event.status_code == 201, event.text
     event_id, offering_id = event.json()["id"], event.json()["offerings"][0]["id"]
     assert (await client.post(f"/v1/admin/meal-events/{event_id}/publish", headers=admin)).status_code == 200
-    order_payload = {"items": [{"offering_id": offering_id, "quantity": 1, "option_ids": [option_id]}], "contact_email": "applicant@example.com"}
+    order_payload = {"items": [{"offering_id": offering_id, "quantity": 1, "option_ids": [option_id]}], "contact_phone": "0912345678", "contact_email": "applicant@example.com"}
     order = await client.post(f"/v1/meal-events/{event_id}/orders", headers=auth_headers(v2_context["applicant"]), json=order_payload)
     assert order.status_code == 201, order.text
     assert order.json()["amount_total"] == 140

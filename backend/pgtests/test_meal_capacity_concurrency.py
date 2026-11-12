@@ -35,7 +35,7 @@ async def place_order(session, buyer, event_id, offering_id):
     async with api_test_context(session, [meals_router], settings=payment_settings()) as client:
         created = await client.post(
             f"/v1/meal-events/{event_id}/orders",
-            json={"contact_email": buyer.email, "items": [{"offering_id": offering_id, "quantity": 2}]},
+            json={"contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": offering_id, "quantity": 2}]},
             headers=auth_headers(buyer),
         )
     assert created.status_code == 201, created.text

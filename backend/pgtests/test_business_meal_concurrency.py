@@ -39,7 +39,7 @@ async def business_pg(postgres_sessions):
             async with api_test_context(session, [meals_router], settings=payment_settings()) as client:
                 body = {'meal_booking_type': 'business', 'invoice_buyer_type': 'company',
                     'invoice_buyer_tax_id': '15989995', 'invoice_buyer_name': '合成學校',
-                    'invoice_buyer_email': buyer.email, 'contact_email': buyer.email,
+                    'invoice_buyer_email': buyer.email, "contact_phone": "0912345678", 'contact_email': buyer.email,
                     'items': [{'offering_id': offering_id, 'quantity': 2}]}
                 if request_id:
                     body['client_request_id'] = request_id

@@ -40,6 +40,8 @@ async function fixture(t, { width = 1280, membership = 'active', role = 'custome
     if (path === '/v1/auth/refresh') return route.fulfill({ status: state.signedIn ? 200 : 401, json: state.signedIn ? { access_token: 'isolated', user } : { detail: '隔離訪客' } });
     if (path === '/v1/auth/logout') { state.signedIn = false; return route.fulfill({ status: 204, body: '' }); }
     state.reads.push(path);
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, support_phone: '' } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: state.membership === 'active' || state.membership === 'suspended' ? 'member' : state.membership === 'trainee' ? 'trainee' : 'nonmember', membership: { status: state.membership, member_number: 'TEST-MEMBER' } } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: true, identity_verified: true, message: '' } });

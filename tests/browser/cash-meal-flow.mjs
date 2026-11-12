@@ -31,6 +31,8 @@ async function fixture(t, width, admin = false, allowCash = true) {
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return route.continue();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.test', display_name: '隔離使用者', user_role: admin ? 'admin' : 'customer' } } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: state.locations });
     if (path === '/v1/meal-events/onsite-event') return route.fulfill({ json: { ...event, allow_cash_payment: allowCash } });

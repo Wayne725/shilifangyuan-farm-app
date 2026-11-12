@@ -596,6 +596,7 @@ export interface MealSchedule {
   cutoff_days_before: number;
   advance_days: number;
   weekdays: number[];
+  saturday_business_only?: boolean;
   enabled: boolean;
   auto_publish: boolean;
   offerings: Array<{
@@ -609,6 +610,7 @@ export interface MealSchedule {
 }
 
 export interface MealCancellationRequest {
+  initiated_by_admin?: boolean;
   id: string;
   order_id: string;
   reason: string;
@@ -658,6 +660,11 @@ export interface MealAdminOrderPage {
 }
 
 export interface MealOrder {
+  customer_name?: string | null;
+  customer_email?: string | null;
+  contact_phone?: string | null;
+  invoice_buyer_tax_id?: string | null;
+  invoice_buyer_name?: string | null;
   meal_booking_type?: "standard" | "business";
   payment_opens_at?: string | null;
   payment_closes_at?: string | null;

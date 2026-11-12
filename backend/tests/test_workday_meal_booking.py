@@ -49,7 +49,7 @@ async def create_event(context, service="2026-11-09", **overrides):
     published = await client.post(f"/v1/admin/meal-events/{response.json()['id']}/publish", headers=auth_headers(admin))
     assert published.status_code == 200, published.text
     data = published.json()
-    body = {"contact_email": buyer.email, "items": [{"offering_id": data["offerings"][0]["id"], "quantity": 1}]}
+    body = {"contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": data["offerings"][0]["id"], "quantity": 1}]}
     return data, body
 
 
@@ -174,7 +174,7 @@ async def test_legacy_conversion_preserves_ordered_manual_and_cancelled_events(w
     session.add(AdminAudit(actor_id=admin.id, action="meal_event.update", aggregate_type="meal_event", aggregate_id=manual.id))
     await session.commit()
     with time_machine.travel(datetime(2026,11,7,12,tzinfo=TAIPEI), tick=False):
-        order = await client.post(f"/v1/meal-events/{ordered.id}/orders", json={"contact_email":buyer.email,
+        order = await client.post(f"/v1/meal-events/{ordered.id}/orders", json={"contact_phone": "0912345678", "contact_email":buyer.email,
             "items":[{"offering_id":ordered.offerings[0].id,"quantity":1}]}, headers=auth_headers(buyer))
         assert order.status_code == 201, order.text
     original_order = order.json()
@@ -196,7 +196,7 @@ async def test_legacy_conversion_preserves_ordered_manual_and_cancelled_events(w
     detail = (await client.get(f"/v1/meal-events/{ordered.id}")).json()
     assert "停止接受新預訂" in detail["new_orders_blocked_reason"]
     with time_machine.travel(datetime(2026, 11, 7, 12, tzinfo=TAIPEI), tick=False):
-        body = {"contact_email": buyer.email, "items": [{"offering_id": ordered.offerings[0].id, "quantity": 1}]}
+        body = {"contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": ordered.offerings[0].id, "quantity": 1}]}
         for action in ("quote", "orders"):
             blocked = await client.post(f"/v1/meal-events/{ordered.id}/{action}", json=body, headers=auth_headers(buyer))
             assert blocked.status_code == 409 and "停止接受新預訂" in blocked.json()["detail"]
@@ -467,7 +467,7 @@ async def test_business_only_update_preserves_omission_and_can_disable_before_fi
     disabled = await client.put(path, json=event_body(meal, service, business_only=False), headers=headers)
     assert disabled.status_code == 200, disabled.text
     assert disabled.json()["business_only"] is False
-    body = {"contact_email": buyer.email, "items": [{"offering_id": disabled.json()["offerings"][0]["id"], "quantity": 1}]}
+    body = {"contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": disabled.json()["offerings"][0]["id"], "quantity": 1}]}
     quote = await client.post(f"/v1/meal-events/{event['id']}/quote", json=body)
     assert quote.status_code == 200, quote.text
 
