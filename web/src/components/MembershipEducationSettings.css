@@ -2,3 +2,5 @@
 .membership-education-settings > section { padding-block: 32px; border-bottom: 1px solid var(--line); display: grid; gap: 22px; }
 .membership-education-settings :is(h2, p) { margin: 0; }
 .membership-education-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 22px; }
+details.membership-education-settings > summary { cursor: pointer; min-height: 44px; padding-block: 10px; }
+details.membership-education-settings > form { display: grid; gap: 16px; padding-block: 16px; }

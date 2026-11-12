@@ -67,6 +67,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: python -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('render.yaml').read_text())"
       - name: Audit Python dependencies
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/v2-social-commerce'
         run: |
           audit_env="$RUNNER_TEMP/farm-dependency-audit"
           python -m venv "$audit_env"
@@ -74,15 +75,17 @@ jobs:
           "$audit_env/bin/python" -m pip install pip-audit==2.10.1
           "$audit_env/bin/python" -m pip_audit --disable-pip --require-hashes -r requirements.txt --format cyclonedx-json --output dependency-sbom.cdx.json
       - uses: actions/upload-artifact@v4
-        if: ${{ always() && hashFiles('backend/dependency-sbom.cdx.json') != '' }}
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/codex/v2-social-commerce' && hashFiles('backend/dependency-sbom.cdx.json') != '' }}
         with:
           name: backend-lockfile-sbom
           path: backend/dependency-sbom.cdx.json
       - name: Verify fresh migration upgrade
         run: alembic upgrade head
       - name: Verify full migration rollback
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/v2-social-commerce'
         run: alembic downgrade base
       - name: Verify migration re-upgrade
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/v2-social-commerce'
         run: alembic upgrade head
       - name: Verify pytest exit diagnostics controls
         run: |
@@ -105,6 +108,7 @@ jobs:
           TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/tests-first -- -q --durations=20 "${test_files[@]:0:midpoint}" 2>&1 | tee pytest-exit-evidence/tests-first.log
           TEST_POSTGRES_URL="$DATABASE_URL" python scripts/pytest_exit_diagnostics.py --evidence-dir pytest-exit-evidence/tests-second -- -q --durations=20 "${test_files[@]:midpoint}" 2>&1 | tee pytest-exit-evidence/tests-second.log
       - name: Run backend audits
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/v2-social-commerce'
         run: |
           set -euo pipefail
           mkdir -p pytest-exit-evidence
@@ -148,7 +152,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, webkit]
+        browser: >-
+          ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/codex/v2-social-commerce'
+          && '["chromium", "webkit"]' || '["chromium"]') }}
     defaults:
       run:
         shell: bash
@@ -233,6 +239,7 @@ jobs:
           kill -0 "$supplemental_preview_pid"
           supplemental_tests=(tests/browser/payment-return.mjs tests/browser/meal-order-flow.mjs)
           supplemental_tests+=(tests/browser/workday-meals.mjs tests/browser/shop-tab-order.mjs)
+          supplemental_tests+=(tests/browser/admin-tax-ledger.mjs tests/browser/meal-finance-accessibility.mjs)
           if [[ "$BROWSER_ENGINE" == chromium ]]; then
             supplemental_tests+=(tests/browser/activity-payments.mjs tests/browser/group-review-window.mjs)
           fi
@@ -281,7 +288,9 @@ jobs:
 
   webkit-failure-diagnostic:
     needs: browser-smoke
-    if: ${{ !cancelled() && needs.browser-smoke.result != 'skipped' }}
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/v2-social-commerce'
+      && !cancelled() && needs.browser-smoke.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

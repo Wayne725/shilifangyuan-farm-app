@@ -3,6 +3,8 @@
   gap: clamp(12px, 2vw, 24px);
 }
 .site-header .desktop-nav { justify-self: start; width: max-content; }
+html[data-text-size="large"] .site-header.has-admin-nav .desktop-nav { max-width: 100%; flex-wrap: wrap; }
+html[data-text-size="large"] .site-header.has-admin-nav .desktop-nav a { white-space: nowrap; }
 .site-header .account-button span { max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-header .mobile-menu-button {
   display: inline-flex;

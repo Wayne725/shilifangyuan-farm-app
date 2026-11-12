@@ -10,8 +10,8 @@ import { OptionalMark } from "./OptionalMark";
 type PrintFilters = ReturnType<typeof orderSummaryParameters>;
 type Totals = { order_count: number; quantity: number; product_count: number; paid_order_count?: number; pending_business_order_count?: number };
 type Preview = { fingerprint: string; summary: Totals; pages: string[]; page_count: number; filters: PrintFilters; mode: string };
-type Attempt = { request_id: string; fingerprint: string; filters: PrintFilters };
-type Batch = { request_id: string; fingerprint: string; mode: string; created_at: string; filters: PrintFilters; summary: Totals; pages: Array<{ id: string; page: number; status: string; last_error: string | null }> };
+type Attempt = { request_id: string; fingerprint: string | null; filters: PrintFilters | null };
+type Batch = Attempt & { mode: string; created_at: string; summary: Totals | null; pages: Array<{ id: string; page: number; status: string; last_error: string | null }> };
 const labels: Record<string, string> = { pending: "等待發送", sending: "正在發送", submitted: "雲端已接受", printed: "已確認列印", failed: "出單失敗", unknown: "結果待確認", simulated: "模擬完成" };
 const isSettled = (batch: Batch) => batch.pages.every((page) => ["printed", "failed", "simulated"].includes(page.status));
 const canStartAnother = (batch: Batch) => batch.pages.every((page) => !["pending", "sending"].includes(page.status));
@@ -24,15 +24,22 @@ const errorLabels: Record<string, string> = {
 function readAttempt(key: string): Attempt | null {
   try {
     const value = JSON.parse(sessionStorage.getItem(key) || "null") as Attempt | null;
-    return value && typeof value.request_id === "string" && typeof value.fingerprint === "string" && value.filters?.starts_on ? value : null;
+    if (!value || typeof value.request_id !== "string") return null;
+    return {
+      request_id: value.request_id,
+      fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : null,
+      filters: value.filters?.starts_on ? value.filters : null,
+    };
   } catch { return null; }
 }
 
 function BatchResult({ batch }: { batch: Batch }) {
   return <div className="summary-print-result" role="status">
-    <strong>{batch.mode === "dry_run" ? "模擬列印" : "彙總單列印紀錄"} · {batch.summary.order_count} 筆訂單 · {batch.pages.length} 張</strong>
-    <span>{batch.filters.date_basis === "pickup" ? "取餐" : "下單"} {batch.filters.starts_on} 至 {batch.filters.ends_on}</span>
-    {batch.summary.pending_business_order_count !== undefined && <span>已付款 {batch.summary.paid_order_count || 0} 筆 · 會餐未付款 {batch.summary.pending_business_order_count} 筆</span>}
+    <strong>{batch.mode === "dry_run" ? "模擬列印" : "彙總單列印紀錄"}{batch.summary && <> · {batch.summary.order_count} 筆訂單</>} · {batch.pages.length} 張</strong>
+    {batch.filters && <span>{batch.filters.date_basis === "pickup" ? "取餐" : "下單"} {batch.filters.starts_on} 至 {batch.filters.ends_on}</span>}
+    {batch.summary?.pending_business_order_count !== undefined && batch.summary.paid_order_count !== undefined &&
+      <span>已付款 {batch.summary.paid_order_count} 筆 · 會餐未付款 {batch.summary.pending_business_order_count} 筆</span>}
+    {(!batch.fingerprint || !batch.filters || !batch.summary) && <span>原始列印資料不完整</span>}
     <small>批次 {batch.request_id}</small>
     <ul>{batch.pages.map((page) => <li key={page.id}><span>第 {page.page} 張</span><strong>{labels[page.status] || page.status}</strong>{page.last_error && <span className="form-error">{errorLabels[page.last_error] || page.last_error}</span>}</li>)}</ul>
   </div>;
@@ -80,13 +87,17 @@ export function OrderSummaryPrint({ filters, userId, disabled, access }: { filte
       const value = await access.request<Batch>(`/v1/admin/order-summary/print-jobs/${attempt.request_id}`);
       if (mounted.current && !access.isDenied()) setBatch(value);
     } catch (failure) {
-      if (failure instanceof ApiError && failure.status === 404) throw new Error("尚未查到這筆送印，可重試同一筆送印；系統會沿用原識別碼。");
+      if (failure instanceof ApiError && failure.status === 404) {
+        throw new Error(attempt.fingerprint && attempt.filters
+          ? "尚未查到這筆送印，可重試同一筆送印；系統會沿用原識別碼。"
+          : "找不到這筆列印紀錄。");
+      }
       throw failure;
     }
   });
   const send = () => operate(async () => {
     const value = attempt || (preview ? { request_id: crypto.randomUUID(), fingerprint: preview.fingerprint, filters: preview.filters } : null);
-    if (!value) return;
+    if (!value?.fingerprint || !value.filters) return;
     // Persist before sending so a lost response or reload reuses the same request.
     saveAttempt(value);
     try {
@@ -164,7 +175,7 @@ export function OrderSummaryPrint({ filters, userId, disabled, access }: { filte
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="summary-print-actions">
             {attempt && <button type="button" className="button button-quiet" disabled={busy} onClick={() => void findBatch()}>查詢送印結果</button>}
-            {attempt && !batch && <button type="button" className="button button-primary" disabled={busy} onClick={() => void send()}>重試同一筆送印</button>}
+            {attempt?.fingerprint && attempt.filters && !batch && <button type="button" className="button button-primary" disabled={busy} onClick={() => void send()}>重試同一筆送印</button>}
             {!attempt && !preview && <button type="button" className="button button-primary" disabled={busy} onClick={() => void loadPreview()}>{busy ? "讀取預覽中…" : "重新產生預覽"}</button>}
           </div>
           {batch && canStartAnother(batch) && <div className="summary-print-new">

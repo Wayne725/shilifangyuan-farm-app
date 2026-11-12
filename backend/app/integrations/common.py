@@ -20,6 +20,15 @@ class IntegrationConfigurationError(IntegrationError):
     """Required credentials or cryptographic dependencies are missing."""
 
 
+class ProviderMutationBlocked(IntegrationError):
+    """Recovery mode prevents this operation from reaching the provider."""
+
+
+def require_provider_mutation_enabled(recovery_mode: bool) -> None:
+    if recovery_mode:
+        raise ProviderMutationBlocked("系統還原中，暫停對外交易操作")
+
+
 class IntegrationResponseError(IntegrationError):
     """The provider returned an invalid or unsuccessful response."""
 

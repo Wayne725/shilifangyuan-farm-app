@@ -3,7 +3,9 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import { mealCalendarFixture } from '../fixtures/meal-calendar.mjs';
 
-const { chromium } = createRequire(import.meta.url)('playwright');
+const playwright = createRequire(import.meta.url)('playwright');
+const browserEngine = process.env.BROWSER_ENGINE ?? 'chromium';
+assert.ok(['chromium', 'webkit'].includes(browserEngine), 'Use Chromium or WebKit');
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4189');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || target.pathname !== '/' || target.username || target.password) throw new Error('Use an isolated local origin');
 const base = target.origin;
@@ -17,7 +19,7 @@ function meal(id, period) {
       available_quantity: 50, reserved_quantity: 0, paid_quantity: 0, position: 0, is_active: true, option_groups: [] }] };
 }
 const events = [meal('lunch', 'lunch'), meal('dinner', 'dinner')];
-const sale = { id: 'sale-1', order_number: 'SLF-REPORT-001', sales_channel: 'regular', customer_name: '隔離買家', customer_email: 'buyer@example.com',
+const sale = { id: 'sale-1', order_number: 'SLF-REPORT-001', sales_channel: 'regular', financial_order_category: 'walk_in_product', financial_order_category_label: '現場一般商品', customer_name: '隔離買家', customer_email: 'buyer@example.com',
   membership_type: 'member', created_at: '2030-01-02T01:00:00Z', paid_at: '2030-01-02T01:01:00Z', order_amount: 320,
   tax_amount: 0, period_received: 320, period_refunded: 100, period_net: 220, payment_status: 'paid', fulfillment_status: 'pending',
   pickup_at: null, pickup_time_confirmed: false, invoice_status: 'issued', invoice_number: 'AB12345678',
@@ -25,9 +27,12 @@ const sale = { id: 'sale-1', order_number: 'SLF-REPORT-001', sales_channel: 'reg
   refunds: [{ amount: 100, status: 'completed', reason: '跨期退款', requested_at: '2030-01-01T01:00:00Z', completed_at: '2030-01-02T02:00:00Z' }] };
 const report = { starts_on: '2030-01-01', ends_on: '2030-01-02', summary: { received: 320, refunded: 100, net: 220, receipt_count: 1, refund_count: 1, paid_meal_quantity: 2, pending_refund_amount: 0 },
   daily: [{ period: '2030-01-02', received: 320, refunded: 100, net: 220 }], weekly: [{ period: '2029-12-31', received: 320, refunded: 100, net: 220 }], monthly: [{ period: '2030-01', received: 320, refunded: 100, net: 220 }],
-  products: [{ name: '有機米', unit: '袋', quantity: 2, sales_amount: 320, order_count: 1 }], orders: { items: [sale], total: 1, limit: 20, offset: 0 } };
+  products: [
+    { name: '餐盒', unit: '份', quantity: 1, sales_amount: 160, order_count: 1, financial_order_category: 'walk_in_meal', financial_order_category_label: '現場便當' },
+    { name: '餐盒', unit: '份', quantity: 1, sales_amount: 160, order_count: 1, financial_order_category: 'walk_in_product', financial_order_category_label: '現場一般商品' },
+  ], orders: { items: [sale], total: 1, limit: 20, offset: 0 } };
 async function fixture(t, width) {
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
+  const browser = await playwright[browserEngine].launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block', reducedMotion: 'reduce' });
   const state = { unknown: [], errors: [], quotes: [], reads: [], writes: [] };
@@ -95,11 +100,9 @@ for (const width of [1440, 390]) {
     await page.getByRole('button', { name: '增加蔬食便當', exact: true }).click();
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();
     assert.equal(state.quotes.at(-1).body.pickup_at, '2030-01-03T10:00:00.000Z');
-    await page.getByText('修改取餐時間', {exact:true}).click();
     await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).selectOption('2030-01-03T17:30');
     await page.waitForURL(/pickup_at=.*17%3A30/);
     await page.reload();
-    await page.getByText('修改取餐時間', {exact:true}).click();
     await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).waitFor();
     assert.equal(await page.getByRole('combobox', { name: '預計取餐時間（台灣時間）', exact: true }).inputValue(), '2030-01-03T17:30');
     await page.locator('.offer-total dd').getByText('$120', { exact: true }).waitFor();
@@ -117,6 +120,8 @@ for (const width of [1440, 390]) {
     await page.goto(`${base}/admin/finance`);
     await page.getByRole('tab', { name: '銷售明細（1 筆）', exact: true }).waitFor();
     assert.equal(state.reads[0].sales_channel, 'all');
+    assert.equal(state.reads[0].group_products_by_category, 'true');
+    assert.match(await page.locator('.meal-finance-sale > summary').innerText(), /現場一般商品/);
     assert.equal(await page.locator('.meal-finance-sale').getAttribute('open'), null);
     await page.locator('.meal-finance-sale > summary').click();
     await page.getByText('預估稅額', { exact: true }).waitFor();
@@ -128,11 +133,27 @@ for (const width of [1440, 390]) {
       const tab = page.getByRole('tab', { name: '銷售統整', exact: true });
     assert.equal(await tab.evaluate((e) => getComputedStyle(e).backgroundColor), 'rgba(0, 0, 0, 0)');
     assert.equal(await tab.getAttribute('data-state'), 'active', await page.locator('.meal-finance-page').innerText());
+    const productTable = page.getByRole('table', { name: '首次付款訂單的商品銷售' });
+    await productTable.getByRole('columnheader', { name: '訂單分類', exact: true }).waitFor();
+    assert.equal(await productTable.getByRole('rowheader', { name: '餐盒', exact: true }).count(), 2);
+    await productTable.getByRole('cell', { name: '現場便當', exact: true }).waitFor();
+    await productTable.getByRole('cell', { name: '現場一般商品', exact: true }).waitFor();
     await page.getByRole('combobox', { name: '統整方式', exact: true }).selectOption('weekly');
     await page.getByRole('rowheader', { name: '2029-12-31 起', exact: true }).waitFor();
-    await page.getByRole('combobox', { name: '訂單分類', exact: true }).selectOption('general');
+    const category = page.getByRole('combobox', { name: '訂單分類', exact: true });
+    const channel = page.getByRole('combobox', { name: '銷售通路', exact: true });
+    const mealRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname === '/v1/admin/finance/meal-sales' && url.searchParams.get('order_category') === 'meal';
+    });
+    await category.selectOption('meal');
+    assert.equal(new URL((await mealRequest).url()).searchParams.get('sales_channel'), 'all');
+    assert.deepEqual(await channel.locator('option').allTextContents(), ['全部通路', '便當預訂', '現場收款']);
+    await category.selectOption('walk_in_unclassified');
+    assert.deepEqual(await channel.locator('option').allTextContents(), ['全部通路']);
+    await category.selectOption('general');
     await page.getByRole('button', { name: '更新', exact: true }).waitFor();
-    await page.getByRole('combobox', { name: '銷售類型', exact: true }).selectOption('regular');
+    await channel.selectOption('regular');
     await page.getByLabel('訂單或買家', { exact: true }).fill('SLF-REPORT-001');
     await page.getByRole('button', { name: '查詢', exact: true }).click();
     await page.getByRole('button', { name: '更新', exact: true }).waitFor();
@@ -140,6 +161,7 @@ for (const width of [1440, 390]) {
     await page.getByRole('button', { name: '下載全部明細 CSV', exact: true }).click();
     await downloading;
     const csv = state.reads.findLast((q) => q.csv);
+    assert.equal(csv.group_products_by_category, undefined);
     assert.equal(csv.order_category, 'general'); assert.equal(csv.sales_channel, 'regular'); assert.equal(csv.search, 'SLF-REPORT-001');
     assert.equal(csv.starts_on, '2030-01-01'); assert.equal(csv.ends_on, '2030-01-02');
     await verify(page, state);

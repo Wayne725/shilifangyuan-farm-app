@@ -1,7 +1,7 @@
 import { useSearch } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch, saveSession } from "../lib/api";
+import { apiFetch, runBrowserAuthAction, saveBrowserSignIn } from "../lib/api";
 import { LoadingLines } from "../components/Shared";
 import type { AuthResponse } from "../lib/types";
 
@@ -21,7 +21,7 @@ export function LineLoginPage() {
   const [error, setError] = useState("");
   const finish = (outcome: LineResult) => {
     window.history.replaceState(null, "", "/auth/line/callback");
-    if (outcome.session) saveSession(outcome.session);
+    if (outcome.session) saveBrowserSignIn(outcome.session);
     if (outcome.status === "authenticated" || outcome.status === "linked") {
       window.location.replace(outcome.return_to);
       return;
@@ -31,12 +31,14 @@ export function LineLoginPage() {
   useEffect(() => {
     if (!isAuthReady || started.current) return;
     started.current = true;
-    const request = search.state
-      ? apiFetch<LineResult>("/v1/auth/line/callback", { method: "POST", body: JSON.stringify({ state: search.state, code: search.code || "", error: search.error || "" }) })
-      : apiFetch<LineResult>("/v1/auth/line/pending");
-    void request.then((outcome) => outcome.status === "needs_email"
-      ? apiFetch<LineResult>("/v1/auth/line/register", { method: "POST", body: "{}" })
-      : outcome).then(finish).catch((reason: unknown) => {
+    void runBrowserAuthAction(async () => {
+      const outcome = search.state
+        ? await apiFetch<LineResult>("/v1/auth/line/callback", { method: "POST", body: JSON.stringify({ state: search.state, code: search.code || "", error: search.error || "" }) })
+        : await apiFetch<LineResult>("/v1/auth/line/pending");
+      finish(outcome.status === "needs_email"
+        ? await apiFetch<LineResult>("/v1/auth/line/register", { method: "POST", body: "{}" })
+        : outcome);
+    }).catch((reason: unknown) => {
       window.history.replaceState(null, "", "/auth/line/callback");
       setError(reason instanceof Error ? reason.message : "LINE登入無法完成，請重新登入");
     });

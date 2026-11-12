@@ -17,8 +17,10 @@ from sqlalchemy.orm import selectinload
 from ..admin_explanations import AdminExplanation
 from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
+from ..order_categories import FinancialOrderCategory, financial_order_category_condition
 from ..point_accounts import point_account
 from ..csv_export import csv_response
+from ..supplier_order_demand import supplier_order_demand_rows
 from ..domain import aware
 from ..models import (
     AdminAudit,
@@ -48,9 +50,11 @@ from ..models import (
     SalesChannel,
     SurplusDistribution,
     SurplusLedger,
+    Supplier,
     SystemSetting,
     TaxType,
     User,
+    WalkInSale,
     Wish,
     WishStatus,
     WishSupport,
@@ -279,14 +283,11 @@ async def my_surplus_distributions(
     ]
 
 
-@cooperative_router.get("/v1/admin/finance/nonmember-sales")
-async def nonmember_sales(
-    starts_on: date,
-    ends_on: date,
-    admin: User = Depends(require_admin),
-    session: AsyncSession = Depends(get_session),
+async def _membership_sales_report(
+    session: AsyncSession,
+    start: datetime,
+    end: datetime,
 ) -> dict[str, Any]:
-    start, end = _period(starts_on, ends_on)
     rows = (
         await session.execute(
             select(
@@ -322,27 +323,7 @@ async def nonmember_sales(
     nonmember = revenues[MembershipType.NONMEMBER]
     ratio = ratios[MembershipType.NONMEMBER]
     level = "limit" if ratio >= 0.30 else "warning" if ratio >= 0.25 else "normal"
-    if level != "normal":
-        existing = await session.scalar(
-            select(Notification).where(
-                Notification.user_id == admin.id,
-                Notification.event_type == f"nonmember_sales_{level}",
-                Notification.created_at >= start,
-            )
-        )
-        if existing is None:
-            session.add(
-                Notification(
-                    user_id=admin.id,
-                    event_type=f"nonmember_sales_{level}",
-                    title="非社員銷售比例警示",
-                    body=f"期間非社員銷售占比為 {ratio:.1%}，系統僅警示、不阻擋交易。",
-                )
-            )
-            await session.commit()
     return {
-        "starts_on": starts_on,
-        "ends_on": ends_on,
         "total_revenue": total,
         "nonmember_revenue": nonmember,
         "ratio": ratio,
@@ -371,26 +352,82 @@ async def nonmember_sales(
     }
 
 
-async def _tax_rows(session: AsyncSession, start: datetime, end: datetime) -> list[list[Any]]:
-    rows = (
-        await session.execute(
-            select(
-                OrderItem.tax_type,
-                Order.membership_type_snapshot,
-                Order.sales_channel,
-                func.sum(OrderItem.subtotal),
-                func.count(func.distinct(Order.id)),
+@cooperative_router.get("/v1/admin/finance/nonmember-sales")
+async def nonmember_sales(
+    starts_on: date,
+    ends_on: date,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    start, end = _period(starts_on, ends_on)
+    report = await _membership_sales_report(session, start, end)
+    level = report["level"]
+    if level != "normal":
+        existing = await session.scalar(
+            select(Notification).where(
+                Notification.user_id == admin.id,
+                Notification.event_type == f"nonmember_sales_{level}",
+                Notification.created_at >= start,
             )
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(
-                Order.payment_status == PaymentStatus.PAID,
-                Order.paid_at >= start,
-                Order.paid_at <= end,
-            )
-            .group_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
-            .order_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
         )
-    ).all()
+        if existing is None:
+            ratio = report["nonmember_ratio"]
+            session.add(Notification(
+                user_id=admin.id,
+                event_type=f"nonmember_sales_{level}",
+                title="非社員銷售比例警示",
+                body=f"期間非社員銷售占比為 {ratio:.1%}，系統僅警示、不阻擋交易。",
+            ))
+            await session.commit()
+    return {"starts_on": starts_on, "ends_on": ends_on, **report}
+
+
+@cooperative_router.get("/v1/admin/finance/sales-by-membership")
+async def sales_by_membership(
+    starts_on: date,
+    ends_on: date,
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    report = await _membership_sales_report(session, *_period(starts_on, ends_on))
+    return {
+        "starts_on": starts_on,
+        "ends_on": ends_on,
+        "total_revenue": report["total_revenue"],
+        "sales_breakdown": report["sales_breakdown"],
+        "monitoring_threshold_reached": {
+            "warning": report["warning_threshold"], "limit": report["legal_limit"],
+        }.get(report["level"]),
+    }
+
+
+async def _tax_rows(
+    session: AsyncSession, start: datetime, end: datetime, *, order_category: FinancialOrderCategory,
+) -> list[list[Any]]:
+    query = (
+        select(
+            OrderItem.tax_type,
+            Order.membership_type_snapshot,
+            Order.sales_channel,
+            func.sum(OrderItem.subtotal),
+            func.count(func.distinct(Order.id)),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            Order.payment_status == PaymentStatus.PAID,
+            Order.paid_at >= start,
+            Order.paid_at <= end,
+        )
+        .group_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
+        .order_by(OrderItem.tax_type, Order.membership_type_snapshot, Order.sales_channel)
+    )
+    if order_category != "all":
+        query = query.outerjoin(WalkInSale, WalkInSale.order_id == Order.id).where(
+            financial_order_category_condition(order_category),
+        )
+    rows = (await session.execute(query)).all()
     return [
         [tax_type.value, membership.value, channel.value, int(sales), int(sales) * 5 // 105 if tax_type == TaxType.TAXABLE else 0, int(count)]
         for tax_type, membership, channel, sales, count in rows
@@ -401,10 +438,11 @@ async def _tax_rows(session: AsyncSession, start: datetime, end: datetime) -> li
 async def tax_ledger(
     starts_on: date,
     ends_on: date,
+    order_category: FinancialOrderCategory = "all",
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    rows = await _tax_rows(session, *_period(starts_on, ends_on))
+    rows = await _tax_rows(session, *_period(starts_on, ends_on), order_category=order_category)
     return {
         "starts_on": starts_on,
         "ends_on": ends_on,
@@ -419,10 +457,11 @@ async def tax_ledger(
 async def export_tax_ledger(
     starts_on: date,
     ends_on: date,
+    order_category: FinancialOrderCategory = "all",
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
-    rows = await _tax_rows(session, *_period(starts_on, ends_on))
+    rows = await _tax_rows(session, *_period(starts_on, ends_on), order_category=order_category)
     return csv_response(
         f"tax-ledger-{starts_on}-{ends_on}.csv",
         ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"], rows,
@@ -894,4 +933,50 @@ async def supplier_orders_csv(
         f"supplier-order-{starts_on}-{ends_on}.csv",
         ["商品", "數量", "單位", "溫層", "預計到貨日", "備註"],
         [[name, int(quantity), unit, temperature.value if temperature else "未設定", expected_arrival_on, note] for name, quantity, unit, temperature in rows],
+    )
+
+
+@cooperative_router.get("/v1/admin/supplier-order-demand.csv")
+async def export_supplier_order_demand(
+    starts_on: date,
+    ends_on: date,
+    scope: Literal["supplier", "review"],
+    supplier_id: str | None = Query(None, min_length=1, max_length=36),
+    expected_arrival_on: date | None = None,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    if ends_on < starts_on:
+        raise HTTPException(422, "結束日期不可早於開始日期")
+    if scope == "review":
+        if supplier_id is not None or expected_arrival_on is not None:
+            raise HTTPException(422, "待核對清單只使用付款日期")
+        supplier_name = None
+    else:
+        if supplier_id is None or expected_arrival_on is None:
+            raise HTTPException(422, "請選擇供應者並填寫預計到貨日")
+        supplier_name = await session.scalar(select(Supplier.business_name).where(Supplier.id == supplier_id))
+        if supplier_name is None:
+            raise HTTPException(404, "找不到供應者")
+    try:
+        rows = await supplier_order_demand_rows(session, starts_on, ends_on, supplier_id=supplier_id)
+    except OverflowError as exc:
+        raise HTTPException(422, "付款日期超出可查詢範圍") from exc
+    if not rows:
+        raise HTTPException(409, "這段期間沒有待核對品項" if scope == "review" else "這段期間沒有可依下單快照歸屬此供應者的品項")
+    dates = [starts_on, ends_on]
+    date_headers = ["付款日起（台灣）", "付款日迄（台灣）"]
+    if scope == "review":
+        return csv_response(
+            f"supplier-demand-review-{starts_on}-{ends_on}.csv",
+            [*date_headers, "商品識別", "產品編號", "下單SKU", "下單品名", "單位", "待核對原因", "原訂數量"],
+            ([*dates, *row] for row in rows),
+        )
+    temperatures = {"ambient": "常溫", "chilled": "冷藏", "frozen": "冷凍"}
+    return csv_response(
+        f"supplier-demand-{starts_on}-{ends_on}.csv",
+        [*date_headers, "供應者現名（按下單歸屬）", "商品識別", "下單產品編號", "下單SKU", "下單品名", "單位", "下單溫層", "數量", "預計到貨日"],
+        ([*dates, supplier_name, product_id, product_number, sku, name, unit, temperatures.get(temperature, "未設定"),
+          quantity, expected_arrival_on]
+         for product_id, product_number, sku, name, unit, temperature, quantity in rows),
     )

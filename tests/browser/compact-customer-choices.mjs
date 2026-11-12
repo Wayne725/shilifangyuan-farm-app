@@ -20,7 +20,7 @@ const event = { id: 'compact-meal', title: '隔離便當', location: '合作社'
   pickup_starts_at: '2030-01-03T11:00:00+08:00', pickup_ends_at: '2030-01-03T13:30:00+08:00',
   offerings: [{ id: 'dish', meal_id: 'dish', meal_name: '蔬食便當', price: 120, capacity: 20, available_quantity: 20, reserved_quantity: 0, paid_quantity: 0, position: 0, is_active: true, option_groups: [staple, drink, extras, sauce] }] };
 const channels = ['home_delivery', 'seven_eleven', 'family_mart', 'hilife'];
-const product = { id: 'compact-product', name: '隔離蔭油', unit: '瓶', supplier_name: '合作社', member_price: 300, nonmember_price: 300, stock_quantity: 20, is_active: true, can_ship: true, shipping_temperature: 'ambient', allowed_shipping_channels: channels, tax_type: 'taxable' };
+const product = { id: 'compact-product', name: '隔離蔭油', unit: '瓶', supplier_name: '合作社', member_price: 300, nonmember_price: 300, stock_quantity: 20, is_active: true, daily_sales_enabled: true, can_ship: true, shipping_temperature: 'ambient', allowed_shipping_channels: channels, tax_type: 'taxable' };
 const campaign = { id: 'compact-group', title: '隔離蔭油團購', description: '', member_price: 300, nonmember_price: 300, intake_status: 'open', decision_status: 'recruiting', paid_quantity: 0, min_paid_quantity: 10, supply_cap: 50, per_user_cap: 5, available_quantity: 50, deadline: '2030-01-04T00:00:00Z', estimated_pickup_start: '2030-01-05T00:00:00Z', can_ship: true, shipping_temperature: 'ambient', allowed_shipping_channels: channels };
 const locations = [{ id: 'store', name: '合作社門市（水木書苑內左側）', address: '新竹市合作路 1 號', is_active: true }, { id: 'campus', name: '教育學院大樓', address: '新竹市教育路 2 號', is_active: true }];
 
@@ -36,6 +36,7 @@ async function fixture(t, width, locationState = 'ready') {
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.test', display_name: '隔離買家', user_role: 'customer' } } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, sales_scope: 'all', shipping_enabled: true } });
+    if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
     if (path === '/v1/pickup-locations') return route.fulfill({ status: locationState === 'error' ? 503 : 200, json: locationState === 'error' ? { detail: '隔離讀取失敗' } : locationState === 'empty' ? [] : locations });
     if (path === '/v1/shipping-rates') return route.fulfill({ json: channels.map((channel) => ({ channel, temperature: 'ambient', base_fee: 60, free_shipping_threshold: null, is_active: true })) });
     if (path === '/v1/meal-events/compact-meal') return route.fulfill({ json: event });

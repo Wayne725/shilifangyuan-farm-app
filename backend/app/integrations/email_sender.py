@@ -15,6 +15,7 @@ from typing import (
 
 from ..config import Settings
 from .common import (
+    require_provider_mutation_enabled,
     HTTPResponse,
     IntegrationConfigurationError,
     IntegrationError,
@@ -136,6 +137,7 @@ class FailoverEmailSender:
 
 
 def email_sender_from_settings(settings: Settings) -> EmailSender:
+    require_provider_mutation_enabled(settings.recovery_mode)
     from .mailersend import MailerSendAdapter, MailerSendSettings
     from .resend import ResendAdapter, ResendSettings
 

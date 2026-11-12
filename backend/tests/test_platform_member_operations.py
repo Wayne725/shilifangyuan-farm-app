@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
-from app.models import AdminAudit, MemberRosterEntry, Membership, MembershipOfflineReceipt, MembershipStatus, Notification, Order, PaymentAttempt, Refund
+from app.models import AdminAudit, MemberRosterEntry, Membership, MembershipOfflineReceipt, MembershipStatus, Notification, Order, PaymentAttempt, PointAccount, PointSourceType, PointTransaction, Refund, User
 from app.routers.member_reports import member_reports_router
 from app.routers.platform import platform_router
 from tests.support import auth_headers
@@ -130,6 +130,68 @@ async def test_receipts_idempotent_private_and_void_without_financial_side_effec
         assert await session.scalar(select(func.count(model.id))) == 0
     member = await session.get(Membership, member_id)
     assert member.share_count == 0 and member.status == MembershipStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_points_ledger_search_and_filtered_csv_share_literal_member_scope(shares_context):
+    c = shares_context
+    client, session, headers = c['client'], c['session'], c['admin_headers']
+    include(client, member_reports_router)
+    await claim_roster(c)
+    owner = await session.get(User, c['owner_id'])
+    owner.display_name = '社員 A%B_'
+    owner.notification_email = 'unlisted@example.com'
+    other = User(notification_email='fallback@example.com', display_name='社員 A0BX', password_hash='test')
+    suspended = User(email='suspended@example.com', display_name='社員 A%B_', password_hash='test')
+    session.add_all([other, suspended])
+    await session.flush()
+    account = PointAccount(user_id=other.id)
+    session.add_all([
+        Membership(user_id=other.id, member_number='SHARES-001A', status=MembershipStatus.ACTIVE),
+        Membership(user_id=suspended.id, member_number='SHARES-002', status=MembershipStatus.SUSPENDED),
+        account,
+    ])
+    await session.flush()
+    session.add(PointTransaction(account_id=account.id, amount=7, source_type=PointSourceType.ADMIN_ADJUSTMENT))
+    await session.commit()
+
+    ledger = '/v1/admin/points-ledger'
+    filtered_csv = f'{ledger}/filtered.csv'
+    assert (await client.get(ledger, params={'q': '社員'})).status_code == 401
+    assert (await client.get(filtered_csv, headers=c['owner_headers'], params={'q': '社員'})).status_code == 403
+    for invalid in [{}, {'q': '  '}, {'q': 'x' * 121}]:
+        assert (await client.get(filtered_csv, headers=headers, params=invalid)).status_code == 422
+
+    def csv_rows(response):
+        assert response.status_code == 200, response.text
+        return list(csv.reader(io.StringIO(response.text.lstrip('\ufeff'))))[1:]
+
+    for params, expected in [
+        ({'q': '  a%b_ '}, ['SHARES-001']),
+        ({'q': 'FALLBACK@EXAMPLE.COM'}, ['SHARES-001A']),
+        ({'q': 'unlisted@example.com'}, []),
+        ({'q': 'shares-001 社員'}, ['SHARES-001']),
+        ({'q': 'shares-001a', 'member_number': 'SHARES-001'}, []),
+        ({'q': '社員', 'member_number': 'SHARES-001A'}, ['SHARES-001A']),
+        ({'q': '社員', 'member_number': 'SHARES-00'}, []),
+    ]:
+        listed = await client.get(ledger, headers=headers, params=params)
+        assert listed.status_code == 200, listed.text
+        payload = listed.json()
+        assert payload['total'] == len(expected)
+        assert payload['applied_query'] == params['q'].strip()
+        assert [row['member_number'] for row in payload['items']] == expected
+        exported = await client.get(filtered_csv, headers=headers, params=params)
+        assert csv_rows(exported) == [
+            [row['member_number'], row['name'], row['email'], str(row['balance'])] for row in payload['items']
+        ]
+
+    unfiltered = await client.get(f'{ledger}.csv', headers=headers)
+    assert sorted(row[0] for row in csv_rows(unfiltered)) == ['SHARES-001', 'SHARES-001A']
+    exact = await client.get(f'{ledger}.csv', headers=headers, params={'member_number': 'SHARES-001'})
+    assert [row[0] for row in csv_rows(exact)] == ['SHARES-001']
+    audits = (await session.scalars(select(AdminAudit).where(AdminAudit.action == 'points.exported'))).all()
+    assert sorted(audit.data['count'] for audit in audits) == [0, 0, 0, 1, 1, 1, 1, 1, 2]
 
 
 def test_csv_neutralizes_formulas():

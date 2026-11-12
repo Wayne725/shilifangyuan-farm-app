@@ -422,3 +422,34 @@ for (const role of ['guest', 'customer']) {
     await verifyIsolated(page, state);
   });
 }
+
+
+test('缺少原始資料的彙總批次仍可查詢頁面結果，無法直接重送', { timeout: 25000 }, async (t) => {
+  const { page, state } = await fixture(t);
+  const requestId = 'ea5b5152-879b-4f66-9406-089a1fc2e905';
+  state.queryStatuses = ['failed'];
+  state.batches.set(requestId, {
+    request_id: requestId, fingerprint: null, mode: 'live', created_at: '2030-01-02T02:00:00Z', filters: null, summary: null,
+    pages: [{ id: `${requestId}-1`, page: 1, status: 'failed', last_error: 'summary_changed_before_send' }],
+  });
+  await page.goto(`${base}/admin?section=summary`); await waitForReport(page);
+  const history = page.locator('.order-summary-print > details');
+  const render = Promise.race([
+    history.getByText('原始列印資料不完整', { exact: true }).waitFor(),
+    page.waitForEvent('pageerror').then((error) => { throw error; }),
+  ]);
+  await page.getByText('最近列印紀錄', { exact: true }).click();
+  await render;
+  await history.getByText('出單失敗', { exact: true }).waitFor();
+  await history.getByRole('button', { name: '查看／核對這批', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '彙總單列印', exact: true });
+  await dialog.getByText('出單失敗', { exact: true }).waitFor();
+  state.batches.delete(requestId);
+  await page.reload(); await waitForReport(page);
+  await page.getByRole('button', { name: '查看彙總送印結果', exact: true }).click();
+  await dialog.getByText('找不到這筆列印紀錄。', { exact: true }).waitFor();
+  assert.deepEqual(state.lookups, [requestId]);
+  assert.equal(await dialog.getByRole('button', { name: '重試同一筆送印', exact: true }).count(), 0);
+  assert.equal(state.writes.length, 0);
+  await verifyIsolated(page, state);
+});

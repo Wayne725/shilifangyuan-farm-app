@@ -7,7 +7,7 @@ const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4192');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || target.pathname !== '/') throw new Error('Only isolated local checkout is allowed');
 const base = target.origin;
 const product = { id: 'line-product', slug: 'line-product', name: '隔離測試白米', unit: '包', description: '', category: 'processed',
-  member_price: 120, nonmember_price: 120, stock_quantity: 50, is_active: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'taxable' };
+  member_price: 120, nonmember_price: 120, stock_quantity: 50, is_active: true, daily_sales_enabled: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'taxable' };
 const event = { id: 'line-meal', title: '隔離便當場次', location: '合作社', status: 'published', service_date: '2030-01-03', meal_period: 'lunch',
   ordering_starts_at: '2030-01-02T00:00:00+08:00', ordering_ends_at: '2030-01-03T00:00:00+08:00',
   pickup_starts_at: '2030-01-03T11:00:00+08:00', pickup_ends_at: '2030-01-03T13:30:00+08:00',
@@ -32,6 +32,7 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
       if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'line-buyer', display_name: 'LINE顧客', email: null, notification_email: saved ? 'saved@example.com' : null, membership_type: 'nonmember', user_role: 'customer' } } });
       if (request.method() === 'GET') {
         if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
+        if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
         if (path === '/v1/orders') return route.fulfill({ json: [] });
         if (path === '/v1/orders/line-order' && writes.some(entry => entry.path === orderPath)) {
           assert.equal(url.searchParams.get('own_only'), 'true');

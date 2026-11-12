@@ -29,12 +29,12 @@ export function CampaignReviewPanel({ campaign, unit = "份", onDone, onAccessDe
       {reviewing && <div><dt>距離成團門檻</dt><dd>{Math.max(0, campaign.min_paid_quantity - campaign.paid_quantity)} {unit}</dd></div>}
       {campaign.final_pickup_at && <div><dt>最終取貨時間</dt><dd>{campaignDateTime(campaign.final_pickup_at)}</dd></div>}
     </dl>
-    {campaign.review_overdue && reviewing && <p className="form-error" role="status">已到處理提醒日，仍待管理員處理</p>}
+    {campaign.review_overdue && reviewing && <p role="status"><span className="status-chip">待處理成團審核</span></p>}
     {campaign.confirmed_paid_quantity != null && <p>確認紀錄：已付款 {campaign.confirmed_paid_quantity} {unit}／原門檻 {campaign.confirmed_min_paid_quantity} {unit} · 第 {campaign.confirmed_threshold_version} 版</p>}
     {campaign.confirmation_exception_reason && <p>例外成團原因：{campaign.confirmation_exception_reason}</p>}
     {reviewing && <>
       {!reviewOpen && <button className="button button-system" type="button" disabled={Boolean(block) || otherDecision.isPending || deadlineOpen} onClick={() => { setResult(""); setReviewOpen(true); }}>審核成團</button>}
-      {block && <p className="form-error" role="status">{block}</p>}
+      {block && <p role="status"><span className="status-chip">{block}</span></p>}
       {reviewOpen && <ConfirmationForm campaign={campaign} unit={unit} onAccessDenied={onAccessDenied} onCancel={() => setReviewOpen(false)} onDone={() => { setReviewOpen(false); setResult("共同購買已確認成團"); onDone(); }} />}
     </>}
     {campaign.can_edit_review_deadline && !reviewOpen && <ReviewDeadlineForm disabled={otherDecision.isPending} onEditing={setDeadlineOpen} campaign={campaign} onDone={onDone} onAccessDenied={onAccessDenied} />}

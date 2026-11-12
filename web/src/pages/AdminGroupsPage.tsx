@@ -247,10 +247,58 @@ function CampaignAdminCard({ campaign, products, onDone, onAccessDenied }: { cam
   return <article className="admin-review-card group-proposal-card" aria-label={`共同購買 ${campaign.title}`}>
     <div className="review-card-copy"><span className="status-chip">{campaignStatusLabel(campaign, now)}</span><h3>{campaign.title}</h3><p>已付款 {campaign.paid_quantity}/{campaign.min_paid_quantity} · 保留 {campaign.reserved_quantity} · 剩餘 {campaign.available_quantity}</p><progress className="admin-progress" max={campaign.min_paid_quantity} value={campaign.paid_quantity} /><small>{campaignDateTime(campaign.deadline)} 付款截止 · {campaign.can_ship ? "可配送" : "合作社取貨"}</small></div>
     <Link to="/groups/$campaignId" params={{ campaignId: campaign.id }}>查看前台</Link>
+    <CampaignTextEditor campaign={campaign} onDone={onDone} onAccessDenied={onAccessDenied} />
     <CatalogVisibilityControl kind="group" record={campaign} onDone={onDone} onDenied={onAccessDenied}/>
     <CampaignReviewPanel campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />
     <CampaignQuantityEditor campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />
   </article>;
+}
+
+function CampaignTextEditor({ campaign, onDone, onAccessDenied }: { campaign: GroupCampaign; onDone: () => void; onAccessDenied: () => void }) {
+  const client = useQueryClient();
+  const [sameSession] = useState(captureSessionIdentityGuard);
+  const [editor, setEditor] = useState<{ title: string; description: string; originalTitle: string; originalDescription: string } | null>(null);
+  const update = useMutation({
+    mutationFn: (changes: { title?: string; description?: string }) => {
+      if (!sameSession()) throw new ApiError(401, "登入狀態已變更，請重新登入。");
+      return apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaign.id}`, { method: "PATCH", body: JSON.stringify(changes) });
+    },
+    onSuccess: () => {
+      if (!sameSession()) return;
+      setEditor(null);
+      void client.invalidateQueries({ queryKey: ["group-campaign", campaign.id] });
+      onDone();
+    },
+    onError: error => { if (campaignAccessDenied(error)) onAccessDenied(); },
+  });
+
+  if (!editor) return <div className="admin-create-block">
+    <button className="button button-quiet" type="button" onClick={() => {
+      update.reset();
+      setEditor({ title: campaign.title, description: campaign.description, originalTitle: campaign.title, originalDescription: campaign.description });
+    }}>編輯名稱與說明</button>
+    {update.isSuccess && <p className="form-success" role="status">名稱與說明已儲存</p>}
+  </div>;
+
+  const title = editor.title.trim();
+  const description = editor.description.trim();
+  const changes = {
+    ...(title !== editor.originalTitle.trim() ? { title } : {}),
+    ...(description !== editor.originalDescription.trim() ? { description } : {}),
+  };
+  const canSave = Boolean(title) && Object.keys(changes).length > 0 && !update.isPending;
+  return <form className="social-form admin-master-form admin-create-block" aria-label="編輯共同購買名稱與說明" onSubmit={event => {
+    event.preventDefault();
+    if (canSave) update.mutate(changes);
+  }}>
+    <label className="field"><span>名稱</span><input required maxLength={120} disabled={update.isPending} value={editor.title} onChange={event => setEditor({ ...editor, title: event.target.value })} /></label>
+    <label className="field"><span id={`campaign-description-${campaign.id}`}>說明</span><textarea aria-labelledby={`campaign-description-${campaign.id}`} rows={3} disabled={update.isPending} value={editor.description} onChange={event => setEditor({ ...editor, description: event.target.value })} /></label>
+    {update.isError && <p className="form-error" role="alert">{update.error.message}</p>}
+    <div className="form-actions">
+      <button className="button button-quiet" type="button" disabled={update.isPending} onClick={() => setEditor(null)}>取消</button>
+      <button className="button button-primary" disabled={!canSave}>{update.isPending ? "儲存中…" : "儲存"}</button>
+    </div>
+  </form>;
 }
 
 function BundleCreateForm({ products, onDone, onAccessDenied }: { products: Product[]; onDone: () => void; onAccessDenied: () => void }) {

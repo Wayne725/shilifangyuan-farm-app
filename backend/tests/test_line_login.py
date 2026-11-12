@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.auth import decode_token, make_token_pair, verify_password
+from app.browser_refresh import PROTOCOL_HEADER
 from app.integrations.common import IntegrationConfigurationError, IntegrationError, IntegrationResponseError
 from app.integrations.line_login import LineLoginClient, LineProfile
 from app.models import ExternalIdentity, LineOAuthState, Membership, MembershipStatus, User, UserRole
@@ -405,6 +406,24 @@ async def test_no_line_email_automatically_creates_customer_once(database_sessio
         assert len(profile[1]) == 1
 
 
+@pytest.mark.asyncio
+async def test_line_callback_selects_browser_family_and_keeps_remember_preference(database_session, settings, profile):
+    async with api_test_context(database_session, [line_auth_router, auth_router], settings=settings) as client:
+        state, _ = await start_flow(client, remember_me=False)
+        result = await client.post(
+            "/v1/auth/line/callback", json={"state": state, "code": "test-code"},
+            headers={PROTOCOL_HEADER: "2"},
+        )
+        assert result.status_code == 200, result.text
+        assert result.headers.get(PROTOCOL_HEADER) == "2"
+        scoped = next(value for value in result.headers.get_list("set-cookie") if "_v2_" in value)
+        assert "Max-Age=" not in scoped
+        assert client.cookies.get(FLOW_COOKIE) is None
+        refreshed = await client.post("/v1/auth/refresh")
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.json()["user"]["id"] == result.json()["session"]["user"]["id"]
+
+
 async def legacy_pending_flow(client, session, subject):
     state, _ = await start_flow(client)
     record = await session.scalar(select(LineOAuthState).where(LineOAuthState.state_hash == hashlib.sha256(state.encode()).hexdigest()))
@@ -417,14 +436,21 @@ async def legacy_pending_flow(client, session, subject):
     client.cookies.set(REGISTRATION_COOKIE, registration, path="/v1/auth/line")
 
 
+@pytest.mark.parametrize("v2", [False, True])
 @pytest.mark.asyncio
-async def test_legacy_pending_flow_can_finish_without_email(database_session, settings, profile):
-    async with api_test_context(database_session, [line_auth_router], settings=settings) as client:
+async def test_legacy_pending_flow_can_finish_without_email(database_session, settings, profile, v2):
+    async with api_test_context(database_session, [line_auth_router, auth_router], settings=settings) as client:
         await legacy_pending_flow(client, database_session, profile[0]["subject"])
         assert (await client.get("/v1/auth/line/pending")).json()["status"] == "needs_email"
-        result = await client.post("/v1/auth/line/register", json={})
+        result = await client.post(
+            "/v1/auth/line/register", json={}, headers={PROTOCOL_HEADER: "2"} if v2 else {},
+        )
         assert result.status_code == 200, result.text
         assert result.json()["session"]["user"]["email"] is None
+        assert (result.headers.get(PROTOCOL_HEADER) == "2") is v2
+        renewed = await client.post("/v1/auth/refresh")
+        assert renewed.status_code == 200, renewed.text
+        assert renewed.json()["user"]["id"] == result.json()["session"]["user"]["id"]
         assert (await client.post("/v1/auth/line/register", json={})).status_code == 400
 
 

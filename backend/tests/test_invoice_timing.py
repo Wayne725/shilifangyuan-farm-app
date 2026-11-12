@@ -39,6 +39,34 @@ def aware(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+async def seed_scheduled_cash_order(c, *, request_id=None):
+    created = await create_cash(c, client_request_id=request_id)
+    assert created.status_code == 201, created.text
+    order = await c.session.get(Order, created.json()["id"])
+    await c.session.refresh(order, ["fulfillment"])
+    order.invoice_handling = "pickup_day"
+    order.invoice_issue_after = pickup_invoice_due(order.fulfillment.pickup_at)
+    order.invoice_status = InvoiceStatus.NOT_ELIGIBLE
+    if request_id:
+        order.request_fingerprint = previous_meal_fingerprint(c, "cash_on_pickup", pickup_day=True)
+    await c.session.commit()
+    return order.id
+
+
+def previous_meal_fingerprint(c, payment_method, *, pickup_day=False):
+    body = MealOrderCreate(
+        items=[{"offering_id": c.event.offerings[0].id, "quantity": 1}],
+        contact_email=c.buyer.email, payment_method=payment_method,
+        invoice_handling="pickup_day" if pickup_day else None,
+    ).model_dump(
+        mode="json",
+        exclude={"client_request_id", "pickup_location_id", "needs_utensils", "contact_phone", "meal_booking_type"},
+    )
+    if not pickup_day:
+        body.pop("invoice_handling")
+    return hashlib.sha256(json.dumps({"event_id": c.event.id, "body": body}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 @pytest.mark.asyncio
 async def test_17th_payment_only_issues_on_18th_taipei_and_repeated_call_reuses_invoice(cash_context, monkeypatch):
     c = cash_context
@@ -62,9 +90,7 @@ async def test_17th_payment_only_issues_on_18th_taipei_and_repeated_call_reuses_
         for field, value in tomorrow_meal_timeline(preorder_day).items():
             setattr(c.event, field, value)
         await c.session.commit()
-        created = await create_cash(c, invoice_handling="pickup_day")
-        assert created.status_code == 201, created.text
-        order_id = created.json()["id"]
+        order_id = await seed_scheduled_cash_order(c)
         order = await c.session.get(Order, order_id)
         order.invoice_provider_context = adapter.binding_context
         await c.session.commit()
@@ -99,8 +125,7 @@ async def test_17th_payment_only_issues_on_18th_taipei_and_repeated_call_reuses_
 @pytest.mark.asyncio
 async def test_worker_recovers_after_pickup_day_with_real_current_date_without_backdating(cash_context, monkeypatch):
     c = cash_context
-    created = await create_cash(c, invoice_handling="pickup_day")
-    order_id = created.json()["id"]
+    order_id = await seed_scheduled_cash_order(c)
     assert (await action(c, order_id)).status_code == 200
     job = (await issue_jobs(c, order_id))[0]
     due = aware(job.available_at)
@@ -158,7 +183,7 @@ async def test_admin_arrangement_is_durable_idempotent_and_preserves_existing_ca
 @pytest.mark.asyncio
 async def test_cancel_before_due_cancels_queue_and_stale_dispatch_cannot_issue(cash_context, monkeypatch):
     c = cash_context
-    order_id = (await create_cash(c, invoice_handling="pickup_day")).json()["id"]
+    order_id = await seed_scheduled_cash_order(c)
     assert (await action(c, order_id)).status_code == 200
     job = (await issue_jobs(c, order_id))[0]
     await approve_cancellation(c, order_id)
@@ -174,7 +199,7 @@ async def test_cancel_before_due_cancels_queue_and_stale_dispatch_cannot_issue(c
 @pytest.mark.asyncio
 async def test_cash_collection_correction_cancels_unissued_job_and_recollection_queues_once(cash_context):
     c = cash_context
-    order_id = (await create_cash(c, invoice_handling="pickup_day")).json()["id"]
+    order_id = await seed_scheduled_cash_order(c)
     assert (await action(c, order_id)).status_code == 200
     assert (await action(c, order_id, "cash-unpaid")).status_code == 200
     assert (await issue_jobs(c, order_id))[0].status == OutboxStatus.COMPLETED
@@ -233,14 +258,75 @@ async def test_invoice_preference_change_cannot_change_paid_order_tax_snapshot(c
 
 
 @pytest.mark.asyncio
-async def test_online_order_accepts_pickup_timing_but_not_external_ownership(cash_context):
+async def test_online_order_rejects_external_invoice_ownership(cash_context):
     c = cash_context
     response = await create_cash(c, payment_method="online", invoice_handling="external")
     assert response.status_code == 422
-    response = await create_cash(c, payment_method="online", invoice_handling="pickup_day")
+
+
+@pytest.mark.parametrize("payment_method", ["online", "cash_on_pickup"])
+@pytest.mark.asyncio
+async def test_new_standard_meal_rejects_pickup_day_invoice_without_creating_order(cash_context, payment_method):
+    c = cash_context
+    response = await create_cash(c, payment_method=payment_method, invoice_handling="pickup_day", client_request_id=str(uuid4()))
+    assert response.status_code == 422, response.text
+    assert "取餐日開票適用會餐" in response.json()["detail"]
+    assert await c.session.scalar(select(func.count(Order.id))) == 0
+    assert c.event.offerings[0].reserved_quantity == 0
+
+
+@pytest.mark.asyncio
+async def test_existing_standard_pickup_day_order_replays_without_changing_schedule(cash_context):
+    c = cash_context
+    request_id = str(uuid4())
+    order_id = await seed_scheduled_cash_order(c, request_id=request_id)
+    scheduled = (await c.session.get(Order, order_id)).invoice_issue_after
+    response = await create_cash(c, invoice_handling="pickup_day", client_request_id=request_id)
     assert response.status_code == 201, response.text
+    assert response.json()["id"] == order_id
     assert response.json()["invoice_handling"] == "pickup_day"
-    assert response.json()["invoice_issue_after"]
+    assert (await c.session.get(Order, order_id)).invoice_issue_after == scheduled
+    assert await c.session.scalar(select(func.count(Order.id))) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_policy", ["pickup_day", "on_payment"])
+async def test_meal_submission_lookup_is_read_only_and_scoped(cash_context, legacy_policy):
+    c = cash_context
+    request_id = str(uuid4())
+    if legacy_policy == "pickup_day":
+        order_id = await seed_scheduled_cash_order(c, request_id=request_id)
+    else:
+        created = await create_cash(c, invoice_handling=legacy_policy, client_request_id=request_id)
+        assert created.status_code == 201, created.text
+        order_id = created.json()["id"]
+
+    def path(event_id, submission_id):
+        return f"/v1/meal-events/{event_id}/order-submissions/{submission_id}"
+
+    matched = await c.client.get(path(c.event.id, request_id), headers=auth_headers(c.buyer))
+    assert matched.status_code == 200 and matched.json() == {"order_id": order_id}
+    assert matched.headers["Cache-Control"] == "no-store"
+
+    for event_id, submission_id, actor in (
+        (c.event.id, request_id, c.admin),
+        (str(uuid4()), request_id, c.buyer),
+        (c.event.id, str(uuid4()), c.buyer),
+    ):
+        missing = await c.client.get(path(event_id, submission_id), headers=auth_headers(actor))
+        assert missing.status_code == 200 and missing.json() == {"order_id": None}
+        assert missing.headers["Cache-Control"] == "no-store"
+
+    assert (await c.client.get(path(c.event.id, request_id))).status_code == 401
+    invalid = await c.client.get(path(c.event.id, "not-a-uuid"), headers=auth_headers(c.buyer))
+    assert invalid.status_code == 422
+
+    conflicting_retry = await create_cash(c, client_request_id=request_id)
+    assert conflicting_retry.status_code == 409
+    order = await c.session.get(Order, order_id)
+    assert order.invoice_handling == legacy_policy
+    assert await c.session.scalar(select(func.count(Order.id))) == 1
+    assert c.event.offerings[0].reserved_quantity == 1
 
 
 @pytest.mark.asyncio
@@ -251,11 +337,9 @@ async def test_predeployment_lost_response_replays_explicit_legacy_policy_withou
     response = await create_cash(c, payment_method=payment_method, client_request_id=request_id)
     assert response.status_code == 201, response.text
     order = await c.session.get(Order, response.json()["id"])
-    old_body = MealOrderCreate(
-        items=[{"offering_id": c.event.offerings[0].id, "quantity": 1}],
-        contact_email=c.buyer.email, payment_method=payment_method,
-    ).model_dump(mode="json", exclude={"client_request_id", "pickup_location_id", "needs_utensils", "contact_phone", "invoice_handling", "meal_booking_type"})
-    order.request_fingerprint = hashlib.sha256(json.dumps({"event_id": c.event.id, "body": old_body}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    assert response.json()["invoice_handling"] == legacy_policy
+    assert response.json()["invoice_issue_after"] is None
+    order.request_fingerprint = previous_meal_fingerprint(c, payment_method)
     await c.session.commit()
     for policy in (legacy_policy, None):
         repeat = await create_cash(c, payment_method=payment_method, client_request_id=request_id, invoice_handling=policy)
@@ -288,7 +372,7 @@ async def test_admin_arrangement_requires_invoice_email_before_queuing(cash_cont
 @pytest.mark.asyncio
 async def test_failed_job_retry_api_waits_for_invoice_day_without_consuming_early_retry(cash_context):
     c = cash_context
-    order_id = (await create_cash(c, invoice_handling="pickup_day")).json()["id"]
+    order_id = await seed_scheduled_cash_order(c)
     assert (await action(c, order_id)).status_code == 200
     job = (await issue_jobs(c, order_id))[0]
     due = aware(job.available_at)

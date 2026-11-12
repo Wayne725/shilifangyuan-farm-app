@@ -55,8 +55,17 @@ def business_payment_fields(order, now: datetime | None = None) -> dict:
 
 
 def business_invoice_window_closed(order, now: datetime | None = None) -> bool:
+    if not is_business_meal(order):
+        return False
     window = business_payment_window(order)
-    return bool(window and _aware(now or datetime.now(timezone.utc)) >= window[1])
+    if window is not None:
+        closes_at = window[1]
+    elif order.invoice_issue_after is not None:
+        # The scheduled day is stored on the order for callers without loaded relationships.
+        closes_at = _aware(order.invoice_issue_after) + timedelta(days=1)
+    else:
+        return False
+    return _aware(now or datetime.now(timezone.utc)) >= closes_at
 
 
 def business_invoice_date_error(order, invoice) -> str | None:

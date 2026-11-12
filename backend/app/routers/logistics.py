@@ -29,7 +29,7 @@ from sqlalchemy.orm import selectinload
 from ..admin_explanations import AdminExplanation
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
-from ..sales_scope import require_sales_scope_allows
+from ..sales_scope import require_sales_scope_allows, sales_capabilities
 from ..database import get_session
 from ..domain import DomainError, order_tax_amount
 from ..integrations.common import IntegrationError
@@ -910,6 +910,90 @@ async def receive_logistics_selection_result(
     return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _formal_logistics_order_blocker(order: Order) -> str | None:
+    if order.payment_status != PaymentStatus.PAID:
+        return "訂單付款後才能建立物流單"
+    if (
+        order.order_kind == OrderKind.GROUP
+        and (
+            order.group_campaign is None
+            or order.group_campaign.decision_status
+            != GroupDecisionStatus.CONFIRMED
+        )
+    ):
+        return "共同購買確認成團後才能出貨"
+    if order.fulfillment is None or order.fulfillment.shipment is None:
+        return "訂單尚未選擇物流"
+    if (
+        order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
+        or order.fulfillment.method != FulfillmentMethod.ECPAY_LOGISTICS
+    ):
+        return "訂單履約方式不是物流配送"
+    return None
+
+
+def _temp_logistics_id(shipment: Shipment) -> str:
+    return str((shipment.provider_payload or {}).get("TempLogisticsID", ""))
+
+
+def _formal_logistics_creation_blocker(order: Order, fulfillment: OrderFulfillment, shipment: Shipment) -> str | None:
+    if (
+        order.fulfillment_status
+        in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
+        or fulfillment.status
+        in {
+            FulfillmentState.PICKED_UP,
+            FulfillmentState.DELIVERED,
+            FulfillmentState.NO_SHOW,
+            FulfillmentState.CANCELLED,
+        }
+    ):
+        return "訂單目前不可建立物流單"
+    if (
+        order.fulfillment_status != FulfillmentStatus.PREPARING
+        or fulfillment.status != FulfillmentState.PREPARING
+    ):
+        return "訂單進入備貨中後才能建立物流單"
+    if shipment.status != ShipmentStatus.READY_TO_CREATE:
+        return "暫存物流單尚未完成"
+    if not _temp_logistics_id(shipment):
+        return "缺少綠界暫存物流單編號"
+    return None
+
+
+def _sandbox_logistics_enabled(settings: Settings) -> bool:
+    return settings.environment.strip().lower() in {"development", "sandbox", "test"}
+
+
+def admin_logistics_action(order: Order, settings: Settings) -> str | None:
+    if (
+        settings.recovery_mode
+        or order.sales_channel == SalesChannel.MEAL_PREORDER
+        or order.payment_status != PaymentStatus.PAID
+        or order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
+        or order.fulfillment_status == FulfillmentStatus.PENDING_CONFIRMATION
+    ):
+        return None
+    fulfillment = order.fulfillment
+    shipment = fulfillment.shipment if fulfillment else None
+    if shipment is None:
+        return None
+    if shipment.status == ShipmentStatus.READY_TO_CREATE:
+        if (
+            sales_capabilities(settings)["shipping_enabled"] is True
+            and not shipment.ecpay_logistics_id
+            and _formal_logistics_order_blocker(order) is None
+            and _formal_logistics_creation_blocker(order, fulfillment, shipment) is None
+        ):
+            return "admin_create_logistics"
+    elif _sandbox_logistics_enabled(settings):
+        if shipment.status == ShipmentStatus.CREATED:
+            return "admin_simulate_shipment_in_transit"
+        if shipment.status == ShipmentStatus.IN_TRANSIT:
+            return "admin_simulate_shipment_delivered"
+    return None
+
+
 @logistics_router.post(
     "/v1/admin/orders/{order_id}/logistics/create",
     response_model=ShipmentOperationRead,
@@ -921,55 +1005,21 @@ async def create_formal_logistics_order(
     settings: Settings = Depends(get_settings),
 ) -> ShipmentOperationRead:
     order = await _load_order(session, order_id, lock=True)
-    if order.payment_status != PaymentStatus.PAID:
-        raise HTTPException(status_code=409, detail="訂單付款後才能建立物流單")
-    if (
-        order.order_kind == OrderKind.GROUP
-        and (
-            order.group_campaign is None
-            or order.group_campaign.decision_status
-            != GroupDecisionStatus.CONFIRMED
-        )
-    ):
-        raise HTTPException(status_code=409, detail="共同購買確認成團後才能出貨")
-    if order.fulfillment is None or order.fulfillment.shipment is None:
-        raise HTTPException(status_code=409, detail="訂單尚未選擇物流")
-    if (
-        order.fulfillment_method != FulfillmentMethod.ECPAY_LOGISTICS
-        or order.fulfillment.method != FulfillmentMethod.ECPAY_LOGISTICS
-    ):
-        raise HTTPException(status_code=409, detail="訂單履約方式不是物流配送")
-    shipment = order.fulfillment.shipment
+    order_blocker = _formal_logistics_order_blocker(order)
+    if order_blocker:
+        raise HTTPException(status_code=409, detail=order_blocker)
+    fulfillment = order.fulfillment
+    shipment = fulfillment.shipment
     if shipment.ecpay_logistics_id:
         return ShipmentOperationRead(
             shipment=_shipment_read(shipment),
             provider=_safe_provider_payload(shipment.provider_payload or {}),
         )
     require_sales_scope_allows(settings)
-    if (
-        order.fulfillment_status
-        in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
-        or order.fulfillment.status
-        in {
-            FulfillmentState.PICKED_UP,
-            FulfillmentState.DELIVERED,
-            FulfillmentState.NO_SHOW,
-            FulfillmentState.CANCELLED,
-        }
-    ):
-        raise HTTPException(status_code=409, detail="訂單目前不可建立物流單")
-    if (
-        order.fulfillment_status != FulfillmentStatus.PREPARING
-        or order.fulfillment.status != FulfillmentState.PREPARING
-    ):
-        raise HTTPException(status_code=409, detail="訂單進入備貨中後才能建立物流單")
-    if shipment.status != ShipmentStatus.READY_TO_CREATE:
-        raise HTTPException(status_code=409, detail="暫存物流單尚未完成")
-    temp_id = str(
-        (shipment.provider_payload or {}).get("TempLogisticsID", "")
-    )
-    if not temp_id:
-        raise HTTPException(status_code=409, detail="缺少綠界暫存物流單編號")
+    creation_blocker = _formal_logistics_creation_blocker(order, fulfillment, shipment)
+    if creation_blocker:
+        raise HTTPException(status_code=409, detail=creation_blocker)
+    temp_id = _temp_logistics_id(shipment)
     order_id_snapshot = order.id
     order_number = order.order_number
     admin_id = admin.id
@@ -1202,11 +1252,7 @@ async def advance_sandbox_shipment_status(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ShipmentRead:
-    if settings.environment.strip().lower() not in {
-        "development",
-        "sandbox",
-        "test",
-    }:
+    if not _sandbox_logistics_enabled(settings):
         raise HTTPException(status_code=404, detail="找不到此功能")
     if body.status not in {
         ShipmentStatus.IN_TRANSIT,

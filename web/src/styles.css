@@ -5739,6 +5739,8 @@ p {
   font-size: 1rem;
 }
 
+.meal-capacity-form { display: grid; gap: 8px; margin-top: 12px; }
+
 .supplier-accreditation-list {
   display: grid;
   grid-column: 1 / -1;

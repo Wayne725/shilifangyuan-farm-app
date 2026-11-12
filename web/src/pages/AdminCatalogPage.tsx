@@ -11,6 +11,7 @@ import { type FormEvent, useRef, useState } from "react";
 
 import { PhotoPicker, savePhoto } from "../components/PhotoPicker";
 import { AdminNav } from "../components/AdminNav";
+import { SupplierOrderDemand } from "../components/SupplierOrderDemand";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, formatDate, formatMoney } from "../lib/api";
@@ -189,6 +190,7 @@ export function AdminCatalogPage() {
         </Tabs.Content>
 
         <Tabs.Content className="tab-content" value="suppliers">
+          <SupplierOrderDemand suppliers={suppliers.data || []} />
           <SupplierCreateForm onDone={refreshSuppliers} />
           <AdminSection title="供應者清單" count={suppliers.data?.length || 0} pending={suppliers.isPending} error={suppliers.error?.message}>
             <div className="admin-review-list">

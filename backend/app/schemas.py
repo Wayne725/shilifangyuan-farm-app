@@ -1568,6 +1568,8 @@ class MealOfferingInput(BaseModel):
 
 class MealEventCreate(BaseModel):
     booking_policy: Literal["legacy", "workday", "special"] = "workday"
+    same_day_preparation_minutes: Optional[int] = Field(default=None, ge=1, le=1439, strict=True)
+    business_only: bool = False
     allow_cash_payment: bool = False
     title: str = Field(min_length=1, max_length=160)
     location: str = Field(min_length=1, max_length=240)
@@ -1633,14 +1635,66 @@ class MealScheduleInput(BaseModel):
         return self
 
 
+class MealScheduleUpdate(MealScheduleInput):
+    expected_updated_at: datetime | None = None
+
+    @field_validator("expected_updated_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("時間必須包含時區")
+        return value
+
+
 class MealScheduleRead(MealScheduleInput, ApiModel):
     id: str
     timezone: Literal["Asia/Taipei"] = "Asia/Taipei"
     created_at: datetime
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def normalize_version(cls, value: datetime) -> datetime:
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+MealScheduleOrderingStatus = Literal["draft", "paused", "closed", "open", "scheduled"]
+
+
+class MealScheduleDisablePreviewEvent(ApiModel):
+    id: str
+    title: str
+    service_date: date
+    order_count: int
+    ordering_status: MealScheduleOrderingStatus
+
+
+class MealScheduleDisablePreview(ApiModel):
+    preview_version: str
+    events: list[MealScheduleDisablePreviewEvent]
+
+
+class MealScheduleDisable(BaseModel):
+    scope: Literal["generation_only", "pause_generated"]
+    preview_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MealScheduleDisabled(ApiModel):
+    paused_event_count: int
 
 
 class MealPaymentOptionsUpdate(BaseModel):
     allow_cash_payment: bool
+
+
+class MealOrderingPauseUpdate(AdminActionReason):
+    paused: bool = Field(strict=True)
+    expected_version: int = Field(ge=0, strict=True)
+
+
+class MealOfferingCapacityUpdate(AdminActionReason):
+    expected_capacity: int = Field(ge=1, le=100000, strict=True)
+    capacity: int = Field(ge=1, le=100000, strict=True)
 
 
 class MealOfferingRead(ApiModel):
@@ -1669,6 +1723,9 @@ class MealEventSummary(ApiModel):
 
 class MealEventBookingRead(MealEventSummary):
     booking_policy: Literal["legacy", "workday", "special"] = "legacy"
+    same_day_preparation_minutes: Optional[int] = None
+    business_only: bool = False
+    ordering_paused: bool = False
     new_orders_blocked_reason: Optional[str] = None
     ordering_starts_at: datetime
     ordering_ends_at: datetime
@@ -1687,6 +1744,7 @@ class MealEventCalendarRead(MealEventBookingRead):
 
 
 class MealEventRead(MealEventBookingRead):
+    ordering_pause_version: int = 0
     allow_cash_payment: bool = False
     offerings: List[MealOfferingRead] = Field(default_factory=list)
     schedule_template_id: Optional[str] = None
@@ -1747,6 +1805,10 @@ class MealOptionSelectionRead(ApiModel):
     option_id: Optional[str] = None
     option_name: str
     price_delta: int
+
+
+class MealOrderSubmissionRead(ApiModel):
+    order_id: str | None
 
 
 class MealOrderQuoteItemRead(ApiModel):

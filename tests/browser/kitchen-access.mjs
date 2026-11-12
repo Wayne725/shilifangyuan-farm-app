@@ -19,13 +19,18 @@ const order = { id: 'kitchen-order', order_number: privateOrder, customer_name: 
 const job = { id: 'print-job', order_id: order.id, order_number: privateOrder, status: 'unknown', mode: 'live',
   kind: 'order', reprint_of_id: null, attempts: 1, can_query: true, last_error: 'transport_result_unknown',
   pickup_at: order.pickup_at, created_at: '2030-01-02T02:00:00Z', preview: `${privatePreview}\n${privateName}` };
+const printerConfiguration = {
+  configured_region: 'cn', live_config_ready: false, in_app_worker_enabled: true,
+  missing_variables: ['FEIE_UKEY'], checks: { printer_enabled: true, live_mode_selected: true,
+    credentials_configured: false, endpoint_allowed: true, ukey_rotation_confirmed: true, china_endpoint_confirmed: true },
+};
 
 async function fixture(t, width) {
   const browser = await engine.launch({ headless: true });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
   const state = { reads: [], writes: [], errors: [], unknown: [], external: [], refreshes: 0, refreshCode: 200,
-    codes: {}, queues: {}, holds: new Set(), pending: {}, holdEntered: {}, prints: 0 };
+    codes: {}, queues: {}, holds: new Set(), pending: {}, holdEntered: {}, prints: 0, printerConfiguration };
   await context.exposeBinding('isolatedKitchenPrint', () => { state.prints += 1; });
   await context.addInitScript(() => { window.print = () => void window.isolatedKitchenPrint(); });
   const fulfill = async (route, response) => {
@@ -55,6 +60,7 @@ async function fixture(t, width) {
     else if (path.endsWith('/kitchen-order/ticket')) { key = 'ticket'; body = order; }
     else if (path.endsWith('/kitchen-order/status')) { key = 'status'; body = { ...order, fulfillment_status: 'preparing' }; }
     else if (path === '/v1/admin/printers/status') { key = 'device'; body = { enabled: true, dry_run: false, status: 'online', error: null }; }
+    else if (path === '/v1/admin/printers/configuration') { key = 'configuration'; body = state.printerConfiguration; }
     else if (path === '/v1/admin/printers/jobs') { key = 'jobs'; body = { items: [job], total: 1 }; }
     else if (path === '/v1/admin/printers/jobs/print-job') { key = 'preview'; body = job; }
     else if (path.startsWith('/v1/admin/printers/jobs/print-job/')) { key = path.split('/').at(-1); body = key === 'reprint' ? { ...job, id: 'new-print-job', status: 'pending' } : job; }
@@ -101,7 +107,7 @@ async function fixture(t, width) {
     }
     const body = await page.locator('body').innerText();
     for (const value of [privateOrder, privateName, privatePreview]) assert.equal(body.includes(value), false, `撤權後不得保留${value}`);
-    assert.equal(await page.getByRole('button', { name: /建立正式補印|開始製作|重新查詢結果|開啟列印對話框/ }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: /建立正式補印|開始製作|重新查詢結果|開啟列印對話框|雲端設定/ }).count(), 0);
   }
   async function stopped() {
     const before = [state.reads.length, state.writes.length, state.prints];
@@ -138,12 +144,13 @@ for (const width of [390, 1440]) {
   });
 }
 
-for (const key of ['device', 'preview', 'list', 'ticket', 'platform']) {
+for (const key of ['device', 'configuration', 'preview', 'list', 'ticket', 'platform']) {
   test(`${key} GET403也隱藏父子全部私人內容並停止輪詢`, async t => {
     const f = await fixture(t, 1440);
     f.state.codes[key] = 403;
     const denied = f.page.waitForResponse(response => response.status() === 403);
     if (key === 'device') await f.page.getByRole('button', { name: '查詢設備', exact: true }).click();
+    else if (key === 'configuration') await f.page.getByRole('button', { name: '雲端設定', exact: true }).click();
     else if (key === 'list') await f.page.getByRole('button', { name: '更新清單', exact: true }).click();
     else if (key === 'ticket') await f.page.getByRole('button', { name: '預覽備餐單／補印', exact: true }).click();
     else if (key === 'platform') await f.page.reload();
@@ -153,6 +160,67 @@ for (const key of ['device', 'preview', 'list', 'ticket', 'platform']) {
     await f.hidden(); await f.stopped();
   });
 }
+
+for (const width of [390, 1440]) {
+  test(`${width}px 雲端設定按需讀取，顯示有效區域及送印狀態`, async t => {
+    const f = await fixture(t, width);
+    const button = f.page.getByRole('button', { name: '雲端設定', exact: true });
+    const configuration = f.page.getByRole('region', { name: '雲端出單設定', exact: true });
+    const count = () => f.state.reads.filter(row => row.key === 'configuration').length;
+    await button.waitFor();
+    assert.equal(count(), 0);
+    assert.equal(await button.getAttribute('aria-expanded'), 'false');
+    assert.equal(await configuration.count(), 0);
+    await button.click();
+    await configuration.getByText('中國站', { exact: true }).waitFor();
+    assert.equal(count(), 1);
+    assert.equal(await button.getAttribute('aria-expanded'), 'true');
+    for (const text of ['正式', '未就緒', '設備憑證', '站內背景送單', '已啟用']) {
+      assert.equal(await configuration.getByText(text, { exact: true }).count(), 1, text);
+    }
+    assert.equal(await configuration.getByText('FEIE_UKEY', { exact: true }).count(), 0);
+    assert.equal(await f.page.getByRole('button', { name: '查詢設備', exact: true }).count(), 1);
+    assert.equal(await f.page.getByRole('button', { name: '查看／補印', exact: true }).count(), 1);
+    assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+
+    await button.click();
+    await f.page.clock.runFor(61000);
+    assert.equal(count(), 1);
+    f.state.printerConfiguration = {
+      ...printerConfiguration, configured_region: 'jp', live_config_ready: true, in_app_worker_enabled: false,
+      checks: { ...printerConfiguration.checks, credentials_configured: true, china_endpoint_confirmed: undefined, asia_pacific_endpoint_confirmed: true },
+    };
+    await button.click();
+    await configuration.getByText('亞太站', { exact: true }).waitFor();
+    assert.equal(count(), 2);
+    assert.equal(await configuration.getByText('就緒', { exact: true }).count(), 1);
+    assert.equal(await configuration.getByText('未啟用', { exact: true }).count(), 1);
+    assert.equal(await configuration.getByText('待確認', { exact: true }).count(), 0);
+    assert.equal(f.state.prints, 0);
+    assert.deepEqual(f.state.writes, []);
+  });
+}
+
+test('撤權後晚到雲端設定200不得恢復內容或重新讀取', async t => {
+  const f = await fixture(t, 390);
+  const held = f.hold('configuration');
+  await f.page.getByRole('button', { name: '雲端設定', exact: true }).click();
+  await held;
+  f.state.codes.device = 403;
+  const denied = f.page.waitForResponse(response => response.url().endsWith('/printers/status') && response.status() === 403);
+  await f.page.getByRole('button', { name: '查詢設備', exact: true }).click();
+  await denied;
+  await f.page.clock.runFor(100);
+  await f.hidden();
+  f.release('configuration');
+  await f.page.clock.runFor(100);
+  await f.hidden();
+  await f.stopped();
+  assert.equal(await f.page.getByRole('region', { name: '雲端出單設定', exact: true }).count(), 0);
+  assert.equal(f.state.reads.filter(row => row.key === 'configuration').length, 1);
+  assert.equal(f.state.prints, 0);
+  assert.deepEqual(f.state.writes, []);
+});
 
 for (const [key, button] of [['query', '重新查詢結果'], ['resolve', '確認紙本已印'], ['reprint', '建立正式補印'], ['status', '開始製作']]) {
   test(`${key} 寫入403共享撤權並禁止後續動作`, async t => {

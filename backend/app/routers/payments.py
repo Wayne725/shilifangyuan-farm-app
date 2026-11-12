@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from ..auth import get_current_user, require_admin
 from ..config import Settings, get_settings
+from ..recovery_quarantine import RecoveryHoldActive, has_active_hold, payment_targets, provider_payment_reference, require_unheld
 from ..database import get_session
 from ..domain import meal_payment_window_open
 from ..integrations.common import IntegrationError
@@ -25,6 +26,8 @@ from ..integrations.ecpay import (
 from ..integrations.payment_service import (
     PaymentApplicationError,
     SQLAlchemyPaymentCallbackRepository,
+    browser_return_base,
+    browser_return_storefront,
     create_membership_payment_attempt,
     create_payment_attempt,
     ensure_order_payment_runtime_enabled,
@@ -116,6 +119,7 @@ async def _refresh_raygate_attempt(
     settings: Settings,
     attempt: PaymentAttempt,
 ) -> dict[str, str]:
+    await require_unheld(session, *payment_targets(attempt))
     adapter = raygate_payment_adapter_from_settings(settings)
     query_result = await adapter.query_order(attempt.merchant_trade_no)
     repository = SQLAlchemyPaymentCallbackRepository(session)
@@ -130,6 +134,7 @@ async def _refresh_raygate_attempt(
 )
 async def start_payment(
     order_id: str,
+    request: Request,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -140,6 +145,7 @@ async def start_payment(
             order_id=order_id,
             user=user,
             settings=settings,
+            return_storefront=browser_return_storefront(settings, request.headers.get("Origin")),
         )
         return payment_attempt_read(attempt, settings)
     except PaymentApplicationError as exc:
@@ -160,6 +166,7 @@ async def start_payment(
 )
 async def start_membership_payment(
     charge_id: str,
+    request: Request,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -170,6 +177,7 @@ async def start_membership_payment(
             charge_id=charge_id,
             user=user,
             settings=settings,
+            return_storefront=browser_return_storefront(settings, request.headers.get("Origin")),
         )
         return payment_attempt_read(attempt, settings)
     except PaymentApplicationError as exc:
@@ -201,6 +209,8 @@ async def refresh_payment_attempt_status(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     attempt = await _owned_payment_attempt(session, attempt_id, user)
+    if await has_active_hold(session, *payment_targets(attempt)):
+        return {**_payment_attempt_status(attempt), "status": "confirming"}
     enforce(f"payment-refresh:attempt:{attempt_id}", PAYMENT_REFRESH_RULE)
     if (
         attempt.provider == RAYGATE_PAYMENT_PROVIDER
@@ -259,6 +269,7 @@ async def query_admin_order_payment(
         raise HTTPException(404, "此訂單尚無付款紀錄")
     if attempt.provider != RAYGATE_PAYMENT_PROVIDER:
         raise HTTPException(409, "此操作僅支援原雷門付款紀錄")
+    await require_unheld(session, *payment_targets(attempt))
     attempt_id = attempt.id
     session.add(AdminAudit(actor_id=actor_id, action="payment.query_requested", aggregate_type="order", aggregate_id=order_id,
                            reason=body.reason, data={"attempt_id": attempt_id, "provider": "raygate"}))
@@ -291,6 +302,7 @@ async def payment_checkout(
     attempt = await session.get(PaymentAttempt, attempt_id)
     if attempt is None:
         raise HTTPException(status_code=404, detail="找不到付款頁")
+    await require_unheld(session, *payment_targets(attempt))
     if attempt.activity_charge_id is not None:
         from ..activity_payments import lock_activity_payment_subject, payable
         charge = await lock_activity_payment_subject(session, attempt.activity_charge_id)
@@ -395,6 +407,9 @@ async def ecpay_payment_callback(
             acknowledgement,
             headers={"Cache-Control": "no-store"},
         )
+    except RecoveryHoldActive:
+        await session.rollback()
+        return PlainTextResponse("0|ERROR", status_code=503, headers={"Cache-Control": "no-store", "Retry-After": "30"})
     except (IntegrationError, PaymentApplicationError, ValueError) as exc:
         await session.rollback()
         logger.exception(
@@ -460,6 +475,15 @@ async def raygate_payment_callback(
         )
 
     callback_payload = callback_result.to_canonical_payload()
+    attempt = await session.scalar(select(PaymentAttempt).where(
+        PaymentAttempt.provider == RAYGATE_PAYMENT_PROVIDER,
+        PaymentAttempt.merchant_trade_no == callback_payload["MerchantTradeNo"],
+    ))
+    targets = payment_targets(attempt) if attempt else {
+        ("provider_payment", provider_payment_reference(RAYGATE_PAYMENT_PROVIDER, callback_payload["MerchantTradeNo"])),
+    }
+    if await has_active_hold(session, *targets):
+        return PlainTextResponse("RETRY", status_code=503, headers={"Cache-Control": "no-store", "Retry-After": "30"})
     try:
         confirmed_payload = await adapter.query_order(
             callback_result.pos_order_number
@@ -504,6 +528,9 @@ async def raygate_payment_callback(
             raygate_event_key(confirmed_payload),
             confirmed_payload,
         )
+    except RecoveryHoldActive:
+        await session.rollback()
+        return PlainTextResponse("RETRY", status_code=503, headers={"Cache-Control": "no-store", "Retry-After": "30"})
     except (IntegrationError, PaymentApplicationError, ValueError) as exc:
         await session.rollback()
         logger.exception(
@@ -539,6 +566,7 @@ async def raygate_payment_result(
     order_id = attempt.order_id
     membership_charge_id = attempt.membership_charge_id
     activity_charge_id = attempt.activity_charge_id
+    return_storefront = attempt.browser_return_storefront
     payment_state = attempt.status.value
     if attempt.status in {
         PaymentStatus.PENDING,
@@ -573,6 +601,7 @@ async def raygate_payment_result(
             membership_charge_id=membership_charge_id,
             activity_charge_id=activity_charge_id,
             attempt_id=attempt_id,
+            return_storefront=return_storefront,
         ),
         status_code=status.HTTP_303_SEE_OTHER,
         headers={
@@ -606,6 +635,7 @@ async def ecpay_payment_result(
     order_id = attempt.order_id
     membership_charge_id = attempt.membership_charge_id
     activity_charge_id = attempt.activity_charge_id
+    return_storefront = attempt.browser_return_storefront
     try:
         repository = SQLAlchemyPaymentCallbackRepository(session)
         await repository.apply_ecpay_payment_callback(
@@ -629,6 +659,7 @@ async def ecpay_payment_result(
             order_id=order_id,
             membership_charge_id=membership_charge_id,
             activity_charge_id=activity_charge_id,
+            return_storefront=return_storefront,
         ),
         status_code=status.HTTP_303_SEE_OTHER,
     )
@@ -642,11 +673,13 @@ def _payment_result_location(
     membership_charge_id: str | None,
     attempt_id: str | None = None,
     activity_charge_id: str | None = None,
+    return_storefront: str | None = None,
 ) -> str:
+    base = browser_return_base(settings, return_storefront)
     if activity_charge_id is not None:
         query = urlencode({"activity_charge_id": activity_charge_id, "payment": payment_state,
             **({"attempt_id": attempt_id} if attempt_id else {})})
-        return f"{settings.web_base_url.rstrip('/')}/activities/registrations?{query}"
+        return f"{base}/activities/registrations?{query}"
     if order_id is not None:
         query = urlencode(
             {
@@ -655,7 +688,7 @@ def _payment_result_location(
                 **({"attempt_id": attempt_id} if attempt_id else {}),
             }
         )
-        return f"{settings.web_base_url.rstrip('/')}/orders?{query}"
+        return f"{base}/orders?{query}"
     query = urlencode(
         {
             "membership_charge_id": membership_charge_id,
@@ -663,7 +696,7 @@ def _payment_result_location(
             **({"attempt_id": attempt_id} if attempt_id else {}),
         }
     )
-    return f"{settings.web_base_url.rstrip('/')}/account?{query}"
+    return f"{base}/account?{query}"
 
 
 router = payments_router

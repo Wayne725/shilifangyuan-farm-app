@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, update
 
 from .models import Invoice, InvoiceStatus, OutboxEvent, OutboxStatus, PaymentMethod
+from .recovery_work import INVOICE_ISSUE_EVENTS, outbox_is_held
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -37,8 +38,9 @@ async def cancel_unissued_invoice_jobs(session, order) -> None:
         return
     await session.execute(update(OutboxEvent).where(
         OutboxEvent.aggregate_id == order.id,
-        OutboxEvent.event_type.in_(["invoice.issue_requested", "invoice.issue", "issue_invoice"]),
+        OutboxEvent.event_type.in_(INVOICE_ISSUE_EVENTS),
         OutboxEvent.status == OutboxStatus.PENDING,
+        ~outbox_is_held(),
     ).values(status=OutboxStatus.COMPLETED, processed_at=datetime.now(timezone.utc), last_error="cancelled_before_invoice_issue"))
     if invoice_handling(order) != "external":
         order.invoice_status = InvoiceStatus.NOT_ELIGIBLE

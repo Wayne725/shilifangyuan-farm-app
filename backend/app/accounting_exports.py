@@ -15,8 +15,8 @@ from starlette.concurrency import run_in_threadpool
 from .domain import aware
 from .csv_export import csv_response
 from .meal_booking import TAIPEI
-from .models import FinancialStatementImport, Invoice, InvoiceStatus, Order
-from .order_categories import order_category_condition
+from .models import FinancialStatementImport, Invoice, InvoiceStatus, Order, WalkInSale
+from .order_categories import financial_order_category_condition
 from .statement_reconciliation import reconcile_statement, filter_reconciliation
 from .statement_formats import SOURCES, _tables, parse_statement, text
 
@@ -43,8 +43,9 @@ def validate_period(start, end):
 
 
 async def website_invoices(session, start, end, order_category='all'):
-    invoices = list(await session.scalars(select(Invoice).join(Order, Order.id == Invoice.order_id).where(
-        order_category_condition(order_category),
+    invoices = list(await session.scalars(select(Invoice).join(Order, Order.id == Invoice.order_id)
+        .outerjoin(WalkInSale, WalkInSale.order_id == Order.id).where(
+        financial_order_category_condition(order_category),
         Invoice.invoice_number.is_not(None),
         Invoice.invoice_date >= datetime.combine(start, time.min, TAIPEI).astimezone(timezone.utc),
         Invoice.invoice_date < datetime.combine(end + timedelta(days=1), time.min, TAIPEI).astimezone(timezone.utc),

@@ -267,6 +267,12 @@ async def prepare_quantity_amendment(session, order_id, body, user, settings, *,
         raise HTTPException(409, "訂單庫存保留缺少付款紀錄，請由管理員查核")
     await _check_resources(session, order, quantities, now)
     quote = await _quote(session, order, quantities, now)
+    if order.meal_event is not None and (
+        order.meal_event.same_day_preparation_minutes is not None or order.meal_event.business_only
+    ):
+        now = datetime.now(timezone.utc)
+        if reason := order_amendment_blocked_reason(order, now):
+            raise HTTPException(409, reason)
     if not confirm:
         return order, quote
     if body.expected_total != quote.amount_total:

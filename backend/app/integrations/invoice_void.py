@@ -18,10 +18,11 @@ from ..models import (
     Refund,
     RefundStatus,
 )
+from ..recovery_quarantine import require_unheld
 from .common import IntegrationError
 from .fanyu_invoice import FanyuInvoiceAdapter
 from .invoice import InvoiceProvider
-from .invoice_service import InvoiceApplicationError, reconcile_order_invoice
+from .invoice_service import InvoiceApplicationError, _parse_invoice_date, reconcile_order_invoice
 
 
 class InvoiceVoidError(InvoiceApplicationError):
@@ -40,6 +41,7 @@ async def void_refunded_order_invoice(
     trigger: str = "admin",
     refund_id: str | None = None,
 ) -> Invoice:
+    await require_unheld(session, ("order", order_id))
     audit_context = (
         {"trigger": trigger, "refund_id": refund_id}
         if trigger != "admin" else {}
@@ -92,7 +94,7 @@ async def void_refunded_order_invoice(
             raise InvoiceVoidError("汎宇查無原發票，停止作廢，請先人工核對")
         if original_number and invoice.invoice_number != original_number:
             raise InvoiceVoidError("查回票號與原發票不同，停止作廢")
-        if invoice.invoice_date is None:
+        if _parse_invoice_date(found.invoice_date) is None:
             raise InvoiceVoidError("查回發票日期不完整，停止作廢")
         if invoice.provider_status not in {"0", "1"}:
             raise InvoiceVoidError("汎宇尚未回傳可確認的原發票狀態")

@@ -25,38 +25,50 @@ const rejectionReasons = [
   { label: "需聯絡確認", value: "請電話聯絡合作社確認訂單。" },
 ];
 
-export function AdminMealCancellations({ initialSearch = "" }: { initialSearch?: string }) {
+export function AdminMealCancellations({ initialSearch = "", initialOrderId }: { initialSearch?: string; initialOrderId?: string }) {
   const [status, setStatus] = useState("pending");
   const [searchInput, setSearchInput] = useState(initialSearch);
   const [search, setSearch] = useState(initialSearch);
+  const [orderId, setOrderId] = useState(initialOrderId);
   const [offset, setOffset] = useState(0);
   const [startsOn, setStartsOn] = useState("");
   const [endsOn, setEndsOn] = useState("");
-  const params = new URLSearchParams({ review_status: status, search, limit: String(pageSize), offset: String(offset) });
-  if (startsOn) params.set("starts_on", startsOn);
-  if (endsOn) params.set("ends_on", endsOn);
+  const filters = new URLSearchParams({ search });
+  if (orderId) filters.set("order_id", orderId);
+  if (startsOn) filters.set("starts_on", startsOn);
+  if (endsOn) filters.set("ends_on", endsOn);
+  const params = `${filters}&review_status=${status}&limit=${pageSize}&offset=${offset}`;
   const queue = useQuery({
-    queryKey: ["admin-meal-cancellations", status, search, offset, startsOn, endsOn],
+    queryKey: ["admin-meal-cancellations", params],
     queryFn: () => apiFetch<MealCancellationQueue>(`/v1/admin/meal-cancellation-requests?${params}`),
     refetchInterval: 15000,
   });
+  // Keep review actions scoped even when an older API ignores order_id.
+  const items = queue.isError ? undefined : queue.data?.items.filter(item => !orderId || item.order.id === orderId);
+  const total = items && items.length !== queue.data?.items.length ? items.length : queue.data?.total ?? 0;
   return <section className="meal-cancellation-management" aria-labelledby="meal-cancellation-heading">
     <h2 id="meal-cancellation-heading">退單審核</h2>
     <div className="field-grid two-columns"><label className="field"><span>申請開始日期</span><input type="date" value={startsOn} onChange={event => { setStartsOn(event.target.value); setOffset(0); }} /></label><label className="field"><span>申請結束日期</span><input type="date" min={startsOn} value={endsOn} onChange={event => { setEndsOn(event.target.value); setOffset(0); }} /></label></div>
-    <MealCancellationSummary startsOn={startsOn} endsOn={endsOn} search={search} status={status} />
-    <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setSearch(searchInput.trim()); setOffset(0); }}>
+    <MealCancellationSummary filters={filters.toString()} status={status} orderId={orderId} />
+    <form className="admin-order-search" onSubmit={(event) => {
+      event.preventDefault();
+      const term = searchInput.trim();
+      if (term !== search) setOrderId(undefined);
+      setSearch(term);
+      setOffset(0);
+    }}>
       <label>訂單編號或 Email<input value={searchInput} maxLength={100} onChange={(event) => setSearchInput(event.target.value)} /></label>
       <label>退單審核狀態<select value={status} onChange={(event) => { setStatus(event.target.value); setOffset(0); }}>{["pending", "approved", "rejected", "all"].map((key) => <option value={key} key={key}>{key === "all" ? "全部紀錄" : reviewLabels[key as keyof typeof reviewLabels]}</option>)}</select></label>
       <button className="button button-system" type="submit">搜尋</button>
     </form>
     {queue.isPending && <LoadingLines count={3} />}
     {queue.isError && <DataState kind="error" title="退單申請無法讀取" detail={queue.error.message} onAction={() => queue.refetch()} />}
-    {queue.data?.items.length === 0 && <DataState title="沒有符合條件的退單申請" detail="可切換審核狀態或修改搜尋條件。" />}
-    <div className="admin-review-list">{queue.data?.items.map((item) => <CancellationReviewCard key={item.request.id} item={item} />)}</div>
-    {queue.data && <div className="admin-pagination">
-      <span>共 {queue.data.total} 筆・第 {Math.floor(offset / pageSize) + 1} 頁</span>
+    {items?.length === 0 && <DataState title="沒有符合條件的退單申請" detail="可切換審核狀態或修改搜尋條件。" />}
+    <div className="admin-review-list">{items?.map((item) => <CancellationReviewCard key={item.request.id} item={item} />)}</div>
+    {!queue.isError && queue.data && <div className="admin-pagination">
+      <span>共 {total} 筆・第 {Math.floor(offset / pageSize) + 1} 頁</span>
       <button className="button button-quiet" type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - pageSize))}>上一頁</button>
-      <button className="button button-quiet" type="button" disabled={offset + pageSize >= queue.data.total} onClick={() => setOffset(offset + pageSize)}>下一頁</button>
+      <button className="button button-quiet" type="button" disabled={offset + pageSize >= total} onClick={() => setOffset(offset + pageSize)}>下一頁</button>
     </div>}
   </section>;
 }

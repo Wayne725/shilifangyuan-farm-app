@@ -1,4 +1,10 @@
+import type { FinancialOrderCategory } from "./order-category";
 import type { InvoiceStatus } from "./types";
+
+export interface UtcFinancePeriod {
+  starts_on: string;
+  ends_on: string;
+}
 
 export interface MealSalesPeriod {
   period: string;
@@ -9,7 +15,12 @@ export interface MealSalesPeriod {
   refund_count: number;
 }
 
-export interface MealSalesOrder {
+interface FinancialOrderSource {
+  financial_order_category?: Exclude<FinancialOrderCategory, "all"> | "walk_in_meal" | "walk_in_product";
+  financial_order_category_label?: string;
+}
+
+export interface MealSalesOrder extends FinancialOrderSource {
   revision?: number;
   receipts?: Array<{ merchant_trade_no: string; order_revision: number; amount: number; status: string; received_at: string | null; obsolete_revision: boolean }>;
   id: string;
@@ -47,6 +58,14 @@ export interface MealSalesOrder {
   refunds: Array<{ amount: number; status: string; reason: string; requested_at: string; completed_at?: string | null; purpose?: string; payment_attempt_id?: string | null }>;
 }
 
+interface MealSalesProduct extends FinancialOrderSource {
+  name: string;
+  unit: string;
+  quantity: number;
+  sales_amount: number;
+  order_count: number;
+}
+
 export interface MealSalesReport {
   starts_on: string;
   ends_on: string;
@@ -62,7 +81,7 @@ export interface MealSalesReport {
   daily: MealSalesPeriod[];
   weekly: MealSalesPeriod[];
   monthly: MealSalesPeriod[];
-  products: Array<{ name: string; unit: string; quantity: number; sales_amount: number; order_count: number }>;
+  products: MealSalesProduct[];
   orders: { items: MealSalesOrder[]; total: number; limit: number; offset: number };
 }
 
@@ -81,4 +100,9 @@ export function financePeriodPreset(mode: "today" | "week" | "month", today = ta
   const date = new Date(`${today}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
   return { startsOn: date.toISOString().slice(0, 10), endsOn: today };
+}
+
+export function currentUtcFinancePeriod(): UtcFinancePeriod {
+  const { startsOn, endsOn } = financePeriodPreset("month", new Date().toISOString().slice(0, 10));
+  return { starts_on: startsOn, ends_on: endsOn };
 }

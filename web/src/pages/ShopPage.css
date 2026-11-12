@@ -1,0 +1,32 @@
+.shop-product-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 1rem;
+  margin-block: 1.25rem;
+}
+
+.shop-product-filter-actions,
+.shop-product-results,
+.shop-product-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.shop-product-results {
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+
+.shop-product-results > p {
+  margin: 0;
+}
+
+@media (max-width: 680px) {
+  .shop-product-filters {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+}

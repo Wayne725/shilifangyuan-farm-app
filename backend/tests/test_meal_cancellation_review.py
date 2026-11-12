@@ -10,6 +10,7 @@ import app.jobs as jobs
 from app.integrations.common import HTTPResponse
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
 from app.integrations.payment_service import SQLAlchemyPaymentCallbackRepository
+from app.meal_schedules import TAIPEI
 from app.models import (
     AdminAudit, FulfillmentMethod, FulfillmentState, FulfillmentStatus,
     InventoryReservation, Invoice, InvoiceStatus, Meal, MealCancellationRequest,
@@ -210,6 +211,7 @@ async def test_approved_refund_flows_to_confirmed_invoice_void(review_context, m
     await c.session.commit()
     adjustment = await c.session.scalar(select(OutboxEvent).where(OutboxEvent.event_type == "invoice.adjustment_required"))
     calls, voided = [], False
+    invoice_date = c.now.astimezone(TAIPEI).strftime("%Y%m%d")
 
     async def transport(url, envelope, _headers, _timeout):
         nonlocal voided
@@ -217,7 +219,7 @@ async def test_approved_refund_flows_to_confirmed_invoice_void(review_context, m
         calls.append(path)
         if path == "cancelInvoice":
             voided = True
-        return HTTPResponse(200, json.dumps({"statusCode": "0", "respData": {"invNo": "AB12345678", "invDate": "20261008", "status": "1" if voided else "0"}}), {})
+        return HTTPResponse(200, json.dumps({"statusCode": "0", "respData": {"invNo": "AB12345678", "invDate": invoice_date, "status": "1" if voided else "0"}}), {})
 
     monkeypatch.setattr(jobs, "invoice_adapter_from_settings", lambda _: FanyuInvoiceAdapter(fanyu_settings(), transport=transport))
     await jobs._dispatch_outbox_event(c.session, make_test_settings(invoice_provider="fanyu"), adjustment.id)

@@ -2,9 +2,9 @@ import { AdminWalkInSale } from "../components/AdminWalkInSale";
 import { AdminInvoiceIssue } from "../components/AdminInvoiceIssue";
 import { OrderQuantityAmendment } from "../components/OrderQuantityAmendment";
 import { Buildings, Package, Truck } from "@phosphor-icons/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { onlineManager, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { DataState, LoadingLines, SectionHeading } from "../components/Shared";
 import { AdminCashPayment } from "../components/AdminCashPayment";
@@ -27,14 +27,18 @@ import { useAdminOrderAccess } from "../lib/admin-order-access";
 import { shippingChannelLabels } from "../lib/commerce";
 import {
   adminPaymentStatusLabel,
+  invoiceProviderNames,
   shipmentStatusLabel,
 } from "../lib/labels";
 import type { Order } from "../lib/types";
+
+type InvoiceFollowupReason = "business_date" | "issuance" | "void";
 
 interface AdminOrder extends Order {
   customer_name: string;
   contact_phone: string | null;
   contact_phone_status: "available" | "missing" | "unavailable";
+  invoice_followup_reason?: InvoiceFollowupReason;
 }
 
 interface AdminOrderPage {
@@ -55,14 +59,20 @@ const operationTitles = {
   issues: "問題回報",
 };
 
+const invoiceFollowupCopy = {
+  business_date: { label: "會餐發票日期待核對", action: "核對付款日、取餐日與發票日期。" },
+  issuance: { label: "開票待核對", action: "使用「查詢發票」確認原發票的開立狀態。" },
+  void: { label: "作廢待核對" },
+};
+
 export function AdminPage() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
   const orderAccess = useAdminOrderAccess();
   const routeSearch = useSearch({ from: "/admin" });
-  const { q, queue } = routeSearch;
+  const { q, queue, order_id: orderId } = routeSearch;
   const section = routeSearch.section === "suppliers" || routeSearch.section === "locations"
-    ? "today" : routeSearch.section ?? (q || queue ? "orders" : "today");
+    ? "today" : routeSearch.section ?? (q || queue || orderId ? "orders" : "today");
   if (!isAdmin) {
     return (
       <section className="admin-gate">
@@ -75,7 +85,7 @@ export function AdminPage() {
   }
 
   const content = section === "today" ? <AdminToday adminId={user.id} />
-    : section === "orders" ? <AdminOrdersPanel key={JSON.stringify([user.id, q, queue])} adminId={user.id} q={q} queue={queue} orderAccess={orderAccess} />
+    : section === "orders" ? <AdminOrdersPanel key={JSON.stringify([user.id, q, queue, orderId])} adminId={user.id} q={q} queue={queue} initialOrderId={orderId} orderAccess={orderAccess} />
     : section === "manual-invoice" ? <AdminWalkInSale key={user.id} />
     : section === "summary" ? <AdminOrderSummary />
     : <section className="admin-issues-panel"><SectionHeading eyebrow="SYSTEM STATUS / 系統狀態" title="問題回報" /><AdminFailurePanel /></section>;
@@ -91,17 +101,23 @@ export function AdminPage() {
   </>;
 }
 
-function AdminOrdersPanel({ adminId, q, queue, orderAccess }: {
+const subscribeOrderConnection = (listener: () => void) => onlineManager.subscribe(listener);
+const hasOrderConnection = () => onlineManager.isOnline();
+
+function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
   adminId: string;
   q?: string;
   queue?: "refunds" | "business-unpaid" | "invoice";
+  initialOrderId?: string;
   orderAccess: ReturnType<typeof useAdminOrderAccess>;
 }) {
   const queryClient = useQueryClient();
+  const isOnline = useSyncExternalStore(subscribeOrderConnection, hasOrderConnection);
   const [orderSearchInput, setOrderSearchInput] = useState(q || "");
   const [orderSearch, setOrderSearch] = useState(q || "");
+  const [orderId, setOrderId] = useState(initialOrderId);
   const [orderOffset, setOrderOffset] = useState(0);
-  const [orderCategory, setOrderCategory] = useState<OrderCategory>(queue === "business-unpaid" || queue === "invoice" ? "meal" : "all");
+  const [orderCategory, setOrderCategory] = useState<OrderCategory>(queue === "business-unpaid" ? "meal" : "all");
   const [orderPayment, setOrderPayment] = useState("");
   const [cancellationPending, setCancellationPending] = useState(queue === "refunds");
   const [businessUnpaid, setBusinessUnpaid] = useState(queue === "business-unpaid");
@@ -110,13 +126,21 @@ function AdminOrdersPanel({ adminId, q, queue, orderAccess }: {
     q: orderSearch, offset: String(orderOffset), limit: "12",
     cancellation_pending: String(cancellationPending), order_category: orderCategory,
   });
+  if (orderId) params.set("order_id", orderId);
   if (orderPayment) params.set("payment_status", orderPayment);
   if (businessUnpaid) params.set("business_unpaid", "true");
   if (invoiceFollowup) params.set("invoice_followup", "true");
   const orderQuery = useQuery({
     queryKey: ["admin-orders", adminId, params.toString()],
-    queryFn: ({ signal }) => orderAccess.request<AdminOrderPage>(`/v1/admin/order-search?${params}`, { signal }),
+    queryFn: async ({ signal }) => {
+      const result = await orderAccess.request<AdminOrderPage>(`/v1/admin/order-search?${params}`, { signal });
+      if (!orderId) return result;
+      // Older APIs may ignore order_id. Keep all order actions bound to the selected record.
+      const items = result.items.filter(order => order.id === orderId);
+      return { ...result, items, total: items.length };
+    },
     enabled: !orderAccess.denied,
+    staleTime: 0,
     retry: (failureCount) => !orderAccess.isDenied() && failureCount < 2,
   });
   useEffect(() => {
@@ -131,11 +155,13 @@ function AdminOrdersPanel({ adminId, q, queue, orderAccess }: {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
   const createLogistics = useMutation({
+    networkMode: "always",
     mutationFn: (orderId: string) =>
       orderAccess.request(`/v1/admin/orders/${orderId}/logistics/create`, { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-orders"] }),
   });
   const advanceShipment = useMutation({
+    networkMode: "always",
     mutationFn: ({ orderId, status }: { orderId: string; status: string }) =>
       orderAccess.request(`/v1/admin/orders/${orderId}/logistics/sandbox-status`, {
         method: "POST",
@@ -150,18 +176,24 @@ function AdminOrdersPanel({ adminId, q, queue, orderAccess }: {
     <OrderCategoryFilter value={orderCategory} onChange={(value) => {
       setOrderCategory(value);
       setOrderOffset(0);
-      if (value === "general") { setBusinessUnpaid(false); setInvoiceFollowup(false); }
+      if (value === "general") setBusinessUnpaid(false);
     }} />
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
-    <form className="admin-order-search" onSubmit={(event) => { event.preventDefault(); setOrderOffset(0); setOrderSearch(orderSearchInput.trim()); }}>
+    <form className="admin-order-search" onSubmit={(event) => {
+      event.preventDefault();
+      const term = orderSearchInput.trim();
+      if (term !== orderSearch) setOrderId(undefined);
+      setOrderSearch(term);
+      setOrderOffset(0);
+    }}>
       <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} type="search" placeholder="訂單編號、姓名、Email、商品或統編" maxLength={120} /></label>
       <label className="field"><span>付款狀態</span><select value={orderPayment} onChange={(event) => { setOrderPayment(event.target.value); setOrderOffset(0); }}><option value="">全部狀態</option><option value="pending">待付款</option><option value="paid">已付款</option><option value="refund_pending">退款中</option><option value="refunded">已退款</option><option value="failed">付款失敗</option><option value="expired">已逾期</option><option value="late_paid_refund_required">付款晚到待退款</option></select></label>
       <label className="check-field"><input type="checkbox" checked={cancellationPending} onChange={(event) => { setCancellationPending(event.target.checked); setOrderOffset(0); }} />只看退單待審</label>
       <label className="check-field"><input type="checkbox" checked={businessUnpaid} onChange={event => { setBusinessUnpaid(event.target.checked); setOrderOffset(0); if (event.target.checked) { setOrderCategory("meal"); setOrderPayment(""); setInvoiceFollowup(false); } }} />會餐未付款</label>
       {invoiceFollowup && <label className="check-field"><input type="checkbox" checked onChange={() => { setInvoiceFollowup(false); setOrderOffset(0); }} />發票待合作社處理</label>}
       <button className="button button-quiet" type="submit">搜尋</button>
-      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false); setInvoiceFollowup(false); setOrderOffset(0); }}>清除查詢</button>
+      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderId(undefined); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false); setInvoiceFollowup(false); setOrderOffset(0); }}>清除查詢</button>
     </form>
     <div className="operations-list">
       {!orderQuery.isError && orderQuery.data?.items.map((order) => (
@@ -182,15 +214,20 @@ function AdminOrdersPanel({ adminId, q, queue, orderAccess }: {
           </dl>
           <div className="operation-state">
             {order.meal_booking_type === "business" && <span className="status-chip">會餐{order.payment_followup_required ? " · 未付款待追蹤" : ""}</span>}
-            {order.invoice_followup_required && <span className="status-chip">發票待合作社處理</span>}
+            {(order.invoice_followup_reason || order.invoice_followup_required) && <span className="status-chip">
+              {order.invoice_followup_reason ? invoiceFollowupCopy[order.invoice_followup_reason].label : "發票待合作社處理"}
+            </span>}
             <OrderStatusBadge kind="payment" status={order.payment_status} />
-            <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} />
+            <OrderStatusBadge kind="fulfillment" status={displayedFulfillmentStatus(order)} />
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />
             {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {shipmentStatusLabel(order.shipment.status)}</span>}
           </div>
+          {order.invoice_followup_reason && <InvoiceFollowupAction reason={order.invoice_followup_reason} invoice={order.invoice} />}
           <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} shippingFee={order.sales_channel === "meal_preorder" ? undefined : order.shipment?.shipping_fee} taxAmount={order.tax_amount} invoiceTax={order.invoice_tax} invoiceStatus={order.invoice_status} />
           <AdminOrderAction
             order={order}
+            logisticsReady={isOnline && orderQuery.isSuccess && orderQuery.isFetchedAfterMount
+              && orderQuery.fetchStatus === "idle"}
             busy={updateFulfillment.isPending || createLogistics.isPending || advanceShipment.isPending}
             onFulfillment={(status) => updateFulfillment.mutate({ orderId: order.id, status })}
             onCreateLogistics={() => createLogistics.mutate(order.id)}
@@ -212,21 +249,41 @@ function AdminOrdersPanel({ adminId, q, queue, orderAccess }: {
       <span>共 {orderQuery.data.total} 筆 · 第 {Math.floor(orderOffset / 12) + 1} 頁</span>
       <button className="button button-quiet" type="button" disabled={orderOffset + 12 >= orderQuery.data.total || orderQuery.isFetching} onClick={() => setOrderOffset(orderOffset + 12)}>下一頁</button>
     </nav>}
-    {!orderQuery.isError && orderQuery.data?.total === 0 && <p>沒有符合條件的訂單。</p>}
+    {!orderQuery.isError && orderQuery.data?.total === 0 && <p>{orderId ? "找不到這筆訂單。" : "沒有符合條件的訂單。"}</p>}
     {(updateFulfillment.isError || createLogistics.isError || advanceShipment.isError) && (
       <p className="form-error">{(updateFulfillment.error || createLogistics.error || advanceShipment.error)?.message}</p>
     )}
   </section>;
 }
 
+function InvoiceFollowupAction({ reason, invoice }: { reason: InvoiceFollowupReason; invoice: Order["invoice"] }) {
+  if (reason !== "void") return <small className="no-action">{invoiceFollowupCopy[reason].action}</small>;
+  const provider = invoice?.provider;
+  const platform = (provider && invoiceProviderNames[provider]) || "原開票平台";
+  const action = provider === "fanyu"
+    ? "使用「發票作廢處理」核對汎宇結果。"
+    : `請至${platform}核對並處理作廢。`;
+  const reference = invoice?.invoice_number ? `發票號碼 ${invoice.invoice_number}`
+    : invoice?.relate_number ? `銷貨單號 ${invoice.relate_number}` : null;
+  return <small className="no-action">{action}{reference && <> {reference}</>}</small>;
+}
+
+function displayedFulfillmentStatus(order: Order) {
+  if (order.sales_channel === "meal_preorder" && order.fulfillment_status === "picked_up" &&
+      !order.cancelled_at && order.fulfillment?.status === "no_show") return "no_show";
+  return order.fulfillment_status;
+}
+
 function AdminOrderAction({
   order,
+  logisticsReady,
   busy,
   onFulfillment,
   onCreateLogistics,
   onShipment,
 }: {
   order: Order;
+  logisticsReady: boolean;
   busy: boolean;
   onFulfillment: (status: string) => void;
   onCreateLogistics: () => void;
@@ -234,8 +291,16 @@ function AdminOrderAction({
 }) {
   const invoiceControl = <AdminStatusQuery orderId={order.id} kind="invoice" disabled={busy} />;
   if (order.sales_channel === "meal_preorder") {
+    const pendingCancellation = order.cancellation_request?.status === "pending";
     const canManageMeal = order.payment_status !== "refunded" && order.fulfillment_status !== "cancelled" && !order.cancelled_at;
-    return <div className="operation-actions">{canManageMeal && <Link className="button button-quiet" to="/admin/meals" search={{ tab: "orders", q: order.order_number }}>便當取餐與退單</Link>}{invoiceControl}</div>;
+    return <div className="operation-actions">
+      {(pendingCancellation || canManageMeal) && <Link
+        className="button button-quiet"
+        to="/admin/meals"
+        search={{ tab: pendingCancellation ? "cancellations" : "orders", q: order.order_number, order_id: pendingCancellation ? order.id : undefined }}
+      >{pendingCancellation ? "審核便當退單" : "便當取餐與退單"}</Link>}
+      {invoiceControl}
+    </div>;
   }
   if (order.payment_status !== "paid") {
     return (
@@ -246,14 +311,15 @@ function AdminOrderAction({
     );
   }
   let fulfillmentControl: ReactNode = null;
+  const logisticsActions = logisticsReady && Array.isArray(order.available_actions) ? order.available_actions : [];
   if (order.fulfillment_status === "pending_confirmation") {
     fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("preparing")}>進入備貨</button>;
   } else if (order.fulfillment_method === "ecpay_logistics") {
-    if (order.shipment?.status === "ready_to_create") {
+    if (logisticsActions.includes("admin_create_logistics")) {
       fulfillmentControl = <button type="button" disabled={busy} onClick={onCreateLogistics}>建立綠界物流單</button>;
-    } else if (order.shipment?.status === "created") {
+    } else if (logisticsActions.includes("admin_simulate_shipment_in_transit")) {
       fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("in_transit")}>模擬配送中</button>;
-    } else if (order.shipment?.status === "in_transit") {
+    } else if (logisticsActions.includes("admin_simulate_shipment_delivered")) {
       fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("delivered")}>模擬已送達</button>;
     }
   } else if (order.fulfillment_status === "preparing") {

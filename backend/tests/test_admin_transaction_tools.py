@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models import Order, OutboxEvent, OutboxStatus, PaymentAttempt, PaymentStatus, User, UserRole
+from app.models import (
+    FulfillmentMethod, FulfillmentState, FulfillmentStatus, Order, OrderFulfillment, OutboxEvent,
+    OutboxStatus, PaymentAttempt, PaymentStatus, Shipment, ShipmentStatus, ShippingChannel,
+    ShippingTemperature, User, UserRole,
+)
 from app.routers.operations import operations_router
 from tests.support import api_test_context, auth_headers, make_test_settings
 from tests.test_integrations import make_regular_order
@@ -31,6 +35,98 @@ async def test_admin_order_search_is_paginated_and_role_protected(database_sessi
         assert denied.status_code == 403
         invalid = await client.get('/v1/admin/order-search?limit=1000', headers=auth_headers(admin))
         assert invalid.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "environment, sales_scope, expected_actions",
+    [
+        ("production", "all", ["admin_create_logistics", None, None]),
+        ("preview", "all", ["admin_create_logistics", None, None]),
+        ("production", "pickup", [None, None, None]),
+        ("production", "meals_only", [None, None, None]),
+        ("sandbox", "all", ["admin_create_logistics", "admin_simulate_shipment_in_transit", "admin_simulate_shipment_delivered"]),
+        ("sandbox", "pickup", [None, "admin_simulate_shipment_in_transit", "admin_simulate_shipment_delivered"]),
+    ],
+)
+async def test_admin_order_search_advertises_only_available_logistics_actions(
+    database_session, environment, sales_scope, expected_actions,
+):
+    buyer, _, order = await make_regular_order(database_session)
+    admin = User(email="logistics-admin@example.test", display_name="管理員", password_hash="unused", user_role=UserRole.ADMIN)
+    order.contact_email = "buyer@example.com"
+    order.payment_status = PaymentStatus.PAID
+    order.fulfillment_status = FulfillmentStatus.PREPARING
+    order.fulfillment_method = FulfillmentMethod.ECPAY_LOGISTICS
+    shipment = Shipment(
+        status=ShipmentStatus.READY_TO_CREATE,
+        channel=ShippingChannel.HOME_DELIVERY,
+        temperature=ShippingTemperature.AMBIENT,
+        provider_payload={"TempLogisticsID": "synthetic-private-value"},
+    )
+    order.fulfillment = OrderFulfillment(
+        method=FulfillmentMethod.ECPAY_LOGISTICS, status=FulfillmentState.PREPARING, shipment=shipment,
+    )
+    database_session.add(admin)
+    await database_session.commit()
+    path = "/v1/admin/order-search"
+    params = {"order_id": order.id}
+    settings = make_test_settings(environment=environment, sales_scope=sales_scope)
+    async with api_test_context(database_session, [operations_router], settings=settings) as client:
+        assert (await client.get(path, params=params)).status_code == 401
+        assert (await client.get(path, params=params, headers=auth_headers(buyer))).status_code == 403
+        headers = auth_headers(admin)
+        for state, expected in zip(
+            (ShipmentStatus.READY_TO_CREATE, ShipmentStatus.CREATED, ShipmentStatus.IN_TRANSIT), expected_actions,
+        ):
+            shipment.status = state
+            await database_session.commit()
+            result = await client.get(path, params=params, headers=headers)
+            assert result.status_code == 200, result.text
+            assert result.headers["cache-control"] == "no-store"
+            assert "synthetic-private-value" not in result.text
+            row = result.json()["items"][0]
+            assert row["shipment"]["status"] == state.value
+            actions = [value for value in row["available_actions"] if value.startswith("admin_")]
+            assert actions == ([expected] if expected else [])
+
+        shipment.status = ShipmentStatus.READY_TO_CREATE
+        shipment.provider_payload = {}
+        await database_session.commit()
+        result = await client.get(path, params=params, headers=headers)
+        assert "admin_create_logistics" not in result.json()["items"][0]["available_actions"]
+
+
+async def test_admin_order_lookup_uses_exact_identity_without_changing_manual_search(database_session):
+    buyer, _, first = await make_regular_order(database_session)
+    first.order_number = "O2030010210"
+    first.contact_email = "first@example.com"
+    newer = Order(
+        order_number="O20300102100", user_id=buyer.id, order_kind=first.order_kind,
+        membership_type_snapshot=first.membership_type_snapshot, amount_total=600,
+        contact_email="different@example.com", created_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+    admin = User(email="exact-admin@example.test", display_name="管理員", password_hash="unused", user_role=UserRole.ADMIN)
+    database_session.add_all([newer, admin])
+    await database_session.commit()
+    path = "/v1/admin/order-search"
+    params = {"q": first.order_number}
+    async with api_test_context(database_session, [operations_router], settings=make_test_settings()) as client:
+        headers = auth_headers(admin)
+        fuzzy = await client.get(path, params=params, headers=headers)
+        assert [row["id"] for row in fuzzy.json()["items"]] == [newer.id, first.id]
+        selected = await client.get(path, params=params | {"order_id": first.id, "limit": 1}, headers=headers)
+        assert selected.status_code == 200, selected.text
+        assert selected.headers["cache-control"] == "no-store"
+        assert selected.json()["total"] == 1
+        assert [row["id"] for row in selected.json()["items"]] == [first.id]
+        assert selected.json()["items"][0]["contact_email"] == first.contact_email
+        missing = await client.get(path, params=params | {"order_id": "unknown"}, headers=headers)
+        assert missing.json()["total"] == 0 and missing.json()["items"] == []
+        wrong_category = await client.get(path, params=params | {"order_id": first.id, "order_category": "meal"}, headers=headers)
+        assert wrong_category.json()["total"] == 0
+        assert (await client.get(path, params={"order_id": first.id})).status_code == 401
+        assert (await client.get(path, params={"order_id": first.id}, headers=auth_headers(buyer))).status_code == 403
+        assert (await client.get(path, params={"order_id": "x" * 37}, headers=headers)).status_code == 422
 
 
 async def test_failed_email_retry_requires_confirmation_but_optional_reason(database_session):

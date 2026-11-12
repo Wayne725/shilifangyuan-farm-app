@@ -175,19 +175,21 @@ for(const width of [390,1280])test(`${width}px活動停止公開可恢復且不�
  assert.notEqual(state.writes[0].body.expected_updated_at,state.writes[1].body.expected_updated_at);assert.equal(state.activity.is_public,true);await clean(page,state);
 });
 
-test('活動隱藏後離開並重整，仍可從活動歷史恢復公開',async t=>{
+test('未結束活動停止公開後仍可在預設清單恢復，公開與今日待辦範圍會隱藏',async t=>{
  const{page,state,visit}=await fixture(t,{path:adminActivitiesPath,role:'admin',width:390,reg:registration});await visit();
+ const title=page.getByRole('heading',{name:activity.title,exact:true});
+ const scope=page.getByLabel('活動範圍');
+ const restore=page.getByRole('button',{name:'恢復公開',exact:true});
  await page.getByRole('button',{name:'停止公開',exact:true}).click();
  await page.getByRole('button',{name:'確認停止公開',exact:true}).click();
- await page.getByRole('heading',{name:activity.title,exact:true}).waitFor({state:'hidden'});
+ await restore.waitFor();
+ assert.equal(await scope.inputValue(),'current');
+ await scope.selectOption('active');
+ await title.waitFor({state:'hidden'});
  const publicRead=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/activities');
  await page.goto(`${base}/activities`);await publicRead;await page.getByRole('heading',{name:'永續活動',exact:true}).waitFor();
- assert.equal(await page.getByRole('heading',{name:activity.title,exact:true}).count(),0);
- await page.goto(`${base}${adminActivitiesPath}`);await page.getByLabel('活動範圍').selectOption('history');
- await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();await page.reload();
- await page.getByLabel('活動範圍').selectOption('history');await page.getByRole('button',{name:'恢復公開',exact:true}).click();
- await page.getByRole('heading',{name:activity.title,exact:true}).waitFor({state:'hidden'});
- await page.getByLabel('活動範圍').selectOption('current');
+ assert.equal(await title.count(),0);
+ await page.goto(`${base}${adminActivitiesPath}`);await restore.waitFor();await page.reload();await restore.click();
  await page.getByRole('button',{name:'停止公開',exact:true}).waitFor();
  assert.equal(state.activity.is_public,true);assert.equal(state.registration.status,registration.status);
  assert.equal(state.writes.length,2);assert.ok(state.writes.every(row=>row.method==='PATCH'&&row.path==='/v1/admin/activities/activity/visibility'));
@@ -209,36 +211,32 @@ test('停止公開版本衝突須重新確認，仍保留報名',async t=>{
  await page.getByRole('dialog',{name:'停止公開活動'}).getByRole('button',{name:'返回',exact:true}).click();
  await start.click();
  await confirm.click();
- await page.getByRole('heading',{name:activity.title,exact:true}).waitFor({state:'hidden'});
+ await page.getByRole('button',{name:'恢復公開',exact:true}).waitFor();
  assert.deepEqual(state.writes[1].body,{is_public:false,expected_updated_at:version});
  assert.deepEqual(state.registration,registration);
  await clean(page,state);
 });
 
-test('活動獨立連結預設進行中，已結束與未公開活動可查看',async t=>{
- const history=[
-  {...activity,id:'past',title:'隔離已到期活動',ends_at:'2030-01-01T04:00:00Z'},
-  {...activity,id:'hidden',title:'隔離未公開活動',is_public:false},
- ];
+test('活動獨立連結預設列出未結束活動，已到期活動可從歷史查看',async t=>{
+ const past={...activity,id:'past',title:'隔離已到期活動',ends_at:'2030-01-01T04:00:00Z'};
+ const hidden={...activity,id:'hidden',title:'隔離未公開活動',is_public:false};
  const pending={...activity,id:'pending',title:'隔離待審活動',status:'pending_review'};
- const {page,state,visit}=await fixture(t,{path:adminActivitiesPath,role:'admin',width:390,moreActivities:[...history,pending]});
+ const {page,state,visit}=await fixture(t,{path:adminActivitiesPath,role:'admin',width:390,moreActivities:[past,hidden,pending]});
  await visit();
  const title=name=>page.getByRole('heading',{name,exact:true});
- await title(activity.title).waitFor();
- await title(pending.title).waitFor();
+ for(const item of [activity,hidden,pending])await title(item.title).waitFor();
  assert.equal(await page.getByRole('tab',{name:'活動管理',exact:true}).getAttribute('aria-selected'),'true');
- for(const item of history)assert.equal(await title(item.title).count(),0);
+ assert.equal(await title(past.title).count(),0);
  await page.getByLabel('活動範圍').selectOption('active');
  await page.waitForURL(url=>url.searchParams.get('tab')==='activities'&&url.searchParams.get('view')==='active');
- await title(pending.title).waitFor({state:'hidden'});
+ for(const item of [hidden,pending])await title(item.title).waitFor({state:'hidden'});
  await title(activity.title).waitFor();
  await page.getByLabel('活動範圍').selectOption('history');
  await page.waitForURL(url=>url.searchParams.get('tab')==='activities'&&!url.searchParams.has('view'));
- for(const item of history)await title(item.title).waitFor();
- assert.equal(await title(activity.title).count(),0);
+ await title(past.title).waitFor();
+ for(const item of [activity,hidden,pending])assert.equal(await title(item.title).count(),0);
  await page.getByLabel('活動範圍').selectOption('all');
- await title(activity.title).waitFor();
- for(const item of history)await title(item.title).waitFor();
+ for(const item of [activity,past,hidden,pending])await title(item.title).waitFor();
  assert.equal(state.writes.length,0);
  await clean(page,state);
 });
@@ -304,10 +302,12 @@ test('會籍獨立連結接受會籍 ID 與會員 ID',async t=>{
  const other=makeMember('membership-other','user-other','隔離其他社員');
  const {page,state,visit}=await fixture(t,{path:'/admin/social?tab=members&q=membership-target',role:'admin',memberships:[target,other]});
  await visit();
+ await page.waitForURL(url=>url.pathname==='/admin/users'&&url.searchParams.get('tab')==='members'&&url.searchParams.get('q')==='membership-target');
  const title=name=>page.getByRole('heading',{name:`${name} · 待編號`,exact:true});
  await title(target.display_name).waitFor();
  assert.equal(await title(other.display_name).count(),0);
  await page.goto(`${base}/admin/social?tab=members&q=user-other`);
+ await page.waitForURL(url=>url.pathname==='/admin/users'&&url.searchParams.get('tab')==='members'&&url.searchParams.get('q')==='user-other');
  await title(other.display_name).waitFor();
  assert.equal(await title(target.display_name).count(),0);
  assert.equal(state.writes.length,0);

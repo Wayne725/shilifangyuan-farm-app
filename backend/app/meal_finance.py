@@ -9,8 +9,11 @@ from sqlalchemy.orm import selectinload
 
 from .domain import aware
 from .meal_schedules import TAIPEI
-from .order_categories import OrderCategory, order_category_condition
-from .models import Order, OrderItem, PaymentAttempt, PaymentStatus, Refund, RefundStatus, SalesChannel, User
+from .models import Order, OrderItem, PaymentAttempt, PaymentStatus, Refund, RefundStatus, SalesChannel, User, WalkInSale
+from .order_categories import (
+    FINANCIAL_ORDER_CATEGORY_LABELS, FinancialOrderCategory, financial_order_category,
+    financial_order_category_condition,
+)
 
 
 class MealSalesFilters(BaseModel):
@@ -18,7 +21,8 @@ class MealSalesFilters(BaseModel):
     ends_on: Annotated[date, Field(ge=date(2, 1, 1), le=date(9998, 12, 31))]
     search: str = Field(default="", max_length=100)
     sales_channel: Literal["all", "meal_preorder", "regular", "group"] = "meal_preorder"
-    order_category: OrderCategory = "all"
+    order_category: FinancialOrderCategory = "all"
+    group_products_by_category: bool = False
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -34,23 +38,26 @@ class MealSalesFilters(BaseModel):
         return start, end
 
 
-def _channel_scope(filters):
-    channel = True if filters.sales_channel == "all" else Order.sales_channel == SalesChannel(filters.sales_channel)
-    return and_(channel, order_category_condition(filters.order_category))
+def _sales_scope(filters, *columns):
+    query = select(*columns).select_from(Order).outerjoin(WalkInSale, WalkInSale.order_id == Order.id).where(
+        financial_order_category_condition(filters.order_category),
+    )
+    if filters.sales_channel != "all":
+        query = query.where(Order.sales_channel == SalesChannel(filters.sales_channel))
+    return query
 
 
 def _receipts(filters):
     received = or_(PaymentAttempt.paid_at.is_not(None), PaymentAttempt.status.in_({
         PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED,
     }))
-    attempts = select(
-        Order.id.label("order_id"), PaymentAttempt.amount.label("amount"),
+    orders = _sales_scope(filters, Order.id.label("order_id"))
+    attempts = orders.join(PaymentAttempt, PaymentAttempt.order_id == Order.id).add_columns(
+        PaymentAttempt.amount.label("amount"),
         func.coalesce(PaymentAttempt.paid_at, case((and_(PaymentAttempt.order_revision == Order.revision, PaymentAttempt.amount == Order.amount_total, PaymentAttempt.superseded_at.is_(None)), Order.paid_at))).label("occurred_at"),
-    ).join(PaymentAttempt, PaymentAttempt.order_id == Order.id).where(
-        _channel_scope(filters), received,
-    )
-    legacy = select(Order.id.label("order_id"), Order.amount_total.label("amount"), Order.paid_at.label("occurred_at")).where(
-        _channel_scope(filters), Order.paid_at.is_not(None),
+    ).where(received)
+    legacy = orders.add_columns(Order.amount_total.label("amount"), Order.paid_at.label("occurred_at")).where(
+        Order.paid_at.is_not(None),
         ~exists().where(PaymentAttempt.order_id == Order.id, received),
     )
     return union_all(attempts, legacy).cte("meal_receipts")
@@ -72,8 +79,8 @@ def _day_expression(session, column):
 
 def _order_scope(filters, receipts):
     start, end = filters.bounds()
-    return select(Order).outerjoin(User, User.id == Order.user_id).where(
-        _channel_scope(filters), _search_condition(filters.search), or_(
+    return _sales_scope(filters, Order).outerjoin(User, User.id == Order.user_id).where(
+        _search_condition(filters.search), or_(
             and_(Order.created_at >= start, Order.created_at < end),
             exists().where(receipts.c.order_id == Order.id, receipts.c.occurred_at >= start, receipts.c.occurred_at < end),
             exists().where(Refund.order_id == Order.id, or_(
@@ -88,23 +95,30 @@ def _money_in_period(at, start, end):
     return at is not None and start <= aware(at) < end
 
 
+def _category_fields(category):
+    return {
+        "financial_order_category": category,
+        "financial_order_category_label": FINANCIAL_ORDER_CATEGORY_LABELS[category],
+    }
+
+
 async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
     receipts = _receipts(filters)
     query = _order_scope(filters, receipts)
     total = int(await session.scalar(select(func.count()).select_from(query.subquery())) or 0)
-    orders = list(await session.scalars(query.options(
+    orders = (await session.execute(query.add_columns(financial_order_category()).options(
         selectinload(Order.user), selectinload(Order.items).selectinload(OrderItem.selected_options),
         selectinload(Order.meal_event), selectinload(Order.fulfillment), selectinload(Order.invoice),
         selectinload(Order.payment_attempts), selectinload(Order.refunds), selectinload(Order.cancellation_requests),
-    ).order_by(Order.created_at.desc(), Order.id.desc()).limit(filters.limit).offset(filters.offset)))
+    ).order_by(Order.created_at.desc(), Order.id.desc()).limit(filters.limit).offset(filters.offset))).all()
     start, end = filters.bounds()
-    receipt_rows = (await session.execute(select(receipts).where(receipts.c.order_id.in_([order.id for order in orders])))).all() if orders else []
+    receipt_rows = (await session.execute(select(receipts).where(receipts.c.order_id.in_([order.id for order, _ in orders])))).all() if orders else []
     period_receipts = defaultdict(int)
     for order_id, amount, occurred_at in receipt_rows:
         if _money_in_period(occurred_at, start, end):
             period_receipts[order_id] += amount
     details = []
-    for order in orders:
+    for order, category in orders:
         refunds = sorted(order.refunds, key=lambda row: (aware(row.created_at), row.id), reverse=True)
         period_refunds = sum(row.amount for row in refunds if row.status == RefundStatus.COMPLETED and _money_in_period(row.completed_at, start, end))
         latest_request = max(order.cancellation_requests, key=lambda row: (aware(row.requested_at), row.id), default=None)
@@ -112,6 +126,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
         event = order.meal_event
         details.append({
             "id": order.id, "order_number": order.order_number, "sales_channel": order.sales_channel.value, "customer_name": order.user.display_name if order.user else order.customer_name_snapshot or "現場客人",
+            **_category_fields(category),
             "customer_email": order.contact_email, "membership_type": order.membership_type_snapshot.value,
             "revision": order.revision,
             "receipts": [{"merchant_trade_no": attempt.merchant_trade_no, "order_revision": attempt.order_revision,
@@ -144,9 +159,12 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
 async def meal_sales_report(session: AsyncSession, filters: MealSalesFilters):
     start, end = filters.bounds()
     receipts = _receipts(filters)
-    scope = select(Order.id).outerjoin(User, User.id == Order.user_id).where(
-        _channel_scope(filters), _search_condition(filters.search),
-    ).cte("selected_meal_orders")
+    order_query = _sales_scope(filters, Order.id).outerjoin(User, User.id == Order.user_id).where(
+        _search_condition(filters.search),
+    )
+    if filters.group_products_by_category:
+        order_query = order_query.add_columns(financial_order_category().label("financial_order_category"))
+    scope = order_query.cte("selected_meal_orders")
     receipt_day = _day_expression(session, receipts.c.occurred_at)
     receipt_rows = (await session.execute(select(receipt_day, func.sum(receipts.c.amount), func.count()).where(
         receipts.c.order_id.in_(select(scope.c.id)), receipts.c.occurred_at >= start, receipts.c.occurred_at < end,
@@ -174,10 +192,25 @@ async def meal_sales_report(session: AsyncSession, filters: MealSalesFilters):
             for field in ("received", "refunded", "net", "receipt_count", "refund_count"):
                 row[field] += values[field]
         return list(grouped.values())
-    products = (await session.execute(select(
-        OrderItem.product_name, OrderItem.unit_label, func.sum(OrderItem.quantity), func.sum(OrderItem.subtotal), func.count(func.distinct(Order.id)),
-    ).join(Order, Order.id == OrderItem.order_id).where(Order.id.in_(select(scope.c.id)), Order.paid_at >= start, Order.paid_at < end)
-        .group_by(OrderItem.product_name, OrderItem.unit_label).order_by(func.sum(OrderItem.quantity).desc(), OrderItem.product_name))).all()
+    product_query = (
+        select(
+            OrderItem.product_name, OrderItem.unit_label, func.sum(OrderItem.quantity).label("quantity"),
+            func.sum(OrderItem.subtotal).label("sales_amount"), func.count(func.distinct(Order.id)).label("order_count"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(scope, scope.c.id == Order.id)
+        .where(Order.paid_at >= start, Order.paid_at < end)
+        .group_by(OrderItem.product_name, OrderItem.unit_label)
+        .order_by(func.sum(OrderItem.quantity).desc(), OrderItem.product_name, OrderItem.unit_label)
+    )
+    if filters.group_products_by_category:
+        category = scope.c.financial_order_category
+        product_query = product_query.add_columns(category).group_by(category).order_by(category)
+    products = [{
+        "name": row.product_name, "unit": row.unit_label, "quantity": int(row.quantity),
+        "sales_amount": int(row.sales_amount), "order_count": int(row.order_count),
+        **(_category_fields(row.financial_order_category) if filters.group_products_by_category else {}),
+    } for row in await session.execute(product_query)]
     relevant_ids = _order_scope(filters, receipts).with_only_columns(Order.id).subquery()
     pending_refunds = int(await session.scalar(select(func.coalesce(func.sum(Refund.amount), 0)).where(
         Refund.order_id.in_(select(relevant_ids.c.id)), Refund.status == RefundStatus.PENDING,
@@ -190,9 +223,8 @@ async def meal_sales_report(session: AsyncSession, filters: MealSalesFilters):
         "summary": {"received": received, "refunded": refunded, "net": received - refunded,
                     "receipt_count": sum(row["receipt_count"] for row in daily.values()),
                     "refund_count": sum(row["refund_count"] for row in daily.values()),
-                    "pending_refund_amount": pending_refunds, "paid_meal_quantity": sum(int(row[2]) for row in products)},
+                    "pending_refund_amount": pending_refunds, "paid_meal_quantity": sum(row["quantity"] for row in products)},
         "daily": sorted(daily.values(), key=lambda row: row["period"], reverse=True), "weekly": group_periods("week"), "monthly": group_periods("month"),
-        "products": [{"name": name, "unit": unit, "quantity": int(quantity), "sales_amount": int(amount), "order_count": int(count)}
-                     for name, unit, quantity, amount, count in products],
+        "products": products,
         "orders": details,
     }

@@ -75,6 +75,7 @@ for (const width of [390, 1280]) {
     await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
     await page.getByRole('heading', { name: '合作社現場開票', exact: true }).waitFor();
     assert.equal(await page.getByRole('region', { name: '電子發票設定' }).count(), 0);
+    assert.equal(await page.getByRole('combobox', { name: '開票時機', exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     if (process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/onsite-checkout-${width}.png`, fullPage: true });
     await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).click();
@@ -85,6 +86,7 @@ for (const width of [390, 1280]) {
     assert.equal(state.writes[0].body.pickup_location_id, null);
     assert.equal(state.writes[0].body.needs_utensils, false);
     assert.equal('invoice_carrier_type' in state.writes[0].body, false);
+    assert.equal('invoice_handling' in state.writes[0].body, false);
     assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
   });
   test(`${width}px 後台可登錄POS收款與更正未付款`, async t => {
@@ -94,7 +96,7 @@ for (const width of [390, 1280]) {
     await page.getByLabel('實收金額', { exact: true }).fill('120');
     await page.getByLabel('處理原因', { exact: true }).fill('已核對 POS');
     await page.getByLabel('現場收款方式', { exact: true }).selectOption('pos');
-    await page.getByLabel('POS 單號／收款參考（選填）', { exact: true }).fill('POS-123');
+    await page.getByLabel('POS 單號／收款參考', { exact: true }).fill('POS-123');
     assert.equal(await page.getByRole('button', { name: '確認已付款', exact: true }).isEnabled(), false);
     await page.getByLabel('已核對上述款項確實收到', { exact: true }).check();
     await page.getByRole('button', { name: '確認已付款', exact: true }).click();

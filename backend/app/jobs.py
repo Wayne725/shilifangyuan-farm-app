@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from .config import Settings, get_settings
+from .recovery_quarantine import payment_attempt_is_held, require_unheld
 from .member_lookup import MEMBER_LOOKUP_EVENT, prepare_member_lookup_email
 from .database import SessionLocal, get_session
 from .domain import apply_proposal_clock
@@ -97,6 +98,7 @@ from .v2_domain import apply_member_proposal_clock
 from .reconciliation import ReconciliationMonitor, ReconciliationPartialFailure
 from .reconciliation import read_reconciliation_status
 from .reconciliation_schemas import ReconciliationStatusRead
+from .recovery_work import INVOICE_ISSUE_EVENTS, REFUND_EVENTS, outbox_is_held
 from .auth import require_admin
 
 
@@ -168,6 +170,8 @@ async def reconcile_once(
     source: str = "job",
 ) -> ReconcileReport:
     active_settings = settings or get_settings()
+    if active_settings.recovery_mode:
+        raise RuntimeError("Reconciliation is disabled in recovery mode")
     current = now or datetime.now(timezone.utc)
     report = ReconcileReport()
     from .activity_payments import reconcile_charges
@@ -289,6 +293,9 @@ def schedule_background_reconcile(
     garbage-collect a still-running reconciliation.
     """
 
+    active_settings = settings or get_settings()
+    if active_settings.recovery_mode:
+        raise RuntimeError("Reconciliation is disabled in recovery mode")
     global _background_reconcile_task
     if (
         _background_reconcile_task is not None
@@ -346,7 +353,7 @@ def schedule_background_reconcile(
 
 @asynccontextmanager
 async def periodic_reconciliation(settings: Settings):
-    if not settings.reconciliation_enabled:
+    if settings.recovery_mode or not settings.reconciliation_enabled:
         yield
         return
     stop = asyncio.Event()
@@ -451,6 +458,7 @@ def expired_payment_candidates(settings: Settings, now: datetime):
         select(PaymentAttempt.id)
         .where(
             _payment_reconcile_due(now),
+            ~payment_attempt_is_held(),
             PaymentAttempt.provider.in_({"raygate", "ecpay"}),
             or_(
                 (PaymentAttempt.activity_charge_id.is_not(None)
@@ -523,6 +531,7 @@ async def _reconcile_expired_payments(
                 PaymentAttempt.id == attempt_id,
                 PaymentAttempt.status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
                 _payment_reconcile_due(now),
+                ~payment_attempt_is_held(),
             )
             .values(next_reconcile_at=claim_time + timedelta(seconds=settings.reconciliation_interval_seconds))
             .execution_options(synchronize_session=False)
@@ -865,12 +874,15 @@ async def _reconcile_meal_events(
         if _aware(event.pickup_ends_at) > now:
             if _aware(event.pickup_starts_at) <= now:
                 event.status = MealEventStatus.PICKUP_OPEN
+                ready_candidates = select(Order).where(
+                    Order.meal_event_id == event.id,
+                    Order.payment_status == PaymentStatus.PAID,
+                    Order.cancelled_at.is_(None),
+                )
+                if event.same_day_preparation_minutes is not None:
+                    ready_candidates = ready_candidates.where(Order.meal_booking_type == "business")
                 ready_orders = list(await session.scalars(
-                    select(Order).where(
-                        Order.meal_event_id == event.id,
-                        Order.payment_status == PaymentStatus.PAID,
-                        Order.cancelled_at.is_(None),
-                    ).options(selectinload(Order.fulfillment)).with_for_update()
+                    ready_candidates.options(selectinload(Order.fulfillment)).with_for_update()
                 ))
                 for order in ready_orders:
                     if order.fulfillment is not None and order.fulfillment.status in {
@@ -1073,11 +1085,13 @@ async def _process_outbox(
     limit: int,
 ) -> tuple[int, int]:
     stale_processing_cutoff = now - timedelta(minutes=10)
+    held = outbox_is_held()
     stale = list(
         await session.scalars(
             select(OutboxEvent).where(
                 OutboxEvent.status == OutboxStatus.PROCESSING,
                 OutboxEvent.available_at <= stale_processing_cutoff,
+                ~held,
             )
         )
     )
@@ -1094,6 +1108,7 @@ async def _process_outbox(
             .where(
                 OutboxEvent.status == OutboxStatus.PENDING,
                 OutboxEvent.available_at <= now,
+                ~held,
             )
             .order_by(OutboxEvent.created_at)
             .limit(limit)
@@ -1107,6 +1122,7 @@ async def _process_outbox(
             .where(
                 OutboxEvent.id == event_id,
                 OutboxEvent.status == OutboxStatus.PENDING,
+                ~held,
             )
             .with_for_update()
         )
@@ -1283,13 +1299,9 @@ async def _dispatch_outbox_event(
     event = await session.get(OutboxEvent, event_id)
     if event is None:
         return
-    if event.event_type in {"refund.requested", "sandbox_refund"}:
+    if event.event_type in REFUND_EVENTS:
         await _process_refund_event(session, event, settings)
-    elif event.event_type in {
-        "invoice.issue",
-        "invoice.issue_requested",
-        "issue_invoice",
-    }:
+    elif event.event_type in INVOICE_ISSUE_EVENTS:
         await _process_invoice_event(session, settings, event)
     elif (
         event.event_type == "invoice.adjustment_required"
@@ -1439,6 +1451,14 @@ async def _process_refund_event(
             .limit(1)
             .with_for_update()
         )
+    hold_targets = tuple((scope, reference) for scope, reference in (
+        ("outbox", event.id),
+        ("order", refund.order_id),
+        ("membership_charge", refund.membership_charge_id),
+        ("activity_charge", refund.activity_charge_id),
+        ("payment_attempt", attempt.id if attempt else None),
+    ) if reference is not None)
+    await require_unheld(session, *hold_targets)
     subject_amount = attempt.amount if attempt is not None else (order.amount_total if order is not None else charge.amount)
     if refund.amount != subject_amount:
         raise ValueError("雷門規格只允許全額退款")

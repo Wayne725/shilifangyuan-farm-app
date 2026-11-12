@@ -125,7 +125,7 @@ for (const channel of ['regular', 'group', 'meal_preorder']) for (const width of
   });
 }
 
-for (const route of ['/admin', '/admin/meals']) {
+for (const route of ['/admin?section=orders', '/admin/meals']) {
   test(`${route} 管理員現場便當以相同流程改量`, async t => {
     const { page, state, visit } = await fixture(t, { channel: 'meal_preorder', role: 'admin', width: 390, paymentMethod: 'cash_on_pickup', path: route }); await visit();
     const dialog = await openEditor(page); await dialog.getByLabel('隔離白米數量', { exact: true }).selectOption('2'); await preview(page, dialog);

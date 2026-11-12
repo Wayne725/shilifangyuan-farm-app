@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_minutes: int = Field(default=30, ge=5, le=60)
     refresh_token_days: int = Field(default=7, ge=1, le=30)
+    browser_refresh_protocol_enabled: bool = True
     refresh_cookie_name: str = Field(
         default="slf_refresh",
         pattern=r"^[A-Za-z0-9_-]{1,64}$",
@@ -104,6 +105,7 @@ class Settings(BaseSettings):
     line_login_redirect_uri: str = ""
     line_login_scope: str = "openid profile email"
     payment_provider: str = "ecpay"
+    payment_legacy_return_enabled: bool = True
     ecpay_payment_merchant_id: str = ""
     ecpay_payment_hash_key: str = ""
     ecpay_payment_hash_iv: str = ""
@@ -195,7 +197,10 @@ class Settings(BaseSettings):
     demo_nonmember_password: str = DEFAULT_DEMO_NONMEMBER_PASSWORD
     demo_reset_confirmation: str = ""
     payment_reservation_minutes: int = 15
+    recovery_mode: bool = False
+    recovery_proof_signer_public_key: str = ""
     reconciliation_enabled: bool = False
+    reconciliation_on_request_enabled: bool = True
     reconciliation_interval_seconds: float = Field(default=60.0, ge=30, le=3600)
     reconciliation_retention_enabled: bool = True
     reconciliation_retention_days: int = Field(default=30, ge=1, le=365)
@@ -361,11 +366,17 @@ class Settings(BaseSettings):
             invalid_secrets.append(
                 "DEMO_RESET_CONFIRMATION（不可與任何展示登入密碼相同）"
             )
-        if environment in REMOTE_ENVIRONMENTS:
-            from .integrations.common import (
-                IntegrationConfigurationError,
-                is_public_https_origin,
-            )
+        from .integrations.common import is_public_https_origin
+
+        for name, value in (
+            ("APP_BASE_URL", self.app_base_url),
+            ("WEB_BASE_URL", self.web_base_url),
+        ):
+            if not is_public_https_origin(value):
+                invalid_secrets.append(f"{name}（必須為公開 HTTPS 網址）")
+
+        if not self.recovery_mode:
+            from .integrations.common import IntegrationConfigurationError
             from .integrations.email_sender import email_sender_from_settings
             from .integrations.resend import ResendSettings
 
@@ -390,12 +401,6 @@ class Settings(BaseSettings):
                         "RESEND_API_KEY/EMAIL_FROM_EMAIL"
                         "（Preview／正式環境必須設定可用的 Resend 寄件者）"
                     )
-            for name, value in (
-                ("APP_BASE_URL", self.app_base_url),
-                ("WEB_BASE_URL", self.web_base_url),
-            ):
-                if not is_public_https_origin(value):
-                    invalid_secrets.append(f"{name}（必須為公開 HTTPS 網址）")
         acceptance_order_id = self.raygate_payment_acceptance_order_id.strip()
         acceptance_sku = self.raygate_payment_acceptance_sku.strip()
         if acceptance_order_id and acceptance_sku:
@@ -409,7 +414,7 @@ class Settings(BaseSettings):
             invalid_secrets.append(
                 "RAYGATE_PAYMENT_ACCEPTANCE_SKU（格式不正確）"
             )
-        if acceptance_order_id or acceptance_sku:
+        if not self.recovery_mode and (acceptance_order_id or acceptance_sku):
             if environment != "preview":
                 invalid_secrets.append(
                     "RAYGATE_PAYMENT_ACCEPTANCE_*"
@@ -453,6 +458,13 @@ class Settings(BaseSettings):
                     "RAYGATE_PAYMENT_*（正式小額驗收不可使用規格書範例憑證）"
                 )
         if environment in SECURE_ENVIRONMENTS:
+            self._validate_pii_encryption_settings(invalid_secrets)
+        if environment == "production" and not self.async_database_url.startswith(
+            "postgresql+asyncpg://"
+        ):
+            invalid_secrets.append("DATABASE_URL（正式環境必須使用 PostgreSQL）")
+
+        if environment in SECURE_ENVIRONMENTS and not self.recovery_mode:
             r2_values = {
                 "CLOUDFLARE_R2_ACCOUNT_ID": self.cloudflare_r2_account_id,
                 "CLOUDFLARE_R2_ACCESS_KEY_ID": self.cloudflare_r2_access_key_id,
@@ -519,7 +531,6 @@ class Settings(BaseSettings):
                     invalid_secrets.append("ECPAY_LOGISTICS_HASH_KEY（必須為 16 bytes）")
                 if len(self.ecpay_logistics_hash_iv.encode("utf-8")) != 16:
                     invalid_secrets.append("ECPAY_LOGISTICS_HASH_IV（必須為 16 bytes）")
-            self._validate_pii_encryption_settings(invalid_secrets)
             invoice_stage = (
                 self.ecpay_invoice_stage
                 if self.invoice_provider == "ecpay"
@@ -651,12 +662,6 @@ class Settings(BaseSettings):
                     invalid_secrets.append(
                         "ECPAY_LOGISTICS_SENDER_ADDRESS（不可使用測試地址）"
                     )
-            if environment == "production" and not self.async_database_url.startswith(
-                "postgresql+asyncpg://"
-            ):
-                invalid_secrets.append(
-                    "DATABASE_URL（正式環境必須使用 PostgreSQL）"
-                )
         if invalid_secrets:
             raise RuntimeError(
                 f"{environment} 環境拒絕啟動："

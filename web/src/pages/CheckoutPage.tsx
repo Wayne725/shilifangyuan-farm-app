@@ -6,7 +6,7 @@ import {
   Receipt,
   ShieldCheck,
 } from "@phosphor-icons/react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -22,7 +22,7 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { saveInvoiceCarrierIfRequested } from "../lib/invoice-carrier";
 import { useCommerce } from "../context/CommerceContext";
-import { maxOrderItemQuantity } from "../lib/cart-quantity";
+import { maxOrderItemQuantity, productQuantityLimit } from "../lib/cart-quantity";
 import { openOrderHandoff } from "../lib/checkout-navigation";
 import { ApiError, apiFetch, formatMoney, isCurrentSessionUser, replaceBrokenAsset, resolveAsset } from "../lib/api";
 import { checkoutWasRejected, clearCheckoutSubmission, prepareCheckoutSubmission, readCheckoutSubmission, type CheckoutSubmission } from "../lib/checkout-submission";
@@ -38,6 +38,7 @@ import type {
   FulfillmentMethod,
   OrderQuote,
   PickupLocation,
+  Product,
   ShippingChannel,
   ShippingRate,
 } from "../lib/types";
@@ -45,13 +46,16 @@ import "../styles/fulfillment-methods.css";
 
 type CheckoutMethod = Extract<FulfillmentMethod, "cooperative_pickup"> | "shipping";
 const logisticsEnabled = import.meta.env.VITE_LOGISTICS_ENABLED === "true";
+const stockQueryKey = "checkout-stock";
+const stockMaxAge = 30_000;
 
 export function CheckoutPage() {
   const { user, openLogin, saveMobileBarcode } = useAuth();
+  const queryClient = useQueryClient();
   const platform = useStorefrontStatus();
   const shippingEnabled = logisticsEnabled && storefrontCapabilities(platform.data).shipping;
   const notificationEmail = user?.notification_email || user?.email || "";
-  const { cart, adjustQuantity, clearCart } = useCommerce();
+  const { cart, adjustQuantity, removeFromCart, clearCart } = useCommerce();
   const [quantityError, setQuantityError] = useState("");
   const [checkoutMethod, setCheckoutMethod] =
     useState<CheckoutMethod>("cooperative_pickup");
@@ -65,6 +69,7 @@ export function CheckoutPage() {
   const [pendingSubmission, setPendingSubmission] = useState<CheckoutSubmission | null>(null);
   useEffect(() => {
     setPendingSubmission(user ? readCheckoutSubmission(user.id) : null);
+    setQuantityError("");
   }, [user?.id]);
   const items = useMemo(
     () =>
@@ -90,6 +95,16 @@ export function CheckoutPage() {
     queryFn: () => apiFetch<ShippingRate[]>("/v1/shipping-rates"),
     enabled: shippingEnabled,
   });
+  const stock = useQueries({ queries: items.map(({ product_id }) => ({
+    queryKey: [stockQueryKey, product_id],
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      apiFetch<Product>(`/v1/products/${encodeURIComponent(product_id)}`, { cache: "no-store", signal }),
+    enabled: !pendingSubmission,
+    refetchOnMount: "always" as const,
+    refetchOnWindowFocus: true,
+    staleTime: stockMaxAge,
+    retry: false,
+  })) });
   const quote = useQuery({
     queryKey: ["order-quote", itemKey, user?.id, user?.membership_type, invoicePreference.buyerType],
     queryFn: () =>
@@ -99,6 +114,11 @@ export function CheckoutPage() {
       }),
     enabled: Boolean(user && items.length && !orderBlockReason),
   });
+  useEffect(() => {
+    if (quote.error instanceof ApiError && [409, 422].includes(quote.error.status)) {
+      void queryClient.invalidateQueries({ queryKey: [stockQueryKey] });
+    }
+  }, [queryClient, quote.error, quote.errorUpdatedAt]);
   const estimatedShippingFee =
     checkoutMethod === "shipping" &&
     shippingChannel &&
@@ -206,9 +226,9 @@ export function CheckoutPage() {
       invoicePreferenceIsValid(invoicePreference) &&
       (checkoutMethod === "shipping" ? shippingReady : selectedPickupLocation && !locations.isError),
   );
-  const changeQuantity = (productId: string, delta: number) => {
+  const changeQuantity = (change: () => void) => {
     try {
-      adjustQuantity(productId, delta);
+      change();
       setQuantityError("");
     } catch (reason) {
       setQuantityError(reason instanceof RangeError ? reason.message : "無法儲存結帳清單，請再試一次。");
@@ -249,26 +269,53 @@ export function CheckoutPage() {
               <span>01</span>
               <div><small>YOUR SELECTION</small><h2>選購內容</h2></div>
             </div>
-            {cart.map(({ product, quantity }) => (
-              <article className="checkout-item" key={product.id}>
-                <img src={resolveAsset(product.image_url)} alt={product.name} onError={replaceBrokenAsset} />
-                <div>
-                  <small>{product.supplier_name || product.category}</small>
-                  <h3>{product.name}</h3>
-                  <p>{formatMoney(quote.data?.items.find((item) => item.product_id === product.id)?.unit_price
-                    ?? (user?.membership_type === "member" || user?.membership_type === "trainee" ? product.member_price : product.nonmember_price))}／{product.unit}</p>
-                </div>
-                <div className="quantity-control">
-                  <button type="button" disabled={createOrder.isPending} onClick={() => changeQuantity(product.id, -1)} aria-label="減少數量">
-                    <Minus size={15} />
-                  </button>
-                  <span>{quantity}</span>
-                  <button type="button" disabled={createOrder.isPending || quantity >= maxOrderItemQuantity} onClick={() => changeQuantity(product.id, 1)} aria-label="增加數量">
-                    <Plus size={15} />
-                  </button>
-                </div>
-              </article>
-            ))}
+            {cart.map(({ product, quantity }, index) => {
+              const availability = stock[index];
+              const checked = availability.isFetchedAfterMount && availability.fetchStatus === "idle";
+              const latest = checked && availability.isSuccess && !availability.isStale &&
+                availability.data?.id === product.id ? availability.data : null;
+              const unavailable = (checked && availability.error instanceof ApiError && availability.error.status === 404)
+                || latest?.is_active === false || latest?.daily_sales_enabled === false;
+              const limit = latest?.is_active === true && latest.daily_sales_enabled === true &&
+                Number.isInteger(latest.stock_quantity) && latest.stock_quantity >= 0 ? productQuantityLimit(latest) : null;
+              const checking = availability.fetchStatus === "fetching";
+              let stockMessage = "";
+              if (unavailable) stockMessage = "目前停止販售";
+              else if (limit === 0) stockMessage = "目前缺貨";
+              else if (checking) stockMessage = "正在確認庫存";
+              else if (limit === null) stockMessage = availability.isSuccess && availability.isStale ? "庫存待確認" : "暫時無法確認庫存";
+              else if (quantity >= limit) stockMessage = `目前最多可買 ${limit} ${latest?.unit || product.unit}`;
+              const statusId = `checkout-stock-${product.id}`;
+              return (
+                <article className="checkout-item" key={product.id}>
+                  <img src={resolveAsset(product.image_url)} alt={product.name} onError={replaceBrokenAsset} />
+                  <div>
+                    <small>{product.supplier_name || product.category}</small>
+                    <h3>{product.name}</h3>
+                    <p>{formatMoney(quote.data?.items.find((item) => item.product_id === product.id)?.unit_price
+                      ?? (user?.membership_type === "member" || user?.membership_type === "trainee" ? product.member_price : product.nonmember_price))}／{product.unit}</p>
+                    {stockMessage && <p id={statusId} role="status">{stockMessage}</p>}
+                    {(unavailable || limit === 0) && <button className="text-link" type="button" disabled={createOrder.isPending} onClick={() => changeQuantity(() => removeFromCart(product.id))}>移除商品</button>}
+                    {!unavailable && limit === null && !checking && <button className="text-link" type="button" disabled={availability.fetchStatus === "paused"} onClick={() => void availability.refetch()}>重查庫存</button>}
+                  </div>
+                  <div className="quantity-control">
+                    <button type="button" disabled={createOrder.isPending} onClick={() => changeQuantity(() => adjustQuantity(product.id, -1))} aria-label="減少數量">
+                      <Minus size={15} />
+                    </button>
+                    <span>{quantity}</span>
+                    <button type="button" disabled={createOrder.isPending || limit === null || quantity >= limit} aria-label="增加數量" aria-describedby={stockMessage ? statusId : undefined} onClick={() => {
+                      if (Date.now() - availability.dataUpdatedAt >= stockMaxAge) {
+                        void availability.refetch();
+                        return;
+                      }
+                      changeQuantity(() => adjustQuantity(product.id, 1, limit));
+                    }}>
+                      <Plus size={15} />
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
             {quantityError && <p className="form-error" role="alert">{quantityError}</p>}
 
             <div className="checkout-step-title pickup-title">

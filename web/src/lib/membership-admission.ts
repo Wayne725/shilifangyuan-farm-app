@@ -35,6 +35,7 @@ export interface AdmissionConfig {
     obligations: string[];
     statement: string;
     admission_fee_amount?: number;
+    admission_fee_version?: number;
     share_unit_amount: number;
     student_min_shares: number;
     student_max_shares: number;
@@ -64,6 +65,9 @@ export interface AdmissionRound {
   status: AdmissionStatus;
   profile: AdmissionProfile | null;
   requested_share_count: number;
+  admission_fee_amount?: number;
+  admission_fee_version?: number;
+  share_unit_amount?: number;
   student_claimed: boolean;
   discovery_channel: string | null;
   discovery_other: string | null;
@@ -138,7 +142,10 @@ const roundPath = (id: string) => `${admissionPath}/rounds/${encodeURIComponent(
 export const admissionApi = {
   read: () => apiFetch<AdmissionRead>(admissionPath),
   round: (id: string) => apiFetch<AdmissionRound>(roundPath(id)),
-  start: (idempotency_key: string) => apiFetch<AdmissionRound>(`${admissionPath}/rounds`, { method: "POST", body: JSON.stringify({ idempotency_key }) }),
+  start: (idempotency_key: string, expected_fee_version: number) => apiFetch<AdmissionRound>(`${admissionPath}/rounds`, {
+    method: "POST",
+    body: JSON.stringify({ idempotency_key, ...(expected_fee_version ? { expected_fee_version } : {}) }),
+  }),
   save: (id: string, payload: AdmissionSavePayload) => apiFetch<AdmissionRound>(roundPath(id), { method: "PUT", body: JSON.stringify(payload) }),
   education: (id: string, expected_version: number, material_version: string) => apiFetch<AdmissionRound>(`${roundPath(id)}/education`, { method: "POST", body: JSON.stringify({ expected_version, material_version, read_confirmed: true }) }),
   quiz: (id: string, payload: { expected_version: number; idempotency_key: string; quiz_version: string; answers: { question_id: string; option: string }[] }) => apiFetch<AdmissionRound>(`${roundPath(id)}/quiz-attempts`, { method: "POST", body: JSON.stringify(payload) }),

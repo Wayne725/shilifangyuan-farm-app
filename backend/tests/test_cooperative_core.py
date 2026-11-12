@@ -1,27 +1,38 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import csv
+import io
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
+from app import main
+from app.auth import create_token
+from app.config import get_settings
+from app.database import get_session
 from app.models import (
     AdminAudit, PointTransaction,
     Membership,
     MembershipStatus,
     MembershipType,
+    Notification,
     Order,
     OrderItem,
     OrderKind,
+    PaymentMethod,
     PaymentStatus,
     Product,
     SalesChannel,
     TaxType,
     User,
     UserRole,
+    WalkInSale,
 )
 from app.routers.cooperative import cooperative_router
-from tests.support import api_test_context, auth_headers, fast_password_hash
+from tests.support import api_test_context, auth_headers, fast_password_hash, make_test_settings
 
 
 @pytest.fixture
@@ -93,6 +104,164 @@ async def test_finance_monitor_tax_and_irreversible_surplus(cooperative_context)
     mine = await client.get("/v1/me/surplus-distributions", headers=auth_headers(cooperative_context["member_a"]))
     assert mine.status_code == 200
     assert mine.json()[0]["distribution_amount"] == 188
+
+
+@pytest.mark.asyncio
+async def test_tax_ledger_read_and_csv_share_scope_and_reject_unauthorized(
+    cooperative_context, monkeypatch,
+) -> None:
+    settings = make_test_settings(reconciliation_on_request_enabled=False)
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    application = main.create_app()
+
+    async def session_override():
+        yield cooperative_context["session"]
+
+    application.dependency_overrides[get_session] = session_override
+    application.dependency_overrides[get_settings] = lambda: settings
+
+    def headers(user, valid_for: timedelta) -> dict[str, str]:
+        token = create_token(user, "access", valid_for, settings)
+        return {"Authorization": f"Bearer {token}"}
+
+    admin = cooperative_context["admin"]
+    authorized = headers(admin, timedelta(minutes=5))
+    expired = headers(admin, -timedelta(minutes=5))
+    customer = headers(cooperative_context["customer"], timedelta(minutes=5))
+    path = "/v1/admin/finance/tax-ledger"
+    period = {"starts_on": "2030-01-01", "ends_on": "2030-01-01"}
+    reversed_period = {"starts_on": "2030-01-02", "ends_on": period["starts_on"]}
+    midnight = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    next_midnight = midnight + timedelta(days=1)
+    orders = (await cooperative_context["session"].scalars(select(Order).order_by(Order.order_number))).all()
+    for order, paid_at in zip(orders, (
+        midnight - timedelta(microseconds=1), midnight, next_midnight - timedelta(microseconds=1),
+        midnight + timedelta(hours=4),
+    ), strict=True):
+        order.paid_at = paid_at
+    await cooperative_context["session"].commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url=settings.app_base_url,
+    ) as client:
+        for url in (path, f"{path}.csv"):
+            for credentials, expected in (({}, 401), (expired, 401), (customer, 403)):
+                blocked = await client.get(url, params=period, headers=credentials)
+                assert blocked.status_code == expected
+                assert blocked.headers["cache-control"] == "no-store"
+                assert "content-disposition" not in blocked.headers
+                assert "rows" not in blocked.json()
+            invalid_period = await client.get(url, params=reversed_period, headers=authorized)
+            assert invalid_period.status_code == 422
+        report = await client.get(path, params=period, headers=authorized)
+        exported = await client.get(f"{path}.csv", params=period, headers=authorized)
+
+    assert report.status_code == exported.status_code == 200
+    assert report.headers["cache-control"] == exported.headers["cache-control"] == "no-store"
+    assert exported.headers["content-disposition"] == 'attachment; filename="tax-ledger-2030-01-01-2030-01-01.csv"'
+    assert exported.content.startswith(b"\xef\xbb\xbf")
+    assert exported.headers["content-type"] == "text/csv; charset=utf-8"
+    fields = ["tax_type", "membership_type", "sales_channel", "sales_amount", "tax_amount", "order_count"]
+    expected_rows = [["tax_exempt", "member", "regular", 100, 0, 1], ["taxable", "nonmember", "regular", 200, 9, 1]]
+    assert report.json() == {**period, "rows": [dict(zip(fields, row)) for row in expected_rows]}
+    assert list(csv.reader(io.StringIO(exported.content.decode("utf-8-sig")))) == [
+        ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"],
+        *[[str(value) for value in row] for row in expected_rows],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tax_ledger_filters_walk_in_categories_in_report_and_csv(cooperative_context) -> None:
+    context = cooperative_context
+    session = context["session"]
+    paid_at = datetime(2040, 2, 15, 1, tzinfo=timezone.utc)
+    sources = [
+        ("web-meal", SalesChannel.MEAL_PREORDER, False, None, 130),
+        ("web-product", SalesChannel.REGULAR, False, None, 43),
+        ("counter-meal", SalesChannel.REGULAR, True, "meal", 40),
+        ("counter-product", SalesChannel.REGULAR, True, "product", 52),
+        ("counter-unknown", SalesChannel.REGULAR, True, None, 21),
+    ]
+    counter_orders = []
+    for name, channel, walk_in, category, amount in sources:
+        order = Order(
+            order_number=f"TAX-{name}", order_kind=OrderKind.REGULAR, sales_channel=channel,
+            customer_kind="walk_in" if walk_in else "account", user_id=None if walk_in else context["customer"].id,
+            payment_method=PaymentMethod.CASH_ON_PICKUP if walk_in else PaymentMethod.ONLINE,
+            payment_status=PaymentStatus.PAID, paid_at=paid_at, amount_total=amount,
+            membership_type_snapshot=MembershipType.NONMEMBER, contact_email="",
+            items=[OrderItem(product_name=name, unit_label="份", quantity=1, unit_price=amount,
+                             subtotal=amount, tax_type=TaxType.TAXABLE)],
+        )
+        session.add(order)
+        if walk_in:
+            counter_orders.append((order, category))
+    await session.flush()
+    session.add_all(
+        WalkInSale(order_id=order.id, client_request_id=str(uuid4()), request_fingerprint="a" * 64,
+                   operator_id=context["admin"].id, sale_category=category)
+        for order, category in counter_orders
+    )
+    await session.commit()
+
+    path = "/v1/admin/finance/tax-ledger"
+    headers = auth_headers(context["admin"])
+    expected = {
+        "all": {"meal_preorder": (130, 6, 1), "regular": (156, 7, 4)},
+        "meal": {"meal_preorder": (130, 6, 1), "regular": (40, 1, 1)},
+        "general": {"regular": (95, 4, 2)},
+        "walk_in_unclassified": {"regular": (21, 1, 1)},
+    }
+    for category, rows in expected.items():
+        params = {"starts_on": "2040-02-15", "ends_on": "2040-02-15", "order_category": category}
+        report = await context["client"].get(path, params=params, headers=headers)
+        exported = await context["client"].get(f"{path}.csv", params=params, headers=headers)
+        assert report.status_code == exported.status_code == 200
+        assert {
+            row["sales_channel"]: (row["sales_amount"], row["tax_amount"], row["order_count"])
+            for row in report.json()["rows"]
+        } == rows
+        table = csv.reader(io.StringIO(exported.content.decode("utf-8-sig")))
+        assert next(table) == ["稅別", "身分", "銷售通路", "銷售額", "稅額", "訂單筆數"]
+        assert {channel: (int(sales), int(tax), int(count)) for _, _, channel, sales, tax, count in table} == rows
+
+
+@pytest.mark.asyncio
+async def test_membership_sales_view_is_admin_only_read_only_and_reuses_ledger_scope(cooperative_context):
+    c = cooperative_context
+    client, session, admin = c["client"], c["session"], c["admin"]
+    url = "/v1/admin/finance/sales-by-membership"
+    params = {"starts_on": "2020-01-01", "ends_on": "2030-12-31"}
+    expired = {"Authorization": f"Bearer {create_token(admin, 'access', -timedelta(minutes=5))}"}
+    for headers, expected in (({}, 401), (expired, 401), (auth_headers(c["customer"]), 403)):
+        assert (await client.get(url, params=params, headers=headers)).status_code == expected
+    invalid = await client.get(url, params={"starts_on": "2030-01-01", "ends_on": "2029-12-31"}, headers=auth_headers(admin))
+    assert invalid.status_code == 422
+
+    for _ in range(2):
+        response = await client.get(url, params=params, headers=auth_headers(admin))
+        assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+        report = response.json()
+        assert report == {
+            **params, "total_revenue": 600, "monitoring_threshold_reached": 0.30,
+            "sales_breakdown": [
+                {"membership_type": "nonmember", "revenue": 200, "ratio": pytest.approx(1 / 3)},
+                {"membership_type": "trainee", "revenue": 0, "ratio": 0},
+                {"membership_type": "member", "revenue": 400, "ratio": pytest.approx(2 / 3)},
+            ],
+        }
+    assert await session.scalar(select(func.count(Notification.id))) == 0
+    assert await session.scalar(select(func.count(AdminAudit.id))) == 0
+    tax = await client.get("/v1/admin/finance/tax-ledger", params=params, headers=auth_headers(admin))
+    assert sum(row["sales_amount"] for row in tax.json()["rows"]) == report["total_revenue"]
+    old = await client.get("/v1/admin/finance/nonmember-sales", params=params, headers=auth_headers(admin))
+    assert old.json()["sales_breakdown"] == report["sales_breakdown"]
+    notice = (await session.scalars(select(Notification))).one()
+    assert notice.event_type == "nonmember_sales_limit" and notice.user_id == admin.id
+
+    empty = await client.get(url, params={"starts_on": "2001-01-01", "ends_on": "2001-01-01"}, headers=auth_headers(admin))
+    assert empty.status_code == 200
+    assert empty.json()["total_revenue"] == 0 and empty.json()["monitoring_threshold_reached"] is None
 
 
 @pytest.mark.asyncio

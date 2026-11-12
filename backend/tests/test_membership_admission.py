@@ -10,6 +10,7 @@ from app.integrations.common import IntegrationResponseError
 from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.membership_admission import round_aad, submission_aad
 from app.membership_admission_content import get_admission_config
+from app.membership_admission_fee import ADMISSION_FEE_KEY
 from app.membership_education_settings import MEMBERSHIP_EDUCATION_KEY
 from app.models import (
     AdminAudit, MemberProfile, Membership, MembershipApplication, MembershipApplicationStatus,
@@ -23,6 +24,7 @@ from tests.support import api_test_context, auth_headers, make_test_settings
 
 URL = "/v1/membership/admission"
 ADMIN_URL = "/v1/admin/membership/admissions"
+FEE_URL = "/v1/admin/membership/admission-fee"
 PROFILE = {
     "legal_name": "隔離申請人", "phone": "0900000000", "birth_date": "1995-01-01",
     "address": "隔離測試地址", "emergency_contact": "隔離緊急聯絡人", "contact_email": "admission@example.com",
@@ -122,6 +124,87 @@ async def test_public_questions_no_answers_and_get_never_creates_admission(admis
     assert len(data["config"]["quiz"]["questions"]) == 10
     assert "correct_option" not in response.text and "selected_option" not in response.text
     assert await c["session"].scalar(select(func.count(MembershipAdmissionRound.id))) == 0
+
+
+@pytest.mark.asyncio
+async def test_admission_fee_updates_require_admin_current_version_and_integer_amount(admission_context):
+    c = admission_context
+    client, admin = c["client"], c["admin_headers"]
+    body = {"admission_fee_amount": 750, "expected_version": 0}
+    for headers, expected in (({}, 401), (c["owner_headers"], 403)):
+        assert (await client.get(FEE_URL, headers=headers)).status_code == expected
+        assert (await client.put(FEE_URL, headers=headers, json=body)).status_code == expected
+    read = await client.get(FEE_URL, headers=admin)
+    assert read.status_code == 200 and read.headers["cache-control"] == "no-store"
+    assert (read.json()["admission_fee_amount"], read.json()["version"], read.json()["share_unit_amount"]) == (500, 0, 100)
+    assert await c["session"].get(SystemSetting, ADMISSION_FEE_KEY) is None
+    for overrides in ({"admission_fee_amount": value} for value in (-1, True, 0.5, "750", 100_000_001)):
+        assert (await client.put(FEE_URL, headers=admin, json={**body, **overrides})).status_code == 422
+    assert (await client.put(FEE_URL, headers=admin, json={**body, "share_unit_amount": 300})).status_code == 422
+    assert (await client.put(FEE_URL, headers=admin, json={**body, "admission_fee_amount": 500})).json()["version"] == 0
+    saved = await client.put(FEE_URL, headers=admin, json={**body, "reason": " 經隔離測試確認 "})
+    assert saved.status_code == 200 and saved.headers["cache-control"] == "no-store"
+    assert (saved.json()["admission_fee_amount"], saved.json()["version"], saved.json()["share_unit_amount"]) == (750, 1, 100)
+    stale = await client.put(FEE_URL, headers=admin, json={**body, "admission_fee_amount": 850})
+    assert stale.status_code == 409 and stale.headers["cache-control"] == "no-store"
+    assert (await client.get(FEE_URL, headers=admin)).json() == saved.json()
+    audit = (await c["session"].scalars(select(AdminAudit).where(AdminAudit.aggregate_id == ADMISSION_FEE_KEY))).one()
+    assert audit.actor_id == c["admin_id"] and audit.reason == "經隔離測試確認"
+    assert audit.data == {"previous": {"admission_fee_amount": 500, "version": 0},
+                          "current": {"admission_fee_amount": 750, "version": 1}}
+
+
+@pytest.mark.asyncio
+async def test_admission_fee_snapshots_resume_supplement_restart_and_reject_stale_begin(admission_context):
+    c = admission_context
+    client, owner, admin = c["client"], c["owner_headers"], c["admin_headers"]
+    start_url = f"{URL}/rounds"
+    first_key = str(uuid4())
+    row = (await client.post(start_url, headers=owner, json={"idempotency_key": first_key})).json()
+    assert (row["admission_fee_amount"], row["admission_fee_version"], row["share_unit_amount"]) == (500, 0, 100)
+    first_change = await client.put(FEE_URL, headers=admin, json={"admission_fee_amount": 750, "expected_version": 0})
+    assert first_change.status_code == 200
+
+    me = (await client.get(URL, headers=owner)).json()
+    assert me["config"]["declaration"]["admission_fee_amount"] == 500
+    retry = (await client.post(start_url, headers=owner, json={"idempotency_key": first_key})).json()
+    assert retry["id"] == row["id"] and retry["admission_fee_amount"] == 500
+    outsider_quote = (await client.get(URL, headers=c["outsider_headers"])).json()["config"]["declaration"]
+    assert (outsider_quote["admission_fee_amount"], outsider_quote["admission_fee_version"]) == (750, 1)
+    stale = await client.post(start_url, headers=c["outsider_headers"], json={"idempotency_key": str(uuid4()), "expected_fee_version": 0})
+    assert stale.status_code == 409 and "入社費已更新" in stale.json()["detail"]
+    assert await c["session"].scalar(select(func.count(MembershipAdmissionRound.id))) == 1
+
+    row = await submitted(c)
+    response = await review(c, row, decision="request_supplement", decision_reference=None)
+    assert response.status_code == 200
+    row = response.json()
+    change = await client.put(FEE_URL, headers=admin, json={"admission_fee_amount": 800, "expected_version": 1})
+    assert change.status_code == 200
+    updated = await client.put(f"{URL}/rounds/{row['id']}", headers=owner,
+        json=profile_body(row, requested_share_count=12))
+    assert updated.status_code == 200 and updated.json()["admission_fee_amount"] == 500
+    resubmitted = await client.post(f"{URL}/rounds/{row['id']}/submit", headers=owner,
+        json={"expected_version": updated.json()["version"]})
+    assert resubmitted.status_code == 200
+    snapshots = (await c["session"].scalars(select(MembershipAdmissionSubmission)
+        .order_by(MembershipAdmissionSubmission.revision_number))).all()
+    fields = ("admission_fee_amount", "admission_fee_version", "share_unit_amount", "share_capital_amount")
+    assert [tuple(item.facts[key] for key in fields) for item in snapshots] == [(500, 0, 100, 1000), (500, 0, 100, 1200)]
+    rejected = await review(c, resubmitted.json(), decision="reject")
+    assert rejected.status_code == 200
+    me = (await client.get(URL, headers=owner)).json()
+    assert me["current_round"]["admission_fee_amount"] == 500
+    assert (me["config"]["declaration"]["admission_fee_amount"], me["config"]["declaration"]["admission_fee_version"]) == (800, 2)
+    next_key = str(uuid4())
+    restart = await client.post(start_url, headers=owner, json={"idempotency_key": next_key, "expected_fee_version": 2})
+    assert restart.status_code == 200
+    second = restart.json()
+    assert second["round_number"] == 2 and (second["admission_fee_amount"], second["admission_fee_version"], second["share_unit_amount"]) == (800, 2, 100)
+    history = await client.get(f"{URL}/rounds/{row['id']}", headers=owner)
+    assert history.json()["admission_fee_amount"] == 500
+    assert await c["session"].scalar(select(func.count(MembershipCharge.id))) == 0
+    assert await c["session"].scalar(select(func.count(Membership.id))) == 0
 
 
 @pytest.mark.asyncio

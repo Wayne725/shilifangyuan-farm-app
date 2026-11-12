@@ -13,6 +13,7 @@ from .config import Settings
 from .integrations.common import IntegrationError
 from .integrations.pii_crypto import pii_cipher_from_settings
 from .membership_admission_content import get_admission_config
+from .membership_admission_fee import read_admission_fee_settings
 from .membership_admission_schemas import (
     AdmissionEducationConfirm, AdmissionEligibilityRead, AdmissionListRead,
     AdmissionMeRead, AdmissionProfile, AdmissionQuizSubmit, AdmissionReviewInput,
@@ -201,6 +202,7 @@ def _render_round(row, settings, data: _RoundReadData) -> AdmissionRoundRead:
     return AdmissionRoundRead(
         **{name: getattr(row, name) for name in (
             "id", "user_id", "round_number", "version", "flow_version", "status", "requested_share_count",
+            "admission_fee_amount", "admission_fee_version", "share_unit_amount",
             "student_claimed", "discovery_channel", "declaration_version", "privacy_version", "material_version",
             "quiz_version", "review_reason", "student_verified", "decision_reference")},
         **{name: _aware(getattr(row, name)) for name in (
@@ -252,7 +254,15 @@ async def read_me(session, user, settings):
     blocked = await start_blocked_reason(session, user.id)
     if blocked is None and latest is not None and latest.status not in {"rejected", "withdrawn"}:
         blocked = "請先完成目前申請" if latest.status != "approved" else "本輪已審核同意，後續繳費與入社階段尚未開放"
-    return AdmissionMeRead(config=get_admission_config(),
+    config = get_admission_config()
+    if blocked is None:
+        fee = await read_admission_fee_settings(session)
+        config["declaration"].update(admission_fee_amount=fee.admission_fee_amount,
+            admission_fee_version=fee.version, share_unit_amount=fee.share_unit_amount)
+    elif latest is not None:
+        config["declaration"].update(admission_fee_amount=latest.admission_fee_amount,
+            admission_fee_version=latest.admission_fee_version, share_unit_amount=latest.share_unit_amount)
+    return AdmissionMeRead(config=config,
         current_round=await read_round(session, latest, settings) if latest else None,
         history=[{"id": row.id, "round_number": row.round_number, "status": row.status,
             "created_at": _aware(row.created_at), "reviewed_at": _aware(row.reviewed_at)} for row in rounds],
@@ -276,11 +286,17 @@ async def start_round(session, user, body: AdmissionRoundStart, settings):
         MembershipAdmissionRound.user_id == user.id).order_by(MembershipAdmissionRound.round_number.desc()).limit(1))
     if latest is not None and latest.status not in {"rejected", "withdrawn"}:
         return await read_round(session, latest, settings)
+    fee = await read_admission_fee_settings(session)
+    if body.expected_fee_version != fee.version:
+        _fail("入社費已更新，請重新讀取並確認金額")
     row = MembershipAdmissionRound(user_id=user.id, round_number=latest.round_number + 1 if latest else 1,
-        idempotency_key=str(body.idempotency_key), quiz_version=get_admission_config()["quiz"]["version"])
+        idempotency_key=str(body.idempotency_key), quiz_version=get_admission_config()["quiz"]["version"],
+        admission_fee_amount=fee.admission_fee_amount, admission_fee_version=fee.version,
+        share_unit_amount=fee.share_unit_amount)
     session.add(row)
     await session.flush()
-    _audit(session, row, user.id, "started")
+    _audit(session, row, user.id, "started", data={"admission_fee_amount": row.admission_fee_amount,
+        "admission_fee_version": row.admission_fee_version, "share_unit_amount": row.share_unit_amount})
     await session.flush()
     return await read_round(session, row, settings)
 
@@ -392,6 +408,8 @@ async def submit_round(session, round_id, user, body: AdmissionVersionInput, set
     snapshot = MembershipAdmissionSubmission(id=new_id(), round_id=row.id,
         revision_number=(revision or 0) + 1, quiz_attempt_id=passing.id, submitted_at=now,
         facts={"requested_share_count": row.requested_share_count, "student_claimed": row.student_claimed,
+            "admission_fee_amount": row.admission_fee_amount, "admission_fee_version": row.admission_fee_version,
+            "share_unit_amount": row.share_unit_amount, "share_capital_amount": row.requested_share_count * row.share_unit_amount,
             "discovery_channel": row.discovery_channel, "declaration_version": row.declaration_version,
             "privacy_version": row.privacy_version, "consented_at": _aware(row.consented_at).isoformat(),
             "material_version": row.material_version, "material_completed_at": _aware(row.material_completed_at).isoformat(),

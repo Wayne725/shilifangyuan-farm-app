@@ -12,13 +12,21 @@ import { ApiError, apiFetch, formatDate } from "../lib/api";
 import { campaignOrderBlockReason, campaignStatusLabel } from "../lib/group-campaigns";
 import { mealMenuAvailability } from "../lib/meal-time";
 import type { GroupCampaign, MealCalendarEvent, MealEvent, Product } from "../lib/types";
+import "./ShopPage.css";
+
+const productsPerPage = 12;
+
+function normalizeProductSearch(value: string) {
+  return value.normalize("NFKC").toLocaleLowerCase("zh-TW");
+}
 
 export function ShopPage() {
   const platform = useStorefrontStatus();
   const { addToCart, itemCount } = useCommerce();
-  const { tab } = useSearch({ from: "/shop" });
+  const { tab, q, category, page } = useSearch({ from: "/shop" });
   const navigate = useNavigate({ from: "/shop" });
   const activeTab = tab || "meals";
+  const [productQuery, setProductQuery] = useState(q ?? "");
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
@@ -28,7 +36,38 @@ export function ShopPage() {
     queryKey: ["products"],
     queryFn: () => apiFetch<Product[]>("/v1/products"),
   });
-  const dailyProducts = products.data?.filter((item) => item.is_active !== false && item.daily_sales_enabled !== false);
+  const dailyProducts = products.data?.filter((item) => item.is_active !== false && item.daily_sales_enabled !== false) ?? [];
+  const categories = [...new Set(dailyProducts.map((product) => product.category).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, "zh-TW"));
+  const query = normalizeProductSearch(q ?? "");
+  const matches = dailyProducts.filter((product) => {
+    if (category && product.category !== category) return false;
+    return !query || [product.name, product.description, product.category]
+      .some((value) => normalizeProductSearch(value ?? "").includes(query));
+  });
+  const pageCount = Math.max(1, Math.ceil(matches.length / productsPerPage));
+  const currentPage = Math.min(page ?? 1, pageCount);
+  const currentProducts = matches.slice((currentPage - 1) * productsPerPage, currentPage * productsPerPage);
+  useEffect(() => {
+    setProductQuery(q ?? "");
+  }, [q, category, page]);
+  useEffect(() => {
+    if (activeTab === "products" && products.isSuccess && !products.isFetching && page && page > pageCount) {
+      void navigate({
+        search: (previous) => ({ ...previous, page: pageCount > 1 ? pageCount : undefined }),
+        replace: true,
+        resetScroll: false,
+      });
+    }
+  }, [activeTab, navigate, page, pageCount, products.isFetching, products.isSuccess]);
+  const updateProductFilters = (nextQuery: string, nextCategory?: string) => {
+    const trimmedQuery = nextQuery.trim();
+    setProductQuery(trimmedQuery);
+    void navigate({
+      search: { tab: "products", q: trimmedQuery || undefined, category: nextCategory || undefined },
+      resetScroll: false,
+    });
+  };
   const campaigns = useQuery({
     queryKey: ["group-campaigns"],
     queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns"),
@@ -65,7 +104,7 @@ export function ShopPage() {
 
       <Tabs.Root className="market-tabs" value={activeTab} onValueChange={(next) => {
         if (next === "meals" || next === "groups" || next === "products") {
-          void navigate({ search: { tab: next }, resetScroll: false });
+          void navigate({ search: (previous) => ({ ...previous, tab: next }), resetScroll: false });
         }
       }}>
         <div className="tab-list market-navigation">
@@ -103,14 +142,61 @@ export function ShopPage() {
               onAction={() => products.refetch()}
             />
           )}
-          {dailyProducts?.length === 0 && (
-            <DataState title="商品整理中" detail="完成正式商品與 SKU 建檔後，選品會出現在這裡。" />
+          {products.isSuccess && dailyProducts.length === 0 && (
+            <DataState title="商品整理中" detail="目前沒有可選購的商品。" />
           )}
-          <div className="product-grid catalog-grid">
-            {dailyProducts?.map((product) => (
-              <ProductCard key={product.id} product={product} onAdd={addToCart} />
-            ))}
-          </div>
+          {dailyProducts.length > 0 && (
+            <>
+              <form className="shop-product-filters" role="search" aria-label="日常選品" onSubmit={(event) => {
+                event.preventDefault();
+                updateProductFilters(productQuery, category);
+              }}>
+                <label className="field">
+                  <span>搜尋商品</span>
+                  <input type="search" maxLength={120} value={productQuery} onChange={(event) => setProductQuery(event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>商品分類</span>
+                  <select value={category ?? ""} onChange={(event) => updateProductFilters(productQuery, event.target.value)}>
+                    <option value="">全部分類</option>
+                    {categories.map((name) => <option key={name} value={name}>{name}</option>)}
+                    {category && !categories.includes(category) && <option value={category}>未上架的分類</option>}
+                  </select>
+                </label>
+                <div className="shop-product-filter-actions">
+                  <button className="button button-primary" type="submit">搜尋</button>
+                  {(q || category) && (
+                    <button className="button button-quiet" type="button" onClick={() => updateProductFilters("")}>清除篩選</button>
+                  )}
+                </div>
+              </form>
+              <div className="shop-product-results">
+                <p role="status">{matches.length ? `共 ${matches.length} 件商品` : "找不到符合的商品"}</p>
+                {pageCount > 1 && (
+                  <nav className="shop-product-pagination" aria-label="商品分頁">
+                    {currentPage > 1 ? (
+                      <Link className="button button-quiet" to="/shop"
+                        search={{ tab: "products", q, category, page: currentPage > 2 ? currentPage - 1 : undefined }}
+                        resetScroll={false}>上一頁</Link>
+                    ) : <button className="button button-quiet" type="button" disabled>上一頁</button>}
+                    <span>第 {currentPage} / {pageCount} 頁</span>
+                    {currentPage < pageCount ? (
+                      <Link className="button button-quiet" to="/shop"
+                        search={{ tab: "products", q, category, page: currentPage + 1 }}
+                        resetScroll={false}>下一頁</Link>
+                    ) : <button className="button button-quiet" type="button" disabled>下一頁</button>}
+                  </nav>
+                )}
+              </div>
+              {currentProducts.length > 0 && (
+                <div className="product-grid catalog-grid">
+                  {currentProducts.map((product) => (
+                    <ProductCard key={product.id} product={product} onAdd={addToCart} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </Tabs.Content>
 
         <Tabs.Content value="groups" className="tab-content">

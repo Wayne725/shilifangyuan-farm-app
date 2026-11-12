@@ -5,9 +5,11 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
-import { channelMatchesCategory, orderCategoryLabels, type OrderCategory } from "../lib/order-category";
+import { financialOrderCategoryLabels, type FinancialOrderCategory } from "../lib/order-category";
 import { ActivityFinance } from "../components/ActivityFinance";
 import { AdminNav } from "../components/AdminNav";
+import { TaxLedger } from "../components/TaxLedger";
+import { SalesByMembership } from "../components/SalesByMembership";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, downloadApiFile, formatMoney } from "../lib/api";
@@ -19,28 +21,59 @@ const pageSize = 20;
 const membershipNames: Record<string, string> = { nonmember: "一般使用者", trainee: "實習社員", member: "社員" };
 const cancellationNames: Record<string, string> = { pending: "退單待審", approved: "退單已核准", rejected: "退單遭拒" };
 const refundNames: Record<string, string> = { pending: "待退款", completed: "退款完成", failed: "退款失敗" };
-const channelNames = { all: "全部銷售", meal_preorder: "便當", regular: "日常選品", group: "共同購買" };
+const channelNames = { meal_preorder: "便當預訂", regular: "日常選品", group: "共同購買" };
+const channelFilterNames = { all: "全部通路", ...channelNames, regular: "日常選品／現場收款" };
+type SalesChannelFilter = keyof typeof channelFilterNames;
+const categoryChannels: Record<FinancialOrderCategory, readonly SalesChannelFilter[]> = {
+  all: ["all", "meal_preorder", "regular", "group"],
+  general: ["all", "regular", "group"],
+  meal: ["all", "meal_preorder", "regular"],
+  walk_in_unclassified: ["all"],
+};
+
+function channelFilterName(channel: SalesChannelFilter, category: FinancialOrderCategory) {
+  return channel === "regular" && category === "meal" ? "現場收款" : channelFilterNames[channel];
+}
 
 export function AdminFinancePage() {
   const {user,openLogin}=useAuth();
   if(user?.user_role!=="admin") return <section className="admin-gate"><h1>財務報表只向管理員開放。</h1>{!user&&<button className="button button-primary" onClick={openLogin}>管理員登入</button>}</section>;
-  return <section className="admin-module-page meal-finance-page"><header className="workspace-heading"><div><p className="eyebrow">FINANCE / 財務報表</p><h1>收款與銷售報表</h1></div></header><AdminNav/><Tabs.Root key={user.id} defaultValue="sales"><Tabs.List className="tab-list" aria-label="財務來源"><Tabs.Trigger value="sales">商品銷售</Tabs.Trigger><Tabs.Trigger value="activities">活動收款</Tabs.Trigger></Tabs.List><Tabs.Content value="sales"><ProductFinance/></Tabs.Content><Tabs.Content value="activities"><ActivityFinance/></Tabs.Content></Tabs.Root></section>;
+  return <section className="admin-module-page meal-finance-page">
+    <header className="workspace-heading"><div><p className="eyebrow">FINANCE / 財務報表</p><h1>收款與銷售報表</h1></div></header>
+    <AdminNav />
+    <Tabs.Root key={user.id} defaultValue="sales">
+      <Tabs.List className="tab-list" aria-label="財務來源">
+        <Tabs.Trigger value="sales">商品銷售</Tabs.Trigger>
+        <Tabs.Trigger value="memberships">身分銷售占比</Tabs.Trigger>
+        <Tabs.Trigger value="activities">活動收款</Tabs.Trigger>
+        <Tabs.Trigger value="tax">稅務彙總</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="sales"><ProductFinance /></Tabs.Content>
+      <Tabs.Content value="memberships"><SalesByMembership adminId={user.id} /></Tabs.Content>
+      <Tabs.Content value="activities"><ActivityFinance /></Tabs.Content>
+      <Tabs.Content value="tax"><TaxLedger adminId={user.id} /></Tabs.Content>
+    </Tabs.Root>
+  </section>;
 }
 function ProductFinance() {
   const { user, openLogin } = useAuth();
   const isAdmin = user?.user_role === "admin";
-  const [draft, setDraft] = useState(() => ({ ...financePeriodPreset("month"), search: "", salesChannel: "all", orderCategory: "all" as OrderCategory }));
+  const [draft, setDraft] = useState(() => ({
+    ...financePeriodPreset("month"), search: "", salesChannel: "all" as SalesChannelFilter,
+    orderCategory: "all" as FinancialOrderCategory,
+  }));
   const [filters, setFilters] = useState(draft);
   const [offset, setOffset] = useState(0);
   const [formError, setFormError] = useState("");
   const parameters = new URLSearchParams({ starts_on: filters.startsOn, ends_on: filters.endsOn, search: filters.search, sales_channel: filters.salesChannel, order_category: filters.orderCategory });
   const report = useQuery({
     queryKey: ["meal-sales-report", filters, offset],
-    queryFn: () => apiFetch<MealSalesReport>(`/v1/admin/finance/meal-sales?${parameters}&limit=${pageSize}&offset=${offset}`),
+    queryFn: () => apiFetch<MealSalesReport>(`/v1/admin/finance/meal-sales?${parameters}&group_products_by_category=true&limit=${pageSize}&offset=${offset}`),
     enabled: isAdmin,
     refetchInterval: 30_000,
   });
-  const download = useMutation({ mutationFn: () => downloadApiFile(`/v1/admin/finance/meal-sales.csv?${parameters}`, `${orderCategoryLabels[filters.orderCategory]}銷售明細-${filters.startsOn}-${filters.endsOn}.csv`) });
+  const categoryName = financialOrderCategoryLabels[filters.orderCategory];
+  const download = useMutation({ mutationFn: () => downloadApiFile(`/v1/admin/finance/meal-sales.csv?${parameters}`, `${categoryName}銷售明細-${filters.startsOn}-${filters.endsOn}.csv`) });
   useEffect(() => {
     if (report.data && offset > 0 && offset >= report.data.orders.total) setOffset(Math.max(0, Math.floor((report.data.orders.total - 1) / pageSize) * pageSize));
   }, [offset, report.data]);
@@ -54,8 +87,8 @@ function ProductFinance() {
   return <section>
     <h2>銷售明細與統整</h2>
 
-    <OrderCategoryFilter value={filters.orderCategory} onChange={(orderCategory) => {
-      const next = { ...filters, orderCategory, salesChannel: "all" };
+    <OrderCategoryFilter includeWalkInUnclassified value={filters.orderCategory} onChange={(orderCategory) => {
+      const next = { ...filters, orderCategory, salesChannel: "all" as const };
       setDraft(next); setFilters(next); setOffset(0); setFormError("");
     }} />
     <div className="meal-finance-presets" aria-label="常用查詢期間">{(["today", "week", "month"] as const).map((mode) => <button key={mode} type="button" className="button button-quiet" onClick={() => applyPreset(mode)}>{{ today: "今天", week: "本週", month: "本月" }[mode]}</button>)}</div>
@@ -66,12 +99,14 @@ function ProductFinance() {
     }}>
       <label className="field"><span>收退款日期起</span><input type="date" required value={draft.startsOn} onChange={(event) => setDraft({ ...draft, startsOn: event.target.value })} /></label>
       <label className="field"><span>收退款日期迄</span><input type="date" required value={draft.endsOn} onChange={(event) => setDraft({ ...draft, endsOn: event.target.value })} /></label>
-      <label className="field"><span>銷售類型</span><select value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value })}>{Object.entries(channelNames).filter(([value]) => channelMatchesCategory(value, filters.orderCategory)).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
+      <label className="field"><span>銷售通路</span><select value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value as SalesChannelFilter })}>
+        {categoryChannels[draft.orderCategory].map((channel) => <option key={channel} value={channel}>{channelFilterName(channel, draft.orderCategory)}</option>)}
+      </select></label>
       <label className="field"><span>訂單或買家</span><input placeholder="訂單編號、姓名或電子信箱" value={draft.search} maxLength={100} onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
       <button className="button button-primary" type="submit">查詢</button>
     </form>
     {formError && <p className="form-error" role="alert">{formError}</p>}
-    <div className="meal-finance-result-heading"><p>{orderCategoryLabels[filters.orderCategory]} · {channelNames[filters.salesChannel as keyof typeof channelNames]} · {filters.startsOn} 至 {filters.endsOn}{filters.search && ` · ${filters.search}`}</p><div><button className="button button-quiet" type="button" disabled={report.isFetching} onClick={() => void report.refetch()}><ArrowClockwise size={18} />更新</button><button className="button button-system" type="button" disabled={!report.data || download.isPending} onClick={() => download.mutate()}><DownloadSimple size={18} />{download.isPending ? "下載中…" : "下載全部明細 CSV"}</button></div></div>
+    <div className="meal-finance-result-heading"><p>{categoryName} · {channelFilterName(filters.salesChannel, filters.orderCategory)} · {filters.startsOn} 至 {filters.endsOn}{filters.search && ` · ${filters.search}`}</p><div><button className="button button-quiet" type="button" disabled={report.isFetching} onClick={() => void report.refetch()}><ArrowClockwise size={18} />更新</button><button className="button button-system" type="button" disabled={!report.data || download.isPending} onClick={() => download.mutate()}><DownloadSimple size={18} />{download.isPending ? "下載中…" : "下載全部明細 CSV"}</button></div></div>
     {download.isError && <p className="form-error" role="alert">{download.error.message}</p>}
     {report.isPending ? <LoadingLines count={5} /> : report.isError ? <DataState kind="error" title="銷售報表無法讀取" detail={report.error.message} onAction={() => void report.refetch()} /> : report.data && <>
       <div className="meal-finance-stats">
@@ -86,7 +121,7 @@ function ProductFinance() {
         <Tabs.Content className="tab-content" value="summary"><SalesSummary report={report.data} /></Tabs.Content>
         <Tabs.Content className="tab-content" value="details">
           {report.data.orders.total === 0 ? <DataState title="這段期間沒有符合條件的訂單" detail="可調整日期或清除搜尋文字。" /> : <div className="meal-finance-orders">{report.data.orders.items.map((order) => <details className="meal-finance-sale" key={order.id}>
-            <summary><div><strong className="order-number">{order.order_number}</strong><span>{financeDateTime(order.created_at)} · {channelNames[order.sales_channel]}</span></div><div><strong>{order.customer_name}</strong><span>{order.items.map((item) => `${item.name} × ${item.quantity}`).join("、") || "無品項"}</span></div><div><span>訂單金額</span><strong>{formatMoney(order.order_amount)}</strong></div><div><span>{adminPaymentStatusLabel(order.payment_status)}</span><span>{invoiceStatusLabel(order.invoice_status)}</span></div><span className="meal-finance-expand">詳細資料</span></summary>
+            <summary><div><strong className="order-number">{order.order_number}</strong><span>{financeDateTime(order.created_at)} · {salesOrderSourceName(order)}</span></div><div><strong>{order.customer_name}</strong><span>{order.items.map((item) => `${item.name} × ${item.quantity}`).join("、") || "無品項"}</span></div><div><span>訂單金額</span><strong>{formatMoney(order.order_amount)}</strong></div><div><span>{adminPaymentStatusLabel(order.payment_status)}</span><span>{invoiceStatusLabel(order.invoice_status)}</span></div><span className="meal-finance-expand">詳細資料</span></summary>
             <SalesOrder order={order} />
           </details>)}</div>}
           {report.data.orders.total > 0 && <nav className="admin-pagination" aria-label="銷售明細分頁"><button className="button button-quiet" type="button" disabled={offset === 0 || report.isFetching} onClick={() => setOffset(Math.max(0, offset - pageSize))}>上一頁</button><span>第 {Math.floor(offset / pageSize) + 1}／{Math.ceil(report.data.orders.total / pageSize)} 頁 · 共 {report.data.orders.total} 筆</span><button className="button button-quiet" type="button" disabled={offset + pageSize >= report.data.orders.total || report.isFetching} onClick={() => setOffset(offset + pageSize)}>下一頁</button></nav>}
@@ -96,11 +131,27 @@ function ProductFinance() {
   </section>;
 }
 
+function salesOrderSourceName(order: MealSalesOrder) {
+  if (order.financial_order_category?.startsWith("walk_in_") && order.financial_order_category_label) {
+    return order.financial_order_category_label;
+  }
+  return channelNames[order.sales_channel];
+}
+
 function SalesSummary({ report }: { report: MealSalesReport }) {
   const [period, setPeriod] = useState<"daily" | "weekly" | "monthly">("daily");
   return <div className="meal-finance-summary">
     <section><div className="meal-finance-result-heading"><h2>收款與退款統整</h2><label className="field"><span>統整方式</span><select value={period} onChange={(event) => setPeriod(event.target.value as typeof period)}><option value="daily">每日</option><option value="weekly">每週（週一開始）</option><option value="monthly">每月</option></select></label></div><PeriodTable rows={report[period]} period={period} /></section>
-    <section><h2>商品銷售數量</h2>{report.products.length === 0 ? <DataState title="期間內沒有首次付款的商品" detail="跨期退款仍會顯示在收退款統整。" /> : <div className="meal-finance-table-wrap"><table className="meal-finance-table"><caption>首次付款訂單的商品銷售</caption><thead><tr><th scope="col">商品</th><th scope="col">數量</th><th scope="col">品項小計</th><th scope="col">訂單數</th></tr></thead><tbody>{report.products.map((row) => <tr key={`${row.name}-${row.unit}`}><th scope="row">{row.name}</th><td>{row.quantity} {row.unit}</td><td>{formatMoney(row.sales_amount)}</td><td>{row.order_count}</td></tr>)}</tbody></table></div>}</section>
+    <section><h2>商品銷售數量</h2>{report.products.length === 0 ? <DataState title="期間內沒有首次付款的商品" detail="跨期退款仍會顯示在收退款統整。" /> : <div className="meal-finance-table-wrap">
+      <table className="meal-finance-table">
+        <caption>首次付款訂單的商品銷售</caption>
+        <thead><tr><th scope="col">商品</th><th scope="col">訂單分類</th><th scope="col">數量</th><th scope="col">品項小計</th><th scope="col">訂單數</th></tr></thead>
+        <tbody>{report.products.map((row) => <tr key={JSON.stringify([row.name, row.unit, row.financial_order_category])}>
+          <th scope="row">{row.name}</th><td>{row.financial_order_category_label ?? "—"}</td>
+          <td>{row.quantity} {row.unit}</td><td>{formatMoney(row.sales_amount)}</td><td>{row.order_count}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>}</section>
   </div>;
 }
 
@@ -111,7 +162,7 @@ function PeriodTable({ rows, period }: { rows: MealSalesPeriod[]; period: string
 
 function SalesOrder({ order }: { order: MealSalesOrder }) {
   return <article className="meal-finance-order">
-    <header><div><h2>{order.order_number}</h2><p>{order.customer_name} · {membershipNames[order.membership_type] || order.membership_type}</p><p>{order.customer_email}</p></div><Link className="button button-quiet" to="/admin" search={{ q: order.order_number }}>處理付款／發票</Link></header>
+    <header><div><h2>{order.order_number}</h2><p>{order.customer_name} · {membershipNames[order.membership_type] || order.membership_type}</p><p>{order.customer_email}</p></div><Link className="button button-quiet" to="/admin" search={{ section: "orders", q: order.order_number, order_id: order.id }}>處理付款／發票</Link></header>
     <div className="meal-finance-order-states"><span>{adminPaymentStatusLabel(order.payment_status)}</span><span>{fulfillmentStatusLabel(order.fulfillment_status)}</span><span>{invoiceStatusLabel(order.invoice_status)}{order.invoice_number && ` · ${order.invoice_number}`}</span>{order.cancellation_status && <span>{cancellationNames[order.cancellation_status] || order.cancellation_status}</span>}</div>
     <dl className="meal-finance-order-meta">{order.revision !== undefined && <div><dt>目前訂單版本</dt><dd>第 {order.revision} 版</dd></div>}<div><dt>下單時間</dt><dd>{financeDateTime(order.created_at)}</dd></div><div><dt>首次付款時間</dt><dd>{financeDateTime(order.paid_at)}</dd></div><div><dt>取貨時間</dt><dd>{financeDateTime(order.pickup_at)}{!order.pickup_time_confirmed && order.pickup_at && "（原場次開始時間）"}</dd></div><div><dt>取貨地點</dt><dd>{order.location || "—"}</dd></div></dl>
     <ul className="meal-finance-item-list">{order.items.map((item, index) => <li key={`${item.name}-${index}`}><div><strong>{item.name} × {item.quantity} {item.unit}</strong><p>單價 {formatMoney(item.unit_price)} · {item.tax_type === "taxable" ? "含稅" : "免稅"}{item.options.length > 0 && ` · 加選：${item.options.map((option) => `${option.group_name}／${option.name}`).join("、")}`}</p></div><strong>{formatMoney(item.subtotal)}</strong></li>)}</ul>

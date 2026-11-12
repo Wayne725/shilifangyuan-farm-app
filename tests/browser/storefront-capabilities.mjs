@@ -6,7 +6,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4197');
 if (!['localhost', '127.0.0.1'].includes(target.hostname) || target.pathname !== '/' || !['http:', 'https:'].includes(target.protocol)) throw new Error('Only isolated local storefront tests are allowed');
 const base = target.origin;
-const product = { id: 'scope-product', slug: 'scope-product', name: '範圍測試農產', category: '蔬果', unit: '袋', member_price: 90, nonmember_price: 100, stock_quantity: 20, can_ship: true, shipping_temperature: 'ambient', allowed_shipping_channels: ['home_delivery'], is_active: true };
+const product = { id: 'scope-product', slug: 'scope-product', name: '範圍測試農產', category: '蔬果', unit: '袋', member_price: 90, nonmember_price: 100, stock_quantity: 20, can_ship: true, shipping_temperature: 'ambient', allowed_shipping_channels: ['home_delivery'], is_active: true, daily_sales_enabled: true };
 const pickup = { orders_open: true, closed_message: '暫停接單', sales_scope: 'pickup', regular_orders_enabled: true, group_orders_enabled: true, shipping_enabled: false };
 const mealsOnly = { ...pickup, sales_scope: 'meals_only', regular_orders_enabled: false, group_orders_enabled: false };
 
@@ -25,6 +25,7 @@ async function fixture(t, { platform = pickup, path = '/checkout', admin = false
     const path = url.pathname;
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-scope', user: { id: 'buyer', email: 'buyer@example.com', display_name: '隔離使用者', user_role: admin ? 'admin' : 'customer', membership_type: 'nonmember' } } });
     if (path === '/v1/platform') { if (delayed) await gate; return route.fulfill({ json: platform }); }
+    if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
     if (path === '/v1/admin/platform') return route.fulfill({ json: { ...platform, printer_brand: '', printer_model: '', printer_connection: 'unknown', kitchen_sound: false } });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'store', name: '隔離自取點', is_active: true }] });
     if (path === '/v1/shipping-rates') return route.fulfill({ json: [] });

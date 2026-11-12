@@ -524,6 +524,19 @@ class RefreshSession(Base):
     user: Mapped[User] = relationship(back_populates="refresh_sessions")
 
 
+class BrowserRefreshSelection(Base):
+    __tablename__ = "browser_refresh_selections"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    family_id: Mapped[str] = mapped_column(String(36))
+    current_session_id: Mapped[str] = mapped_column(
+        ForeignKey("refresh_sessions.id", ondelete="CASCADE"), index=True
+    )
+    predecessor_id: Mapped[Optional[str]] = mapped_column(String(36))
+    recovery_proof_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    recovery_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class CredentialRateLimitBucket(Base):
     __tablename__ = "credential_rate_limit_buckets"
     __table_args__ = (Index("ix_credential_rate_limit_expiry_key", "expires_at", "key_hash"),)
@@ -1755,10 +1768,28 @@ class MealEvent(Base):
             name="ordering_before_pickup_end",
         ),
         UniqueConstraint("schedule_template_id", "service_date", name="uq_meal_event_schedule_date"),
+        CheckConstraint(
+            "same_day_preparation_minutes IS NULL OR (same_day_preparation_minutes BETWEEN 1 AND 1439 "
+            "AND booking_policy IN ('workday', 'special') AND NOT allow_cash_payment)",
+            name="meal_same_day_configuration",
+        ),
+        CheckConstraint(
+            "NOT business_only OR (booking_policy IN ('workday', 'special') "
+            "AND same_day_preparation_minutes IS NULL AND NOT allow_cash_payment)",
+            name="meal_business_only_configuration",
+        ),
+        CheckConstraint(
+            "ordering_pause_version >= 0 AND (ordering_paused_at IS NULL OR ordering_pause_version > 0)",
+            name="meal_ordering_pause_version",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     booking_policy: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
+    same_day_preparation_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    ordering_paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ordering_pause_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))
@@ -2173,6 +2204,7 @@ class OrderItem(Base):
     source_product_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("products.id", ondelete="SET NULL"), nullable=True
     )
+    procurement_snapshot: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON(none_as_null=True), nullable=True)
     source_bundle_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("group_bundles.id", ondelete="SET NULL"), nullable=True
     )
@@ -2463,6 +2495,10 @@ class PaymentAttempt(Base):
             "(order_id IS NULL AND membership_charge_id IS NULL AND activity_charge_id IS NOT NULL)",
             name="exactly_one_payment_subject",
         ),
+        CheckConstraint(
+            "browser_return_storefront IN ('canonical', 'legacy')",
+            name="browser_return_storefront_supported",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -2495,6 +2531,7 @@ class PaymentAttempt(Base):
         index=True,
     )
     checkout_payload: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    browser_return_storefront: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     provider_response: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     next_reconcile_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
@@ -2819,6 +2856,33 @@ class OutboxEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
+
+
+class RecoveryCutover(Base):
+    __tablename__ = "recovery_cutovers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    checkpoint_sha256: Mapped[str] = mapped_column(String(64))
+    manifest_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    armed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class RecoveryHold(Base):
+    __tablename__ = "recovery_holds"
+    __table_args__ = (
+        Index("ix_recovery_holds_scope_reference_resolved", "scope", "reference", "resolved_at"),
+    )
+
+    cutover_id: Mapped[str] = mapped_column(ForeignKey("recovery_cutovers.id", ondelete="RESTRICT"), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    reference: Mapped[str] = mapped_column(String(128), primary_key=True)
+    evidence_sha256: Mapped[str] = mapped_column(String(64))
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    resolved_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    resolution_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    resolution: Mapped[Optional[str]] = mapped_column(String(24))
 
 
 class ExternalEvent(Base):
@@ -3193,6 +3257,9 @@ class MembershipAdmissionRound(Base):
     status: Mapped[str] = mapped_column(String(32), default="draft", server_default="draft", index=True)
     profile_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requested_share_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    admission_fee_amount: Mapped[int] = mapped_column(Integer, server_default="500")
+    admission_fee_version: Mapped[int] = mapped_column(Integer, server_default="0")
+    share_unit_amount: Mapped[int] = mapped_column(Integer, server_default="100")
     student_claimed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     discovery_channel: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     discovery_other_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

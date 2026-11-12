@@ -61,11 +61,11 @@ test("提案全部enum都有中文顯示，歷史enum不改寫",async()=>{
   assert.equal(modules["./group-campaigns"].groupProposalStatusLabel("ended_unmet"),"未達投票門檻");
   assert.equal(modules["./group-campaigns"].groupProposalStatusLabel("expired_unhandled"),"逾期未開團");
 });
-test("數量鎖定原因以已結束、截止、付款紀錄依序判斷",()=>{
+test("數量設定狀態以已結束、截止、付款紀錄依序判斷",()=>{
   const reason=modules["./group-campaigns"].campaignQuantityBlockReason;
   const paid={...campaign,core_locked_at:"2030-01-01T00:00:00Z",paid_quantity:0};
-  assert.equal(reason({...paid,decision_status:"failed_unmet"},now),"此團已結束，無法修改數量設定。");
-  assert.equal(reason({...paid,deadline:"2030-01-01T00:00:00Z"},now),"付款已截止，無法修改數量設定。");
-  assert.equal(reason(paid,now),"已有付款紀錄，限購與成團數量已鎖定。");
+  assert.equal(reason({...paid,decision_status:"failed_unmet"},now),"共同購買已結束");
+  assert.equal(reason({...paid,deadline:"2030-01-01T00:00:00Z"},now),"付款已截止");
+  assert.equal(reason(paid,now),"數量設定已鎖定");
   assert.equal(reason(campaign,now),"");
 });

@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ApiError, apiFetch, downloadApiFile } from "../lib/api";
 import { OrderCategoryFilter } from "./OrderCategoryFilter";
-import { type OrderCategory } from "../lib/order-category";
+import type { FinancialOrderCategory } from "../lib/order-category";
 import { financePeriodPreset } from "../lib/meal-finance";
 import "./AccountingExport.css";
 
@@ -19,7 +19,7 @@ interface Batch {id: string; filename: string; created_at: string;}
 export function AccountingExport({initialFormat = "invoice"}: {initialFormat?: keyof typeof formats}) {
   const [format, setFormat] = useState<keyof typeof formats>(initialFormat);
   const [period, setPeriod] = useState(() => financePeriodPreset("month"));
-  const [category, setCategory] = useState<OrderCategory>("all");
+  const [category, setCategory] = useState<FinancialOrderCategory>("all");
   const [subject, setSubject] = useState<"all" | "order" | "activity">(initialFormat === "invoice" ? "order" : "all");
   const [batchId, setBatchId] = useState("");
   const [page, setPage] = useState(0);
@@ -37,7 +37,7 @@ export function AccountingExport({initialFormat = "invoice"}: {initialFormat?: k
     <form onSubmit={event => {event.preventDefault(); setMessage(""); download.mutate();}}>
       <label className="field"><span>匯出格式</span><select aria-label="匯出格式" value={format} onChange={event => {setFormat(event.target.value as keyof typeof formats); if (event.target.value === "invoice") setSubject("order"); setBatchId(""); setPage(0);}}>{Object.entries(formats).map(([value, option]) => <option key={value} value={value}>{option.label}</option>)}</select></label>
       <label className="field"><span>匯出來源</span><select aria-label="匯出來源" value={format === "invoice" ? "order" : subject} onChange={event => {setSubject(event.target.value as "all" | "order" | "activity"); setCategory("all");}}>{format !== "invoice" && <option value="all">全部來源</option>}<option value="order">訂單</option>{format !== "invoice" && <option value="activity">活動應收</option>}</select></label>
-      {subject !== "activity" && <OrderCategoryFilter value={category} onChange={setCategory} />}
+      {subject !== "activity" && <OrderCategoryFilter value={category} onChange={setCategory} includeWalkInUnclassified />}
       <label className="field"><span>{format === "invoice" ? "發票日期起" : "交易日期起"}</span><input required type="date" value={period.startsOn} onChange={event => setPeriod({...period, startsOn: event.target.value})}/></label>
       <label className="field"><span>{format === "invoice" ? "發票日期迄" : "交易日期迄"}</span><input required type="date" min={period.startsOn} value={period.endsOn} onChange={event => setPeriod({...period, endsOn: event.target.value})}/></label>
       <label className="field accounting-export-source"><span>資料來源</span><select aria-label="資料來源" required={format !== "invoice"} value={batchId} onChange={event => setBatchId(event.target.value)}><option value="">{format === "invoice" ? "網站發票紀錄" : "請選擇已匯入的明細檔"}</option>{batches.data?.items.map(batch => <option key={batch.id} value={batch.id}>{batch.filename}</option>)}</select></label>

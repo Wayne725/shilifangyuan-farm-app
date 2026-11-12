@@ -1,7 +1,7 @@
 """Real Alembic upgrades in a private schema of the disposable local PG database."""
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -16,7 +16,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_engine_from_config, async_sessionmaker, create_async_engine
 
 from app.config import Settings
-from app.models import MembershipType, Order, User, UserRole
+from app.models import BrowserRefreshSelection, MembershipType, Order, RefreshSession, User, UserRole
 from app.routers.walk_in_sales import walk_in_sales_router
 from tests.support import api_test_context, auth_headers, make_test_settings
 from tests.test_walk_in_sales import payload
@@ -173,9 +173,83 @@ async def test_counter_membership_migration_times_out_behind_live_order_reader_a
     async with database.engine.begin() as live_reader:
         await live_reader.execute(text("LOCK TABLE orders IN ACCESS SHARE MODE"))
         with pytest.raises(DBAPIError) as blocked:
-            await database.migrate(command.upgrade, "head")
+            await database.migrate(command.upgrade, "0055_counter_member_pricing")
         assert blocked.value.orig.sqlstate == "55P03"
         assert await live_reader.scalar(text("SELECT version_num FROM alembic_version")) == previous
         assert await live_reader.scalar(text("SELECT count(*) FROM orders")) == 0
+    await database.migrate(command.upgrade, "0055_counter_member_pricing")
+    assert await version(database) == "0055_counter_member_pricing"
+
+
+@pytest.mark.asyncio
+async def test_payment_storefront_migration_times_out_behind_live_payment_reader_and_can_retry(migrated_database):
+    database = migrated_database
+    previous = "0055_counter_member_pricing"
+    payment_revision = "0056_payment_return_storefront"
+    await database.migrate(command.upgrade, previous)
+    async with database.engine.begin() as live_reader:
+        await live_reader.execute(text("LOCK TABLE payment_attempts IN ACCESS SHARE MODE"))
+        with pytest.raises(DBAPIError) as blocked:
+            await database.migrate(command.upgrade, payment_revision)
+        assert blocked.value.orig.sqlstate == "55P03"
+        assert await live_reader.scalar(text("SELECT version_num FROM alembic_version")) == previous
+        assert await live_reader.scalar(text("SELECT count(*) FROM payment_attempts")) == 0
+    await database.migrate(command.upgrade, payment_revision)
+    assert await version(database) == payment_revision
+    async with database.engine.connect() as connection:
+        assert await connection.scalar(text(
+            "SELECT convalidated FROM pg_constraint WHERE conrelid = 'payment_attempts'::regclass "
+            "AND conname = 'ck_payment_attempts_browser_return_storefront_supported'"
+        )) is False
+    await database.migrate(command.downgrade, previous)
+    assert await version(database) == previous
+
+
+@pytest.mark.asyncio
+async def test_browser_refresh_downgrade_refuses_active_selection(migrated_database):
+    database = migrated_database
     await database.migrate(command.upgrade, "head")
-    assert await version(database) == database.head == "0055_counter_member_pricing"
+    user_id, session_id, selector_id = str(uuid4()), str(uuid4()), uuid4().hex
+    expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+    async with database.engine.begin() as connection:
+        await connection.execute(User.__table__.insert().values(
+            id=user_id, display_name="隔離登入", password_hash="test",
+        ))
+        await connection.execute(RefreshSession.__table__.insert().values(
+            id=session_id, user_id=user_id, expires_at=expires_at,
+        ))
+        await connection.execute(BrowserRefreshSelection.__table__.insert().values(
+            id=selector_id, family_id=session_id, current_session_id=session_id,
+        ))
+
+    with pytest.raises(RuntimeError, match="仍有有效的新版瀏覽器登入"):
+        await database.migrate(command.downgrade, "0056_payment_return_storefront")
+    assert await version(database) == database.head
+    async with database.engine.begin() as connection:
+        assert await connection.scalar(select(BrowserRefreshSelection.current_session_id)) == session_id
+        assert await connection.scalar(select(RefreshSession.expires_at)) == expires_at
+        await connection.execute(update(RefreshSession).values(revoked_at=datetime.now(timezone.utc)))
+
+    await database.migrate(command.downgrade, "0056_payment_return_storefront")
+    assert await version(database) == "0056_payment_return_storefront"
+    async with database.engine.connect() as connection:
+        assert await connection.scalar(select(RefreshSession.id)) == session_id
+        assert not await connection.run_sync(lambda sync: inspect(sync).has_table("browser_refresh_selections"))
+
+
+@pytest.mark.asyncio
+async def test_empty_browser_refresh_downgrade_times_out_behind_reader_and_can_retry(migrated_database):
+    database = migrated_database
+    await database.migrate(command.upgrade, "head")
+    async with database.engine.begin() as live_reader:
+        await live_reader.execute(text("LOCK TABLE browser_refresh_selections IN ACCESS SHARE MODE"))
+        with pytest.raises(DBAPIError) as blocked:
+            await database.migrate(command.downgrade, "0056_payment_return_storefront")
+        assert blocked.value.orig.sqlstate == "55P03"
+        assert await live_reader.scalar(text("SELECT version_num FROM alembic_version")) == database.head
+        assert await live_reader.scalar(text("SELECT count(*) FROM browser_refresh_selections")) == 0
+
+    await database.migrate(command.downgrade, "0056_payment_return_storefront")
+    assert await version(database) == "0056_payment_return_storefront"
+    await database.migrate(command.upgrade, "head")
+    assert await version(database) == database.head

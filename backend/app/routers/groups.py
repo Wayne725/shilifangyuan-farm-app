@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
-from typing import List, Optional, Set, Tuple
+from typing import Any, List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select, text
@@ -22,6 +22,7 @@ from ..product_creation import create_product_record
 from ..platform_settings import require_accepting_orders
 from ..config import Settings, get_settings
 from ..sales_scope import require_sales_scope_allows
+from ..supplier_order_demand import product_procurement_snapshot
 from ..integrations.invoice_service import invoice_context_from_settings
 from ..domain import (
     DomainError,
@@ -145,7 +146,7 @@ async def target_order_snapshot(
     target_id: str,
     *,
     lock: bool = False,
-) -> Tuple[str, str, TaxType, Optional[str], Optional[str]]:
+) -> tuple[str, str, TaxType, str | None, str | None, dict[str, str | None] | None]:
     if target_type == TargetType.PRODUCT:
         query = select(Product).where(
             Product.id == target_id, Product.is_active.is_(True)
@@ -161,6 +162,7 @@ async def target_order_snapshot(
             product.tax_type,
             product.id,
             None,
+            product_procurement_snapshot(product),
         )
     bundle = await session.scalar(
         select(GroupBundle)
@@ -188,7 +190,7 @@ async def target_order_snapshot(
         )
         else TaxType.TAX_EXEMPT
     )
-    return bundle.name, "組", tax_type, None, bundle.id
+    return bundle.name, "組", tax_type, None, bundle.id, None
 
 
 async def _committed_group_quantity(
@@ -365,6 +367,13 @@ async def update_campaign(
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         return campaign_read(campaign)
+    if updates.keys() <= {"title", "description"}:
+        if "title" in updates and not updates["title"].strip():
+            raise HTTPException(status_code=422, detail="請填寫共同購買名稱")
+        changes = {field: value for field, value in updates.items() if getattr(campaign, field) != value}
+        if not changes:
+            return campaign_read(campaign)
+        return await _save_campaign_changes(session, campaign, admin, changes)
 
     candidate_values = {
         "source_proposal_id": campaign.source_proposal_id,
@@ -434,15 +443,23 @@ async def update_campaign(
             session, candidate.target_type, candidate.target_id
         )
 
-    for field in changed_fields:
-        setattr(campaign, field, candidate_dump[field])
+    return await _save_campaign_changes(
+        session, campaign, admin, {field: candidate_dump[field] for field in changed_fields}
+    )
+
+
+async def _save_campaign_changes(
+    session: AsyncSession, campaign: GroupCampaign, admin: User, changes: dict[str, Any],
+) -> CampaignRead:
+    for field, value in changes.items():
+        setattr(campaign, field, value)
     session.add(
         AdminAudit(
             actor_id=admin.id,
             action="campaign.update",
             aggregate_type="group_campaign",
             aggregate_id=campaign.id,
-            data={"changed_fields": sorted(changed_fields)},
+            data={"changed_fields": sorted(changes)},
         )
     )
     await session.commit()
@@ -517,7 +534,7 @@ async def _group_join_quote(session, campaign, body, user, *, target_snapshot=No
             raise HTTPException(status_code=422, detail="找不到適用的物流費率")
         if product_subtotal < rate.free_shipping_threshold:
             shipping_fee = rate.fee
-    _, _, product_tax_type, _, _ = target_snapshot or await target_order_snapshot(session, campaign.target_type, campaign.target_id)
+    _, _, product_tax_type, *_ = target_snapshot or await target_order_snapshot(session, campaign.target_type, campaign.target_id)
     tax_type = sale_tax_type(
         product_tax_type, membership_type, body.invoice_buyer_type
     )
@@ -611,7 +628,7 @@ async def join_campaign(
     if ((body.expected_total is not None and body.expected_total != quote.amount_total)
         or (body.expected_quote_fingerprint is not None and body.expected_quote_fingerprint != quote.confirmation_fingerprint)):
         raise HTTPException(409, "共同購買報價已更新，請重新確認後再送單", headers={"X-Error-Code": "quote_changed"})
-    name, unit, _, product_id, bundle_id = snapshot
+    name, unit, _, product_id, bundle_id, procurement_snapshot = snapshot
     membership_type, tax_type, unit_price = quote.membership_type, quote.tax_type, quote.unit_price
     pickup_location = None
     if body.pickup_location_id is not None:
@@ -671,6 +688,7 @@ async def join_campaign(
         items=[
             OrderItem(
                 source_product_id=product_id,
+                procurement_snapshot=procurement_snapshot,
                 source_bundle_id=bundle_id,
                 product_name=name,
                 unit_label=unit,

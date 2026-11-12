@@ -135,6 +135,61 @@ async def test_admin_blocked_query_and_void_keep_reason_without_contacting_provi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("changes", "expected_status"), [
+    ({"invNo": "XY87654321"}, 409),
+    ({"invDate": "20260911"}, 409),
+    ({"randomNumber": "5678"}, 409),
+    ({"invDate": "", "randomNumber": ""}, 200),
+    ({}, 200),
+    ({"invDate": "20260931"}, 200),
+])
+async def test_admin_invoice_query_preserves_original_invoice_identity(
+    database_session, monkeypatch, changes, expected_status,
+):
+    import app.routers.invoices as routes
+
+    admin, _, order = await make_regular_order(database_session)
+    admin.user_role = UserRole.ADMIN
+    order.payment_status = PaymentStatus.PAID
+    order.invoice_status = InvoiceStatus.ISSUED
+    settings = fanyu_settings()
+    context = account_context(settings)
+    order.invoice_provider_context = context
+    original_date = datetime(2026, 9, 9, 16, 8, tzinfo=timezone.utc)
+    invoice = Invoice(
+        order=order, provider="fanyu", relate_number="QUERYIDENTITY", status=InvoiceStatus.ISSUED,
+        invoice_number="AB12345678", invoice_date=original_date, random_number="1234",
+        provider_status="0", provider_context=context, provider_request={"sellerID": settings.seller_id},
+    )
+    database_session.add(invoice)
+    await database_session.commit()
+    order_id, invoice_id = order.id, invoice.id
+    calls = []
+
+    async def transport(url, envelope, *_args):
+        calls.append(url.rsplit("/", 1)[-1])
+        assert envelope["reqData"]["orderID"] == "QUERYIDENTITY"
+        return HTTPResponse(200, json.dumps({
+            "statusCode": "0", "respData": {
+                "invNo": "AB12345678", "invDate": "20260910", "randomNumber": "1234", "status": "0", **changes,
+            },
+        }), {})
+
+    adapter = FanyuInvoiceAdapter(settings, transport)
+    monkeypatch.setattr(routes, "invoice_adapter_from_settings", lambda _: adapter)
+    async with api_test_context(database_session, [invoices_router], settings=make_test_settings(invoice_provider="fanyu")) as client:
+        response = await client.post(f"/v1/admin/orders/{order_id}/invoice/query", headers=auth_headers(admin), json={})
+
+    saved = await database_session.get(Invoice, invoice_id, populate_existing=True)
+    assert response.status_code == expected_status, response.text
+    assert calls == ["queryInvoice"]
+    assert saved.status == InvoiceStatus.ISSUED
+    assert saved.invoice_number == "AB12345678"
+    assert saved.invoice_date.replace(tzinfo=timezone.utc) == original_date
+    assert saved.random_number == "1234"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", [issue_paid_order_invoice, reconcile_order_invoice])
 @pytest.mark.parametrize("has_invoice", [False, True])
 @pytest.mark.parametrize("change", [

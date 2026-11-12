@@ -11,6 +11,7 @@ if (!['127.0.0.1', 'localhost'].includes(target.hostname) || !['http:', 'https:'
 }
 const base = target.origin;
 const prefix = '/v1/membership/admission';
+const feePath = '/v1/admin/membership/admission-fee';
 const now = '2030-01-02T02:00:00Z';
 const profile = {
   legal_name: '隔離申請人', phone: '0912345678', birth_date: '2000-01-01', address: '隔離市合作路1號',
@@ -36,26 +37,66 @@ const newRound = () => ({
   student_verified: null, decision_reference: null, created_at: now, updated_at: now, can_edit: true, can_submit: false, can_withdraw: true,
 });
 
-async function fixture(t, width, { conflict = false, score = 80, member = false, hasLegacy = false, admissionFee = 500, shareUnit = 100 } = {}) {
+async function fixture(t, width, { conflict = false, score = 80, member = false, hasLegacy = false, admissionFee = 500, shareUnit = 100, role = 'customer', path = '/membership', adminRoundCount = 0 } = {}) {
   const viewConfig = structuredClone(config);
-  viewConfig.declaration.admission_fee_amount = admissionFee;
   viewConfig.declaration.share_unit_amount = shareUnit;
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Taipei', locale: 'zh-TW', serviceWorkers: 'block' });
-  const state = { round: null, history: [], writes: [], unknown: [], errors: [], reads: 0, conflict, denyReads: false, denyMutation: false };
+  const state = {
+    round: null, history: [], writes: [], unknown: [], errors: [], reads: 0, conflict, denyReads: false, denyMutation: false,
+    fee: { admission_fee_amount: admissionFee, version: 0, share_unit_amount: shareUnit, maximum_admission_fee_amount: 100_000_000 },
+    feeRequests: [], adminAdmissionOffsets: [],
+    adminRounds: Array.from({ length: adminRoundCount }, (_, index) => ({
+      ...newRound(), id: `admin-round-${index + 1}`, status: 'submitted', submitted_at: now,
+      profile: { ...profile, legal_name: `隔離申請人 ${index + 1}` },
+    })),
+  };
   await context.route('**/*', route => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
-    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-token', user: { id: 'applicant', email: profile.contact_email, display_name: '隔離帳號', user_role: 'customer', membership_type: member ? 'member' : 'nonmember' } } });
+    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-token', user: { id: 'applicant', email: profile.contact_email, display_name: '隔離帳號', user_role: role, membership_type: member ? 'member' : 'nonmember' } } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: member ? 'member' : 'nonmember', membership: member ? { status: 'active', member_number: 'ISOLATED001' } : null } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, sales_scope: 'pickup' } });
+    if (role === 'admin' && ['/v1/admin/membership-applications', '/v1/admin/members'].includes(path)) {
+      return route.fulfill({ json: [] });
+    }
+    if (role === 'admin' && path === '/v1/admin/membership/admissions' && request.method() === 'GET') {
+      const offset = Number(url.searchParams.get('offset'));
+      const limit = Number(url.searchParams.get('limit'));
+      state.adminAdmissionOffsets.push(offset);
+      const rounds = state.adminRounds.filter(round => ['submitted', 'needs_supplement'].includes(round.status));
+      return route.fulfill({ json: { items: rounds.slice(offset, offset + limit), total: rounds.length, limit, offset } });
+    }
+    if (role === 'admin' && path.endsWith('/review') && path.startsWith('/v1/admin/membership/admissions/') && request.method() === 'POST') {
+      const body = request.postDataJSON();
+      const round = state.adminRounds.find(item => item.id === path.split('/').at(-2));
+      assert.equal(body.expected_version, round.version);
+      assert.equal(body.decision, 'reject');
+      state.writes.push({ method: request.method(), path, body });
+      Object.assign(round, { status: 'rejected', version: round.version + 1 });
+      return route.fulfill({ json: round });
+    }
+    if (path === '/v1/admin/membership-education/settings' && role === 'admin') {
+      return route.fulfill({ json: { configured: true, version: 1, retry_limit: 1, retry_interval_minutes: 15 } });
+    }
+    if (path === feePath && role === 'admin') {
+      const body = request.method() === 'PUT' ? request.postDataJSON() : null;
+      state.feeRequests.push({ method: request.method(), body });
+      if (body && body.expected_version !== state.fee.version) {
+        return route.fulfill({ status: 409, json: { detail: '入社費設定已更新，請重新讀取後再儲存' } });
+      }
+      if (body) state.fee = { ...state.fee, admission_fee_amount: body.admission_fee_amount, version: state.fee.version + 1 };
+      return route.fulfill({ json: state.fee });
+    }
     if (path === prefix && request.method() === 'GET') {
       state.reads++;
       if (state.denyReads) return route.fulfill({ status: 401, json: { detail: '隔離登入已失效' } });
+      viewConfig.declaration.admission_fee_amount = state.fee.admission_fee_amount;
+      viewConfig.declaration.admission_fee_version = state.fee.version;
       const history = [...state.history, ...(state.round ? [state.round] : [])].map(value => ({ id: value.id, round_number: value.round_number, status: value.status, created_at: value.created_at, reviewed_at: value.reviewed_at }));
       return route.fulfill({ json: { config: viewConfig, current_round: state.round, history, profile_defaults: null, has_legacy_application: hasLegacy, can_start: !state.round || ['withdrawn', 'rejected'].includes(state.round.status), start_blocked_reason: null } });
     }
@@ -72,10 +113,18 @@ async function fixture(t, width, { conflict = false, score = 80, member = false,
     if (state.denyMutation) return route.fulfill({ status: 403, json: { detail: '隔離權限已失效' } });
     if (path === `${prefix}/rounds`) {
       assert.match(body.idempotency_key, /^[0-9a-f-]{36}$/);
+      if ((!state.round || ['withdrawn', 'rejected'].includes(state.round.status)) && (body.expected_fee_version ?? 0) !== state.fee.version) {
+        return route.fulfill({ status: 409, json: { detail: '入社費已更新，請重新讀取並確認金額' } });
+      }
+      const snapshots = {
+        admission_fee_amount: state.fee.admission_fee_amount,
+        admission_fee_version: state.fee.version,
+        share_unit_amount: state.fee.share_unit_amount,
+      };
       if (state.round && ['withdrawn', 'rejected'].includes(state.round.status)) {
         state.history.push(structuredClone(state.round));
-        state.round = { ...newRound(), id: `isolated-round-${state.history.length + 1}`, round_number: state.history.length + 1 };
-      } else state.round ||= newRound();
+        state.round = { ...newRound(), ...snapshots, id: `isolated-round-${state.history.length + 1}`, round_number: state.history.length + 1 };
+      } else state.round ||= { ...newRound(), ...snapshots };
       return route.fulfill({ json: state.round });
     }
     assert.equal(body.expected_version, state.round.version);
@@ -117,7 +166,7 @@ async function fixture(t, width, { conflict = false, score = 80, member = false,
   const page = await context.newPage();
   page.setDefaultTimeout(7000);
   page.on('pageerror', error => state.errors.push(error.message));
-  await page.goto(`${base}/membership`);
+  await page.goto(`${base}${path}`);
   return { page, state };
 }
 
@@ -298,4 +347,83 @@ test('費率由API提供，不在瀏覽器寫死入社費或每股金額', async
   await quote.getByText('$1,900', { exact: true }).waitFor();
   assert.deepEqual(state.writes, []);
   verifyState(state);
+});
+
+test('新申請須確認更新後的入社費，重開草稿保留當輪金額', async t => {
+  const { page, state } = await fixture(t, 390);
+  const quote = page.locator('dl[aria-label="入社費用估算"]');
+  await quote.getByText('$500', { exact: true }).waitFor();
+  state.fee = { ...state.fee, admission_fee_amount: 750, version: 1 };
+  const start = page.getByRole('button', { name: '開始入社申請', exact: true });
+  await start.click();
+  await page.getByText('入社費已更新，請重新讀取並確認金額', { exact: true }).waitFor();
+  assert.equal(state.round, null);
+  assert.equal(await start.isDisabled(), true);
+  await page.getByRole('button', { name: '重新讀取最新進度', exact: true }).click();
+  await quote.getByText('$750', { exact: true }).waitFor();
+  await start.click();
+  await page.getByRole('heading', { name: '資料與志願書', exact: true }).waitFor();
+  assert.equal(state.writes.at(-1).body.expected_fee_version, 1);
+  assert.equal(state.round.admission_fee_amount, 750);
+  state.fee = { ...state.fee, admission_fee_amount: 800, version: 2 };
+  await page.reload();
+  await quote.getByText('$750', { exact: true }).waitFor();
+  assert.equal(await quote.getByText('$800', { exact: true }).count(), 0);
+  verifyState(state);
+});
+
+test('後台入社費設定沿用教育入口，攔下舊版本與非整數', async t => {
+  const { page, state } = await fixture(t, 390, { role: 'admin', path: '/admin/social?tab=education' });
+  await page.getByRole('heading', { name: '測驗重考設定' }).waitFor();
+  assert.deepEqual(state.feeRequests, []);
+  await page.getByText('新申請入社費', { exact: true }).click();
+  const amount = page.getByLabel('入社費（元）', { exact: true });
+  const save = page.getByRole('button', { name: '儲存入社費', exact: true });
+  await amount.waitFor();
+  assert.equal(await amount.inputValue(), '500');
+  await amount.fill('750.5');
+  assert.equal(await save.isDisabled(), true);
+  await amount.fill('750');
+  state.fee = { ...state.fee, admission_fee_amount: 650, version: 1 };
+  await save.click();
+  await page.getByText('入社費設定已更新，請重新讀取後再儲存', { exact: true }).waitFor();
+  assert.equal(await amount.inputValue(), '750');
+  await page.getByRole('button', { name: '重新讀取入社費設定', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('details.membership-education-settings input[type=number]').value === '650');
+  await amount.fill('750');
+  await save.click();
+  await page.getByText('入社費設定已儲存。', { exact: true }).waitFor();
+  assert.deepEqual(state.feeRequests.filter(({ method }) => method === 'PUT').map(({ body }) => body), [
+    { expected_version: 0, admission_fee_amount: 750, reason: '' },
+    { expected_version: 1, admission_fee_amount: 750, reason: '' },
+  ]);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  verifyState(state);
+});
+
+test('後台審完最後一頁的單筆入社申請後，回到仍有待審項目的頁面', async t => {
+  const { page, state } = await fixture(t, 390, {
+    role: 'admin', path: '/admin/social?tab=reviews', adminRoundCount: 26,
+  });
+  const inbox = page.getByRole('region', { name: '新版入社審核' });
+  const first = inbox.getByRole('heading', { name: '隔離申請人 1', exact: true });
+  const last = inbox.getByRole('heading', { name: '隔離申請人 26', exact: true });
+  await first.waitFor();
+  await inbox.getByRole('button', { name: '下一頁', exact: true }).click();
+  await last.waitFor();
+  const review = inbox.getByRole('form', { name: '隔離申請人 26第1輪入社審核', exact: true });
+  await review.getByRole('radio', { name: '不通過', exact: true }).check();
+  await review.getByRole('button', { name: '確認不通過', exact: true }).click();
+  await inbox.getByText('共 25 輪', { exact: true }).waitFor();
+  await first.waitFor();
+  assert.equal(await last.count(), 0);
+  assert.equal(await inbox.getByRole('navigation', { name: '入社申請分頁' }).count(), 0);
+  assert.deepEqual(state.adminAdmissionOffsets, [0, 25, 25, 0]);
+  assert.deepEqual(state.writes, [{
+    method: 'POST', path: '/v1/admin/membership/admissions/admin-round-26/review',
+    body: { expected_version: 1, decision: 'reject', reason: '' },
+  }]);
+  assert.equal(state.adminRounds[25].status, 'rejected');
+  assert.deepEqual(state.unknown, []);
+  assert.deepEqual(state.errors, []);
 });

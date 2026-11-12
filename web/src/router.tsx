@@ -118,8 +118,18 @@ const resetPasswordRoute = createRoute({
 const shopRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/shop",
-  validateSearch: (search: Record<string, unknown>): { tab?: "meals" | "groups" | "products" } => ({
+  validateSearch: (search: Record<string, unknown>): {
+    tab?: "meals" | "groups" | "products";
+    q?: string;
+    category?: string;
+    page?: number;
+  } => ({
     tab: search.tab === "meals" || search.tab === "groups" || search.tab === "products" ? search.tab : undefined,
+    q: typeof search.q === "string" || typeof search.q === "number" || typeof search.q === "boolean"
+      ? String(search.q).trim().slice(0, 120) || undefined
+      : undefined,
+    category: typeof search.category === "string" ? search.category.trim().slice(0, 40) || undefined : undefined,
+    page: typeof search.page === "number" && Number.isSafeInteger(search.page) && search.page > 1 ? search.page : undefined,
   }),
   component: page("./pages/ShopPage", "ShopPage"),
 });
@@ -243,8 +253,9 @@ const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
   component: page("./pages/AdminPage", "AdminPage"),
-  validateSearch: (search: Record<string, unknown>): { q?: string; section?: "orders" | "manual-invoice" | "summary" | "issues" | "suppliers" | "locations"; queue?: "refunds" | "business-unpaid" | "invoice" } => ({
+  validateSearch: (search: Record<string, unknown>): { q?: string; order_id?: string; section?: "orders" | "manual-invoice" | "summary" | "issues" | "suppliers" | "locations"; queue?: "refunds" | "business-unpaid" | "invoice" } => ({
     q: typeof search.q === "string" ? search.q.trim().slice(0, 100) : undefined,
+    order_id: typeof search.order_id === "string" && search.order_id ? search.order_id : undefined,
     section: search.section === "orders" || search.section === "manual-invoice" || search.section === "summary" || search.section === "issues" || search.section === "suppliers" || search.section === "locations" ? search.section : undefined,
     queue: search.queue === "refunds" || search.queue === "business-unpaid" || search.queue === "invoice" ? search.queue : undefined,
   }),
@@ -270,6 +281,9 @@ const adminSocialRoute = createRoute({
   }),
   beforeLoad: ({ search }) => {
     if (search.tab === "wishes") throw redirect({ to: "/admin/groups", search: { tab: "wishes" }, replace: true });
+    if (search.tab === "members" || search.tab === "roster") {
+      throw redirect({ to: "/admin/users", search: { tab: search.tab, q: search.q }, replace: true });
+    }
   },
 });
 
@@ -343,9 +357,11 @@ const adminGroupsRoute = createRoute({
 const adminMealsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/meals",
-  validateSearch: (search: Record<string, unknown>): { tab?: string; q?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { tab?: string; q?: string; order_id?: string } => ({
     tab: typeof search.tab === "string" && ["orders", "cancellations", "events", "schedules", "meals"].includes(search.tab) ? search.tab : undefined,
     q: typeof search.q === "string" ? search.q.slice(0, 100) : undefined,
+    order_id: search.tab === "cancellations" && typeof search.order_id === "string" && search.order_id.length > 0 && search.order_id.length <= 36
+      ? search.order_id : undefined,
   }),
   component: page("./pages/AdminMealsPage", "AdminMealsPage"),
 });
@@ -367,11 +383,13 @@ const adminKitchenRoute = createRoute({
 const adminRecordsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/records",
-  component: page("./pages/AdminRecordsPage", "AdminRecordsPage"),
-  validateSearch: (search: Record<string, unknown>): { tab?: "members" | "payments" | "points"; member?: string } => ({
-    tab: search.tab === "payments" || search.tab === "points" ? search.tab : "members",
+  validateSearch: (search: Record<string, unknown>): { tab?: "payments" | "points"; member?: string } => ({
+    tab: search.tab === "payments" || search.tab === "points" ? search.tab : undefined,
     member: typeof search.member === "string" ? search.member.trim().slice(0, 100) || undefined : undefined,
   }),
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: "/admin/users", search: { tab: "records", ledger: search.tab, member: search.member }, replace: true });
+  },
 });
 
 const adminPromotionsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/admin/promotions", component: page("./pages/AdminPromotionsPage", "AdminPromotionsPage") });
@@ -384,6 +402,22 @@ const adminSettingsRoute = createRoute({ getParentRoute: () => rootRoute, path: 
 const adminUsersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/users",
+  validateSearch: (search: Record<string, unknown>): {
+    tab?: "members" | "roster" | "records";
+    ledger?: "payments" | "points";
+    q?: string;
+    membership?: string;
+    member?: string;
+  } => {
+    const tab = search.tab === "members" || search.tab === "roster" || search.tab === "records" ? search.tab : undefined;
+    return {
+      tab,
+      ledger: tab === "records" && (search.ledger === "payments" || search.ledger === "points") ? search.ledger : undefined,
+      q: tab === "members" && typeof search.q === "string" ? search.q.trim().slice(0, 100) || undefined : undefined,
+      membership: tab && typeof search.membership === "string" ? search.membership.trim().slice(0, 100) || undefined : undefined,
+      member: tab && typeof search.member === "string" ? search.member.trim().slice(0, 100) || undefined : undefined,
+    };
+  },
   component: page("./pages/AdminUsersPage", "AdminUsersPage"),
 });
 

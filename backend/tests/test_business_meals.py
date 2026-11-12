@@ -5,6 +5,7 @@ import time_machine
 from uuid import uuid4
 from sqlalchemy import func, select
 
+from app.integrations import payment_service
 from app.integrations.payment_service import PaymentApplicationError, SQLAlchemyPaymentCallbackRepository, create_payment_attempt
 from app.business_meals import business_payment_fields
 from app.jobs import _reconcile_meal_events
@@ -139,6 +140,39 @@ async def test_business_payment_action_and_http_guard_after_service_end(booking_
         detail = await client.get(f'/v1/meal-orders/{order_id}', headers=auth_headers(buyer))
         assert 'pay' not in detail.json()['available_actions']
         assert detail.json()['payment_followup_required'] is True
+
+
+@pytest.mark.parametrize("blocked_stage", ["new_order", "reuse_order", "new_reservations"])
+async def test_business_payment_waiting_for_lock_cannot_start_after_midnight(
+    booking_context, fake_payment, monkeypatch, blocked_stage,
+):
+    client, session, buyer, _admin, event, body = booking_context
+    created = await client.post(f"/v1/meal-events/{event.id}/orders", json=business_body(body), headers=auth_headers(buyer))
+    assert created.status_code == 201
+    order_id = created.json()["id"]
+    existing = None
+    if blocked_stage == "reuse_order":
+        existing = await create_payment_attempt(session, order_id, buyer, payment_settings(), now=CLOSE - timedelta(minutes=1))
+
+    lock_name = "_business_meal_reservations" if blocked_stage == "new_reservations" else "lock_order_payment_subject"
+    lock = getattr(payment_service, lock_name)
+    with time_machine.travel(CLOSE - timedelta(seconds=1), tick=False) as clock:
+        async def cross_midnight_after_lock(*args):
+            result = await lock(*args)
+            clock.move_to(CLOSE)
+            return result
+
+        monkeypatch.setattr(payment_service, lock_name, cross_midnight_after_lock)
+        result = await client.post(f"/v1/orders/{order_id}/payment-attempts", json={}, headers=auth_headers(buyer))
+        assert result.status_code == 409, result.text
+        assert result.json()["detail"] == "會餐付款日期已過，請聯絡合作社"
+
+    attempts = list(await session.scalars(select(PaymentAttempt).where(PaymentAttempt.order_id == order_id)))
+    assert len(attempts) == int(existing is not None)
+    if existing is not None:
+        assert attempts[0].id == existing.id and attempts[0].status == PaymentStatus.PENDING
+    reservation = await session.scalar(select(InventoryReservation).where(InventoryReservation.order_id == order_id))
+    assert reservation.status == ReservationStatus.ACTIVE and reservation.payment_attempt_id is None
 
 
 async def test_business_failed_checkout_retry_does_not_reserve_again(booking_context, fake_payment):

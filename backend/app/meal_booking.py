@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -28,9 +29,15 @@ def meal_period(event: MealEvent) -> str:
     )
 
 
-def meal_booking_window(event: MealEvent) -> tuple[datetime, datetime]:
+def meal_booking_window(event: MealEvent, *, business: bool = False) -> tuple[datetime, datetime]:
     if event.booking_policy in {"workday", "special"}:
-        return _aware(event.ordering_starts_at), _aware(event.ordering_ends_at)
+        end = _aware(event.ordering_ends_at)
+        if business and (event.same_day_preparation_minutes is not None or event.business_only):
+            prior_day_cutoff = datetime.combine(
+                meal_service_date(event) - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI,
+            )
+            end = min(end, prior_day_cutoff)
+        return _aware(event.ordering_starts_at), end
     service_date = meal_service_date(event)
     start = datetime.combine(service_date - timedelta(days=1), time.min, TAIPEI)
     end = datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI)
@@ -56,10 +63,21 @@ def workday_booking_window(service_date: date, ends_at: datetime) -> tuple[datet
     return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
-def configured_booking_window(service_date: date, policy: str, starts_at: datetime,
-                              ends_at: datetime) -> tuple[datetime, datetime]:
-    start = _aware(starts_at)
-    end = min(_aware(ends_at), datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
+def configured_booking_window(
+    service_date: date, policy: str, starts_at: datetime, ends_at: datetime, *, same_day: bool = False,
+) -> tuple[datetime, datetime]:
+    start, end = _aware(starts_at), _aware(ends_at)
+    if same_day:
+        if end.astimezone(TAIPEI).date() != service_date:
+            raise ValueError("當日訂餐的截止時間必須在取餐當日")
+        if policy == "workday":
+            opening, _ = workday_booking_window(service_date, end)
+            start = max(start, opening)
+        if start >= end:
+            raise ValueError("有效訂購截止必須晚於開賣時間")
+        return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+    end = min(end, datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
     if policy == "workday":
         opening, end = workday_booking_window(service_date, end)
         start = max(start, opening)
@@ -69,6 +87,12 @@ def configured_booking_window(service_date: date, policy: str, starts_at: dateti
 
 
 def meal_new_orders_blocked_reason(event: MealEvent) -> str | None:
+    if event.ordering_paused_at is not None:
+        return "此場次暫停接受新訂單"
+    return meal_calendar_blocked_reason(event)
+
+
+def meal_calendar_blocked_reason(event: MealEvent) -> str | None:
     if event.booking_policy != "legacy" or not event.schedule_template_id:
         return None
     from .workday_calendar import CalendarUnavailable, is_workday
@@ -81,27 +105,44 @@ def meal_new_orders_blocked_reason(event: MealEvent) -> str | None:
     return None
 
 
+def _meal_pickup_clocks(period: str) -> Iterator[time]:
+    first, last = MEAL_PICKUP_TIMES[period]
+    for minutes in range(first.hour * 60 + first.minute, last.hour * 60 + last.minute + 1, 30):
+        hour, minute = divmod(minutes, 60)
+        yield time(hour, minute)
+
+
+def meal_schedule_has_pickup_slots(period: str, start: time, end: time) -> bool:
+    return any(start <= clock and (end < start or clock <= end) for clock in _meal_pickup_clocks(period))
+
+
 def meal_pickup_slots(event: MealEvent) -> list[datetime]:
     service_date = meal_service_date(event)
-    first, last = MEAL_PICKUP_TIMES[meal_period(event)]
-    selected = datetime.combine(service_date, first, TAIPEI)
-    last_slot = datetime.combine(service_date, last, TAIPEI)
     event_start = _aware(event.pickup_starts_at)
-    event_end = _aware(event.pickup_slot_ends_at or event.pickup_ends_at)
-    end_inclusive = event.pickup_slot_ends_at is not None
+    pickup_end = _aware(event.pickup_ends_at)
+    event_end = _aware(event.pickup_slot_ends_at) if event.pickup_slot_ends_at is not None else None
     slots = []
-    while selected <= last_slot:
-        within_end = selected <= event_end if end_inclusive else selected < event_end
-        if event_start <= selected < _aware(event.pickup_ends_at) and within_end:
+    for clock in _meal_pickup_clocks(meal_period(event)):
+        selected = datetime.combine(service_date, clock, TAIPEI)
+        if event_start <= selected < pickup_end and (event_end is None or selected <= event_end):
             slots.append(selected.astimezone(timezone.utc))
-        selected += timedelta(minutes=30)
     return slots
 
 
-def validate_meal_booking_day(event: MealEvent, now: datetime) -> None:
+def meal_order_deadline(event: MealEvent, pickup_at: datetime, *, business: bool = False) -> datetime:
+    _, cutoff = meal_booking_window(event, business=business)
+    minutes = event.same_day_preparation_minutes
+    if minutes is not None and not business:
+        return min(cutoff, _aware(pickup_at) - timedelta(minutes=minutes))
+    return cutoff
+
+
+def validate_meal_booking_day(event: MealEvent, now: datetime, *, business: bool = False) -> None:
     current = _aware(now)
     if event.booking_policy not in {"workday", "special"} and meal_service_date(event) != current.astimezone(TAIPEI).date() + timedelta(days=1):
         raise ValueError("便當只能提前一天預訂，請選擇明天的取餐日期")
-    start, end = meal_booking_window(event)
+    start, end = meal_booking_window(event, business=business)
     if not start <= current < end:
+        if event.same_day_preparation_minutes is not None and not business:
+            raise ValueError("目前不在此場次的預訂時間內")
         raise ValueError("目前不在便當預訂時間內，請於取餐前一天晚上 20:00 前完成預訂")

@@ -80,7 +80,7 @@ export function createBrowserStorage(resolve: () => BrowserStorage): SafeBrowser
 export const localStore = createBrowserStorage(() => window.localStorage);
 export const sessionStore = createBrowserStorage(() => window.sessionStorage);
 
-export function readStoredJson<T>(storage: SafeBrowserStorage, key: string, fallback: T): T {
+export function readStoredJson<T>(storage: Pick<SafeBrowserStorage, "getItem">, key: string, fallback: T): T {
   try {
     const value = storage.getItem(key);
     return value === null ? fallback : JSON.parse(value) as T;

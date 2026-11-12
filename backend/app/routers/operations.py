@@ -5,13 +5,14 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..admin_work_queues import admin_today_counts, business_invoice_followup_orders, pending_order_cancellation, unpaid_business_order
+from ..admin_work_queues import InvoiceFollowupReason, admin_today_counts, invoice_followup_conditions, pending_order_cancellation, unpaid_business_order
 from ..auth import require_admin
+from ..business_meals import business_invoice_window_closed
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..invoice_timing import invoice_not_due
@@ -38,6 +39,7 @@ from ..models import (
     User,
     new_id,
 )
+from ..recovery_work import outbox_is_held, outbox_work_held
 from ..schemas import (
     AdminActionReason,
     PickupLocationCreate,
@@ -52,13 +54,19 @@ from ..schemas import (
     SupplierUpdate,
 )
 
+from .logistics import admin_logistics_action
+
 
 operations_router = APIRouter(tags=["operations"])
 
 
-async def job_retry_blocker(session: AsyncSession, event: OutboxEvent) -> str:
+async def job_retry_blocker(session: AsyncSession, event: OutboxEvent, *, recovery_held: bool | None = None) -> str:
     if event.status != OutboxStatus.FAILED:
         return "工作並非失敗狀態，不可重複排入"
+    if recovery_held is None:
+        recovery_held = await outbox_work_held(session, event.id)
+    if recovery_held:
+        return "這筆工作正在進行復原核對，暫停重送"
     if email_delivery_unknown(event) and event.event_type in {"auth.email_verification_requested", "auth.password_reset_requested"}:
         return "驗證或密碼重設信的寄送結果未知，請由本人重新申請，不可直接重送舊憑證"
     if event.event_type == "invoice.issue_requested":
@@ -71,6 +79,8 @@ async def job_retry_blocker(session: AsyncSession, event: OutboxEvent) -> str:
             return "尚未到預定取餐開票日，請到期後再重試"
         if invoice and invoice.status in {InvoiceStatus.ISSUED, InvoiceStatus.VOID_PENDING, InvoiceStatus.VOIDED}:
             return "已開票或進入調整流程，請先查詢發票"
+        if business_invoice_window_closed(order):
+            return "會餐已超過取餐開票日，請查詢原發票"
         return ""
     if event.event_type == "send_email":
         kind = event.payload.get("event_type")
@@ -115,10 +125,11 @@ async def list_failed_jobs(
             job_error_expression().icontains(term, autoescape=True),
         ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
-    rows = (await session.execute(query.order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc()).limit(limit).offset(offset))).all()
+    rows = (await session.execute(query.add_columns(outbox_is_held())
+        .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc()).limit(limit).offset(offset))).all()
     items = []
-    for event, order in rows:
-        blocker = await job_retry_blocker(session, event)
+    for event, order, recovery_held in rows:
+        blocker = await job_retry_blocker(session, event, recovery_held=recovery_held)
         delivery = event.payload.get("email_delivery")
         delivery = delivery if isinstance(delivery, dict) else {}
         items.append({"id": event.id, "event_type": event.event_type, "aggregate_id": event.aggregate_id,
@@ -184,9 +195,10 @@ class AdminOrderRead(OrderRead):
     customer_name: str
     contact_phone: Optional[str] = None
     contact_phone_status: Literal["available", "missing", "unavailable"] = "missing"
+    invoice_followup_reason: InvoiceFollowupReason | None = Field(default=None, exclude_if=lambda reason: reason is None)
 
 
-def admin_order_read(order: Order, settings: Settings) -> AdminOrderRead:
+def admin_order_read(order: Order, settings: Settings, invoice_followup_reason: InvoiceFollowupReason | None = None) -> AdminOrderRead:
     from .orders import order_read
 
     phone = None
@@ -201,9 +213,13 @@ def admin_order_read(order: Order, settings: Settings) -> AdminOrderRead:
             phone_status = "available"
         except IntegrationError:
             phone_status = "unavailable"
+    data = order_read(order, True)
+    if logistics_action := admin_logistics_action(order, settings):
+        data.available_actions.append(logistics_action)
     return AdminOrderRead(
-        **order_read(order, True).model_dump(), customer_name=order.user.display_name if order.user else order.customer_name_snapshot or "現場客人",
+        **data.model_dump(), customer_name=order.user.display_name if order.user else order.customer_name_snapshot or "現場客人",
         contact_phone=phone, contact_phone_status=phone_status,
+        invoice_followup_reason=invoice_followup_reason,
     )
 
 
@@ -218,6 +234,7 @@ class AdminOrderPage(BaseModel):
 async def search_admin_orders(
     response: Response,
     q: str = Query(default="", max_length=120),
+    order_id: str | None = Query(default=None, min_length=1, max_length=36),
     cancellation_pending: bool = False,
     business_unpaid: bool = False,
     invoice_followup: bool = False,
@@ -233,13 +250,16 @@ async def search_admin_orders(
     query = select(Order).where(order_category_condition(order_category))
     if business_unpaid:
         query = query.where(unpaid_business_order())
-    if invoice_followup:
-        query = query.where(Order.id.in_(business_invoice_followup_orders(session, datetime.now(timezone.utc))))
+    followup = invoice_followup_conditions(session, datetime.now(timezone.utc)) if invoice_followup else None
+    if followup is not None:
+        query = query.where(or_(*followup.values()))
     if payment_status is not None:
         query = query.where(Order.payment_status == payment_status)
     if cancellation_pending:
         query = query.where(pending_order_cancellation())
-    if term := q.strip():
+    if order_id is not None:
+        query = query.where(Order.id == order_id)
+    elif term := q.strip():
         query = query.where(or_(
             Order.order_number.icontains(term, autoescape=True),
             Order.contact_email.icontains(term, autoescape=True),
@@ -249,15 +269,22 @@ async def search_admin_orders(
             Order.items.any(OrderItem.product_name.icontains(term, autoescape=True)),
         ))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
-    orders = await session.scalars(query.options(
+    page_query = query.options(
         selectinload(Order.user),
         selectinload(Order.cancellation_requests),
         selectinload(Order.amendments), selectinload(Order.payment_attempts),
         selectinload(Order.items), selectinload(Order.group_campaign),
         selectinload(Order.meal_event), selectinload(Order.invoice),
         selectinload(Order.fulfillment).selectinload(OrderFulfillment.shipment),
-    ).order_by(Order.created_at.desc(), Order.id.desc()).offset(offset).limit(limit))
-    return AdminOrderPage(items=[admin_order_read(order, settings) for order in orders], total=total or 0, limit=limit, offset=offset)
+    ).order_by(Order.created_at.desc(), Order.id.desc()).offset(offset).limit(limit)
+    if followup is None:
+        orders = await session.scalars(page_query)
+        items = [admin_order_read(order, settings) for order in orders]
+    else:
+        reason = case(*[(condition, code) for code, condition in followup.items()])
+        rows = await session.execute(page_query.add_columns(reason))
+        items = [admin_order_read(order, settings, invoice_followup_reason=code) for order, code in rows]
+    return AdminOrderPage(items=items, total=total or 0, limit=limit, offset=offset)
 
 
 @operations_router.get("/v1/admin/today")

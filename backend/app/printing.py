@@ -14,6 +14,7 @@ from .business_meals import is_business_meal
 from .integrations.common import IntegrationError
 from .integrations.feie import FeieError, configured_region
 from .integrations.pii_crypto import pii_cipher_from_settings
+from .recovery_work import print_is_held
 from .models import FulfillmentState, FulfillmentStatus, MemberProfile, Order, OrderFulfillment, PaymentAttempt, PaymentMethod, PaymentStatus, PrintJob, User
 
 
@@ -348,11 +349,16 @@ def quantity_changes(before: dict, after: dict) -> list[dict]:
             if previous.get(identity, {}).get("quantity", 0) != current.get(identity, {}).get("quantity", 0)]
 
 
+async def _locked_order_print_jobs(session: AsyncSession, order_id: str) -> tuple[list[PrintJob], set[str]]:
+    rows = (await session.execute(select(PrintJob, print_is_held(session)).where(PrintJob.order_id == order_id)
+        .order_by(PrintJob.created_at, PrintJob.id).with_for_update())).all()
+    return [job for job, _held in rows], {job.id for job, held in rows if held}
+
+
 async def enqueue_amendment_print(session: AsyncSession, order: Order, before_snapshot: dict, settings: Settings) -> None:
     if not order.meal_event_id:
         return
-    jobs = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == order.id)
-        .order_by(PrintJob.created_at, PrintJob.id).with_for_update()))
+    jobs, held_ids = await _locked_order_print_jobs(session, order.id)
     originals = [job for job in jobs if job.kind in {"order", "amendment"}]
     if not originals:
         if settings.printer_enabled:
@@ -373,7 +379,7 @@ async def enqueue_amendment_print(session: AsyncSession, order: Order, before_sn
         if sent:
             snapshot["quantity_changes"] = quantity_changes(source.snapshot, snapshot)
         for job in target_jobs:
-            if job.status == "pending":
+            if job.status == "pending" and job.id not in held_ids:
                 job.status, job.last_error = "failed", "order_revision_superseded"
         session.add(PrintJob(order_id=order.id, event_key=key, kind=kind, mode=mode,
             printer_fingerprint=fingerprint, snapshot=snapshot))
@@ -381,8 +387,7 @@ async def enqueue_amendment_print(session: AsyncSession, order: Order, before_sn
 
 async def enqueue_cancellation_print(session: AsyncSession, order: Order, settings: Settings) -> None:
     # Called while holding the order lock, as is the worker claim.
-    jobs = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == order.id)
-        .order_by(PrintJob.created_at, PrintJob.id).with_for_update()))
+    jobs, held_ids = await _locked_order_print_jobs(session, order.id)
     originals = [job for job in jobs if job.kind in {"order", "amendment"}]
     if not originals:
         return
@@ -390,7 +395,7 @@ async def enqueue_cancellation_print(session: AsyncSession, order: Order, settin
                if job.status in {"sending", "submitted", "printed", "unknown", "simulated"}}
     existing_targets = {(job.mode, job.printer_fingerprint) for job in jobs if job.kind == "cancellation"}
     for job in originals:
-        if job.status == "pending":
+        if job.status == "pending" and job.id not in held_ids:
             job.status, job.last_error = "failed", "order_cancelled_before_send"
     for target, original in targets.items():
         if target in existing_targets:

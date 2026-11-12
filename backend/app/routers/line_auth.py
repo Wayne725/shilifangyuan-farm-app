@@ -26,7 +26,8 @@ from ..member_claims import MemberClaimError, verified_roster_entry, verified_ro
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..schemas import ExistingMemberIdentity
 from ..rate_limit import LOGIN_RULE, client_key
-from .auth import _new_token_pair_and_session, _validate_cookie_origin, token_response, _issue_email_verification
+from .auth import _issue_email_verification, _issue_login_session, _login_token_response, _validate_cookie_origin
+from ..browser_refresh import PreparedBrowserLogin, prepare_browser_login
 
 line_auth_router = APIRouter(prefix="/v1/auth/line", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -185,16 +186,20 @@ async def line_start(body: LineStart, request: Request, response: Response,
 
 
 async def _sign_in(user: User, record: LineOAuthState, session: AsyncSession,
-    response: Response, settings: Settings, *, return_to: str | None = None) -> dict:
+    request: Request, response: Response, settings: Settings,
+    browser_login: PreparedBrowserLogin | None, *, return_to: str | None = None) -> dict:
     user = await session.scalar(select(User).where(User.id == user.id)
         .options(selectinload(User.membership)).execution_options(populate_existing=True))
     if user is None or not user.is_active:
         raise HTTPException(status_code=403, detail="此帳號已停用，請洽管理員")
-    pair, refresh = _new_token_pair_and_session(user, settings, remember_me=record.remember_me)
-    session.add(refresh)
+    tokens = await _issue_login_session(
+        user, session, settings, browser_login, remember_me=record.remember_me,
+    )
     record.member_claim_encrypted = None
     await session.commit()
-    result = token_response(user, response, settings, pair, remember_me=record.remember_me)
+    result = _login_token_response(
+        user, request, response, settings, tokens, remember_me=record.remember_me,
+    )
     _clear_flow(response, settings)
     return {"status": "authenticated", "return_to": return_to or record.return_to, "intent": record.registration_intent,
         "session": result.model_dump(mode="json")}
@@ -291,6 +296,9 @@ async def line_callback(body: LineCallback, request: Request, response: Response
         if (user is None or not user.is_active
             or int(user.token_version or 0) != record.target_token_version):
             raise HTTPException(status_code=409, detail="原登入帳號已變更，請回原帳號重新連結LINE")
+    browser_login = (
+        await prepare_browser_login(request, session, settings) if record.purpose == "login" else None
+    )
     identity = await session.scalar(select(ExternalIdentity).where(
         ExternalIdentity.provider == "line", ExternalIdentity.subject == profile.subject).with_for_update())
     try:
@@ -320,13 +328,17 @@ async def line_callback(body: LineCallback, request: Request, response: Response
             identity.data_consent_version = record.data_consent_version
             identity.data_consented_at = record.data_consented_at
             return_to = await _prepare_member_registration(account, record, session, settings)
-            return await _sign_in(account, record, session, response, settings, return_to=return_to)
+            return await _sign_in(
+                account, record, session, request, response, settings, browser_login, return_to=return_to,
+            )
         email = profile.email
         if email and await session.scalar(select(User.id).where(User.email == email)) is not None:
             email = None
         account = await _create_account(profile, None if record.member_claim_encrypted else email, record, session)
         return_to = await _prepare_member_registration(account, record, session, settings)
-        return await _sign_in(account, record, session, response, settings, return_to=return_to)
+        return await _sign_in(
+            account, record, session, request, response, settings, browser_login, return_to=return_to,
+        )
     except IntegrityError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="帳號或LINE已建立連結，請重新登入或使用原帳號連結") from exc
@@ -358,9 +370,10 @@ async def line_register(body: LineRegistration, request: Request, response: Resp
     await session.commit()
     if claimed is None:
         raise HTTPException(status_code=400, detail="LINE註冊流程已過期或已完成，請重新登入")
+    browser_login = await prepare_browser_login(request, session, settings)
     try:
         account = await _create_account(LineProfile(record.pending_subject, record.pending_display_name or "LINE使用者", None), email, record, session)
-        return await _sign_in(account, record, session, response, settings)
+        return await _sign_in(account, record, session, request, response, settings, browser_login)
     except IntegrityError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="此LINE或Email已建立帳號，請重新登入或使用原帳號連結") from exc

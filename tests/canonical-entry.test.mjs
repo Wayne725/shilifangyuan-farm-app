@@ -23,6 +23,15 @@ test("既有付款與身分回傳在原網域完成，不搬移授權憑證", ()
     assert.equal(canonicalEntryUrl(legacy + path), null);
   }
 });
+test("金流頁的會籍及活動返回連結保留原網域", () => {
+  for (const path of [
+    "/account?membership_charge_id=charge&attempt_id=attempt",
+    "/activities/registrations?activity_charge_id=charge&attempt_id=attempt",
+  ]) {
+    assert.equal(canonicalEntryUrl(legacy + path), null);
+  }
+  assert.equal(canonicalEntryUrl(legacy + "/account"), "https://shilifangyuan.com/account");
+});
 test("舊網域仍有購物或選餐草稿時保留原流程", () => {
   assert.equal(canonicalEntryUrl(legacy + "/shop", true), null);
   assert.equal(canonicalEntryUrl(legacy + "/shop", false), "https://shilifangyuan.com/shop");

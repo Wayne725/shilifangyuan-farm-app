@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from email_validator import EmailNotValidError, validate_email
@@ -225,12 +226,16 @@ async def register(session, activity_id, user, contact=None):
     return registration_read(existing, activity)
 
 
-async def create_payment_attempt(session, charge_id, user, settings):
-    from .integrations.payment_service import ensure_payment_runtime_enabled, _build_checkout_payload, PaymentApplicationError
+async def create_payment_attempt(session, charge_id, user, settings, *, return_storefront=None):
+    from .integrations.payment_service import (
+        PaymentApplicationError, _build_checkout_payload, browser_return_base, ensure_payment_runtime_enabled,
+    )
     from .integrations.ecpay import create_merchant_trade_no
+    from .recovery_quarantine import require_unheld
     charge = await lock_activity_payment_subject(session, charge_id)
     if charge is None or charge.user_id != user.id:
         raise HTTPException(404, "找不到活動繳款")
+    await require_unheld(session, ("activity_charge", charge.id))
     now = datetime.now(timezone.utc)
     if not payable(charge, charge.registration, charge.activity, now):
         raise PaymentApplicationError("此活動款項目前無法付款，請重新查詢報名狀態")
@@ -240,13 +245,16 @@ async def create_payment_attempt(session, charge_id, user, settings):
             return attempt
         if attempt.status in UNSETTLED and attempt.unpaid_verified_at is None:
             raise PaymentApplicationError("前次付款結果仍在確認中，請稍後重新整理")
-    attempt = PaymentAttempt(activity_charge=charge, provider=settings.payment_provider,
+    attempt = PaymentAttempt(activity_charge=charge, provider=settings.payment_provider, browser_return_storefront=return_storefront,
         merchant_trade_no=create_merchant_trade_no(f"activity-{charge.id}", len(charge.payment_attempts)+1, now),
         amount=charge.amount, status=PaymentStatus.PENDING, expires_at=min(aware(charge.expires_at), now+timedelta(minutes=settings.payment_reservation_minutes)))
     session.add(attempt)
     await session.flush()
+    client_back_url = f"{browser_return_base(settings, return_storefront)}/activities/registrations"
+    if return_storefront == "legacy":
+        client_back_url += "?" + urlencode({"activity_charge_id": charge.id, "attempt_id": attempt.id})
     attempt.checkout_payload = _build_checkout_payload(settings=settings, attempt=attempt, amount=charge.amount,
-        item_name=charge.activity_title, client_back_url=f"{settings.web_base_url.rstrip('/')}/activities/registrations",
+        item_name=charge.activity_title, client_back_url=client_back_url,
         custom_fields={"CustomField1": charge.id, "CustomField2": "activity_charge"}, current=now)
     await session.commit()
     return attempt

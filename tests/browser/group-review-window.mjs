@@ -37,6 +37,7 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
     if((endpoint.startsWith('/v1/group-campaigns')||endpoint.endsWith('/admin/open-direct')||endpoint.endsWith('/admin/approve'))&&['POST','PATCH'].includes(method)) {
       const body=request.postDataJSON();state.writes.push({path:endpoint,method,body});
       if(state.failWrite){const failure=state.failWrite;if(failure.status!==401)state.failWrite=null;if(state.changeOnConflict)Object.assign(state.campaign,state.changeOnConflict);return route.fulfill({status:failure.status,json:{detail:failure.message}});}
+      if(endpoint==='/v1/group-campaigns/campaign'&&method==='PATCH')Object.assign(state.campaign,body);
       if(endpoint.endsWith('/admin/visibility')){assert.equal(body.expected_updated_at,state.campaign.updated_at);state.campaign.is_public=body.is_public;state.campaign.updated_at=new Date(Date.parse(state.campaign.updated_at)+1000).toISOString();}
       if(endpoint.endsWith('/admin/confirm')){assert.equal(body.expected_threshold_version,state.campaign.threshold_version);if(state.campaign.paid_quantity<state.campaign.min_paid_quantity){assert.equal(body.allow_below_threshold,true);}Object.assign(state.campaign,{decision_status:'confirmed',can_confirm:false,can_edit_review_deadline:false,final_pickup_at:body.final_pickup_at,confirmed_paid_quantity:state.campaign.paid_quantity,confirmed_min_paid_quantity:state.campaign.min_paid_quantity,confirmed_threshold_version:state.campaign.threshold_version,confirmation_exception_reason:body.reason||null});}
       if(endpoint.endsWith('/admin/review-deadline')){assert.equal(body.expected_confirmation_deadline,state.campaign.confirmation_deadline);assert.equal(body.expected_updated_at,state.campaign.updated_at);Object.assign(state.campaign,body,{review_overdue:false});}
@@ -51,6 +52,27 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
 const card=page=>page.getByRole('article',{name:'共同購買 截止審核隔離共同購買',exact:true});
 async function clean(page,state){assert.deepEqual(state.unknown,[]);assert.deepEqual(state.errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);}
 async function waitForAdminDenied(page,status){if(status===401)await page.getByRole('heading',{name:'共同購買管理只向管理者開放。',exact:true}).waitFor();else await page.getByText('共同購買管理權限已失效').waitFor();}
+
+test('已截止且有付款的共同購買可更正公開說明', async t => {
+  const { page, state, visit } = await fixture(t, { width: 390 });
+  const before = structuredClone(state.campaign);
+  await visit();
+  await card(page).getByRole('button', { name: '編輯名稱與說明' }).click();
+  const editor = card(page).getByRole('form', { name: '編輯共同購買名稱與說明' });
+  const save = editor.getByRole('button', { name: '儲存', exact: true });
+  assert.equal(await save.isDisabled(), true);
+  await editor.getByRole('textbox', { name: '說明', exact: true }).fill('到貨通知會寄到訂單 Email。');
+  await save.click();
+  await card(page).getByText('名稱與說明已儲存').waitFor();
+  assert.deepEqual(state.writes, [{
+    path: '/v1/group-campaigns/campaign', method: 'PATCH', body: { description: '到貨通知會寄到訂單 Email。' },
+  }]);
+  assert.deepEqual(state.campaign, { ...before, description: '到貨通知會寄到訂單 Email。' });
+  await card(page).getByRole('link', { name: '查看前台' }).click();
+  await page.getByText('到貨通知會寄到訂單 Email。', { exact: true }).waitFor();
+  assert.deepEqual(state.quotes, []);
+  await clean(page, state);
+});
 async function openReview(page){await card(page).getByRole('button',{name:'審核成團',exact:true}).click();return card(page).getByRole('form',{name:'確認共同購買成團'});}
 
 test('建立共同購買的處理提醒日預設付款截止+72h，台灣日期不受瀏覽器時區影響',async t=>{
@@ -87,14 +109,19 @@ for(const width of [1280,390])test(`未達標例外仍需勾選，原因可略�
   await submit.click();await page.getByText('共同購買已確認成團',{exact:true}).waitFor();assert.equal(state.writes[0].body.allow_below_threshold,true);assert.equal(state.writes[0].body.reason,width===1280?'供應方同意六份出貨':'');assert.equal(state.campaign.min_paid_quantity,10);await clean(page,state);
 });
 for(const [label,patch] of [['0付款',{paid_quantity:0,can_confirm:false}],['結算未知',{decision_status:'recruiting',intake_status:'settling',can_confirm:false}],['截止前已達標',{...recruiting}]])test(`${label} 不允許確認成團`,async t=>{
-  const {page,state,visit}=await fixture(t,{campaign:{...pending,...patch}});await visit();await card(page).waitFor();assert.equal(await card(page).getByRole('button',{name:'審核成團'}).isDisabled(),true);assert.equal(await page.getByRole('form',{name:'確認共同購買成團'}).count(),0);assert.deepEqual(state.writes,[]);await clean(page,state);
+  const {page,state,visit}=await fixture(t,{campaign:{...pending,...patch}});await visit();await card(page).waitFor();
+  assert.equal(await card(page).getByRole('button',{name:'審核成團'}).isDisabled(),true);
+  if(label==='截止前已達標')await card(page).getByRole('status').filter({hasText:'付款截止後開放審核'}).waitFor();
+  assert.equal(await card(page).getByRole('alert').count(),0);
+  assert.equal(await page.getByRole('form',{name:'確認共同購買成團'}).count(),0);
+  assert.deepEqual(state.writes,[]);await clean(page,state);
 });
 test('成團版本409保留取貨與原因，重讀後須確認新數量再例外成團',async t=>{
   const {page,state,visit}=await fixture(t);await visit();let form=await openReview(page);await form.getByLabel('最終取貨時間（台灣）').fill('2030-01-07T15:00');state.failWrite={status:409,message:'數量資料已更新'};state.changeOnConflict={paid_quantity:8,threshold_version:3};await form.getByRole('button',{name:'確認成團',exact:true}).click();await form.getByRole('button',{name:'重新核對成團資料'}).waitFor();assert.equal(await form.getByLabel('最終取貨時間（台灣）').inputValue(),'2030-01-07T15:00');assert.equal(state.writes.length,1);
   await form.getByRole('button',{name:'重新核對成團資料'}).click();await form.getByLabel('已核對最新付款數量與原門檻').waitFor();const submit=form.getByRole('button',{name:'例外確認成團'});assert.equal(await submit.isDisabled(),true);await form.getByLabel('已核對最新付款數量與原門檻').check();await form.getByLabel('未達原門檻，仍確認成團').check();await form.getByLabel('例外成團原因').fill('核對最新八份仍出貨');await submit.click();await page.getByText('共同購買已確認成團',{exact:true}).waitFor();assert.equal(state.writes[1].body.expected_threshold_version,3);await clean(page,state);
 });
 test('過期僅提示；付款截止後可用專用端點調整審核與取貨日期',async t=>{
-  const {page,state,visit}=await fixture(t,{campaign:{...pending,review_overdue:true,confirmation_deadline:'2030-01-02T01:00:00Z'}});await visit();await page.getByText('已到處理提醒日，仍待管理員處理').waitFor();assert.deepEqual(state.writes,[]);await card(page).getByRole('button',{name:'調整處理提醒日'}).click();const form=page.getByRole('form',{name:'調整共同購買處理提醒日'});await form.getByLabel('管理員處理提醒日（台灣）').fill('2030-01-08T12:00');await form.getByLabel('預計取貨開始（台灣）').fill('2030-01-09T12:00');await form.getByLabel('預計取貨結束（台灣）').fill('2030-01-10T12:00');await form.getByLabel('調整原因').fill('確認供應時程');await form.getByRole('button',{name:'儲存處理提醒日'}).click();await page.getByText('處理提醒日已更新',{exact:true}).waitFor();assert.equal(state.writes.length,1);assert.equal(state.writes[0].path,'/v1/group-campaigns/campaign/admin/review-deadline');assert.equal(state.writes[0].body.expected_confirmation_deadline,'2030-01-02T01:00:00Z');assert.equal(state.writes[0].body.estimated_pickup_start,'2030-01-09T04:00:00.000Z');await clean(page,state);
+  const {page,state,visit}=await fixture(t,{campaign:{...pending,review_overdue:true,confirmation_deadline:'2030-01-02T01:00:00Z'}});await visit();await card(page).getByRole('status').filter({hasText:'待處理成團審核'}).waitFor();assert.equal(await card(page).getByRole('alert').count(),0);assert.deepEqual(state.writes,[]);await card(page).getByRole('button',{name:'調整處理提醒日'}).click();const form=page.getByRole('form',{name:'調整共同購買處理提醒日'});await form.getByLabel('管理員處理提醒日（台灣）').fill('2030-01-08T12:00');await form.getByLabel('預計取貨開始（台灣）').fill('2030-01-09T12:00');await form.getByLabel('預計取貨結束（台灣）').fill('2030-01-10T12:00');await form.getByLabel('調整原因').fill('確認供應時程');await form.getByRole('button',{name:'儲存處理提醒日'}).click();await page.getByText('處理提醒日已更新',{exact:true}).waitFor();assert.equal(state.writes.length,1);assert.equal(state.writes[0].path,'/v1/group-campaigns/campaign/admin/review-deadline');assert.equal(state.writes[0].body.expected_confirmation_deadline,'2030-01-02T01:00:00Z');assert.equal(state.writes[0].body.estimated_pickup_start,'2030-01-09T04:00:00.000Z');await clean(page,state);
 });
 test('處理提醒日409保留草稿，重讀與核對後才可儲存',async t=>{
   const {page,state,visit}=await fixture(t);await visit();await card(page).getByRole('button',{name:'調整處理提醒日'}).click();const form=page.getByRole('form',{name:'調整共同購買處理提醒日'});await form.getByLabel('管理員處理提醒日（台灣）').fill('2030-01-05T15:00');await form.getByLabel('調整原因').fill('延長核對時間');state.failWrite={status:409,message:'期限已更新'};state.changeOnConflict={confirmation_deadline:'2030-01-05T04:00:00Z',updated_at:'2030-01-02T02:00:01Z'};await form.getByRole('button',{name:'儲存處理提醒日'}).click();await form.getByRole('button',{name:'重新讀取處理提醒日'}).waitFor();assert.equal(await form.getByLabel('管理員處理提醒日（台灣）').inputValue(),'2030-01-05T15:00');assert.equal(await form.getByLabel('調整原因').inputValue(),'延長核對時間');await form.getByRole('button',{name:'重新讀取處理提醒日'}).click();await form.getByLabel('已核對最新提醒日，確認儲存目前輸入').waitFor();assert.equal(await form.getByRole('button',{name:'儲存處理提醒日'}).isDisabled(),true);await form.getByLabel('已核對最新提醒日，確認儲存目前輸入').check();await form.getByRole('button',{name:'儲存處理提醒日'}).click();await page.getByText('處理提醒日已更新',{exact:true}).waitFor();assert.equal(state.writes[1].body.expected_confirmation_deadline,'2030-01-05T04:00:00Z');await clean(page,state);
@@ -147,7 +174,28 @@ for(const path of ['/admin/groups','/group-votes'])test(`${path} 歷史未達投
   const {page,state,visit}=await fixture(t,{path,proposal:true,proposalStatus:'ended_unmet'});await visit();await page.getByText('未達投票門檻',{exact:true}).waitFor();assert.equal(await page.getByText('ended_unmet',{exact:true}).count(),0);assert.deepEqual(state.writes,[]);await clean(page,state);
 });
 test('歷史失敗共同購買即使有鎖定日期與零付款，仍顯示已結束原因',async t=>{
-  const {page,state,visit}=await fixture(t,{campaign:{...pending,decision_status:'failed_unmet',paid_quantity:0,can_confirm:false,can_edit_review_deadline:false}});await visit();await page.getByText('此團已結束，無法修改數量設定。',{exact:true}).waitFor();assert.equal(await page.getByText('已有付款紀錄，限購與成團數量已鎖定。',{exact:true}).count(),0);assert.deepEqual(state.writes,[]);await clean(page,state);
+  const {page,state,visit}=await fixture(t,{campaign:{...pending,decision_status:'failed_unmet',paid_quantity:0,can_confirm:false,can_edit_review_deadline:false}});
+  await visit();
+  const quantities=card(page).getByRole('region',{name:'共同購買數量設定'});
+  await quantities.getByRole('status').filter({hasText:'共同購買已結束'}).waitFor();
+  assert.equal(await quantities.getByRole('button',{name:'編輯數量設定'}).count(),0);
+  assert.equal(await quantities.getByRole('alert').count(),0);
+  assert.deepEqual(state.writes,[]);await clean(page,state);
+});
+
+test('未截止且未鎖定仍可編輯數量，儲存失敗保留輸入並顯示錯誤',async t=>{
+  const {page,state,visit}=await fixture(t,{campaign:{...recruiting,core_locked_at:null,paid_quantity:0}});
+  await visit();
+  const quantities=card(page).getByRole('region',{name:'共同購買數量設定'});
+  await quantities.getByRole('button',{name:'編輯數量設定'}).click();
+  const limit=quantities.getByLabel(/本團供應上限/);
+  await limit.fill('35');
+  state.failWrite={status:503,message:'暫時無法儲存數量'};
+  await quantities.getByRole('button',{name:'儲存數量設定'}).click();
+  await quantities.getByRole('alert').filter({hasText:'暫時無法儲存數量'}).waitFor();
+  assert.equal(await limit.inputValue(),'35');
+  assert.deepEqual(state.writes,[{path:'/v1/group-campaigns/campaign',method:'PATCH',body:{supply_cap:35}}]);
+  await clean(page,state);
 });
 
 for(const width of [390,1280])test(`${width}px共同購買管理含未公開資料，停止與恢復不更動成團金流`,async t=>{

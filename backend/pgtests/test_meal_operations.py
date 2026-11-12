@@ -6,6 +6,7 @@ from app.models import Order, OutboxEvent, OutboxStatus
 from app.routers.meals import meals_router
 from pgtests.test_transaction_concurrency import postgres_sessions
 from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.test_admin_invoice_followup import check_admin_invoice_followup
 from tests.test_meal_operations import NOW, ids, seed_search_orders
 
 
@@ -41,3 +42,9 @@ async def test_postgres_clock_json_failure_filters_and_summary_agree(postgres_se
             assert ids(result.json()) == {c.order.id, c.orders["legacy"].id, c.orders["ready"].id}
             summary = await client.get("/v1/admin/meal-operations-summary", headers=auth_headers(c.admin))
             assert summary.json()["invoice_attention"] == 3
+
+
+@pytest.mark.asyncio
+async def test_postgres_admin_invoice_followup_uses_current_actionable_orders(postgres_sessions):
+    async with postgres_sessions() as session:
+        await check_admin_invoice_followup(session)

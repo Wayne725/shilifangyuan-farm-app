@@ -9,7 +9,7 @@ const base = 'http://127.0.0.1:4261';
 const root = resolve(process.env.BROWSER_DIST_ROOT || resolve(import.meta.dirname, '../../web/dist'));
 const campaign = { id: 'recovery-group', title: '恢復測試共同購買', description: '', target_type: 'product', target_id: 'group-product', member_price: 100, nonmember_price: 100, min_paid_quantity: 1, paid_quantity: 0, reserved_quantity: 0, supply_cap: 20, per_user_cap: 10, available_quantity: 20, intake_status: 'open', decision_status: 'recruiting', deadline: '2030-01-02T00:00:00Z', estimated_pickup_start: '2030-01-03T00:00:00Z', estimated_pickup_end: '2030-01-04T00:00:00Z', can_ship: false, allowed_shipping_channels: [] };
 const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
-async function fixture(t, { loseResponse = false, blockedStorage = false, loseBeforeCreate = false, rejection = null, missingFingerprint = false, shipping = false } = {}) {
+async function fixture(t, { loseResponse = false, blockedStorage = false, loseBeforeCreate = false, rejection = null, missingFingerprint = false, shipping = false, origin = base } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: Number(process.env.BROWSER_WIDTH || 390), height: 1000 }, serviceWorkers: 'block' });
@@ -26,7 +26,7 @@ async function fixture(t, { loseResponse = false, blockedStorage = false, loseBe
   const quoteFingerprint = body => state.fingerprint === undefined ? undefined : body.fulfillment_method === 'ecpay_logistics' ? (body.invoice_buyer_type === 'company' ? 'd'.repeat(64) : 'c'.repeat(64)) : state.fingerprint;
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
-    if (url.origin !== base) return route.abort();
+    if (url.origin !== origin) return route.abort();
     if (path === '/isolated-group-payment') return route.fulfill({ contentType: 'text/html', body: '<h1>隔離共同購買付款</h1>' });
     if (path === '/isolated-group-logistics') return route.fulfill({ contentType: 'text/html', body: '<h1>隔離共同購買物流</h1>' });
     if (!path.startsWith('/v1/')) {
@@ -55,8 +55,8 @@ async function fixture(t, { loseResponse = false, blockedStorage = false, loseBe
       if (state.loseResponse) { state.loseResponse = false; return route.abort(); }
       return route.fulfill({ status: 201, json: { ...order, group_contract_changed: state.stale, group_payment_uncertain: state.uncertain } });
     }
-    if (/^\/v1\/orders\/group-order-\d+\/payment-attempts$/.test(path)) { state.payments.push(path); return route.fulfill({ status: 201, json: { id: 'isolated-attempt', payment_url: `${base}/isolated-group-payment` } }); }
-    if (/^\/v1\/orders\/group-order-\d+\/logistics\/selection$/.test(path)) { state.logistics.push({ path, body: request.postDataJSON() }); return route.fulfill({ status: 201, json: { selection_url: `${base}/isolated-group-logistics` } }); }
+    if (/^\/v1\/orders\/group-order-\d+\/payment-attempts$/.test(path)) { state.payments.push(path); return route.fulfill({ status: 201, json: { id: 'isolated-attempt', payment_url: `${origin}/isolated-group-payment` } }); }
+    if (/^\/v1\/orders\/group-order-\d+\/logistics\/selection$/.test(path)) { state.logistics.push({ path, body: request.postDataJSON() }); return route.fulfill({ status: 201, json: { selection_url: `${origin}/isolated-group-logistics` } }); }
     if (path === '/v1/orders') return route.fulfill({ json: [] });
     state.unknown.push(`${request.method()} ${path}`);
     return route.fulfill({ status: 404, json: { detail: 'Undefined isolated route' } });
@@ -64,12 +64,12 @@ async function fixture(t, { loseResponse = false, blockedStorage = false, loseBe
   const page = await context.newPage(); page.setDefaultTimeout(5000);
   page.on('pageerror', error => state.errors.push(error.message));
   t.after(() => { assert.deepEqual(state.errors, []); assert.deepEqual(state.unknown, []); });
-  await page.goto(`${base}/groups/recovery-group`);
+  await page.goto(`${origin}/groups/recovery-group`);
   await page.getByRole('heading', { name: campaign.title, exact: true }).waitFor();
   const submit = () => page.getByRole('button', { name: /^(參加並前往付款|參加並選擇物流|重試原共同購買訂單)$/ });
   await submit().waitFor();
   await page.locator('.offer-total').getByText('$100', { exact: true }).waitFor();
-  await page.getByText('本次單價', { exact: true }).waitFor();
+  await page.getByText(/^(一般|本次)單價$/).waitFor();
   assert.equal(await page.getByText('社員單價', { exact: true }).count(), 0);
   return { page, state, submit };
 }
@@ -89,6 +89,24 @@ test('共同購買建單回應遺失後重整，以同UUID同body恢復一單並
   assert.deepEqual(state.creates[1], state.creates[0]);
   assert.equal(state.creates[0].expected_total, 200);
   assert.equal(state.creates[0].expected_quote_fingerprint, 'a'.repeat(64));
+  assert.deepEqual(state.payments, ['/v1/orders/group-order-1/payment-attempts']);
+});
+
+test('舊網址沒有購物車草稿時，重整仍以原識別恢復共同購買送單', async t => {
+  const origin = 'https://shilifangyuan-web.onrender.com';
+  const { page, state, submit } = await fixture(t, { loseResponse: true, origin });
+  await submit().click();
+  await page.getByText('目前無法連上後端服務，請稍後重試。', { exact: true }).waitFor();
+  await page.evaluate(() => localStorage.setItem('slf_cart_v2:user:group-buyer', '{"items":[]}'));
+
+  await page.reload();
+  await page.getByRole('heading', { name: '確認原共同購買訂單結果', exact: true }).waitFor();
+  assert.equal(page.url(), `${origin}/groups/recovery-group`);
+  await submit().click();
+  await page.waitForURL(`${origin}/isolated-group-payment`);
+  assert.equal(state.orders.size, 1);
+  assert.equal(state.creates.length, 2);
+  assert.deepEqual(state.creates[1], state.creates[0]);
   assert.deepEqual(state.payments, ['/v1/orders/group-order-1/payment-attempts']);
 });
 

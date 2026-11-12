@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import test from 'node:test';
@@ -38,17 +39,17 @@ function originLocks() {
   };
 }
 
-async function loadApi(fetcher, { navigator, timers = { setTimeout, clearTimeout }, storage, broadcast } = {}) {
+async function loadApi(fetcher, { navigator, timers = { setTimeout, clearTimeout }, storage, sessionStorage, broadcast, crypto } = {}) {
   const compile = source => ts.transpileModule(source, { compilerOptions: {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
   } }).outputText;
   const storageExports = {};
-  const browser = storage ? { window: { localStorage: storage } } : {};
+  const browser = storage ? { window: { localStorage: storage, sessionStorage } } : {};
   vm.runInNewContext(compile(await readFile(new URL('../../web/src/lib/browser-storage.ts', import.meta.url), 'utf8')), { exports: storageExports, ...browser });
   const source = await readFile(new URL('../../web/src/lib/api.ts', import.meta.url), 'utf8');
   const exports = {};
   vm.runInNewContext(compile(source.replace('import.meta.env.VITE_API_BASE_URL', '""')), {
-    exports, navigator, Headers, FormData, AbortController, DOMException, ...timers, ...browser, BroadcastChannel: broadcast,
+    exports, navigator, Headers, FormData, AbortController, DOMException, ...timers, ...browser, BroadcastChannel: broadcast, crypto,
     require(name) {
       if (name === './browser-storage') return storageExports;
       assert.equal(name, './http');
@@ -249,3 +250,143 @@ test('refresh/clearSession不把token寫入儲存或廣播，原購物車保持�
   assert.equal(values.get('slf_cart'), cart);
   assert.equal([...values.values()].some(value => value.includes('sensitive-test-token')), false);
 });
+
+
+function storedValues() {
+  const values = new Map();
+  return {
+    values,
+    storage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+}
+
+for (const useSharedLock of [false, true]) {
+  test(`遺失續期回應後以同一識別重試，${useSharedLock ? '另一分頁' : '同分頁重整'}可恢復`, async () => {
+    const local = storedValues(), tab = storedValues();
+    const requests = [];
+    const options = {
+      navigator: useSharedLock ? { locks: originLocks() } : undefined,
+      storage: local.storage, sessionStorage: tab.storage, crypto: webcrypto,
+    };
+    const fetcher = async (path, init) => {
+      assert.equal(path, '/v1/auth/refresh');
+      assert.equal(init.credentials, 'include');
+      assert.equal(init.keepalive, undefined);
+      const headers = new Headers(init.headers);
+      assert.equal(headers.get('X-Refresh-Protocol'), '2');
+      requests.push(headers.get('X-Refresh-Operation'));
+      assert.match(requests.at(-1), /^[a-f0-9]{32}$/);
+      if (requests.length === 1) throw new TypeError('response lost after commit');
+      return Response.json(session('a', 'browser-only-bearer'));
+    };
+    const oldPage = await loadApi(fetcher, options);
+    await assert.rejects(oldPage.restoreSession(), error => error.status === 503);
+    const holder = useSharedLock ? local : tab;
+    assert.equal(holder.values.size, 1);
+    assert.equal([...holder.values.values()].some(value => value.includes('browser-only-bearer')), false);
+    const nextPage = await loadApi(fetcher, useSharedLock ? {
+      ...options, sessionStorage: storedValues().storage,
+    } : options);
+    await nextPage.restoreSession();
+    assert.equal(requests[0], requests[1]);
+    assert.equal(nextPage.getAccessToken(), 'browser-only-bearer');
+    assert.equal(holder.values.size, 0);
+    await nextPage.restoreSession();
+    assert.notEqual(requests[1], requests[2]);
+  });
+}
+
+test('過期操作識別不重送，確定401清理該識別', async () => {
+  const local = storedValues(), tab = storedValues();
+  const key = 'slf_refresh_operation_v2', expired = 'a'.repeat(32);
+  tab.values.set(key, JSON.stringify({ id: expired, expiresAt: Date.now() - 1 }));
+  const api = await loadApi(async (_path, init) => {
+    assert.notEqual(new Headers(init.headers).get('X-Refresh-Operation'), expired);
+    return new Response(null, { status: 401 });
+  }, { storage: local.storage, sessionStorage: tab.storage, crypto: webcrypto });
+  assert.equal(await api.restoreSession(), null);
+  assert.equal(tab.values.has(key), false);
+});
+
+test('明確登入及登出只公告變更識別，清除殘留續期識別', async () => {
+  const local = storedValues(), tab = storedValues();
+  const key = 'slf_refresh_operation_v2';
+  for (const store of [local, tab]) store.values.set(key, 'old-proof');
+  const api = await loadApi(async () => { throw new Error('No HTTP needed'); }, {
+    storage: local.storage, sessionStorage: tab.storage, crypto: webcrypto,
+  });
+  api.saveBrowserSignIn(session('b', 'synthetic-bearer'));
+  const signal = local.values.get('slf_session_change_v2');
+  assert.match(signal, /^[a-f0-9]{32}$/);
+  assert.deepEqual([...local.values.values()], [signal]);
+  assert.equal(tab.values.size, 0);
+  api.finishBrowserSignOut(false);
+  assert.equal(local.values.get('slf_session_change_v2'), signal);
+  api.finishBrowserSignOut(true);
+  assert.notEqual(local.values.get('slf_session_change_v2'), signal);
+  assert.equal(api.getAccessToken(), null);
+});
+
+test('兩分頁第一次登入依序收取裝置Cookie並公告各自的工作階段', async () => {
+  const locks = originLocks(), local = storedValues(), heldResponse = deferred(), aEntered = deferred();
+  const options = { navigator: { locks }, storage: local.storage, sessionStorage: storedValues().storage, crypto: webcrypto };
+  const order = [];
+  const a = await loadApi(async () => { throw new Error('Not needed'); }, options);
+  const b = await loadApi(async () => { throw new Error('Not needed'); }, options);
+  const first = a.runBrowserAuthAction(async () => {
+    order.push('a-request'); aEntered.resolve();
+    await heldResponse.promise;
+    a.saveBrowserSignIn(session('a'));
+    order.push('a-response');
+  });
+  await aEntered.promise;
+  const second = b.runBrowserAuthAction(async () => {
+    order.push('b-request');
+    b.saveBrowserSignIn(session('b'));
+    order.push('b-response');
+  });
+  await tick();
+  assert.deepEqual(order, ['a-request']);
+  heldResponse.resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ['a-request', 'a-response', 'b-request', 'b-response']);
+  assert.equal(b.getAccessToken(), 'b-token');
+});
+
+test('同帳號重新登入使較早登出失效，正常續期維持原明確登入代次', async () => {
+  const api = await loadApi(async () => Response.json(session('a', 'refreshed-a')));
+  api.saveBrowserSignIn(session('a', 'first-a'));
+  const before = api.captureExplicitSessionGuard();
+  await api.restoreSession();
+  assert.equal(before(), true);
+  api.saveBrowserSignIn(session('a', 'new-login-a'));
+  assert.equal(before(), false);
+  assert.equal(api.getAccessToken(), 'new-login-a');
+});
+
+for (const cookieArrives of [true, false]) {
+  test(`並行續期只以新Cookie重試一次，${cookieArrives ? '可繼續登入' : '維持可重試狀態'}`, async () => {
+    const local = storedValues(), tab = storedValues(), operations = [];
+    const api = await loadApi(async (_path, init) => {
+      operations.push(new Headers(init.headers).get('X-Refresh-Operation'));
+      if (operations.length === 2 && cookieArrives) return Response.json(session('a', 'new-generation'));
+      return new Response(null, { status: 401, headers: { 'X-Error-Code': 'refresh_cookie_race' } });
+    }, { storage: local.storage, sessionStorage: tab.storage, crypto: webcrypto });
+    api.saveSession(session('a', 'current-session'));
+    if (cookieArrives) {
+      await api.restoreSession();
+      assert.equal(api.getAccessToken(), 'new-generation');
+      assert.equal(tab.values.size, 0);
+    } else {
+      await assert.rejects(api.restoreSession(), error => error.status === 503);
+      assert.equal(api.getAccessToken(), 'current-session');
+      assert.equal(tab.values.size, 1);
+    }
+    assert.equal(operations.length, 2);
+    assert.equal(operations[0], operations[1]);
+  });
+}

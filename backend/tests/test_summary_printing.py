@@ -444,3 +444,44 @@ async def test_summary_manual_resolution_invalidates_inflight_query_cas(summary_
     assert job.status == "printed" and job.lease_token is None
     assert job.last_result == {"source": "admin_paper_check", "printed": True}
     assert fake.submissions == 1
+
+
+@pytest.mark.parametrize("missing_field", ["filters", "fingerprint", "summary"])
+async def test_damaged_summary_metadata_still_exposes_original_page_history(summary_print_context, missing_field):
+    context = summary_print_context
+    await paid_order(context, label="OLD-HISTORY", items=[line(name="Old history item")])
+    await paid_order(context, label="NEW-HISTORY", items=[line(name="New history item")])
+    old_preview = await preview(context, search="Old history item")
+    old = await create_batch(context, old_preview, search="Old history item")
+    recent = await create_batch(context, search="New history item")
+    old_job = await context.session.get(PrintJob, old["pages"][0]["id"])
+    snapshot = dict(old_job.snapshot)
+    del snapshot[missing_field]
+    old_job.snapshot = snapshot
+    old_job.status = "failed"
+    old_job.last_error = "summary_changed_before_send"
+    await context.session.commit()
+    expected = {**old, missing_field: None, "pages": [
+        {**old["pages"][0], "status": "failed", "last_error": "summary_changed_before_send"},
+    ]}
+    headers = auth_headers(context.admin)
+
+    def normalized_time(batch):
+        created_at = datetime.fromisoformat(batch["created_at"])
+        return {**batch, "created_at": created_at.replace(tzinfo=timezone.utc)}
+
+    listing = await context.client.get(f"{BASE}/print-jobs", headers=headers)
+    assert listing.status_code == 200
+    assert {item["request_id"]: normalized_time(item) for item in listing.json()["items"]} == {
+        expected["request_id"]: normalized_time(expected), recent["request_id"]: normalized_time(recent),
+    }
+    detail = await context.client.get(f"{BASE}/print-jobs/{old['request_id']}", headers=headers)
+    assert detail.status_code == 200 and normalized_time(detail.json()) == normalized_time(expected)
+    replay = await context.client.post(f"{BASE}/print-jobs", headers=headers, json={
+        "request_id": old["request_id"], "filters": PARAMS | {"search": "Old history item"},
+        "fingerprint": old_preview["fingerprint"],
+    })
+    assert replay.status_code == 201 and normalized_time(replay.json()) == normalized_time(expected)
+    assert len(await jobs(context)) == 2
+    await context.session.refresh(old_job)
+    assert old_job.snapshot == snapshot and old_job.attempts == 0

@@ -16,6 +16,7 @@ from .models import FulfillmentStatus, Order, PaymentStatus, PrintJob
 from .manual_order_printing import current_manual_snapshot, load_manual_print_order, manual_print_kind, manual_print_status_error
 from .printing import (business_preparation_print_allowed, business_preparation_window_open, business_receipt_fields, confirmed_print_payment, format_receipt, job_matches_printer, open_receipt_content, payment_snapshot_from_session,
                        receipt_time, render_receipt_snapshot, seal_receipt_content)
+from .recovery_work import print_is_held, summary_source_ids
 from .summary_printing import summary_job_is_current
 
 logger = logging.getLogger(__name__)
@@ -28,16 +29,18 @@ def wake_printer() -> None:
 
 
 async def process_print_job(settings: Settings, *, factory=SessionLocal, client=None, now=None) -> bool:
-    if not settings.printer_enabled:
+    if settings.recovery_mode or not settings.printer_enabled:
         return False
     now = now or datetime.now(timezone.utc)
     # A crashed sender may already have delivered its HTTP request. Never reclaim it for submission.
     async with factory() as session:
-        await session.execute(update(PrintJob).where(PrintJob.status == "sending", PrintJob.lease_until <= now).values(
+        held = print_is_held(session)
+        await session.execute(update(PrintJob).where(PrintJob.status == "sending", PrintJob.lease_until <= now, ~held).values(
             status="unknown", last_error="sender_interrupted_result_unknown", lease_until=None, lease_token=None, next_attempt_at=now))
         await session.commit()
         candidate = (await session.execute(select(PrintJob.id, PrintJob.order_id).outerjoin(Order, Order.id == PrintJob.order_id).where(
             PrintJob.next_attempt_at <= now,
+            ~held,
             or_(and_(PrintJob.status == "pending", or_(
                 PrintJob.kind.in_({"cancellation", "summary", "reference"}),
                 PrintJob.reprint_of_id.is_not(None),
@@ -54,8 +57,15 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         order = (await session.scalar(select(Order).where(Order.id == candidate.order_id)
                  .options(selectinload(Order.fulfillment))
                  .execution_options(populate_existing=True).with_for_update())) if candidate.order_id else None
-        job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id).with_for_update())
+        job = await session.scalar(select(PrintJob).where(PrintJob.id == candidate.id, ~held).with_for_update())
+        if job is None:
+            return True
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
+            return True
+        pending_summary = job.kind == "summary" and job.status == "pending"
+        if pending_summary and not (source_ids := summary_source_ids(job.snapshot)):
+            job.status, job.last_error = "failed", "summary_changed_before_send"
+            await session.commit()
             return True
         if job.kind == "reference" or job.snapshot.get("manual") or job.reprint_of_id:
             order = await load_manual_print_order(session, job.order_id)
@@ -111,8 +121,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.next_attempt_at = now + timedelta(seconds=60)
                 await session.commit()
                 return True
-        if job.kind == "summary" and job.status == "pending":
-            source_ids = [source["id"] for source in job.snapshot["source_versions"]]
+        if pending_summary:
             await session.execute(select(Order.id).where(Order.id.in_(source_ids)).order_by(Order.id).with_for_update())
             if not await summary_job_is_current(session, job, settings):
                 job.status, job.last_error = "failed", "summary_changed_before_send"
@@ -131,7 +140,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
         submitting = job.status == "pending"
         token = str(uuid4())
         # The compare-and-swap also protects SQLite and a claim racing another process.
-        claimed = await session.execute(update(PrintJob).where(PrintJob.id == job.id, PrintJob.status == job.status,
+        claimed = await session.execute(update(PrintJob).where(PrintJob.id == job.id, PrintJob.status == job.status, ~held,
             or_(PrintJob.lease_until.is_(None), PrintJob.lease_until <= now)).values(
                 status="sending" if submitting else job.status, lease_token=token,
                 lease_until=now + timedelta(seconds=settings.printer_lease_seconds)))
@@ -204,7 +213,7 @@ def _aware(value: datetime) -> datetime:
 @asynccontextmanager
 async def periodic_printing(settings: Settings):
     global _wake
-    if not settings.printer_enabled or not settings.printer_worker_enabled:
+    if settings.recovery_mode or not settings.printer_enabled or not settings.printer_worker_enabled:
         yield
         return
     event = asyncio.Event()
@@ -238,6 +247,9 @@ async def periodic_printing(settings: Settings):
 
 async def main():
     settings = get_settings().model_copy(update={"printer_worker_enabled": True})
+    if settings.recovery_mode:
+        logger.info("printer_worker_paused_recovery_mode")
+        return
     async with periodic_printing(settings):
         await asyncio.Event().wait()
 

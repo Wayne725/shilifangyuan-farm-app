@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order
-from .meal_booking import TAIPEI, _aware, workday_booking_window
+from .meal_booking import TAIPEI, _aware, meal_schedule_has_pickup_slots, workday_booking_window
 from .workday_calendar import CalendarUnavailable, is_workday
 
 
@@ -75,6 +75,10 @@ async def generate_scheduled_meal_events(
     ))
     created_ids: list[str] = []
     for template in templates:
+        pickup_start_time = time.fromisoformat(template.pickup_start_time)
+        pickup_end_time = time.fromisoformat(template.pickup_end_time)
+        if not meal_schedule_has_pickup_slots(template.meal_period, pickup_start_time, pickup_end_time):
+            continue
         await _convert_unordered_legacy_events(session, template, today, report)
         meal_ids = {item["meal_id"] for item in template.offerings}
         active_ids = set(await session.scalars(
@@ -100,8 +104,8 @@ async def generate_scheduled_meal_events(
                 break
             if not workday or service_date.weekday() not in template.weekdays:
                 continue
-            pickup_start = datetime.combine(service_date, time.fromisoformat(template.pickup_start_time), TAIPEI)
-            pickup_end = datetime.combine(service_date, time.fromisoformat(template.pickup_end_time), TAIPEI)
+            pickup_start = datetime.combine(service_date, pickup_start_time, TAIPEI)
+            pickup_end = datetime.combine(service_date, pickup_end_time, TAIPEI)
             if pickup_end < pickup_start:
                 pickup_end += timedelta(days=1)
             cutoff = datetime.combine(

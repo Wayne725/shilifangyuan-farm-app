@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from .config import Settings, get_settings
 from .database import get_session
 from .models import (
+    BrowserRefreshSelection,
     Membership,
     MembershipStatus,
     MembershipType,
@@ -100,6 +101,8 @@ def create_token(
     settings: Optional[Settings] = None,
     *,
     remember_me: bool = True,
+    browser_family: str | None = None,
+    browser_device: str | None = None,
 ) -> str:
     active_settings = settings or get_settings()
     now = datetime.now(timezone.utc)
@@ -127,6 +130,9 @@ def create_token(
     }
     if token_type == "refresh":
         payload["remember_me"] = remember_me
+    if browser_family and browser_device:
+        payload["browser_family"] = browser_family
+        payload["browser_device"] = browser_device
     return jwt.encode(
         payload,
         active_settings.jwt_secret,
@@ -190,16 +196,35 @@ async def get_current_user(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> User:
-    payload = decode_token(token, "access", settings)
-    user = await session.scalar(
+    return await get_active_user_for_access(decode_token(token, "access", settings), session)
+
+
+def _access_user_query(payload: dict[str, Any], *, check_browser: bool = True):
+    query = (
         select(User)
         .where(User.id == payload["sub"], User.is_active.is_(True))
         .options(selectinload(User.membership))
     )
+    if check_browser and payload.get("browser_device"):
+        selection = select(BrowserRefreshSelection.id).where(
+            BrowserRefreshSelection.id == payload["browser_device"],
+            BrowserRefreshSelection.family_id == payload.get("browser_family"),
+        )
+        query = query.where(selection.exists())
+    return query
+
+
+async def get_active_user_for_access(
+    payload: dict[str, Any], session: AsyncSession, *, logout: bool = False
+) -> User:
+    query = _access_user_query(payload, check_browser=not logout)
+    if logout:
+        query = query.with_for_update()
+    user = await session.scalar(query)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="找不到此使用者",
+            detail="登入工作階段已失效，請重新登入" if payload.get("browser_device") else "找不到此使用者",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if int(payload.get("ver", -1)) != int(user.token_version or 0):
@@ -219,14 +244,10 @@ async def get_optional_user(
     if not token:
         return None
     payload = decode_token(token, "access", settings)
-    user = await session.scalar(
-        select(User)
-        .where(User.id == payload["sub"], User.is_active.is_(True))
-        .options(selectinload(User.membership))
-    )
-    if user is None:
+    user = await session.scalar(_access_user_query(payload))
+    if user is None and not payload.get("browser_device"):
         return None
-    if int(payload.get("ver", -1)) != int(user.token_version or 0):
+    if user is None or int(payload.get("ver", -1)) != int(user.token_version or 0):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="登入工作階段已失效，請重新登入",

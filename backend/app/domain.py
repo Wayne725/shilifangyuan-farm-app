@@ -286,6 +286,7 @@ def meal_payment_window_open(order: Order, now: datetime) -> bool:
         event is not None
         and event.status in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}
         and aware(event.ordering_starts_at) <= now < aware(event.ordering_ends_at)
+        and (booking_deadline is not None or getattr(event, "same_day_preparation_minutes", None) is None)
         and (booking_deadline is None or now < aware(booking_deadline))
     )
 
@@ -372,11 +373,12 @@ def order_amendment_blocked_reason(order: Order, now: Optional[datetime] = None)
         return "退單申請審核中，無法修改數量"
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
         from .business_meals import is_business_meal
-        if not is_business_meal(order) and not meal_payment_window_open(order, current):
+        business = is_business_meal(order)
+        if not business and not meal_payment_window_open(order, current):
             return "已超過餐點訂購期限，無法修改數量"
         from .meal_booking import validate_meal_booking_day
         try:
-            validate_meal_booking_day(order.meal_event, current)
+            validate_meal_booking_day(order.meal_event, current, business=business)
         except ValueError as exc:
             return str(exc)
     elif order.group_campaign_id is not None:

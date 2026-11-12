@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hmac
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Literal, Mapping, Optional
+from urllib.parse import urlencode
 
 from sqlalchemy import case, exists, select
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +13,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from ..config import Settings
 from ..point_accounts import point_account
+from ..recovery_quarantine import payment_targets, provider_payment_reference, require_unheld
 from ..controlled_product_payments import is_meals_test_product_order
 from ..sales_scope import SalesScopeError, ensure_sales_scope_allows
 from ..domain import (
@@ -118,6 +120,8 @@ def ensure_payment_runtime_enabled(
     sales_channel: Optional[SalesChannel] = None,
     meal_event_id: Optional[str] = None,
 ) -> None:
+    if settings.recovery_mode:
+        raise PaymentApplicationError("系統還原中，暫停線上付款")
     try:
         ensure_sales_scope_allows(
             settings,
@@ -164,7 +168,7 @@ async def ensure_order_payment_runtime_enabled(
     *,
     amount: Optional[int] = None,
 ) -> None:
-    if await is_meals_test_product_order(session, settings, order, amount=amount):
+    if not settings.recovery_mode and await is_meals_test_product_order(session, settings, order, amount=amount):
         if order.invoice_provider_context != invoice_context_from_settings(settings):
             raise PaymentApplicationError(
                 "此訂單的發票平台資料已過期或未設定，無法付款；請重新訂購測試商品"
@@ -262,6 +266,7 @@ def raygate_payment_adapter_from_settings(settings: Settings) -> RayGateAdapter:
             terminal_id=settings.raygate_payment_terminal_id,
             device_type=settings.raygate_payment_device_type,
             timeout_seconds=getattr(settings, "integration_timeout_seconds", 15.0),
+            recovery_mode=settings.recovery_mode,
         )
     )
 
@@ -447,6 +452,10 @@ async def create_provider_aware_refund(
 ) -> tuple[Refund, bool]:
     if sum(item is not None for item in (order, membership_charge, activity_charge)) != 1:
         raise ValueError("退款必須且只能指定一種付款主體")
+    subjects = tuple((scope, item.id) for scope, item in (
+        ("order", order), ("membership_charge", membership_charge), ("activity_charge", activity_charge),
+    ) if item is not None)
+    await require_unheld(session, *subjects, *(payment_targets(payment_attempt) if payment_attempt else ()))
     if activity_charge is not None:
         if payment_attempt is None or payment_attempt.activity_charge_id != activity_charge.id or payment_attempt.amount != amount:
             raise PaymentApplicationError("活動退款必須綁定正確原付款並整筆退還")
@@ -586,6 +595,35 @@ def _checkout_url(settings: Settings, attempt_id: str) -> str:
     )
 
 
+BrowserReturnStorefront = Literal["canonical", "legacy"]
+CANONICAL_STOREFRONT = "https://shilifangyuan.com"
+LEGACY_STOREFRONT = "https://shilifangyuan-web.onrender.com"
+
+
+def browser_return_storefront(settings: Settings, origin: str | None) -> BrowserReturnStorefront | None:
+    if settings.web_base_url.rstrip("/") == CANONICAL_STOREFRONT:
+        if (
+            settings.payment_legacy_return_enabled
+            and origin == LEGACY_STOREFRONT
+            and browser_return_base(settings, "legacy") == origin
+        ):
+            return "legacy"
+        if origin == CANONICAL_STOREFRONT:
+            return "canonical"
+    return None
+
+
+def browser_return_base(settings: Settings, storefront: str | None) -> str:
+    default_base = settings.web_base_url.rstrip("/")
+    if (
+        storefront == "legacy"
+        and default_base == CANONICAL_STOREFRONT
+        and any(origin.rstrip("/") == LEGACY_STOREFRONT for origin in settings.cors_origins)
+    ):
+        return LEGACY_STOREFRONT
+    return default_base
+
+
 def _build_checkout_payload(
     *,
     settings: Settings,
@@ -678,6 +716,8 @@ async def create_payment_attempt(
     user: User,
     settings: Settings,
     now: Optional[datetime] = None,
+    *,
+    return_storefront: BrowserReturnStorefront | None = None,
 ) -> PaymentAttempt:
     current = now or datetime.now(timezone.utc)
     owned_order_id = await session.scalar(
@@ -703,6 +743,7 @@ async def create_payment_attempt(
     )
     if order is None:
         raise PaymentApplicationError("找不到訂單")
+    await require_unheld(session, ("order", order.id))
     if order.payment_method != PaymentMethod.ONLINE:
         raise PaymentApplicationError("現場付款訂單不可使用線上付款")
     await ensure_order_payment_runtime_enabled(session, settings, order)
@@ -745,13 +786,15 @@ async def create_payment_attempt(
             raise PaymentApplicationError("請先完成物流門市或地址選擇")
 
     from ..business_meals import is_business_meal, business_payment_blocked_reason, business_payment_window
+    business_order = is_business_meal(order)
+    same_day_meal = (
+        not business_order and order.sales_channel == SalesChannel.MEAL_PREORDER
+        and order.meal_event is not None and order.meal_event.same_day_preparation_minutes is not None
+    )
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
         if order.meal_event is None:
             raise PaymentApplicationError("便當訂單缺少場次資料")
-        if is_business_meal(order):
-            if reason := business_payment_blocked_reason(order, current):
-                raise PaymentApplicationError(reason)
-        elif not meal_payment_window_open(order, current):
+        if not business_order and not meal_payment_window_open(order, current):
             raise PaymentApplicationError("便當目前未開放預購或已截止")
 
     attempts = list(await session.scalars(select(PaymentAttempt)
@@ -765,6 +808,14 @@ async def create_payment_attempt(
             existing.superseded_at = existing.superseded_at or current
             if existing.status == PaymentStatus.PENDING:
                 existing.status = PaymentStatus.EXPIRED
+    if business_order:
+        current = now or datetime.now(timezone.utc)
+        if reason := business_payment_blocked_reason(order, current):
+            raise PaymentApplicationError(reason)
+    elif same_day_meal:
+        current = now or datetime.now(timezone.utc)
+        if not meal_payment_window_open(order, current):
+            raise PaymentApplicationError("已超過便當備餐付款期限")
     for existing in sorted(attempts, key=lambda item: item.created_at, reverse=True):
         if is_obsolete_order_attempt(existing, order):
             continue
@@ -788,7 +839,7 @@ async def create_payment_attempt(
     expires_at = current + timedelta(
         minutes=settings.payment_reservation_minutes
     )
-    if is_business_meal(order):
+    if business_order:
         expires_at = min(expires_at, business_payment_window(order)[1])
     elif (
         order.sales_channel == SalesChannel.MEAL_PREORDER
@@ -800,6 +851,7 @@ async def create_payment_attempt(
         order=order,
         order_revision=order.revision,
         provider=settings.payment_provider,
+        browser_return_storefront=return_storefront,
         merchant_trade_no=merchant_trade_no,
         amount=order.amount_total,
         status=PaymentStatus.PENDING,
@@ -808,8 +860,10 @@ async def create_payment_attempt(
     session.add(attempt)
     await session.flush()
 
-    if is_business_meal(order):
+    if business_order:
         await _business_meal_reservations(session, order)
+        if reason := business_payment_blocked_reason(order, now or datetime.now(timezone.utc)):
+            raise PaymentApplicationError(reason)
     elif order.sales_channel == SalesChannel.MEAL_PREORDER:
         for item in sorted(order.items, key=lambda item: item.source_meal_offering_id or item.source_product_id or item.id):
             if item.source_meal_offering_id is None:
@@ -906,6 +960,8 @@ async def create_payment_attempt(
                 )
             )
 
+    if same_day_meal and not meal_payment_window_open(order, now or datetime.now(timezone.utc)):
+        raise PaymentApplicationError("已超過便當備餐付款期限")
     attempt.checkout_payload = _build_checkout_payload(
         settings=settings,
         attempt=attempt,
@@ -915,7 +971,7 @@ async def create_payment_attempt(
             for item in order.items
         ),
         client_back_url="{}/orders?order_id={}".format(
-            settings.web_base_url.rstrip("/"), order.id
+            browser_return_base(settings, attempt.browser_return_storefront), order.id
         ),
         custom_fields={"CustomField1": order.id},
         current=current,
@@ -931,6 +987,8 @@ async def create_membership_payment_attempt(
     user: User,
     settings: Settings,
     now: Optional[datetime] = None,
+    *,
+    return_storefront: BrowserReturnStorefront | None = None,
 ) -> PaymentAttempt:
     ensure_payment_runtime_enabled(settings)
     current = now or datetime.now(timezone.utc)
@@ -950,6 +1008,7 @@ async def create_membership_payment_attempt(
     )
     if charge is None:
         raise PaymentApplicationError("找不到入社應繳款")
+    await require_unheld(session, ("membership_charge", charge.id))
     if (
         charge.application.status
         not in {
@@ -990,6 +1049,7 @@ async def create_membership_payment_attempt(
     attempt = PaymentAttempt(
         membership_charge=charge,
         provider=settings.payment_provider,
+        browser_return_storefront=return_storefront,
         merchant_trade_no=merchant_trade_no,
         amount=charge.amount,
         status=PaymentStatus.PENDING,
@@ -1003,14 +1063,15 @@ async def create_membership_payment_attempt(
         if charge.charge_kind.value == "admission_fee"
         else "十里方圓股金"
     )
+    client_back_url = f"{browser_return_base(settings, return_storefront)}/account"
+    if return_storefront == "legacy":
+        client_back_url += "?" + urlencode({"membership_charge_id": charge.id, "attempt_id": attempt.id})
     attempt.checkout_payload = _build_checkout_payload(
         settings=settings,
         attempt=attempt,
         amount=charge.amount,
         item_name=item_name,
-        client_back_url="{}/account".format(
-            settings.web_base_url.rstrip("/")
-        ),
+        client_back_url=client_back_url,
         custom_fields={
             "CustomField1": charge.id,
             "CustomField2": "membership_charge",
@@ -1061,6 +1122,19 @@ class SQLAlchemyPaymentCallbackRepository:
         event_key: str,
         payload: Mapping[str, str],
     ) -> str:
+        return await self._apply_payment_callback(provider, event_key, payload)
+
+    async def _apply_verified_recovery_raygate(self, attempt_id: str, payload: Mapping[str, str]) -> str:
+        return await self._apply_payment_callback(
+            RAYGATE_PAYMENT_PROVIDER, raygate_event_key(payload), payload, recovery_attempt_id=attempt_id,
+        )
+
+    async def _apply_payment_callback(
+        self, provider: str, event_key: str, payload: Mapping[str, str], *, recovery_attempt_id: str | None = None,
+    ) -> str:
+        if recovery_attempt_id is None:
+            await require_unheld(self.session, ("provider_payment", provider_payment_reference(provider, payload["MerchantTradeNo"])))
+        callback_options = {} if recovery_attempt_id is None else {"notify_email": False}
         event_provider = (
             "ecpay_aio" if provider == "ecpay" else "raygate_payment"
         )
@@ -1072,6 +1146,8 @@ class SQLAlchemyPaymentCallbackRepository:
             )
         )
         if tombstone is not None:
+            if recovery_attempt_id is not None:
+                raise PaymentApplicationError("付款嘗試已封存，不可補登")
             self.session.add(
                 ExternalEvent(
                     provider=event_provider,
@@ -1132,6 +1208,10 @@ class SQLAlchemyPaymentCallbackRepository:
         )
         if attempt is None:
             raise PaymentApplicationError("找不到付款嘗試")
+        if recovery_attempt_id is None:
+            await require_unheld(self.session, *payment_targets(attempt))
+        elif attempt.id != recovery_attempt_id:
+            raise PaymentApplicationError("付款證明與付款嘗試不符")
         if attempt.provider != provider:
             raise PaymentApplicationError("付款服務與付款嘗試不符")
         if attempt.order is not None and attempt.order.payment_method != PaymentMethod.ONLINE:
@@ -1184,7 +1264,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 event.processed_at = datetime.now(timezone.utc)
                 await self.session.commit()
                 return "duplicate"
-            await self._apply_provider_refund(attempt, payload)
+            await self._apply_provider_refund(attempt, payload, **callback_options)
             event.processed = True
             event.processed_at = datetime.now(timezone.utc)
             await self.session.commit()
@@ -1248,7 +1328,7 @@ class SQLAlchemyPaymentCallbackRepository:
             await self.session.commit()
             return "failed"
 
-        await self._apply_success(attempt, payload)
+        await self._apply_success(attempt, payload, **callback_options)
         event.processed = True
         event.processed_at = datetime.now(timezone.utc)
         await self.session.commit()
@@ -1270,7 +1350,7 @@ class SQLAlchemyPaymentCallbackRepository:
         return await self.apply_ecpay_payment_callback(key, synthetic)
 
     async def _apply_success(
-        self, attempt: PaymentAttempt, payload: Mapping[str, str]
+        self, attempt: PaymentAttempt, payload: Mapping[str, str], *, notify_email: bool = True,
     ) -> None:
         current = datetime.now(timezone.utc)
         payment_time = _provider_payment_time(payload) or current
@@ -1691,6 +1771,7 @@ class SQLAlchemyPaymentCallbackRepository:
             "payment_succeeded",
             "付款成功通知",
             "訂單 {} 已付款成功。".format(order.order_number),
+            notify_email=notify_email,
         )
 
     async def _assign_provider_trade_no(
@@ -1718,9 +1799,7 @@ class SQLAlchemyPaymentCallbackRepository:
         attempt.provider_trade_no = provider_trade_no
 
     async def _apply_provider_refund(
-        self,
-        attempt: PaymentAttempt,
-        payload: Mapping[str, str],
+        self, attempt: PaymentAttempt, payload: Mapping[str, str], *, notify_email: bool = True,
     ) -> None:
         await self._assign_provider_trade_no(attempt, payload)
         provider_refund_id = payload.get("RayGateAssociatedOrderID", "")
@@ -1880,7 +1959,7 @@ class SQLAlchemyPaymentCallbackRepository:
                     refund.id,
                 )
                 if fulfillment_irreversible:
-                    await self._publish_refunded_fulfillment_alert(order, refund)
+                    await self._publish_refunded_fulfillment_alert(order, refund, notify_email=notify_email)
         elif attempt.membership_charge is not None:
             charge = attempt.membership_charge
             if remaining_payment_status is None:
@@ -1922,7 +2001,7 @@ class SQLAlchemyPaymentCallbackRepository:
                         "refund_purpose": refund.purpose,
                         "order_revision": attempt.order_revision if order else None,
                     },
-                    email=owner.email,
+                    email=owner.email if notify_email else None,
                     dedupe_key=f"refund:{refund.id}",
                 )
             )
@@ -1946,6 +2025,8 @@ class SQLAlchemyPaymentCallbackRepository:
         self,
         order: Order,
         refund: Refund,
+        *,
+        notify_email: bool = True,
     ) -> None:
         admins = list(
             await self.session.scalars(
@@ -1966,7 +2047,7 @@ class SQLAlchemyPaymentCallbackRepository:
                         "但物流已建立或商品已交付；請立即人工攔截或追蹤退回。"
                     ),
                     data={"order_id": order.id, "refund_id": refund.id},
-                    email=admin.email,
+                    email=admin.email if notify_email else None,
                     dedupe_key=(
                         f"refund-fulfillment:{refund.id}:{admin.id}"
                     ),
@@ -2151,12 +2232,16 @@ class SQLAlchemyPaymentCallbackRepository:
                 reservation.status = ReservationStatus.CONSUMED
                 reservation.payment_attempt = attempt
             return True
-        if (
-            order.fulfillment is not None
-            and order.fulfillment.meal_ordering_ends_at is not None
-            and payment_time >= _aware(order.fulfillment.meal_ordering_ends_at)
-        ):
-            return False
+        deadline = order.fulfillment.meal_ordering_ends_at if order.fulfillment is not None else None
+        if deadline is not None:
+            deadline = _aware(deadline)
+            if payment_time >= deadline:
+                return False
+        confirmation_deadline = None
+        if order.meal_event.same_day_preparation_minutes is not None:
+            if deadline is None or datetime.now(timezone.utc) >= deadline:
+                return False
+            confirmation_deadline = deadline
         originally_in_window = payment_time <= _aware(attempt.expires_at)
         if payment_time > _aware(attempt.expires_at):
             await release_attempt_reservations(self.session, attempt)
@@ -2189,6 +2274,8 @@ class SQLAlchemyPaymentCallbackRepository:
                 offering.reserved_quantity += reservation.quantity
                 reservation.status = ReservationStatus.ACTIVE
                 reservation.released_at = None
+        if confirmation_deadline is not None and datetime.now(timezone.utc) >= confirmation_deadline:
+            return False
         for reservation in sorted(attempt.reservations, key=_reservation_resource_key):
             if (
                 reservation.status == ReservationStatus.ACTIVE
@@ -2257,6 +2344,8 @@ class SQLAlchemyPaymentCallbackRepository:
         event_type: str,
         title: str,
         body: str,
+        *,
+        notify_email: bool = True,
     ) -> None:
         service = NotificationService(
             SQLAlchemyNotificationRepository(self.session)
@@ -2268,7 +2357,7 @@ class SQLAlchemyPaymentCallbackRepository:
                 title=title,
                 body=body,
                 data={"order_id": order.id},
-                email=order.contact_email,
+                email=order.contact_email if notify_email else None,
                 dedupe_key="payment:{}:{}".format(attempt.id, event_type),
             )
         )

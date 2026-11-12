@@ -107,6 +107,15 @@ test("跨到取餐當天、時段更改或不在半小時清單時，需要重�
   assert.equal(reconcileMealDraft(selection({ pickupAt: "invalid" }), event(), NOW).pickupAt, "");
 });
 
+test("手動暫停保留選定時段，恢復後重新核對時段有效性", () => {
+  const draft = selection();
+  const moved = event({ pickup_starts_at: "2026-10-09T12:00:00+08:00" });
+  const paused = reconcileMealDraft(draft, { ...moved, ordering_paused: true, new_orders_blocked_reason: "此場次暫停接受新訂單" }, NOW);
+  assert.deepEqual(paused, draft);
+  assert.equal(reconcileMealDraft(paused, moved, NOW).pickupAt, "");
+  assert.deepEqual(reconcileMealDraft(paused, event(), NOW), draft);
+});
+
 test("空草稿會移除暫存，訂單成立後清除再返回不恢復舊選餐", () => {
   const browserStorage = storage();
   writeMealDraft("lunch", selection(), browserStorage);

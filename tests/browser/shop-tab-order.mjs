@@ -28,7 +28,7 @@ const event = {
 const calendarPath = '/v1/meal-events/calendar';
 const originalListPath = '/v1/meal-events';
 
-async function fixture(t, { width = 390, calendarStatus = 200 } = {}) {
+async function fixture(t, { width = 390, calendarStatus = 200, products = [] } = {}) {
     const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
     t.after(() => browser.close());
     const context = await browser.newContext({
@@ -57,7 +57,10 @@ async function fixture(t, { width = 390, calendarStatus = 200 } = {}) {
           mealReads.push(originalListPath);
           return route.fulfill({ json: [event] });
         }
-        if (method === 'GET' && ['/v1/products', '/v1/group-campaigns'].includes(url.pathname)) {
+        if (method === 'GET' && url.pathname === '/v1/products') return route.fulfill({ json: products });
+        const selectedProduct = products.find(product => url.pathname === `/v1/products/${product.id}`);
+        if (method === 'GET' && selectedProduct) return route.fulfill({ json: selectedProduct });
+        if (method === 'GET' && ['/v1/group-campaigns', '/v1/pickup-locations', '/v1/shipping-rates'].includes(url.pathname)) {
           return route.fulfill({ json: [] });
         }
         unknownApi.push(`${method} ${url.pathname}`);
@@ -155,4 +158,120 @@ test('摘要 503 顯示錯誤並沿用重試，無額外完整清單請求', asy
   assert.ok(mealReads.length > 0);
   assert.ok(mealReads.every(path => path === calendarPath));
   assert.deepEqual(unknownApi, []);
+});
+
+function product(index, changes = {}) {
+  return {
+    id: `isolated-product-${index}`,
+    name: `隔離商品 ${String(index).padStart(2, '0')}`,
+    description: '當季手作 TEA',
+    category: '加工品',
+    unit: '件',
+    member_price: 40,
+    nonmember_price: 50,
+    stock_quantity: 10,
+    can_ship: false,
+    allowed_shipping_channels: [],
+    tax_type: 'tax_exempt',
+    is_active: true,
+    daily_sales_enabled: true,
+    ...changes,
+  };
+}
+
+const catalog = [
+  ...Array.from({ length: 13 }, (_, index) => product(index + 1)),
+  product(14, { category: '飲品', sku: 'PRIVATE-SKU-ISOLATED' }),
+  product(15, { category: '生活用品', is_active: false }),
+  product(16, { category: '蛋品', daily_sales_enabled: false }),
+];
+
+test('商品深連結、篩選及分頁保留在網址，重新整理和上一頁／下一頁可還原', { timeout: 30000 }, async (t) => {
+  const { page, unknownApi, mutations } = await fixture(t, { width: 1440, products: catalog });
+  const params = new URLSearchParams({ tab: 'products', q: 'ＴＥＡ', category: '加工品', page: '2' });
+  await page.goto(`${base}/shop?${params}`);
+  const search = page.getByRole('searchbox', { name: '搜尋商品' });
+  const category = page.getByRole('combobox', { name: '商品分類' });
+  const cards = page.locator('.catalog-grid .product-card');
+  const last = cards.getByRole('heading', { name: '隔離商品 13', exact: true });
+  const previous = page.getByRole('link', { name: '上一頁', exact: true });
+  await last.waitFor();
+  assert.equal(await cards.count(), 1);
+  assert.equal(await search.inputValue(), 'ＴＥＡ');
+  assert.equal(await category.inputValue(), '加工品');
+  assert.deepEqual(new Set(await category.locator('option').allTextContents()), new Set(['全部分類', '加工品', '飲品']));
+
+  await page.reload();
+  await last.waitFor();
+  await previous.click();
+  await page.waitForURL(url => !url.searchParams.has('page'));
+  await cards.getByRole('heading', { name: '隔離商品 01', exact: true }).waitFor();
+  assert.equal(await cards.count(), 12);
+  assert.equal(new URL(page.url()).searchParams.get('category'), '加工品');
+
+  await page.goBack();
+  await last.waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('page'), '2');
+  await page.goForward();
+  await cards.getByRole('heading', { name: '隔離商品 01', exact: true }).waitFor();
+  assert.equal(await search.inputValue(), 'ＴＥＡ');
+
+  await page.getByRole('tab', { name: '共同購買', exact: true }).click();
+  await page.waitForURL(url => url.searchParams.get('tab') === 'groups');
+  assert.equal(await search.count(), 0);
+  await page.getByRole('tab', { name: '日常選品', exact: true }).click();
+  await search.waitFor();
+  assert.equal(await search.inputValue(), 'ＴＥＡ');
+  assert.equal(await category.inputValue(), '加工品');
+
+  await category.selectOption('飲品');
+  await cards.getByRole('heading', { name: '隔離商品 14', exact: true }).waitFor();
+  assert.equal(await cards.count(), 1);
+  assert.equal(new URL(page.url()).searchParams.get('q'), 'ＴＥＡ');
+  assert.equal(new URL(page.url()).searchParams.get('category'), '飲品');
+
+  params.set('page', '999');
+  await page.goto(`${base}/shop?${params}`);
+  await page.waitForURL(url => url.searchParams.get('page') === '2');
+  await last.waitFor();
+  assert.equal(await cards.count(), 1);
+  assert.deepEqual(unknownApi, []);
+  assert.deepEqual(mutations, []);
+});
+
+test('390px 可用鍵盤搜尋，空結果可清除，篩選後的商品能加入原本的結帳清單', { timeout: 30000 }, async (t) => {
+  const { page, unknownApi, mutations } = await fixture(t, { products: catalog });
+  await page.goto(`${base}/shop?tab=products`);
+  const search = page.getByRole('searchbox', { name: '搜尋商品' });
+  const cards = page.locator('.catalog-grid .product-card');
+  await search.fill('PRIVATE-SKU-ISOLATED');
+  await search.press('Enter');
+  await page.getByText('找不到符合的商品', { exact: true }).waitFor();
+  assert.equal(await cards.count(), 0);
+
+  await page.getByRole('button', { name: '清除篩選', exact: true }).click();
+  await page.getByText('共 14 件商品', { exact: true }).waitFor();
+  assert.equal(await search.inputValue(), '');
+  assert.equal(new URL(page.url()).searchParams.has('q'), false);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+
+  await search.fill('隔離商品 13');
+  await search.press('Enter');
+  const add = cards.getByRole('button', { name: '加入購物車：隔離商品 13', exact: true });
+  await add.focus();
+  await add.press('Enter');
+  await page.getByText('隔離商品 13已加入，清單共 1 件', { exact: true }).waitFor();
+  assert.equal(await cards.count(), 1);
+  const inventory = page.waitForResponse(response =>
+    new URL(response.url()).pathname === '/v1/products/isolated-product-13' && response.ok()
+  );
+  await page.getByRole('link', { name: /查看結帳清單/ }).click();
+  await page.waitForURL(`${base}/checkout`);
+  await inventory;
+  const item = page.locator('.checkout-item');
+  await item.getByRole('heading', { name: '隔離商品 13', exact: true }).waitFor();
+  assert.equal(await item.count(), 1);
+  assert.equal(await item.locator('.quantity-control span').innerText(), '1');
+  assert.deepEqual(unknownApi, []);
+  assert.deepEqual(mutations, []);
 });

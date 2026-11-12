@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 import time_machine
@@ -7,11 +8,13 @@ from sqlalchemy import func, select
 from app.integrations.payment_service import PaymentApplicationError, SQLAlchemyPaymentCallbackRepository, create_payment_attempt
 from app.meal_booking import TAIPEI, meal_booking_window
 from app.meal_schedules import generate_scheduled_meal_events
-from app.models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User, UserRole
+from app.models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, OrderFulfillment, User, UserRole
+from app.routers import meals
 from app.routers.meals import meals_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
 from tests.support import api_test_context, auth_headers, make_test_settings
+from tests.test_business_meals import business_body
 from tests.test_order_quantity_amendments import submit
 from tests.test_v2_payment_jobs import fake_payment, payment_settings, successful_callback
 
@@ -272,3 +275,313 @@ async def test_workday_cash_reservation_survives_online_cutoff_until_pickup(work
         assert paid.status_code == 200, paid.text
         assert paid.json()["payment_status"] == "paid"
         assert paid.json()["invoice_status"] == "external"
+
+
+async def test_same_day_checkout_uses_eligible_slot_and_snapshots_its_deadline(workday_context):
+    client, session, admin, buyer, meal = workday_context
+    event, body = await create_event(workday_context, same_day_preparation_minutes=90,
+                                    ordering_ends_at="2026-11-09T11:00:00+08:00")
+    root = f"/v1/meal-events/{event['id']}"
+    assert event["same_day_preparation_minutes"] == 90
+    calendar = await client.get("/v1/meal-events/calendar")
+    summary = next(item for item in calendar.json() if item["id"] == event["id"])
+    assert summary["same_day_preparation_minutes"] == 90
+    with time_machine.travel(datetime(2026, 11, 9, 10, tzinfo=TAIPEI), tick=False):
+        headers = auth_headers(buyer)
+        for path in ["quote", "orders"]:
+            expired = await client.post(
+                f"{root}/{path}",
+                json={**body, "pickup_at": "2026-11-09T11:30:00+08:00"}, headers=headers,
+            )
+            assert expired.status_code == 409 and "時段已截止" in expired.json()["detail"]
+            cash = await client.post(f"{root}/{path}", json={**body, "payment_method": "cash_on_pickup"}, headers=headers)
+            assert cash.status_code == 422 and "未開放現場付款" in cash.json()["detail"]
+        quote = await client.post(f"{root}/quote", json=body)
+        assert quote.status_code == 200, quote.text
+        assert datetime.fromisoformat(quote.json()["pickup_at"]) == datetime(2026, 11, 9, 12, tzinfo=TAIPEI)
+        created = await client.post(f"{root}/orders", json=body, headers=headers)
+        assert created.status_code == 201, created.text
+        order = await session.get(Order, created.json()["id"])
+        fulfillment = await session.scalar(select(OrderFulfillment).where(OrderFulfillment.order_id == order.id))
+        assert fulfillment is not None
+        assert fulfillment.meal_ordering_ends_at.replace(tzinfo=timezone.utc) == datetime(2026, 11, 9, 10, 30, tzinfo=TAIPEI)
+        blocked = await client.put(f"/v1/admin/meal-events/{event['id']}", json=event_body(meal), headers=auth_headers(admin))
+        assert blocked.status_code == 409 and "已有訂單" in blocked.json()["detail"]
+    with time_machine.travel(datetime(2026, 11, 9, 10, 30, tzinfo=TAIPEI), tick=False):
+        assert (await submit(client, buyer, order, 2)).status_code == 409
+
+
+async def test_same_day_opt_in_preserves_business_previous_evening_cutoff(workday_context):
+    client, _session, _admin, buyer, _meal = workday_context
+    event, body = await create_event(workday_context, same_day_preparation_minutes=90)
+    root = f"/v1/meal-events/{event['id']}"
+    company = business_body(body)
+    cutoff = datetime(2026, 11, 8, 20, tzinfo=TAIPEI)
+    with time_machine.travel(cutoff - timedelta(seconds=1), tick=False):
+        allowed = await client.post(f"{root}/quote", json=company)
+        assert allowed.status_code == 200, allowed.text
+    with time_machine.travel(cutoff, tick=False):
+        for path in ["quote", "orders"]:
+            blocked = await client.post(f"{root}/{path}", json=company, headers=auth_headers(buyer))
+            assert blocked.status_code == 409 and "前一天晚上 20:00" in blocked.json()["detail"]
+        assert (await client.post(f"{root}/quote", json=body)).status_code == 200
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    ({"same_day_preparation_minutes": 0}, "same_day_preparation_minutes"),
+    ({"same_day_preparation_minutes": 1440}, "same_day_preparation_minutes"),
+    ({"same_day_preparation_minutes": 90, "allow_cash_payment": True}, "僅支援線上付款"),
+    ({"same_day_preparation_minutes": 90, "booking_policy": "legacy"}, "工作日或特殊日期"),
+    ({"same_day_preparation_minutes": 90, "ordering_ends_at": "2026-11-08T20:00:00+08:00"}, "截止時間必須在取餐當日"),
+    ({"same_day_preparation_minutes": 1439}, "沒有可預訂的取餐時段"),
+])
+async def test_admin_same_day_requires_explicit_valid_configuration(workday_context, overrides, reason):
+    client, _session, admin, _buyer, meal = workday_context
+    rejected = await client.post("/v1/admin/meal-events", json=event_body(meal, **overrides), headers=auth_headers(admin))
+    assert rejected.status_code == 422
+    assert reason in rejected.text
+
+
+async def test_same_day_update_preserves_omitted_opt_in_and_allows_explicit_disable(workday_context):
+    client, _session, admin, _buyer, meal = workday_context
+    event, _ = await create_event(workday_context, same_day_preparation_minutes=90)
+    path = f"/v1/admin/meal-events/{event['id']}"
+    headers = auth_headers(admin)
+    cash = await client.patch(f"{path}/payment-options", json={"allow_cash_payment": True}, headers=headers)
+    assert cash.status_code == 422
+    updated = await client.put(path, json=event_body(meal, title="更新後標題"), headers=headers)
+    assert updated.status_code == 200 and updated.json()["same_day_preparation_minutes"] == 90
+    disabled = await client.put(path, json=event_body(meal, same_day_preparation_minutes=None), headers=headers)
+    assert disabled.status_code == 200 and disabled.json()["same_day_preparation_minutes"] is None
+    assert datetime.fromisoformat(disabled.json()["booking_ends_at"]) == datetime(2026, 11, 8, 20, tzinfo=TAIPEI)
+
+
+async def test_same_day_cannot_publish_after_last_preparation_deadline(workday_context):
+    client, _session, admin, _buyer, meal = workday_context
+    created = await client.post(
+        "/v1/admin/meal-events",
+        json=event_body(meal, same_day_preparation_minutes=120, ordering_ends_at="2026-11-09T12:00:00+08:00"),
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 201, created.text
+    path = f"/v1/admin/meal-events/{created.json()['id']}/publish"
+    with time_machine.travel(datetime(2026, 11, 9, 11, tzinfo=TAIPEI), tick=False):
+        response = await client.post(path, headers=auth_headers(admin))
+    assert response.status_code == 409, response.text
+    assert "已無可預訂的取餐時段" in response.json()["detail"]
+
+
+async def test_same_day_online_checkout_rejects_zero_total_without_creating_order(workday_context):
+    client, session, _admin, buyer, meal = workday_context
+    other_meal = Meal(slug="another-workday-lunch", name="另一款便當", price=100)
+    session.add(other_meal)
+    await session.commit()
+    event, body = await create_event(
+        workday_context, same_day_preparation_minutes=90,
+        offerings=[{"meal_id": item.id, "price": 0, "capacity": 50} for item in (meal, other_meal)],
+    )
+    body["items"].append({"offering_id": event["offerings"][1]["id"], "quantity": 1})
+    with time_machine.travel(datetime(2026, 11, 9, 9, tzinfo=TAIPEI), tick=False):
+        for path in ["quote", "orders"]:
+            response = await client.post(f"/v1/meal-events/{event['id']}/{path}", json=body, headers=auth_headers(buyer))
+            assert response.status_code == 422
+            assert "須有大於零的應付金額" in response.json()["detail"]
+    assert await session.scalar(select(func.count(Order.id))) == 0
+
+
+async def test_saturday_business_only_requires_company_and_preserves_cutoff_and_invoice(workday_context):
+    client, session, admin, buyer, meal = workday_context
+    event, body = await create_event(workday_context, "2026-11-07", booking_policy="special", business_only=True)
+    root = f"/v1/meal-events/{event['id']}"
+    headers = auth_headers(buyer)
+    assert event["business_only"] is True
+    detail = await client.get(root)
+    calendar = await client.get("/v1/meal-events/calendar")
+    assert detail.json()["business_only"] is True
+    assert next(item for item in calendar.json() if item["id"] == event["id"])["business_only"] is True
+
+    for action in ("quote", "orders"):
+        standard = await client.post(f"{root}/{action}", json=body, headers=headers)
+        assert standard.status_code == 422
+        assert standard.json()["detail"] == "此場次僅開放會餐"
+        personal = await client.post(f"{root}/{action}", json={**body, "meal_booking_type": "business"}, headers=headers)
+        assert personal.status_code == 422
+        cash = await client.post(f"{root}/{action}", json=business_body(body, payment_method="cash_on_pickup"), headers=headers)
+        assert cash.status_code == 422
+    assert await session.scalar(select(func.count(Order.id))) == 0
+
+    cutoff = datetime(2026, 11, 6, 20, tzinfo=TAIPEI)
+    company = business_body(body, client_request_id=str(uuid4()))
+    with time_machine.travel(cutoff - timedelta(seconds=1), tick=False):
+        headers = auth_headers(buyer)
+        quote = await client.post(f"{root}/quote", json=company, headers=headers)
+        assert quote.status_code == 200, quote.text
+        created = await client.post(f"{root}/orders", json=company, headers=headers)
+        assert created.status_code == 201, created.text
+        order = created.json()
+        assert order["invoice_handling"] == "pickup_day"
+        assert datetime.fromisoformat(order["payment_opens_at"]) == datetime(2026, 11, 7, tzinfo=TAIPEI)
+        fulfillment = await session.scalar(select(OrderFulfillment).where(OrderFulfillment.order_id == order["id"]))
+        assert fulfillment.meal_ordering_ends_at.replace(tzinfo=timezone.utc) == cutoff
+        changed = await client.put(f"/v1/admin/meal-events/{event['id']}",
+                                   json=event_body(meal, "2026-11-07", booking_policy="special", business_only=False),
+                                   headers=auth_headers(admin))
+        assert changed.status_code == 409
+    with time_machine.travel(cutoff, tick=False):
+        headers = auth_headers(buyer)
+        for action in ("quote", "orders"):
+            late = await client.post(f"{root}/{action}", json={**company, "client_request_id": str(uuid4())}, headers=headers)
+            assert late.status_code == 409, late.text
+        replay = await client.post(f"{root}/orders", json=company, headers=headers)
+        assert replay.status_code == 201 and replay.json()["id"] == order["id"]
+    assert await session.scalar(select(func.count(Order.id))) == 1
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    ({"booking_policy": "legacy"}, "工作日或特殊日期"),
+    ({"same_day_preparation_minutes": 90}, "須於取餐前預訂"),
+    ({"allow_cash_payment": True}, "只支援線上付款"),
+    ({"ordering_starts_at": "2026-11-06T20:00:00+08:00"}, "有效訂購截止必須晚於開賣時間"),
+    ({"pickup_starts_at": "2026-11-07T13:01:00+08:00"}, "沒有可預訂的取餐時段"),
+])
+async def test_business_only_requires_valid_event_configuration(workday_context, overrides, reason):
+    client, _session, admin, _buyer, meal = workday_context
+    values = {"booking_policy": "special", "business_only": True, **overrides}
+    response = await client.post("/v1/admin/meal-events", json=event_body(meal, "2026-11-07", **values),
+                                 headers=auth_headers(admin))
+    assert response.status_code == 422
+    assert reason in response.text
+
+
+async def test_business_only_update_preserves_omission_and_can_disable_before_first_order(workday_context):
+    client, _session, admin, buyer, meal = workday_context
+    service = "2026-11-07"
+    event, _body = await create_event(workday_context, service, booking_policy="special", business_only=True)
+    path = f"/v1/admin/meal-events/{event['id']}"
+    headers = auth_headers(admin)
+    cash = await client.patch(f"{path}/payment-options", json={"allow_cash_payment": True}, headers=headers)
+    assert cash.status_code == 422
+    update = await client.put(path, json=event_body(meal, service, title="只調整場次名稱"), headers=headers)
+    assert update.status_code == 200, update.text
+    assert update.json()["business_only"] is True
+    disabled = await client.put(path, json=event_body(meal, service, business_only=False), headers=headers)
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["business_only"] is False
+    body = {"contact_email": buyer.email, "items": [{"offering_id": disabled.json()["offerings"][0]["id"], "quantity": 1}]}
+    quote = await client.post(f"/v1/meal-events/{event['id']}/quote", json=body)
+    assert quote.status_code == 200, quote.text
+
+
+async def test_business_only_rechecks_cutoff_after_allocating_pickup_code(workday_context, monkeypatch):
+    client, session, _admin, buyer, _meal = workday_context
+    event, body = await create_event(workday_context, "2026-11-07", booking_policy="special", business_only=True)
+    cutoff = datetime(2026, 11, 6, 20, tzinfo=TAIPEI)
+    original = meals._unique_pickup_code
+
+    with time_machine.travel(cutoff - timedelta(seconds=1), tick=False) as clock:
+        async def cross_cutoff(session):
+            code = await original(session)
+            clock.move_to(cutoff)
+            return code
+
+        monkeypatch.setattr(meals, "_unique_pickup_code", cross_cutoff)
+        response = await client.post(f"/v1/meal-events/{event['id']}/orders", json=business_body(body),
+                                     headers=auth_headers(buyer))
+        assert response.status_code == 409 and "時段已截止" in response.json()["detail"]
+        assert await session.scalar(select(func.count(Order.id))) == 0
+
+
+async def test_ordering_pause_only_stops_new_orders_in_selected_event(workday_context, fake_payment):
+    client, session, admin, buyer, _meal = workday_context
+    event, body = await create_event(workday_context)
+    other_event, other_body = await create_event(workday_context, "2026-11-10", booking_policy="special")
+    root = f"/v1/meal-events/{event['id']}"
+    admin_path = f"/v1/admin/meal-events/{event['id']}/ordering-pause"
+    admin_headers = auth_headers(admin)
+    buyer_headers = auth_headers(buyer)
+    existing_body = {**body, "client_request_id": str(uuid4())}
+    created = await client.post(f"{root}/orders", json=existing_body, headers=buyer_headers)
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+    assert event["ordering_pause_version"] == 0 and event["ordering_paused"] is False
+
+    payload = {"paused": True, "expected_version": 0, "reason": "僅供管理員查看"}
+    for headers, code in [({}, 401), (buyer_headers, 403)]:
+        denied = await client.patch(admin_path, json=payload, headers=headers)
+        assert denied.status_code == code, denied.text
+    pause = await client.patch(admin_path, json=payload, headers=admin_headers)
+    assert pause.status_code == 200, pause.text
+    assert pause.json()["status"] == "published"
+    assert pause.json()["ordering_pause_version"] == 1 and pause.json()["ordering_paused"] is True
+    stale = await client.patch(admin_path, json={"paused": False, "expected_version": 0}, headers=admin_headers)
+    assert stale.status_code == 409 and "狀態已更新" in stale.json()["detail"]
+    repeated = await client.patch(admin_path, json={**payload, "expected_version": 1}, headers=admin_headers)
+    assert repeated.status_code == 200 and repeated.json()["ordering_pause_version"] == 1
+
+    public = await client.get(root)
+    calendar = await client.get("/v1/meal-events/calendar")
+    listed = next(item for item in calendar.json() if item["id"] == event["id"])
+    assert listed["ordering_paused"] is True and public.json()["ordering_paused"] is True
+    assert "僅供管理員查看" not in public.text and "僅供管理員查看" not in calendar.text
+    assert public.json()["new_orders_blocked_reason"] == "此場次暫停接受新訂單"
+    for action in ("quote", "orders"):
+        blocked = await client.post(f"{root}/{action}", json=body, headers=buyer_headers)
+        assert blocked.status_code == 409 and blocked.json()["detail"] == "此場次暫停接受新訂單"
+    replay = await client.post(f"{root}/orders", json=existing_body, headers=buyer_headers)
+    assert replay.status_code == 201 and replay.json()["id"] == order_id
+    unrelated = await client.post(f"/v1/meal-events/{other_event['id']}/orders", json=other_body, headers=buyer_headers)
+    assert unrelated.status_code == 201, unrelated.text
+
+    attempt = await create_payment_attempt(session, order_id, buyer, payment_settings())
+    assert (await client.get(f"/payments/{attempt.id}/checkout")).status_code == 200
+    paid = await SQLAlchemyPaymentCallbackRepository(session).apply_ecpay_payment_callback(
+        "paused-meal-order-payment", successful_callback(attempt, FRIDAY, "PAUSED-MEAL-TRADE"),
+    )
+    assert paid == "paid"
+
+    resume = await client.patch(admin_path, json={"paused": False, "expected_version": 1}, headers=admin_headers)
+    assert resume.status_code == 200, resume.text
+    assert resume.json()["ordering_pause_version"] == 2 and resume.json()["ordering_paused"] is False
+    assert (await client.post(f"{root}/quote", json=body)).status_code == 200
+    audits = list(await session.scalars(
+        select(AdminAudit).where(AdminAudit.action == "meal_event.ordering_pause").order_by(AdminAudit.id),
+    ))
+    assert len(audits) == 2
+    pause_audit = next(item for item in audits if item.data["after"]["paused"])
+    assert pause_audit.reason == payload["reason"]
+    assert pause_audit.data == {"before": {"paused": False, "version": 0}, "after": {"paused": True, "version": 1}}
+
+
+async def test_ordering_pause_allows_before_open_and_cannot_resume_after_last_preparation_deadline(workday_context):
+    client, _session, admin, _buyer, _meal = workday_context
+    event, body = await create_event(
+        workday_context, booking_policy="special", ordering_starts_at="2026-11-06T17:00:00+08:00",
+        same_day_preparation_minutes=120, ordering_ends_at="2026-11-09T12:00:00+08:00",
+    )
+    path = f"/v1/admin/meal-events/{event['id']}/ordering-pause"
+    pause = await client.patch(path, json={"paused": True, "expected_version": 0}, headers=auth_headers(admin))
+    assert pause.status_code == 200, pause.text
+    with time_machine.travel(datetime(2026, 11, 9, 11, tzinfo=TAIPEI), tick=False):
+        resume = await client.patch(path, json={"paused": False, "expected_version": 1}, headers=auth_headers(admin))
+        assert resume.status_code == 409 and "無可預訂" in resume.json()["detail"]
+        public = await client.get(f"/v1/meal-events/{event['id']}")
+        assert public.json()["ordering_paused"] is True
+        assert public.json()["ordering_pause_version"] == 1
+        assert (await client.post(f"/v1/meal-events/{event['id']}/quote", json=body)).status_code == 409
+
+
+async def test_ordering_pause_does_not_override_legacy_calendar(workday_context):
+    client, session, admin, _buyer, meal = workday_context
+    published, _body = await create_event(workday_context, "2026-11-07", booking_policy="special")
+    event = await session.get(MealEvent, published["id"])
+    template = template_for(admin, meal)
+    session.add(template)
+    await session.flush()
+    event.booking_policy = "legacy"
+    event.schedule_template_id = template.id
+    await session.commit()
+    response = await client.patch(
+        f"/v1/admin/meal-events/{event.id}/ordering-pause",
+        json={"paused": True, "expected_version": 0}, headers=auth_headers(admin),
+    )
+    assert response.status_code == 409 and "非供餐工作日" in response.json()["detail"]
