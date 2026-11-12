@@ -44,6 +44,7 @@ async def test_each_checkout_persists_server_invoice_context_before_payment(data
         database_session.add(offering)
         await database_session.flush()
         path = f"/v1/meal-events/{event.id}/orders"
+        payload["contact_phone"] = "0912345678"
         payload["items"] = [{"offering_id": offering.id, "quantity": 1}]
     await database_session.commit()
     context = fanyu_test_context()

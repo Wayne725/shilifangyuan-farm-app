@@ -217,8 +217,10 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
             {(order.invoice_followup_reason || order.invoice_followup_required) && <span className="status-chip">
               {order.invoice_followup_reason ? invoiceFollowupCopy[order.invoice_followup_reason].label : "發票待合作社處理"}
             </span>}
-            <OrderStatusBadge kind="payment" status={order.payment_status} />
-            <OrderStatusBadge kind="fulfillment" status={displayedFulfillmentStatus(order)} />
+            <OrderStatusBadge kind="payment" status={order.payment_status} label={order.payment_status === "expired" && !order.cancelled_at ? "付款逾期" : undefined} />
+            {order.sales_channel === "meal_preorder"
+              ? mealServiceEnded(order) && <span className="status-chip">已結束</span>
+              : <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} label={pickupFulfillmentLabel(order)} />}
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />
             {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {shipmentStatusLabel(order.shipment.status)}</span>}
           </div>
@@ -268,10 +270,16 @@ function InvoiceFollowupAction({ reason, invoice }: { reason: InvoiceFollowupRea
   return <small className="no-action">{action}{reference && <> {reference}</>}</small>;
 }
 
-function displayedFulfillmentStatus(order: Order) {
-  if (order.sales_channel === "meal_preorder" && order.fulfillment_status === "picked_up" &&
-      !order.cancelled_at && order.fulfillment?.status === "no_show") return "no_show";
-  return order.fulfillment_status;
+function mealServiceEnded(order: Order) {
+  if (order.cancelled_at || order.fulfillment_status === "cancelled") return false;
+  return order.fulfillment?.status === "no_show" ||
+    (order.fulfillment?.pickup_ends_at && Date.parse(order.fulfillment.pickup_ends_at) <= Date.now());
+}
+
+function pickupFulfillmentLabel(order: Order) {
+  if (order.fulfillment_method !== "cooperative_pickup" || order.payment_status !== "paid") return;
+  if (order.fulfillment_status === "pending_confirmation" || order.fulfillment_status === "preparing") return "準備中";
+  if (order.fulfillment_status === "ready_for_pickup") return "可領取";
 }
 
 function AdminOrderAction({
@@ -291,14 +299,15 @@ function AdminOrderAction({
 }) {
   const invoiceControl = <AdminStatusQuery orderId={order.id} kind="invoice" disabled={busy} />;
   if (order.sales_channel === "meal_preorder") {
-    const pendingCancellation = order.cancellation_request?.status === "pending";
+    const paymentFailed = ["expired", "failed"].includes(order.payment_status);
+    const pendingCancellation = !paymentFailed && order.cancellation_request?.status === "pending";
     const canManageMeal = order.payment_status !== "refunded" && order.fulfillment_status !== "cancelled" && !order.cancelled_at;
     return <div className="operation-actions">
       {(pendingCancellation || canManageMeal) && <Link
         className="button button-quiet"
         to="/admin/meals"
         search={{ tab: pendingCancellation ? "cancellations" : "orders", q: order.order_number, order_id: pendingCancellation ? order.id : undefined }}
-      >{pendingCancellation ? "審核便當退單" : "便當取餐與退單"}</Link>}
+      >{pendingCancellation ? "審核便當退單" : paymentFailed ? "查看便當訂單" : "便當取餐與退單"}</Link>}
       {invoiceControl}
     </div>;
   }

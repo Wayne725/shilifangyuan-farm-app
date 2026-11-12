@@ -291,32 +291,6 @@ def meal_payment_window_open(order: Order, now: datetime) -> bool:
     )
 
 
-def meal_cancellation_request_allowed(order: Order, now: Optional[datetime] = None) -> bool:
-    current = now or utcnow()
-    event = order.__dict__.get("meal_event")
-    fulfillment = order.__dict__.get("fulfillment")
-    from .business_meals import is_business_meal
-    if is_business_meal(order) and order.payment_status in {PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}:
-        return (
-            order.cancelled_at is None
-            and order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
-            and fulfillment is not None
-            and fulfillment.status in {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
-            and event is not None and event.status != MealEventStatus.CANCELLED
-        )
-    return (
-        order.sales_channel == SalesChannel.MEAL_PREORDER
-        and order.payment_status in {PaymentStatus.PENDING, PaymentStatus.PAID}
-        and order.cancelled_at is None
-        and order.fulfillment_status not in {FulfillmentStatus.PICKED_UP, FulfillmentStatus.CANCELLED}
-        and fulfillment is not None
-        and fulfillment.status in {FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
-        and event is not None
-        and event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}
-        and current < aware(event.pickup_ends_at)
-    )
-
-
 def admin_meal_cancellation_allowed(order: Order, now: Optional[datetime] = None) -> bool:
     current = now or utcnow()
     event = order.__dict__.get("meal_event")
@@ -324,7 +298,7 @@ def admin_meal_cancellation_allowed(order: Order, now: Optional[datetime] = None
     if (order.sales_channel != SalesChannel.MEAL_PREORDER or order.cancelled_at is not None
         or order.fulfillment_status == FulfillmentStatus.CANCELLED
         or event is None or event.status == MealEventStatus.CANCELLED or fulfillment is None
-        or order.payment_status not in {PaymentStatus.PENDING, PaymentStatus.PAID, PaymentStatus.EXPIRED, PaymentStatus.FAILED}):
+        or order.payment_status not in {PaymentStatus.PENDING, PaymentStatus.PAID}):
         return False
     if order.payment_status != PaymentStatus.PAID and order.paid_at is not None:
         return False

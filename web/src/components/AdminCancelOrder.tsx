@@ -18,7 +18,7 @@ export function AdminCancelOrder({ order }: { order: CancelOrder }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const reasonId = useId();
-  const canCancel = order.available_actions.includes("cancel");
+  const canCancel = !["expired", "failed"].includes(order.payment_status) && order.available_actions.includes("cancel");
   const cancel = useMutation({
     mutationFn: () => {
       if (!canCancel || user?.user_role !== "admin") throw new Error("請確認退單權限與訂單狀態");

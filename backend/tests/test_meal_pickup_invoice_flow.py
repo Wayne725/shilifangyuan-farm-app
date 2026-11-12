@@ -106,7 +106,7 @@ async def test_production_rejects_new_demo_meal_transactions(pickup_context, eve
     async with api_test_context(session, [meals_router], settings=settings) as client:
         response = await client.post(
             f"/v1/meal-events/{event_id}/{action}",
-            json={"items": [{"offering_id": "demo-offering", "quantity": 1}], "contact_email": "buyer@example.com", "invoice_carrier_type": "cloud"},
+            json={"items": [{"offering_id": "demo-offering", "quantity": 1}], "contact_phone": "0912345678", "contact_email": "buyer@example.com", "invoice_carrier_type": "cloud"},
             headers=auth_headers(buyer),
         )
     assert response.status_code == 409

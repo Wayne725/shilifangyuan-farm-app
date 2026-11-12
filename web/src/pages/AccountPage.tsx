@@ -15,9 +15,10 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { DataState, LoadingLines } from "../components/Shared";
 import { MemberPointDetails, type CooperationTab } from "../components/MemberPointDetails";
 import { LineAccountLink } from "../components/LineLogin";
+import { AccountProfileEditor } from "../components/AccountProfileEditor";
 import { useAuth } from "../context/AuthContext";
 import { openMembershipHandoff } from "../lib/checkout-navigation";
-import { ApiError, apiFetch, formatDate, formatMoney } from "../lib/api";
+import { ApiError, apiFetch, formatDate, formatMoney, updateSessionUser } from "../lib/api";
 import { createMembershipPayment, refreshPaymentAttempt } from "../lib/commerce";
 import type {
   MemberBadge,
@@ -184,6 +185,7 @@ export function AccountPage() {
           <button type="button" onClick={logout}><SignOut size={16} />登出</button>
         </div>
       </header>
+      <AccountProfileEditor key={user.id} userId={user.id} onSave={profile => updateSessionUser({ ...user, display_name: profile.display_name })} />
 
       <nav className="account-shortcuts" aria-label="會員快捷功能">
         <Link to="/orders" search={{ order_id: undefined, result: undefined, message: undefined }}><Receipt size={19} />我的訂單</Link>

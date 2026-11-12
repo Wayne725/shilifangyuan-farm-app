@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AdminMembershipPanel, AdminRosterPanel, useAdminMemberships } from "../components/AdminMemberPanels";
 import { AdminNav } from "../components/AdminNav";
 import { AdminRecordsPanel } from "../components/AdminRecordsPanel";
+import { AccountProfileEditor } from "../components/AccountProfileEditor";
 import { OptionalMark } from "../components/OptionalMark";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
@@ -28,7 +29,7 @@ const memberTabs = [
   { tab: "roster", label: "社員名冊" },
   { tab: "records", label: "社員帳冊" },
 ] as const;
-const memberQueryKeys = [["admin-registered-users"], ["admin-members"], ["admin-member-roster"], ["member-register"], ["membership-payments"], ["points-ledger"]] as const;
+const memberQueryKeys = [["admin-registered-users"], ["admin-members"], ["admin-member-roster"], ["admin-roster-contact"], ["account-profile"], ["member-register"], ["membership-payments"], ["points-ledger"]] as const;
 const initialAccounts = { draftSearch: "", search: "", kind: "all", offset: 0 };
 const membershipIdFormat = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
@@ -115,12 +116,12 @@ function RegisteredUsersPanel({ adminId, request, accounts, setAccounts }: {
     {users.isPending && <LoadingLines count={3} />}{users.isError && <DataState kind="error" title="會員清單無法讀取" detail={users.error.message} onAction={() => users.refetch()} />}
     {users.data && <p role="status">共 {users.data.total} 位註冊者</p>}
     {users.data?.items.length === 0 && <DataState title="沒有符合條件的會員" detail="請調整姓名、編號或身分條件。" />}
-    <div className="admin-user-list">{users.data?.items.map((item) => <RegisteredUserRow key={item.id} item={item} request={request} />)}</div>
+    <div className="admin-user-list">{users.data?.items.map((item) => <RegisteredUserRow key={item.id} item={item} adminId={adminId} request={request} />)}</div>
     {users.data && <nav className="admin-pagination" aria-label="會員分頁"><button className="button button-quiet" type="button" disabled={offset === 0 || users.isFetching} onClick={() => setAccounts({ ...accounts, offset: Math.max(0, offset - 20) })}>上一頁</button><button className="button button-quiet" type="button" disabled={offset + 20 >= users.data.total || users.isFetching} onClick={() => setAccounts({ ...accounts, offset: offset + 20 })}>下一頁</button></nav>}
   </section>;
 }
 
-function RegisteredUserRow({ item, request }: { item: RegisteredUser; request: typeof apiFetch }) {
+function RegisteredUserRow({ item, adminId, request }: { item: RegisteredUser; adminId: string; request: typeof apiFetch }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -160,6 +161,7 @@ function RegisteredUserRow({ item, request }: { item: RegisteredUser; request: t
     </nav>}
     <p>註冊時間：{formatDateTime(item.created_at)}　帳號：{item.is_active ? "啟用" : "停用"}</p>
     <p>管理權限：{item.user_role === "admin" ? "管理員，可使用所有管理模組" : "一般使用者"}</p>
+    <AccountProfileEditor userId={adminId} adminTarget={item.id} request={request} />
     {item.membership_status === "active" && item.membership_id && <button className="button button-quiet" type="button" onClick={() => { setRemoveOpen(!removeOpen); remove.reset(); }}>移除社員資格</button>}
     {removeOpen && <section className="admin-membership-removal" aria-label={`移除 ${item.display_name} 的社員資格`}>
       <h3>確認將 {item.display_name} 改為非社員？</h3>

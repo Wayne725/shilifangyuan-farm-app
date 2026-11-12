@@ -7,6 +7,8 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from .config import Settings
+from .contact_phone import decrypt_contact_phone
 from .domain import aware
 from .meal_schedules import TAIPEI
 from .models import (
@@ -42,11 +44,13 @@ def _load_options():
             selectinload(Order.items).selectinload(OrderItem.selected_options), selectinload(Order.cancellation_requests)]
 
 
-def kitchen_order_read(order):
+def kitchen_order_read(order: Order, settings: Settings):
     pending = next((row for row in order.cancellation_requests if row.status == "pending"), None)
     pickup_at = order.fulfillment.pickup_at or order.meal_event.pickup_starts_at
     return {
         "id": order.id, "order_number": order.order_number, "customer_name": order.user.display_name,
+        "contact_phone": decrypt_contact_phone(order.fulfillment.recipient_phone_encrypted,
+            f"order-fulfillment:{order.fulfillment.id}:recipient_phone", settings),
         "kitchen_note": order.kitchen_note,
         "meal_booking_type": order.meal_booking_type,
         "payment_status": order.payment_status.value,
@@ -68,7 +72,7 @@ def kitchen_order_read(order):
     }
 
 
-async def meal_kitchen_list(session: AsyncSession, filters: MealKitchenFilters):
+async def meal_kitchen_list(session: AsyncSession, filters: MealKitchenFilters, settings: Settings):
     start = datetime.combine(filters.service_date, time.min, TAIPEI).astimezone(timezone.utc)
     end = start + timedelta(days=1)
     now = datetime.now(timezone.utc)
@@ -105,7 +109,7 @@ async def meal_kitchen_list(session: AsyncSession, filters: MealKitchenFilters):
         "limit": filters.limit, "offset": filters.offset, "meal_quantity": sum(int(row[2]) for row in products),
         "products": [{"name": name, "unit": unit, "quantity": int(quantity), "meal_booking_type": booking_type,
                       "payment_status": payment.value} for name, unit, quantity, booking_type, payment in products],
-        "items": [kitchen_order_read(order) for order in orders],
+        "items": [kitchen_order_read(order, settings) for order in orders],
     }
 
 
@@ -142,17 +146,17 @@ async def _locked_kitchen_order(session: AsyncSession, order_id: str):
     return order, fulfillment
 
 
-async def change_meal_kitchen_status(session: AsyncSession, order_id: str, target: str, admin_id: str):
+async def change_meal_kitchen_status(session: AsyncSession, order_id: str, target: str, admin_id: str, settings: Settings):
     order, fulfillment = await _locked_kitchen_order(session, order_id)
     _apply_kitchen_state(session, order, fulfillment, target, admin_id, datetime.now(timezone.utc))
     await session.commit()
-    return kitchen_order_read(order)
+    return kitchen_order_read(order, settings)
 
 
-async def meal_kitchen_ticket(session: AsyncSession, order_id: str):
+async def meal_kitchen_ticket(session: AsyncSession, order_id: str, settings: Settings):
     order = await session.scalar(select(Order).where(Order.id == order_id, Order.sales_channel == SalesChannel.MEAL_PREORDER)
         .options(*_load_options()).execution_options(populate_existing=True))
     if order is None:
         raise HTTPException(404, "找不到便當訂單")
     _ensure_kitchen_allowed(order, order.fulfillment, datetime.now(timezone.utc))
-    return kitchen_order_read(order)
+    return kitchen_order_read(order, settings)

@@ -12,7 +12,7 @@ from ..csv_export import csv_response
 from ..database import get_session
 from ..domain import aware
 from ..meal_booking import TAIPEI
-from ..models import AdminAudit, MealCancellationRequest, Order, Refund, RefundStatus, SalesChannel, User
+from ..models import AdminAudit, MealCancellationRequest, Order, PaymentStatus, Refund, RefundStatus, SalesChannel, User
 
 meal_cancellation_reports_router = APIRouter(prefix="/v1/admin", tags=["meal-cancellations"])
 
@@ -34,7 +34,8 @@ def cancellation_filters(query, starts_on, ends_on, search, *, order_id=None):
 async def cancellation_report(session, starts_on, ends_on, search, *, order_id=None):
     query = select(MealCancellationRequest).join(Order).where(Order.sales_channel == SalesChannel.MEAL_PREORDER)
     requests = list(await session.scalars(cancellation_filters(query, starts_on, ends_on, search, order_id=order_id).options(
-        selectinload(MealCancellationRequest.order).selectinload(Order.refunds), selectinload(MealCancellationRequest.requested_by)
+        selectinload(MealCancellationRequest.order).selectinload(Order.refunds),
+        selectinload(MealCancellationRequest.order).selectinload(Order.user),
     ).order_by(MealCancellationRequest.requested_at.desc(), MealCancellationRequest.id)))
     summary = {"requests": len(requests), "orders": len({row.order_id for row in requests}), "pending": 0, "approved": 0, "rejected": 0,
                "pending_amount": 0, "approved_amount": 0, "refund_pending": 0, "refunded": 0, "refund_failed": 0}
@@ -42,16 +43,19 @@ async def cancellation_report(session, starts_on, ends_on, search, *, order_id=N
     for request in requests:
         order = request.order
         cancellation_refunds = [refund for refund in order.refunds if refund.purpose == "order_cancellation"]
-        summary[request.status] += 1
-        if request.status == "pending":
+        active_pending = request.status == "pending" and order.payment_status not in {PaymentStatus.EXPIRED, PaymentStatus.FAILED}
+        if request.status != "pending" or active_pending:
+            summary[request.status] += 1
+        if active_pending:
             summary["pending_amount"] += order.amount_total
         if request.status == "approved" and order.id not in approved_orders:
             approved_orders.add(order.id)
             summary["approved_amount"] += order.amount_total
             for refund in cancellation_refunds:
                 summary[{RefundStatus.PENDING: "refund_pending", RefundStatus.COMPLETED: "refunded", RefundStatus.FAILED: "refund_failed"}[refund.status]] += refund.amount
-        rows.append({"id": request.id, "order_number": order.order_number, "name": request.requested_by.display_name,
+        rows.append({"id": request.id, "order_number": order.order_number, "name": order.user.display_name,
             "email": order.contact_email, "amount": order.amount_total, "status": request.status, "reason": request.reason,
+            "active_pending": active_pending,
             "requested_at": request.requested_at, "review_reason": request.review_reason, "reviewed_at": request.reviewed_at,
             "payment_status": order.payment_status.value,
             "refund_pending": sum(row.amount for row in cancellation_refunds if row.status == RefundStatus.PENDING),
@@ -91,7 +95,8 @@ async def export_order_cancellations(
 
 
 async def _export_cancellations(session, admin, data, review_status):
-    rows = [row for row in data["items"] if review_status == "all" or row["status"] == review_status]
+    rows = [row for row in data["items"] if review_status == "all"
+            or (row["status"] == review_status and (review_status != "pending" or row["active_pending"]))]
     session.add(AdminAudit(actor_id=admin.id, action="meal.cancellations_exported", aggregate_type="meal_cancellations", aggregate_id=str(uuid4()), data={"count": len(rows)}))
     await session.commit()
     local = lambda value: aware(value).astimezone(TAIPEI).strftime("%Y-%m-%d %H:%M") if value else ""

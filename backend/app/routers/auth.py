@@ -10,6 +10,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..account_profiles import AccountProfileRead, AccountProfileUpdate, read_account_profile, update_account_profile
 from ..auth import (
     decode_token,
     get_active_user_for_access,
@@ -771,6 +772,26 @@ async def logout(
 @auth_router.get("/me", response_model=UserRead)
 async def me(user: User = Depends(get_current_user)) -> UserRead:
     return user_read(user)
+
+
+@auth_router.get("/profile", response_model=AccountProfileRead)
+async def get_profile(
+    response: Response, user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
+) -> AccountProfileRead:
+    response.headers["Cache-Control"] = "private, no-store"
+    return await read_account_profile(session, user, settings)
+
+
+@auth_router.patch("/profile", response_model=AccountProfileRead)
+async def edit_profile(
+    body: AccountProfileUpdate, request: Request, response: Response, user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
+) -> AccountProfileRead:
+    if request.headers.get("X-Expected-User-ID", user.id) != user.id:
+        raise HTTPException(409, "登入帳號已變更，請重新整理後再試")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await update_account_profile(session, user.id, user, body, settings)
 
 
 @auth_router.patch("/preferences", response_model=UserRead)

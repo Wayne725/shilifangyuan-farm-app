@@ -9,7 +9,7 @@ from app.integrations import payment_service
 from app.integrations.payment_service import PaymentApplicationError, SQLAlchemyPaymentCallbackRepository, create_payment_attempt
 from app.business_meals import business_payment_fields
 from app.jobs import _reconcile_meal_events
-from app.models import AdminAudit, InventoryReservation, MealEventStatus, Order, PaymentAttempt, PaymentStatus, Refund, ReservationStatus, TaxType
+from app.models import AdminAudit, InventoryReservation, MealEventStatus, MealOption, MealOptionGroup, Order, PaymentAttempt, PaymentStatus, Refund, ReservationStatus, TaxType
 from app.routers import meals
 from tests.support import auth_headers
 from tests.test_meal_booking_policy import NOW, booking_context
@@ -55,6 +55,32 @@ async def test_business_minimum_two_and_forced_invoice_policy(booking_context):
     assert meals._aware(reservations[0].expires_at) == meals._aware(event.pickup_ends_at)
     await session.refresh(event.offerings[0])
     assert event.offerings[0].reserved_quantity == 2
+
+
+async def test_business_portions_keep_separate_choices_and_share_capacity(booking_context):
+    client, session, buyer, _admin, event, body = booking_context
+    offering = event.offerings[0]
+    offering.capacity = 2
+    group = MealOptionGroup(meal_id=offering.meal_id, name="主食", min_selections=1, options=[
+        MealOption(name="米飯"), MealOption(name="麵", price_delta=10),
+    ])
+    session.add(group)
+    await session.commit()
+    rice, noodles = group.options
+    portions = [{**body["items"][0], "option_ids": [option.id]} for option in (rice, noodles)]
+    url = f"/v1/meal-events/{event.id}/orders"
+    headers = auth_headers(buyer)
+    extra = await client.post(url, json=business_body(body, items=[{**portions[0], "quantity": 2}, portions[1]]), headers=headers)
+    assert extra.status_code == 409, extra.text
+    duplicate = await client.post(url, json=business_body(body, items=[portions[0], portions[0]]), headers=headers)
+    assert duplicate.status_code == 422, duplicate.text
+    created = await client.post(url, json=business_body(body, items=portions), headers=headers)
+    assert created.status_code == 201, created.text
+    order = created.json()
+    assert order["amount_total"] == 210
+    assert {(item["quantity"], item["selections"][0]["option_name"]) for item in order["items"]} == {(1, "米飯"), (1, "麵")}
+    await session.refresh(offering)
+    assert offering.reserved_quantity == 2
 
 
 @pytest.mark.parametrize('clock', [NOW, CLOSE])

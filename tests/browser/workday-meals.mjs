@@ -30,6 +30,8 @@ async function fixture(t, width, { events = [event('monday', '2026-11-09')], now
       ? { json: { access_token: 'isolated-admin-token', user: { id: 'isolated-admin', user_role: 'admin', email: 'admin@example.test', display_name: '隔離管理員' } } }
       : { status: 401, json: { detail: '隔離未登入' } });
     if (method === 'GET') {
+      if (url.pathname === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+      if (url.pathname === '/v1/meal-announcements') return route.fulfill({ json: [] });
       if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', support_phone: '' } });
       if (url.pathname === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture(events) });
       const detail = events.find(({ id }) => url.pathname === `/v1/meal-events/${id}`);
@@ -200,12 +202,13 @@ test('每日排程預設週一至五，既有週六與當天截單設定顯示�
   assert.equal(await form.getByLabel('週六', { exact: true }).count(), 0);
   const card = page.locator('article').filter({ has: page.getByRole('heading', { name: '既有午餐排程', exact: true }) });
   assert.match(await card.innerText(), /取餐前 1 天 20:00/);
-  assert.match(await card.innerText(), /週六（需特殊加開）/);
+  assert.doesNotMatch(await card.innerText(), /週六/);
   await card.getByRole('button', { name: '編輯排程' }).click();
   assert.equal(await form.getByLabel('取餐前幾天截單', { exact: true }).inputValue(), '1');
   assert.equal(await form.getByLabel('每日截單時間', { exact: true }).inputValue(), '20:00');
-  await form.getByLabel('週六（需特殊加開）', { exact: true }).uncheck();
-  assert.equal(await form.getByLabel('週六（需特殊加開）', { exact: true }).isChecked(), false);
+  assert.equal(await form.getByLabel('週六・只接受會餐', { exact: true }).isChecked(), false);
+  await form.getByLabel('週六・只接受會餐', { exact: true }).check();
+  assert.equal(await form.getByLabel('週六・只接受會餐', { exact: true }).isChecked(), true);
   await noOverflow(page); assert.deepEqual(unknown, []);
 });
 
@@ -359,7 +362,7 @@ test('場次可暫停及恢復新預訂，衝突後讀取新版本並保留原�
   await card.getByRole('status').filter({ hasText: '新預訂已暫停' }).waitFor();
   assert.deepEqual(pauseRequests, [{ paused: true, expected_version: 3 }, { paused: true, expected_version: 5 }]);
   assert.equal(await existingOrder.isVisible(), true);
-  assert.equal(await card.getByRole('button', { name: '確認核銷', exact: true }).isVisible(), true);
+  assert.equal(await card.getByRole('button', { name: '確認核銷', exact: true }).count(), 0);
 
   await page.goto(`${base}/shop`);
   const navigation = page.getByRole('region', { name: '便當日期與取餐時間' });

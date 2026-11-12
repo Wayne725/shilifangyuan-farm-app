@@ -42,7 +42,8 @@ InvoiceFollowupReason = Literal["business_date", "issuance", "void"]
 
 
 def pending_order_cancellation():
-    return Order.cancellation_requests.any(MealCancellationRequest.status == "pending")
+    return and_(Order.payment_status.not_in({PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+        Order.cancellation_requests.any(MealCancellationRequest.status == "pending"))
 
 
 def unpaid_business_order():

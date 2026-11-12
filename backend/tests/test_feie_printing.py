@@ -1,3 +1,4 @@
+from app.printing import open_receipt_content
 import asyncio
 from datetime import datetime, timedelta, timezone
 from hashlib import sha1
@@ -307,7 +308,8 @@ async def test_dry_run_never_uses_network_or_claims_printed(print_context, monke
     assert await process_print_job(c.settings, factory=c.factory)
     job = await read_job(c)
     assert job.status == "simulated" and job.vendor_order_id is None and job.printed_at is None
-    assert "模擬列印" in job.content and "飯少" in job.content and "已付款" in job.content
+    content = open_receipt_content(job.content, job.order_id, c.settings)
+    assert "模擬列印" in content and "飯少" in content and "已付款" in content
     assert not await process_print_job(c.settings, factory=c.factory)
 
 

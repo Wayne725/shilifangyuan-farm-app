@@ -25,8 +25,10 @@ const orderItems = [{ offering_id: offeringId, quantity: 1, option_ids: [] }];
 
 const mealEvent = {
   id: eventId, title: eventTitle, location: '隔離驗收點（不供餐）', status: 'published',
-  ordering_starts_at: '2026-09-12T01:00:00Z', ordering_ends_at: '2026-09-12T02:25:00Z',
-  pickup_starts_at: '2026-09-12T03:10:00Z', pickup_ends_at: '2026-09-12T03:55:00Z',
+  service_date: '2026-09-14', meal_period: 'lunch',
+  ordering_starts_at: '2026-09-13T01:00:00Z', ordering_ends_at: '2026-09-13T12:00:00Z',
+  pickup_starts_at: '2026-09-14T03:00:00Z', pickup_ends_at: '2026-09-14T05:30:00Z',
+  pickup_slot_ends_at: '2026-09-14T05:00:00Z',
   offerings: [{
     id: offeringId, meal_id: mealId, meal_name: mealName,
     description: '僅供線上付款驗收，不供餐；所有付款請求皆由本機測試攔截。',
@@ -81,6 +83,8 @@ async function fixture(t) {
           user: { id: 'isolated-launch-buyer', email: 'buyer@example.test', display_name: '隔離買家', user_role: 'customer' } } });
       }
       if (method === 'GET') {
+        if (url.pathname === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+        if (url.pathname === '/v1/meal-announcements') return route.fulfill({ json: [] });
         if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', support_phone: '' } });
         if (url.pathname === `/v1/meal-events/${eventId}`) return route.fulfill({ json: mealEvent });
         if (url.pathname === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture([mealEvent]) });
@@ -112,7 +116,7 @@ async function fixture(t) {
     return route.continue();
   });
   const page = await context.newPage();
-  await page.clock.install({ time: new Date('2026-09-12T01:05:00Z') });
+  await page.clock.install({ time: new Date('2026-09-13T01:05:00Z') });
   page.setDefaultTimeout(10000);
   return { page, state };
 }
@@ -128,22 +132,14 @@ async function verifyMobileOnlineOnly(page, state, content) {
 test('390px 正式 UUID 場次顯示完整臺灣時段，一次預訂只建立一單並交給本機線上付款頁', { timeout: 30000 }, async (t) => {
   const { page, state } = await fixture(t);
   await page.goto(`${base}/meals/${eventId}`);
-  await page.getByRole('heading', { name: eventTitle, exact: true }).waitFor();
+  await page.getByRole('heading', { name: '選餐點與份數', exact: true }).waitFor();
   const content = page.locator('.meal-offer-page');
-  const details = content.locator('.offer-copy dl');
-  for (const [label, time] of [['開放預訂', '09:00'], ['預訂截止', '10:25']]) {
-    const field = details.locator('div').filter({ has: page.getByText(label, { exact: true }) });
-    assert.match(await field.locator('dd').innerText(), new RegExp(`9/12.*${time}`));
-  }
-  const pickupDetails = details.locator('div').filter({ has: page.getByText('取餐時段', { exact: true }) });
-  assert.match(await pickupDetails.locator('dd').innerText(), /9\/12.*11:10.*至.*9\/12.*11:55/);
-  const pickupWindow = await content.locator('.pickup-window').innerText();
-  assert.match(pickupWindow, /9\/12.*11:10.*至.*9\/12.*11:55/);
+  assert.match(await content.locator('.meal-booking-deadline').innerText(), /9\/13.*20:00/);
   await page.getByRole('heading', { name: mealName, exact: true }).waitFor();
   await verifyMobileOnlineOnly(page, state, content);
   assert.deepEqual(state.mutations, []);
   await page.getByRole('button', { name: `增加${mealName}`, exact: true }).click();
-  await page.getByLabel('預計取餐時間（台灣時間）', { exact: true }).selectOption('2026-09-12T11:10');
+  await page.getByRole('combobox', { name: /^預計取餐時間/ }).selectOption('2026-09-14T11:00');
   await content.locator('.offer-total dd').getByText('$1', { exact: true }).waitFor();
   await verifyMobileOnlineOnly(page, state, content);
   await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
@@ -155,25 +151,24 @@ test('390px 正式 UUID 場次顯示完整臺灣時段，一次預訂只建立�
   assert.equal(state.mutations[0].body.invoice_buyer_type, 'personal');
   assert.equal(state.mutations[0].body.invoice_carrier_type, 'cloud');
   assert.equal(state.mutations[0].body.pickup_at, new Date(mealEvent.pickup_starts_at).toISOString());
-  assert.equal('payment_method' in state.mutations[0].body, false);
+  assert.equal(state.mutations[0].body.payment_method, 'online');
+  assert.equal(state.mutations[0].body.contact_phone, '0912345678');
   assert.ok(state.quotes.length >= 1);
   assert.deepEqual(state.quotes.at(-1).items, orderItems);
   assert.equal(state.paymentVisits, 1);
   assert.deepEqual(state.unknownApi, []);
 });
 
-test('390px 商店便當卡片保留預訂截止與取餐起訖完整時段', { timeout: 20000 }, async (t) => {
+test('390px 便當日期摘要保留首末取餐時段並連到原 UUID 場次', { timeout: 20000 }, async (t) => {
   const { page, state } = await fixture(t);
   await page.goto(`${base}/shop`);
   await page.getByRole('tab', { name: '便當預購', exact: true }).click();
-  const card = page.locator('.meal-card').filter({ has: page.getByRole('heading', { name: eventTitle, exact: true }) });
-  await card.waitFor();
-  const text = await card.innerText();
-  assert.match(text, /預訂截止.*9\/12.*10:25/);
-  assert.match(text, /取餐.*9\/12.*11:10.*至.*9\/12.*11:55/);
-  assert.match(text, /不供餐/);
-  assert.equal(await card.getAttribute('href'), `/meals/${eventId}`);
-  await verifyMobileOnlineOnly(page, state, card);
+  const calendar = page.getByRole('region', { name: '便當日期與取餐時間' });
+  const first = calendar.getByRole('link', { name: `${mealEvent.location} 11:00 取餐`, exact: true });
+  await first.waitFor();
+  assert.equal(await calendar.getByRole('link', { name: `${mealEvent.location} 13:00 取餐`, exact: true }).count(), 1);
+  assert.equal(new URL(await first.getAttribute('href'), base).pathname, `/meals/${eventId}`);
+  await verifyMobileOnlineOnly(page, state, calendar);
   assert.deepEqual(state.mutations, []);
   assert.equal(state.paymentVisits, 0);
 });

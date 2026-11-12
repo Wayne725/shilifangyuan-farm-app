@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..admin_explanations import AdminExplanation
+from ..audited_changes import audit_changes
 from ..catalog_visibility import CatalogVisibilityUpdate, update_catalog_visibility
 from .. import activity_payments as activity_service
 from ..auth import (
@@ -302,6 +303,69 @@ async def update_activity_visibility(
     if activity is None:
         raise HTTPException(404, '找不到活動')
     update_catalog_visibility(session, activity, body, admin, 'activity')
+    await session.commit()
+    return _activity_read(activity, admin)
+
+
+class ActivityDetailsUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str = Field(max_length=10000)
+    location: str = Field(min_length=1, max_length=240)
+    starts_at: datetime
+    ends_at: datetime
+    registration_deadline: datetime
+    capacity: int = Field(ge=1, le=100000)
+    expected_updated_at: datetime
+
+
+@community_router.patch("/v1/admin/activities/{activity_id}", response_model=ActivityRead)
+async def edit_activity(
+    activity_id: str, body: ActivityDetailsUpdate, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> ActivityRead:
+    activity = await _load_activity(session, activity_id, for_update=True)
+    if activity is None:
+        raise HTTPException(404, "找不到活動")
+    if activity.status in {ActivityStatus.COMPLETED, ActivityStatus.CANCELLED}:
+        raise HTTPException(409, "已結束或取消的活動不能修改")
+    if activity_service.aware(activity.updated_at) != body.expected_updated_at:
+        raise HTTPException(409, "活動資料已更新，請重新讀取後再修改")
+    updates = body.model_dump(exclude={"expected_updated_at"})
+    updates["title"] = body.title.strip()
+    updates["location"] = body.location.strip()
+    if not updates["title"] or not updates["location"]:
+        raise HTTPException(422, "請填寫標題與地點")
+    if any(value.tzinfo is None or value.utcoffset() is None
+           for value in (body.starts_at, body.ends_at, body.registration_deadline)):
+        raise HTTPException(422, "活動日期時間必須包含時區")
+    if body.ends_at <= body.starts_at or body.registration_deadline > body.starts_at:
+        raise HTTPException(422, "請確認活動開始、結束與報名截止時間")
+    occupied = sum(row.status in activity_service.OCCUPIED for row in activity.registrations)
+    if body.capacity < occupied:
+        raise HTTPException(409, f"已有 {occupied} 人報名或保留名額，名額不能低於此人數")
+    before = {key: getattr(activity, key) for key in updates}
+    for key in ("starts_at", "ends_at", "registration_deadline"):
+        before[key] = activity_service.aware(before[key])
+    notify = any(before[key] != updates[key] for key in ("starts_at", "ends_at", "location"))
+    audit_changes(session, admin.id, "activity", activity.id, "activity.details_update", before, updates)
+    for key, value in updates.items():
+        if value != before[key]:
+            setattr(activity, key, value)
+    if notify:
+        version = body.expected_updated_at.isoformat()
+        start = body.starts_at.astimezone(timezone(timedelta(hours=8)))
+        end = body.ends_at.astimezone(timezone(timedelta(hours=8)))
+        for row in activity.registrations:
+            if row.status != ActivityRegistrationStatus.CANCELLED:
+                await activity_service.notify_once(
+                    session, user_id=row.user_id, key=f"activity-details:{activity.id}:{version}",
+                    title="活動時間或地點已更新",
+                    body=f"「{activity.title}」時間為 {start:%Y/%m/%d %H:%M} 至 {end:%Y/%m/%d %H:%M}，地點為 {activity.location}。",
+                    email=activity_service.valid_email(row.contact_email, row.user.notification_email, row.user.email),
+                    activity_id=activity.id,
+                )
+    if body.capacity > before["capacity"]:
+        await activity_service.promote_waitlist(session, activity, datetime.now(timezone.utc))
     await session.commit()
     return _activity_read(activity, admin)
 

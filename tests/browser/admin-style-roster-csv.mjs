@@ -87,6 +87,8 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
         return route.fulfill({ contentType: 'text/csv', body: '\ufeff商品,數量\n白米,2' });
       }
       if (emptyLists.includes(path)) return route.fulfill({ json: [] });
+      if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+      if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
       if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', sales_scope: 'all' } });
       if (path === '/v1/admin/membership/admissions') return route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0 } });
       if (path === '/v1/admin/users') return route.fulfill({ json: { items: [{

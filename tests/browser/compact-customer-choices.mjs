@@ -35,6 +35,8 @@ async function fixture(t, width, locationState = 'ready') {
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.test', display_name: '隔離買家', user_role: 'customer' } } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, sales_scope: 'all', shipping_enabled: true } });
     if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
     if (path === '/v1/pickup-locations') return route.fulfill({ status: locationState === 'error' ? 503 : 200, json: locationState === 'error' ? { detail: '隔離讀取失敗' } : locationState === 'empty' ? [] : locations });

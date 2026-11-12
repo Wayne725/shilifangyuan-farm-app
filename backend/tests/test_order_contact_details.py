@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.models import Order
 from app.routers.operations import operations_router
 from app.routers.orders import orders_router
+from app.schemas import MealOrderCreate
 from tests.support import api_test_context, auth_headers
 from tests.test_cash_payments import cash_context, create_cash
 
@@ -60,14 +62,44 @@ async def test_checkout_phone_is_encrypted_and_only_admin_search_exposes_it(cash
         assert "0912345678" not in own.text and stored not in own.text
 
 
-@pytest.mark.parametrize("phone", [None, "", "   ", "02-23456789"])
-async def test_checkout_keeps_legacy_no_phone_and_landline_support(cash_context, phone):
+async def test_old_phone_inclusive_fingerprint_can_replay_same_order(cash_context):
     c = cash_context
-    contact_settings(c)
-    response = await create_cash(c, contact_phone=phone)
+    request_id = str(uuid4())
+    created = await create_cash(c, client_request_id=request_id, contact_phone="0912345678")
+    assert created.status_code == 201, created.text
+    order = await c.session.get(Order, created.json()["id"])
+    old_body = MealOrderCreate(
+        items=[{"offering_id": c.event.offerings[0].id, "quantity": 1}],
+        contact_email=c.buyer.email, contact_phone="0912345678", payment_method="cash_on_pickup",
+    ).model_dump(mode="json", exclude={
+        "client_request_id", "meal_booking_type", "invoice_handling", "pickup_location_id", "needs_utensils",
+    })
+    serialized = json.dumps({"event_id": c.event.id, "body": old_body}, sort_keys=True, ensure_ascii=False)
+    order.request_fingerprint = hashlib.sha256(serialized.encode()).hexdigest()
+    await c.session.commit()
+    replay = await create_cash(c, client_request_id=request_id, contact_phone="0912 345 678")
+    changed = await create_cash(c, client_request_id=request_id, contact_phone="0987654321")
+    assert replay.status_code == 201 and replay.json()["id"] == order.id
+    assert changed.status_code == 409
+    assert await c.session.scalar(select(func.count(Order.id))) == 1
+
+
+@pytest.mark.parametrize("phone", [None, "", "   "])
+async def test_checkout_rejects_blank_phone_without_saved_number(cash_context, phone):
+    response = await create_cash(cash_context, contact_phone=phone)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "請填寫聯絡電話"
+    assert await cash_context.session.scalar(select(func.count(Order.id))) == 0
+
+
+async def test_checkout_accepts_landline(cash_context):
+    c = cash_context
+    cipher = pii_cipher_from_settings(contact_settings(c))
+    response = await create_cash(c, contact_phone="02-23456789")
     assert response.status_code == 201, response.text
     order = await c.session.get(Order, response.json()["id"])
-    assert bool(order.fulfillment.recipient_phone_encrypted) == bool(phone and phone.strip())
+    assert cipher.decrypt_text(order.fulfillment.recipient_phone_encrypted,
+        associated_data=f"order-fulfillment:{order.fulfillment.id}:recipient_phone") == "02-23456789"
 
 
 @pytest.mark.parametrize("phone", ["123", "091234567", "09123456789", "abc", "tel:0912345678", "09１２３４５６７８"])
@@ -83,6 +115,8 @@ async def test_bad_phone_cipher_does_not_hide_order_or_expose_cipher(cash_contex
     created = await create_cash(c)
     assert created.status_code == 201, created.text
     order = await c.session.get(Order, created.json()["id"])
+    order.fulfillment.recipient_phone_encrypted = None
+    await c.session.commit()
     async with api_test_context(c.session, [operations_router], settings=settings) as client:
         legacy = await client.get("/v1/admin/order-search", headers=auth_headers(c.admin))
         assert legacy.json()["items"][0]["contact_phone_status"] == "missing"

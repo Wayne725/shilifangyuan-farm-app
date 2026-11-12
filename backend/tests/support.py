@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import json
+
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -47,6 +50,7 @@ def fanyu_test_context() -> dict:
 def make_test_settings(**overrides: Any) -> Settings:
     values = {
         "environment": "test",
+        "pii_encryption_keys_json": json.dumps({"v1": base64.b64encode(b"t" * 32).decode()}),
         "app_base_url": "https://api.example.test",
         "web_base_url": "https://app.example.test",
         **overrides,

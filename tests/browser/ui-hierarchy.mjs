@@ -30,6 +30,8 @@ async function fixture(t, width, email = 'buyer@example.test') {
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return route.continue();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', display_name: '測試管理員', email, user_role: 'admin' } } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (['/v1/products', '/v1/group-campaigns', '/v1/orders'].includes(path)) return route.fulfill({ json: [] });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [] });

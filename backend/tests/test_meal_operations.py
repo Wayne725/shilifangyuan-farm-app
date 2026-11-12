@@ -124,7 +124,7 @@ async def test_same_created_time_search_pages_use_stable_order_id(operations_con
     assert [item["order"]["id"] for item in (await search(c, limit=2))["items"]] == expected[:2]
 
 
-@pytest.mark.parametrize("scope", ["own_orders", "own_meals", "event_meals"])
+@pytest.mark.parametrize("scope", ["own_orders", "own_meals"])
 @pytest.mark.asyncio
 async def test_order_lists_keep_newest_records_and_stable_ties(operations_context, scope):
     c = operations_context
@@ -133,18 +133,25 @@ async def test_order_lists_keep_newest_records_and_stable_ties(operations_contex
         order.contact_email = order.contact_email.replace("example.test", "example.com")
     c.orders["first"].created_at = NOW + timedelta(minutes=1)
     await c.session.commit()
-    if scope == "event_meals":
-        path, user = f"/v1/admin/meal-events/{c.event.id}/orders", c.admin
-        candidates = [order for order in c.orders.values() if order.meal_event_id == c.event.id and order.sales_channel == SalesChannel.MEAL_PREORDER]
-    else:
-        path, user = ("/v1/orders" if scope == "own_orders" else "/v1/meal-orders"), c.buyer
-        candidates = [order for order in c.orders.values() if order.user_id == c.buyer.id and (scope == "own_orders" or order.sales_channel == SalesChannel.MEAL_PREORDER)]
-    response = await c.client.get(path, headers=auth_headers(user))
+    path = "/v1/orders" if scope == "own_orders" else "/v1/meal-orders"
+    candidates = [order for order in c.orders.values() if order.user_id == c.buyer.id and (scope == "own_orders" or order.sales_channel == SalesChannel.MEAL_PREORDER)]
+    response = await c.client.get(path, headers=auth_headers(c.buyer))
     assert response.status_code == 200, response.text
     rows = response.json()
     actual = [item["id"] for item in rows]
     expected = [c.order.id] + sorted((order.id for order in candidates if order != c.order), reverse=True)
     assert actual == expected
+
+
+@pytest.mark.asyncio
+async def test_event_roster_orders_by_pickup_time_with_unscheduled_orders_last(operations_context):
+    c = operations_context
+    for order in c.orders.values():
+        order.contact_email = order.contact_email.replace("example.test", "example.com")
+    await c.session.commit()
+    response = await c.client.get(f"/v1/admin/meal-events/{c.event.id}/orders", headers=auth_headers(c.admin))
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()] == [c.orders[key].id for key in ("first", "ready", "literal", "similar", "legacy")]
 
 
 @pytest.mark.asyncio

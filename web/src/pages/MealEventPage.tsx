@@ -10,7 +10,6 @@ import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router"
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DataState, LoadingLines } from "../components/Shared";
-import { PaymentMethodFields } from "../components/PaymentMethodFields";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { MealPhoto } from "../components/MealPhoto";
 import {
@@ -80,12 +79,21 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const { user, openLogin, saveMobileBarcode } = useAuth();
   const notificationEmail = user?.notification_email || user?.email || "";
   const [kitchenNote, setKitchenNote] = useState("");
-  const [contactPhone, setContactPhone] = useState("");
+  const [emailInput, setEmailInput] = useState<{ userId: string; value: string }>();
+  const [phoneInput, setPhoneInput] = useState<{ userId: string; value: string }>();
+  const savedPhone = useQuery({
+    queryKey: ["meal-checkout-contact", user?.id],
+    queryFn: ({ signal }) => apiFetch<{ phone: string | null }>("/v1/meal-checkout/contact", { signal }),
+    enabled: Boolean(user),
+    retry: false,
+  });
+  const contactEmail = emailInput?.userId === user?.id ? emailInput?.value ?? "" : notificationEmail;
+  const contactPhone = phoneInput?.userId === user?.id ? phoneInput?.value ?? "" : savedPhone.data?.phone || "";
   const checkoutInFlight = useRef(false);
-  const contactPhoneReady = contactPhoneIsValid(contactPhone);
+  const contactEmailReady = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()) && contactEmail.trim().length <= 320;
+  const contactPhoneReady = Boolean(contactPhone.trim()) && contactPhoneIsValid(contactPhone);
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
   const setMealBookingType = (value: "standard" | "business") => setDraft(current => ({ ...current, mealBookingType: value === "business" ? "business" : undefined }));
-  const [standardPaymentMethod, setPaymentMethod] = useState<"online" | "cash_on_pickup">("online");
   const event = useQuery({
     queryKey: ["meal-event", eventId],
     queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
@@ -94,9 +102,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const businessOnly = event.data?.business_only === true;
   const mealBookingType = businessOnly ? "business" : draft.mealBookingType || "standard";
   const business = mealBookingType === "business";
-  const allowCash = Boolean(!businessOnly && event.data?.allow_cash_payment && event.data.same_day_preparation_minutes == null);
-  const paymentMethod = business || !allowCash ? "online" : standardPaymentMethod;
-  const cashOnPickup = paymentMethod === "cash_on_pickup";
   const [couponInput, setCouponInput] = useState("");
   const [couponCode, setCouponCode] = useState("");
   const [draftAdjusted, setDraftAdjusted] = useState(false);
@@ -107,10 +112,9 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const setInvoicePreference = (value: InvoicePreference) => business ? setBusinessPreference(value) : setStandardPreference(value);
   const [submitted, setSubmitted] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const contactEmailError = !contactEmailReady && Boolean(submitted || touched.email);
   const contactPhoneError = !contactPhoneReady && Boolean(submitted || touched.phone);
-  const invoiceReady = cashOnPickup
-    ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invoicePreference.buyerEmail.trim())
-    : invoicePreferenceIsValid(invoicePreference);
+  const invoiceReady = invoicePreferenceIsValid(invoicePreference);
   const [editingInvoice, setEditingInvoice] = useState(false);
   const locations = useQuery({
     queryKey: ["pickup-locations"],
@@ -134,32 +138,36 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const businessClosed = business && event.data && (businessOnly || event.data.same_day_preparation_minutes != null)
     && now >= mealBookingDeadline(event.data, mealBookingType);
   const activeOfferings = event.data?.offerings.filter((item) => item.is_active) || [];
-  const items = useMemo(
-    () => activeOfferings
-      .filter((offering) => (quantities[offering.id] || 0) > 0)
-      .map((offering) => ({
-        offering_id: offering.id,
-        quantity: quantities[offering.id],
-        option_ids: offering.option_groups.filter((group) => group.is_active).flatMap(
-          (group) => selections[offering.id]?.[group.id] || [],
-        ),
-      })),
-    [activeOfferings, quantities, selections],
-  );
-  const selectionsReady = items.every((item) => {
-    const offering = activeOfferings.find((candidate) => candidate.id === item.offering_id);
-    return offering?.option_groups.filter((group) => group.is_active).every((group) => {
-      const count = selections[offering.id]?.[group.id]?.length || 0;
-      return count >= group.min_selections && count <= group.max_selections;
-    });
+  const selectionLines = activeOfferings.flatMap(offering => {
+    const quantity = quantities[offering.id] || 0;
+    if (!quantity) return [];
+    const portions = business ? currentDraft.portionSelections?.[offering.id] : undefined;
+    const groups = offering.option_groups.filter(group => group.is_active);
+    const grouped = new Map<string, { optionIds: string[]; quantity: number; valid: boolean }>();
+    for (const selection of portions || [selections[offering.id] || {}]) {
+      const optionIds = groups.flatMap(group => selection[group.id] || []);
+      const key = JSON.stringify([...optionIds].sort());
+      const line = grouped.get(key);
+      if (line) line.quantity += 1;
+      else grouped.set(key, { optionIds, quantity: portions ? 1 : quantity, valid: groups.every(group => {
+        const count = selection[group.id]?.length || 0;
+        return count >= group.min_selections && count <= group.max_selections;
+      }) });
+    }
+    return [...grouped.values()].map(line => ({ ...line, offering }));
   });
+  const items = selectionLines.map(({ offering, quantity, optionIds }) => ({
+    offering_id: offering.id, quantity, option_ids: optionIds,
+  }));
+  const selectionsReady = selectionLines.every(line => line.valid);
+  const lineLimitExceeded = items.length > 20;
   const itemKey = items
     .map((item) => `${item.offering_id}:${item.quantity}:${[...item.option_ids].sort().join(",")}`)
     .join("|");
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   const quantityReady = !business || totalQuantity >= 2;
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, paymentMethod, mealBookingType],
+    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, contactEmail.trim(), mealBookingType],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
       body: JSON.stringify({
@@ -168,10 +176,10 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         pickup_at: taipeiInputToIso(pickupAt),
         pickup_location_id: pickupLocationId || null,
         needs_utensils: needsUtensils,
-        contact_email: invoicePreference.buyerEmail.trim(),
-        payment_method: paymentMethod,
+        contact_email: contactEmail.trim(),
+        payment_method: "online",
         ...(business ? { meal_booking_type: "business", invoice_handling: "pickup_day" } : {}),
-        ...(!cashOnPickup ? invoicePreferencePayload(invoicePreference) : {}),
+        ...invoicePreferencePayload(invoicePreference),
       }),
     }),
     enabled:
@@ -180,8 +188,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       orderingOpen &&
       pickupReady &&
       pickupLocationReady &&
-      selectionsReady &&
-      invoiceReady,
+      selectionsReady && !lineLimitExceeded &&
+      invoiceReady && contactEmailReady,
   });
   const checkout = useMutation({
     onMutate: captureSessionIdentityGuard,
@@ -190,6 +198,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       if (!user || !isCurrentSessionUser(user.id)) throw new Error("請先登入");
       const sameIdentity = captureSessionIdentityGuard();
       if (!quantityReady) throw new Error("會餐至少需訂 2 份");
+      if (!contactEmailReady) throw new Error("請輸入有效的聯絡 Email");
       if (!contactPhoneReady) throw new Error("請輸入完整手機號碼或含區碼的市話");
       const submittedAt = Date.now();
       if (!event.data || !mealOrderingOpen(event.data, submittedAt, mealBookingType)) {
@@ -206,16 +215,15 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         pickupLocationId,
         needsUtensils,
         items,
-        contactEmail: invoicePreference.buyerEmail.trim(),
+        contactEmail: contactEmail.trim(),
         invoicePreference,
-        paymentMethod,
+        paymentMethod: "online" as const,
         kitchenNote: kitchenNote.trim(),
-        ...(contactPhone.trim() ? { contactPhone: contactPhone.replace(/\s/g, "") } : {}),
+        contactPhone: contactPhone.replace(/\s/g, ""),
       };
-      const legacyTimings = cashOnPickup ? ["pickup_day", "on_payment"] as const : ["pickup_day"] as const;
       const [storageKey, ...legacyKeys] = await Promise.all([
         mealSubmissionStorageKey(user.id, input),
-        ...(!business ? legacyTimings.map(invoiceHandling => mealSubmissionStorageKey(user.id, { ...input, invoiceHandling })) : []),
+        ...(!business ? [mealSubmissionStorageKey(user.id, { ...input, invoiceHandling: "pickup_day" })] : []),
       ]);
       const pendingLegacy = legacyKeys.flatMap(key => {
         const id = sessionStore.getItem(key);
@@ -257,9 +265,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           throw error;
         }
       }
-      if (paymentMethod === "online") {
-        await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
-      }
+      await saveInvoiceCarrierIfRequested(invoicePreference, user.saved_mobile_barcode, saveMobileBarcode);
       if (!sameIdentity()) throw new Error("請重新登入後確認便當訂單");
       const latestId = sessionStore.getItem(storageKey);
       if (latestId && (confirmation || (legacyId && latestId !== legacyId))) return { kind: "review" as const };
@@ -267,7 +273,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         const id = sessionStore.getItem(key);
         return id && id !== legacyId;
       })) return { kind: "review" as const };
-      if (!business && paymentMethod === "online" && !latestId && !legacyId) {
+      if (!business && !latestId && !legacyId) {
         const review = reviewUnmatchedSubmission();
         if (review) return review;
       }
@@ -300,17 +306,13 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         window.location.assign(`/meal-orders?${new URLSearchParams({ order_id: outcome.orderId })}`);
         return;
       }
-      const search = new URLSearchParams({ order_id: outcome.orderId, result: "resume", message: outcome.message });
-      window.location.assign(`/orders?${search.toString()}`);
+      if (user) sessionStore.setItem(`slf_meal_payment_issue:${user.id}:${outcome.orderId}`, outcome.message.slice(0, 500));
+      window.location.assign(`/meal-orders?${new URLSearchParams({ order_id: outcome.orderId })}`);
     },
     onSettled: () => { checkoutInFlight.current = false; },
   });
   const submissionReview = !business && checkout.data?.kind === "submission_review" && checkout.data.review.userId === user?.id
     ? checkout.data : undefined;
-
-  useEffect(() => {
-    if (!allowCash) setPaymentMethod("online");
-  }, [allowCash]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
@@ -352,27 +354,21 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     pickupLocationReady &&
     items.length > 0 &&
     quantityReady &&
-    selectionsReady &&
-    invoiceReady && contactPhoneReady;
+    selectionsReady && !lineLimitExceeded &&
+    invoiceReady && contactEmailReady && contactPhoneReady;
   const checkoutDisabled = checkout.isPending || quote.isFetching || quote.isError
     || (business ? !orderingOpen : !canOrder || !quote.data);
-  const selectedMeals = activeOfferings
-    .filter((offering) => (quantities[offering.id] || 0) > 0)
-    .map((offering) => {
-      const selectedOptions = offering.option_groups.filter((group) => group.is_active).flatMap((group) =>
-        group.options
-          .filter((option) => option.is_active && selections[offering.id]?.[group.id]?.includes(option.id))
-          .map((option) => ({ label: `${group.name}：${option.name}`, price: option.price_delta })),
-      );
-      const quantity = quantities[offering.id];
-      return {
-        offering_id: offering.id,
-        meal_name: offering.meal_name,
-        quantity,
-        options: selectedOptions.map((option) => option.label),
-        subtotal: (offering.price + selectedOptions.reduce((sum, option) => sum + option.price, 0)) * quantity,
-      };
-    });
+  const selectedMeals = selectionLines.map(({ offering, quantity, optionIds }) => {
+    const options = offering.option_groups.filter(group => group.is_active).flatMap(group => group.options
+      .filter(option => option.is_active && optionIds.includes(option.id))
+      .map(option => ({ label: `${group.name}：${option.name}`, price: option.price_delta })));
+    return {
+      meal_name: offering.meal_name,
+      quantity,
+      options: options.map(option => option.label),
+      subtotal: (offering.price + options.reduce((sum, option) => sum + option.price, 0)) * quantity,
+    };
+  });
   const estimatedTotal = selectedMeals.reduce((sum, item) => sum + item.subtotal, 0);
   const confirmedQuote = quote.isError || !canOrder ? undefined : quote.data;
   const pickupAddress = confirmedQuote?.pickup.address || selectedPickupLocation?.address;
@@ -390,17 +386,23 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     }));
   };
 
-  const toggleOption = (offeringId: string, group: MealOptionGroup, optionId: string) => {
+  const changeOption = (offeringId: string, group: MealOptionGroup, optionId: string, portionIndex?: number, single = false) => {
     setDraftAdjusted(false);
     setDraft((current) => {
-      const selected = current.selections[offeringId]?.[group.id] || [];
-      const next = selected.includes(optionId)
+      const portions = current.portionSelections?.[offeringId];
+      const selected = (portionIndex === undefined ? current.selections[offeringId] : portions?.[portionIndex])?.[group.id] || [];
+      const next = single ? (optionId ? [optionId] : []) : selected.includes(optionId)
         ? selected.filter((id) => id !== optionId)
         : group.max_selections === 1
           ? [optionId]
           : selected.length < group.max_selections
             ? [...selected, optionId]
             : selected;
+      if (portionIndex !== undefined && portions) {
+        return { ...current, portionSelections: { ...current.portionSelections,
+          [offeringId]: portions.map((selection, index) => index === portionIndex ? { ...selection, [group.id]: next } : selection),
+        } };
+      }
       return {
         ...current,
         selections: {
@@ -410,6 +412,12 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       };
     });
   };
+  const togglePortions = (offeringId: string, quantity: number) => setDraft(current => {
+    const portions = { ...current.portionSelections };
+    if (portions[offeringId]) delete portions[offeringId];
+    else portions[offeringId] = Array.from({ length: quantity }, () => current.selections[offeringId] || {});
+    return { ...current, portionSelections: Object.keys(portions).length ? portions : undefined };
+  });
   const attemptCheckout = (confirmation?: MealSubmissionReview) => {
     setSubmitted(true);
     if (canOrder && quote.data && !checkoutDisabled && !checkoutInFlight.current) {
@@ -453,7 +461,29 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                   </div>
                   {quantity > 0 && offering.option_groups.some((group) => group.is_active) && (
                     <div className="meal-option-groups">
-                      {offering.option_groups.filter((group) => group.is_active).map((group) => {
+                      {business && quantity > 1 && <label className="check-field"><input type="checkbox"
+                        checked={Boolean(currentDraft.portionSelections?.[offering.id])}
+                        onChange={() => togglePortions(offering.id, quantity)} />每份分開選</label>}
+                      {(business ? currentDraft.portionSelections?.[offering.id] : undefined)
+                        ? currentDraft.portionSelections?.[offering.id].map((selection, index) => <fieldset key={index} className="meal-option-group">
+                          <legend>第 {index + 1} 份</legend>
+                          {offering.option_groups.filter(group => group.is_active).map(group => {
+                            const selected = selection[group.id] || [];
+                            const choices = group.options.filter(option => option.is_active);
+                            return <div className="field" key={group.id}><span>{group.name}{group.min_selections > 0 && `（${selectionRule(group)}）`}</span>
+                              {group.max_selections === 1 ? <select aria-label={`${offering.meal_name} 第 ${index + 1} 份 ${group.name}`} value={selected[0] || ""}
+                                onChange={event => changeOption(offering.id, group, event.target.value, index, true)}>
+                                <option value="">請選擇</option>
+                                {choices.map(option => <option key={option.id} value={option.id}>{option.name}{option.price_delta !== 0 && `（${option.price_delta > 0 ? "+" : "−"}${formatMoney(Math.abs(option.price_delta))}）`}</option>)}
+                              </select> : <div className="meal-option-list">
+                                {choices.map(option => <button className={selected.includes(option.id) ? "selected" : ""} key={option.id}
+                                  type="button" aria-pressed={selected.includes(option.id)}
+                                  onClick={() => changeOption(offering.id, group, option.id, index)}>{option.name}{option.price_delta !== 0 && `（${option.price_delta > 0 ? "+" : "−"}${formatMoney(Math.abs(option.price_delta))}）`}</button>)}
+                              </div>}
+                            </div>;
+                          })}
+                        </fieldset>)
+                        : offering.option_groups.filter((group) => group.is_active).map((group) => {
                         const selected = selections[offering.id]?.[group.id] || [];
                         const valid = selected.length >= group.min_selections && selected.length <= group.max_selections;
                         const activeOptions = group.options.filter((option) => option.is_active);
@@ -488,7 +518,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                                   aria-label={`${option.name}${option.price_delta > 0 ? ` +${formatMoney(option.price_delta)}` : ""}`}
                                   className={selected.includes(option.id) ? "selected" : ""}
                                   key={option.id}
-                                  onClick={() => toggleOption(offering.id, group, option.id)}
+                                  onClick={() => changeOption(offering.id, group, option.id)}
                                   type="button"
                                 >
                                   <MealPhoto className="meal-option-photo" src={option.image_url} alt={`${option.name}照片`} />
@@ -506,7 +536,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               );
             })}
           </div>
-          {business ? <p className="meal-business-payment">付款方式：線上付款 · 取餐當日付款</p> : <PaymentMethodFields value={paymentMethod} onChange={setPaymentMethod} allowCash={allowCash} disabled={checkout.isPending} />}
+          {business && <p className="meal-business-payment">付款方式：線上付款 · 取餐當日付款</p>}
           {activeOfferings.length === 0 && <DataState title="菜單待公告" detail="管理員公布餐點後即可選餐，請稍後再查看。" />}
         </div>
 
@@ -515,17 +545,18 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           <h2 id="meal-summary-heading">確認訂單明細</h2>
           {quote.isFetching && <LoadingLines count={2} />}
           {quote.isError && <p className="form-error">{quote.error.message}</p>}
+          {lineLimitExceeded && <p className="form-error" role="alert">每筆訂單最多 20 種餐點與選項組合。</p>}
           {items.length > 0 && !selectionsReady && <p className="meal-selection-notice">請完成餐點的必選項目。</p>}
           {!pickupAt && !orderingPaused && <p className="meal-selection-notice">請選擇預計取餐時間。</p>}
           {!orderingOpen && <p className="meal-selection-notice">{bookingBlockedReason}{orderingPaused && <> · <Link className="text-link" to="/meal-orders">查看我的便當訂單</Link></>}</p>}
           <dl>
-            {confirmedQuote ? confirmedQuote.items.map((item) => (
-              <div className="meal-quote-line" key={item.offering_id}>
+            {confirmedQuote ? confirmedQuote.items.map((item, index) => (
+              <div className="meal-quote-line" key={`${item.offering_id}-${index}`}>
                 <dt><strong>{item.meal_name} × {item.quantity}</strong><small>{taxTypeLabel(item.tax_type)}</small>{item.selections.length > 0 && <small>{item.selections.map((selection) => `${selection.group_name}：${selection.option_name}`).join(" · ")}</small>}</dt>
                 <dd>{formatMoney(item.subtotal)}</dd>
               </div>
-            )) : selectedMeals.map((item) => (
-              <div className="meal-quote-line" key={item.offering_id}>
+            )) : selectedMeals.map((item, index) => (
+              <div className="meal-quote-line" key={`${item.meal_name}-${index}`}>
                 <dt><strong>{item.meal_name} × {item.quantity}</strong>{item.options.length > 0 && <small>{item.options.join(" · ")}</small>}</dt>
                 <dd>{formatMoney(item.subtotal)}</dd>
               </div>
@@ -561,18 +592,27 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             <summary>{couponCode ? `優惠碼：${couponCode}` : "使用優惠碼"}</summary>
             <div className="meal-coupon-field"><label className="field"><span>優惠碼</span><input maxLength={32} value={couponInput} onChange={event => setCouponInput(event.target.value.toUpperCase())} /></label><button className="button button-quiet" type="button" onClick={() => setCouponCode(couponInput.trim())}>套用優惠碼</button>{couponCode && <button type="button" className="text-link" onClick={() => {setCouponCode(""); setCouponInput("");}}>移除優惠碼</button>}</div>
           </details>
+          <label className="field"><span>聯絡 Email</span><input type="email" required autoComplete="email" maxLength={320} value={contactEmail} aria-invalid={contactEmailError} aria-describedby={contactEmailError ? "meal-contact-email-error" : undefined} onBlur={() => {
+            setTouched(current => ({ ...current, email: true }));
+            if (contactEmailReady) {
+              const fillInvoiceEmail = (preference: InvoicePreference) => preference.buyerEmail ? preference : { ...preference, buyerEmail: contactEmail.trim() };
+              setStandardPreference(fillInvoiceEmail);
+              setBusinessPreference(fillInvoiceEmail);
+            }
+          }} onChange={event => setEmailInput({ userId: user?.id || "", value: event.target.value })} /></label>
+          {contactEmailError && <p id="meal-contact-email-error" className="form-error" role="alert">請輸入有效的聯絡 Email</p>}
+          <label className="field"><span>聯絡電話</span><input type="tel" required autoComplete="tel" maxLength={40} value={contactPhone} aria-invalid={contactPhoneError} aria-describedby={contactPhoneError ? "meal-contact-phone-error" : undefined} onBlur={() => setTouched(current => ({ ...current, phone: true }))} onChange={event => setPhoneInput({ userId: user?.id || "", value: event.target.value })} /></label>
+          {contactPhoneError && <p id="meal-contact-phone-error" className="form-error" role="alert">請輸入完整手機號碼或含區碼的市話</p>}
           <div className="meal-checkout-settings">
             {business && <p className="meal-business-invoice">發票於取餐當日開立</p>}
-            {cashOnPickup ? <section className="meal-invoice-settings"><h3>合作社現場開票</h3><label className="field"><span>訂單通知 Email</span><input type="email" autoComplete="email" required value={invoicePreference.buyerEmail} onChange={event => setInvoicePreference({ ...invoicePreference, buyerEmail: event.target.value })} /></label></section> : <section className="meal-invoice-settings" aria-label="電子發票設定">
+            <section className="meal-invoice-settings" aria-label="電子發票設定">
               <div className="meal-invoice-heading"><h3>電子發票</h3>
                 {invoicePreferenceIsValid(invoicePreference) && <button type="button" className="text-link" aria-expanded={editingInvoice} aria-controls="meal-invoice-fields" onClick={() => setEditingInvoice(!editingInvoice)}>{editingInvoice ? "完成發票設定" : "修改發票設定"}</button>}
               </div>
               <div id="meal-invoice-fields" hidden={!editingInvoice && invoicePreferenceIsValid(invoicePreference)}><InvoicePreferenceFields key={mealBookingType} lockBuyerType={business} deferErrors={business} submitted={submitted} onChange={(value) => { setEditingInvoice(true); setInvoicePreference(value); }} sectionNumber="02" showHeading={false} value={invoicePreference} /></div>
               {!editingInvoice && invoicePreferenceIsValid(invoicePreference) && <dl className="meal-invoice-summary"><InvoicePreferenceSummary value={invoicePreference} typeLabel="發票形式" /></dl>}
-            </section>}
+            </section>
           </div>
-          <label className="field"><span>聯絡電話（選填）</span><input type="tel" autoComplete="tel" maxLength={40} value={contactPhone} aria-invalid={contactPhoneError} aria-describedby={contactPhoneError ? "meal-contact-phone-error" : undefined} onBlur={() => setTouched(current => ({ ...current, phone: true }))} onChange={event => setContactPhone(event.target.value)} /></label>
-          {contactPhoneError && <p id="meal-contact-phone-error" className="form-error" role="alert">請輸入完整手機號碼或含區碼的市話</p>}
           <label className="field"><span>餐點備註（選填）</span><textarea maxLength={500} value={kitchenNote} onChange={event => setKitchenNote(event.target.value)} /></label>
           <div className="meal-payment-action">
           <dl className="meal-payment-total"><div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div></dl>
@@ -588,7 +628,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             </>
           ) : (
             <button className="button button-system full-width" type="button" disabled={checkoutDisabled} onClick={() => attemptCheckout()}>
-              {checkout.isPending ? "建立餐點訂單中…" : business ? "送出會餐訂單（取餐當日付款）" : cashOnPickup ? "確認預訂・現場付款" : "預訂並前往線上付款"}
+              {checkout.isPending ? "建立餐點訂單中…" : business ? "送出會餐訂單（取餐當日付款）" : "預訂並前往線上付款"}
             </button>
           )}
           {business && !quantityReady && (submitted || touched.quantity) && <p className="form-error" role="alert">會餐至少 2 份</p>}

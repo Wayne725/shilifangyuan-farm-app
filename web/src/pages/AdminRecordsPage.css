@@ -15,9 +15,8 @@
 .member-point-adjustment > form { display: grid; gap: 16px; }
 .admin-manual-invoice-records { margin-block: 20px; border-block: 1px solid var(--line); }
 .admin-manual-invoice-records > summary { padding-block: 14px; cursor: pointer; font-weight: 600; }
-.admin-manual-invoice-recent { margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
-.admin-manual-invoice-recent-header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .75rem; margin-bottom: 1rem; }
-.admin-manual-invoice-recent-header h2 { margin: 0; font-size: 1.125rem; }
+.admin-manual-invoice-recent { margin-top: 2rem; }
+.admin-manual-invoice-recent > .text-link { display: inline-block; margin-bottom: 12px; }
 .admin-manual-invoice-content { padding-bottom: 16px; }
 .admin-manual-invoice-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .admin-manual-invoice-table { max-height: 24rem; }

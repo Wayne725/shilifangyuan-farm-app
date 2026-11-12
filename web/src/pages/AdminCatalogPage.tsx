@@ -116,11 +116,11 @@ export function AdminCatalogPage() {
   const isAdmin = user?.user_role === "admin";
   const queryClient = useQueryClient();
   const [productSearch, setProductSearch] = useState("");
-  const [saleFilter, setSaleFilter] = useState<"all" | "active" | "inactive">("all");
+  const [saleFilter, setSaleFilter] = useState<"all" | "active" | "inactive" | "archived">("all");
   const [saleNotice, setSaleNotice] = useState("");
   const [products, suppliers, locations] = useQueries({
     queries: [
-      { queryKey: ["admin-products"], queryFn: () => apiFetch<Product[]>("/v1/products"), enabled: isAdmin },
+      { queryKey: saleFilter === "archived" ? ["admin-products", "archived"] : ["admin-products"], queryFn: () => apiFetch<Product[]>(saleFilter === "archived" ? "/v1/products?archive=archived" : "/v1/products"), enabled: isAdmin },
       { queryKey: ["admin-suppliers"], queryFn: () => apiFetch<Supplier[]>("/v1/admin/suppliers"), enabled: isAdmin },
       { queryKey: ["admin-pickup-locations"], queryFn: () => apiFetch<PickupLocation[]>("/v1/admin/pickup-locations"), enabled: isAdmin },
     ],
@@ -146,7 +146,9 @@ export function AdminCatalogPage() {
   const searchTerms = productSearch.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   const visibleProducts = (products.data || []).filter((product) => {
     const text = [product.name, product.sku, product.product_number, product.supplier_name].filter(Boolean).join(" ").toLocaleLowerCase();
-    return (saleFilter === "all" || product.is_active === (saleFilter === "active"))
+    const shown = saleFilter === "archived" ? Boolean(product.archived_at)
+      : !product.archived_at && (saleFilter === "all" || product.is_active === (saleFilter === "active"));
+    return shown
       && searchTerms.every((term) => text.includes(term));
   });
   const hasProductFilters = searchTerms.length > 0 || saleFilter !== "all";
@@ -172,7 +174,7 @@ export function AdminCatalogPage() {
           <div className="admin-catalog-filters">
             <label className="field"><span>搜尋商品</span><input type="search" placeholder="商品名稱、SKU、產品編號或供應者" value={productSearch} onChange={(event) => setProductSearch(event.target.value)} /></label>
             <div className="admin-quick-buttons" role="group" aria-label="販售狀態">
-              {([["all", "全部"], ["active", "可販售"], ["inactive", "不可販售"]] as const).map(([value, label]) => <button className="button button-quiet" type="button" key={value} aria-pressed={saleFilter === value} onClick={() => setSaleFilter(value)}>{label}</button>)}
+              {([["all", "全部"], ["active", "開放"], ["inactive", "未開放"], ["archived", "已封存"]] as const).map(([value, label]) => <button className="button button-quiet" type="button" key={value} aria-pressed={saleFilter === value} onClick={() => setSaleFilter(value)}>{label}</button>)}
             </div>
             {hasProductFilters && <button className="button button-quiet" type="button" onClick={() => { setProductSearch(""); setSaleFilter("all"); }}>清除查詢</button>}
           </div>
@@ -261,6 +263,7 @@ function productDraft(product: Product): ProductDraft {
 
 function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product: Product; suppliers: Supplier[]; onDone: () => void; onSaleChanged: (product: Product) => void }) {
   const [editing, setEditing] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const [draft, setDraft] = useState<ProductDraft>(() => productDraft(product));
   const [originalDraft, setOriginalDraft] = useState(draft);
   const saleInFlight = useRef(false);
@@ -281,6 +284,12 @@ function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product:
     },
     onSuccess: async () => { setEditing(false); setPhoto(null); setRemovePhoto(false); await onDone(); },
   });
+  const archive = useMutation({
+    mutationFn: (archived: boolean) => apiFetch<Product>(`/v1/admin/products/${product.id}/archive`, {
+      method: "PATCH", body: JSON.stringify({ archived }),
+    }),
+    onSuccess: () => { setConfirmArchive(false); onDone(); },
+  });
   const startEditing = () => {
     const next = productDraft(product);
     setDraft(next);
@@ -292,7 +301,7 @@ function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product:
   if (editing) return <ProductForm title={product.name} draft={draft} currentPhoto={product.image_url} photo={photo} removePhoto={removePhoto} onPhotoChange={(file, remove) => { setPhoto(file); setRemovePhoto(remove); }} suppliers={suppliers} busy={update.isPending} error={update.error?.message} onChange={setDraft} onCancel={() => { setEditing(false); setPhoto(null); setRemovePhoto(false); update.reset(); }} onSubmit={() => update.mutate()} />;
   return (
     <article className="admin-record-card">
-      <span className={`status-chip ${product.is_active ? "passed" : ""}`}>{product.is_active ? "可販售" : "不可販售"}</span>
+      <span className={`status-chip ${product.is_active ? "passed" : ""}`}>{product.archived_at ? "已封存" : product.is_active ? "開放" : "未開放"}</span>
       <h3>{product.name}</h3>
       <p>{product.supplier_name || "未指定供應者"} · {product.sku || product.product_number || "未編號"}</p>
       <dl>
@@ -303,9 +312,17 @@ function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product:
         <div><dt>物流</dt><dd>{product.can_ship ? temperatureLabels[product.shipping_temperature || "ambient"] : "僅取貨"}</dd></div>
       </dl>
       <div className="admin-product-actions">
-        <button className="button button-quiet" type="button" disabled={sale.isPending} onClick={startEditing}>編輯商品</button>
-        <button className="button button-quiet" type="button" disabled={sale.isPending} onClick={() => { if (saleInFlight.current) return; saleInFlight.current = true; sale.mutate(); }}>{sale.isPending ? "更新中…" : product.is_active ? "停止販售" : "恢復販售"}</button>
+        {product.archived_at ? <button className="button button-quiet" type="button" disabled={archive.isPending} onClick={() => archive.mutate(false)}>解除封存</button> : <>
+          <button className="button button-quiet" type="button" disabled={sale.isPending || archive.isPending} onClick={startEditing}>編輯商品</button>
+          <button className="button button-quiet" type="button" disabled={sale.isPending || archive.isPending} onClick={() => { if (saleInFlight.current) return; saleInFlight.current = true; sale.mutate(); }}>{sale.isPending ? "更新中…" : product.is_active ? "停止販售" : "恢復販售"}</button>
+          {!confirmArchive && <button className="button button-quiet" type="button" disabled={sale.isPending} onClick={() => setConfirmArchive(true)}>封存商品</button>}
+        </>}
       </div>
+      {confirmArchive && <div className="form-actions">
+        <button className="button button-quiet" type="button" disabled={archive.isPending} onClick={() => setConfirmArchive(false)}>取消</button>
+        <button className="button button-system" type="button" disabled={archive.isPending} onClick={() => archive.mutate(true)}>確認停止販售並封存</button>
+      </div>}
+      {archive.error && <p className="form-error" role="alert">{archive.error.message}</p>}
       {sale.error && <p className="form-error" role="alert">{sale.error.message}</p>}
     </article>
   );

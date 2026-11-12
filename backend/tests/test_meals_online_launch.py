@@ -42,7 +42,7 @@ async def test_redeemed_online_meal_cannot_cancel_refund_or_restore_capacity(dat
     buyer_headers, admin_headers = auth_headers(buyer), auth_headers(admin)
     async with api_test_context(session, [meals_router, payments_router], settings=payment_settings()) as client:
         created = await client.post(f"/v1/meal-events/{event_id}/orders", headers=buyer_headers, json={
-            "items": [{"offering_id": offering_id, "quantity": 1}], "contact_email": buyer.email,
+            "items": [{"offering_id": offering_id, "quantity": 1}], "contact_phone": "0912345678", "contact_email": buyer.email,
         })
         assert created.status_code == 201, created.text
         order_id = created.json()["id"]
@@ -116,7 +116,7 @@ async def test_only_production_public_listing_hides_demo_events_without_deleting
             for demo_id in DEMO_MEAL_EVENT_IDS:
                 for action, payment_method in (("quote", "online"), ("orders", "online"), ("orders", "cash_on_pickup")):
                     blocked = await client.post(f"/v1/meal-events/{demo_id}/{action}", headers={"Authorization": f"Bearer {buyer_token}"}, json={
-                        "items": [{"offering_id": live.offerings[0].id, "quantity": 1}], "contact_email": buyer.email,
+                        "items": [{"offering_id": live.offerings[0].id, "quantity": 1}], "contact_phone": "0912345678", "contact_email": buyer.email,
                         "payment_method": payment_method,
                     })
                     assert blocked.status_code == 409, blocked.text

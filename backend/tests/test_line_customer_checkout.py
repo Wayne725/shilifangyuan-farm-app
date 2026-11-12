@@ -29,6 +29,11 @@ async def test_line_customer_defers_email_until_checkout_without_changing_login(
             payload["contact_email"] = None
         elif contact_field == "missing":
             payload.pop("contact_email")
+        if channel == "meal" and contact_field != "filled":
+            missing_contact = await client.post(context.create_path, json=payload, headers=headers)
+            assert missing_contact.status_code == 422
+            assert await database_session.scalar(select(func.count()).select_from(Order)) == 0
+            payload["contact_email"] = "CHECKOUT@example.com"
         created = await client.post(context.create_path, json=payload, headers=headers)
         assert created.status_code == 201, created.text
         saved_order = await database_session.get(Order, created.json()["id"])

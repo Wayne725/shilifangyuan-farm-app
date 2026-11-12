@@ -88,7 +88,7 @@ async def test_order_uses_current_pause_state_after_lock_with_cached_event(
             async with api_test_context(session, [meals.meals_router], settings=make_test_settings()) as client:
                 return await client.post(
                     f"/v1/meal-events/{event_id}/orders",
-                    json={"contact_email": buyer.email, "items": [{"offering_id": offering_id, "quantity": 1}]},
+                    json={"contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": offering_id, "quantity": 1}]},
                     headers=auth_headers(buyer),
                 )
 
@@ -132,7 +132,7 @@ async def test_schedule_disable_rechecks_order_count_after_waiting_for_checkout(
     admin_path = f"/v1/admin/meal-schedules/{template_id}"
     order_path = f"/v1/meal-events/{event_id}/orders"
     order_body = {
-        "contact_email": buyer.email, "payment_method": "cash_on_pickup",
+        "contact_phone": "0912345678", "contact_email": buyer.email, "payment_method": "cash_on_pickup",
         "items": [{"offering_id": offering_id, "quantity": 1}],
     }
     ready = asyncio.Event()

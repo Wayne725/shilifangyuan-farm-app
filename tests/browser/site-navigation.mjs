@@ -28,6 +28,8 @@ async function fixture(t, width, sample) {
     state.reads.push(path);
     if (path === '/v1/auth/refresh') return route.fulfill({ status: state.signedIn ? 200 : 401, json: state.signedIn ? { access_token: 'isolated', user } : { detail: '尚未登入' } });
     if (path === '/v1/auth/logout') { state.signedIn = false; return route.fulfill({ status: 204, body: '' }); }
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: sample.confirmedMembership || (sample.social ? 'member' : user?.membership_type || 'nonmember'), membership: { status: 'active' } } });
     if (['/v1/products', '/v1/group-campaigns', '/v1/meal-events/calendar', '/v1/meal-orders', '/v1/activities', '/v1/membership/charges', '/v1/notifications', '/v1/me/badges', '/v1/me/surplus-distributions'].includes(path)) return route.fulfill({ json: [] });

@@ -29,7 +29,7 @@ async def test_last_coupon_is_claimed_once_across_different_events(postgres_sess
     async def create(event_id,offering_id,buyer):
         async with postgres_sessions() as session:
             async with api_test_context(session,[meals.meals_router],settings=make_test_settings()) as client:
-                return await client.post(f'/v1/meal-events/{event_id}/orders',headers=auth_headers(buyer),json={'contact_email':buyer.email,'coupon_code':'LAST20','items':[{'offering_id':offering_id,'quantity':1}]})
+                return await client.post(f'/v1/meal-events/{event_id}/orders',headers=auth_headers(buyer),json={"contact_phone": "0912345678", 'contact_email':buyer.email,'coupon_code':'LAST20','items':[{'offering_id':offering_id,'quantity':1}]})
     results=await asyncio.wait_for(asyncio.gather(*(create(*values) for values in inputs)),timeout=15)
     assert sorted(response.status_code for response in results)==[201,409],[response.text for response in results]
     async with postgres_sessions() as session:

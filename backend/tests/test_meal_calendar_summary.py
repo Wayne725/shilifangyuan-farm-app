@@ -14,13 +14,13 @@ async def test_public_calendar_preserves_booking_fields_and_reads_only_event_and
     monkeypatch.setattr(workday_calendar, "is_workday", lambda date: False)
     operator = User(email="calendar-admin@example.test", display_name="測試操作人員", password_hash="test")
     meal = Meal(
-        slug="calendar-meal", name="測試便當", description="餐點內容及成分說明" * 25, price=120, is_active=False,
+        slug="calendar-meal", name="測試便當", description="餐點內容及成分說明" * 25, price=120,
         option_groups=[MealOptionGroup(
             name="配菜選擇",
             options=[MealOption(name=f"配菜 {index}", price_delta=index) for index in range(1, 9)],
         )],
     )
-    alternate = Meal(slug="calendar-alternate-meal", name="另一餐點", price=110)
+    alternate = Meal(slug="calendar-alternate-meal", name="停售餐點", price=110, is_active=False)
     session.add_all([operator, meal, alternate])
     await session.flush()
     schedule = MealScheduleTemplate(
@@ -53,7 +53,7 @@ async def test_public_calendar_preserves_booking_fields_and_reads_only_event_and
         12, MealEventStatus.PICKUP_OPEN, booking_policy="special", dinner=True,
         pickup_slot_ends_at=datetime(2030, 1, 12, 10, tzinfo=timezone.utc),
         ordering_paused_at=datetime(2030, 1, 11, 8, tzinfo=timezone.utc), ordering_pause_version=1,
-        offerings=[MealEventOffering(meal=alternate, price=110, capacity=5, is_active=False)],
+        offerings=[MealEventOffering(meal=alternate, price=110, capacity=5)],
     )
     blocked_legacy = booking_event(13, MealEventStatus.PUBLISHED, schedule_template_id=schedule.id)
     session.add_all([

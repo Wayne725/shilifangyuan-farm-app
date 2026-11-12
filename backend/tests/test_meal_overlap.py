@@ -65,7 +65,7 @@ async def overlap_context(database_session):
     )
     session.add(event)
     await session.commit()
-    body = {"contact_email": buyer.email, "items": [{"offering_id": event.offerings[0].id, "quantity": 1}], "pickup_at": (now + timedelta(minutes=20)).isoformat()}
+    body = {"contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": event.offerings[0].id, "quantity": 1}], "pickup_at": (now + timedelta(minutes=20)).isoformat()}
     async with api_test_context(session, [meals_router], settings=make_test_settings()) as client:
         yield client, session, admin, buyer, event, body, now
 

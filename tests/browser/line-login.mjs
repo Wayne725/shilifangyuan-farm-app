@@ -59,6 +59,8 @@ async function fixture(t, width, options = {}) {
       return route.fulfill({ json: session });
     }
     if (request.method() === 'GET') {
+      if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+      if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
       if (path === '/v1/platform') return route.fulfill({json: {orders_open: true}});
       if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'nonmember', membership: null } });
       if (path === '/v1/me/points') return route.fulfill({ json: { balance: 0, transactions: [] } });

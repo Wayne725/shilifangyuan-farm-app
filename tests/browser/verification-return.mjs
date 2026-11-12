@@ -44,6 +44,8 @@ async function fixture(t, { signedIn = false, returnTo, verificationStatus = 200
       return route.fulfill({ json: session() });
     }
     if (path === '/v1/auth/register' || path === '/v1/auth/register-existing-member') return route.fulfill({ status: 202, json: { message: '請驗證你的 Email' } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, social_open: true } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: state.signedIn } });
     if (path === '/v1/meal-events/verify-meal') return route.fulfill({ json: meal });

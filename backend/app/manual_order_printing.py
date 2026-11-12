@@ -13,7 +13,8 @@ from .integrations.common import IntegrationError
 from .integrations.feie import FeieError, configured_region, validate_live_config
 from .integrations.pii_crypto import pii_cipher_from_settings
 from .models import FulfillmentState, FulfillmentStatus, MemberProfile, Order, OrderItem, PaymentStatus, PrintJob, SalesChannel
-from .printing import (_contact_phone, confirmed_print_payment, order_print_snapshot,
+from .contact_phone import decrypt_contact_phone
+from .printing import (confirmed_print_payment, order_print_snapshot,
                        payment_snapshot_from_session, printer_fingerprint, render_receipt_snapshot)
 
 
@@ -64,11 +65,11 @@ def manual_print_order_blocked_reason(order: Order) -> str | None:
 async def current_manual_snapshot(session: AsyncSession, order: Order, settings: Settings,
                                   *, reference: bool = False) -> dict:
     fulfillment = order.fulfillment
-    phone = _contact_phone(fulfillment.recipient_phone_encrypted,
+    phone = decrypt_contact_phone(fulfillment.recipient_phone_encrypted,
         f"order-fulfillment:{fulfillment.id}:recipient_phone", settings) if fulfillment else None
     if phone is None:
         encrypted = await session.scalar(select(MemberProfile.phone_encrypted).where(MemberProfile.user_id == order.user_id))
-        phone = _contact_phone(encrypted, f"member-profile:{order.user_id}", settings)
+        phone = decrypt_contact_phone(encrypted, f"member-profile:{order.user_id}", settings)
     field, value = ("phone", phone) if phone else ("email", order.contact_email)
     try:
         contact = {f"customer_{field}_encrypted": pii_cipher_from_settings(settings).encrypt_text(

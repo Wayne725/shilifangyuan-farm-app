@@ -40,7 +40,7 @@ async def booking_context(database_session, monkeypatch):
     )
     session.add_all([buyer, event])
     await session.commit()
-    body = {"contact_email": buyer.email, "items": [{"offering_id": event.offerings[0].id, "quantity": 1}]}
+    body = {"contact_phone": "0912345678", "contact_email": buyer.email, "items": [{"offering_id": event.offerings[0].id, "quantity": 1}]}
     async with api_test_context(session, [meals.meals_router, payments.payments_router], settings=make_test_settings()) as client:
         yield client, session, buyer, admin, event, body
 

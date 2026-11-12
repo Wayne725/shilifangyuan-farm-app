@@ -47,7 +47,7 @@ async def create_cash(c, **extra):
     await reload(c)
     response = await c.client.post(f"/v1/meal-events/{c.event.id}/orders", headers=auth_headers(c.buyer), json={
         "items": [{"offering_id": c.event.offerings[0].id, "quantity": 1}],
-        "contact_email": c.buyer.email, "payment_method": "cash_on_pickup", **extra,
+        "contact_phone": "0912345678", "contact_email": c.buyer.email, "payment_method": "cash_on_pickup", **extra,
     })
     await reload(c)
     return response
@@ -150,6 +150,11 @@ async def test_correction_balances_capacity_revenue_points_and_manual_refund(cas
     assert order.payment_status == PaymentStatus.REFUNDED and await c.session.scalar(select(func.sum(PointTransaction.amount))) == 0
     assert (await c.session.scalar(select(Refund))).status == RefundStatus.COMPLETED
     assert await c.session.scalar(select(func.count(OutboxEvent.id)).where(OutboxEvent.event_type == "refund.requested")) == 0
+    email = await c.session.scalar(select(OutboxEvent).where(
+        OutboxEvent.event_type == "send_email", OutboxEvent.payload["event_type"].as_string() == "refund_completed",
+    ))
+    assert email.payload["to_email"] == c.buyer.email
+    assert "已全額退款" in email.payload["text_content"]
     assert order.invoice_status == InvoiceStatus.EXTERNAL
 
 

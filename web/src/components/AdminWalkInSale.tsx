@@ -317,7 +317,7 @@ export function AdminWalkInSale() {
           <fieldset disabled={Boolean(payload) || creation.isPending}>
             <legend>交易內容</legend>
             <div className="admin-walk-in-categories" role="group" aria-label="顧客身分">
-              <button type="button" aria-pressed={!memberSale} onClick={() => changeBuyerKind("guest")}>現場客人</button>
+              <button type="button" aria-pressed={!memberSale} onClick={() => changeBuyerKind("guest")}>一般顧客</button>
               <button type="button" aria-pressed={memberSale} onClick={() => changeBuyerKind("member")}>社員</button>
             </div>
             <div className="admin-walk-in-categories" role="group" aria-label="商品分類">

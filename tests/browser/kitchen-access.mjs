@@ -12,7 +12,7 @@ const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/htm
 const privateName = '隔離撤權前顧客';
 const privateOrder = 'PRIVATE-KITCHEN-001';
 const privatePreview = 'PRIVATE-PRINT-PREVIEW';
-const order = { id: 'kitchen-order', order_number: privateOrder, customer_name: privateName,
+const order = { id: 'kitchen-order', order_number: privateOrder, customer_name: privateName, contact_phone: '0912345678',
   kitchen_note: '私人餐點備註', meal_event_id: 'meal-event', event_title: '隔離便當', location: '隔離取餐處',
   pickup_at: '2030-01-03T03:30:00Z', pickup_time_confirmed: true, fulfillment_status: 'pending_confirmation',
   needs_utensils: true, items: [{ name: '隔離便當', quantity: 2, unit: '份', options: [] }] };
@@ -106,7 +106,7 @@ async function fixture(t, width) {
       throw error;
     }
     const body = await page.locator('body').innerText();
-    for (const value of [privateOrder, privateName, privatePreview]) assert.equal(body.includes(value), false, `撤權後不得保留${value}`);
+    for (const value of [privateOrder, privateName, privatePreview, order.contact_phone]) assert.equal(body.includes(value), false, `撤權後不得保留${value}`);
     assert.equal(await page.getByRole('button', { name: /建立正式補印|開始製作|重新查詢結果|開啟列印對話框|雲端設定/ }).count(), 0);
   }
   async function stopped() {
@@ -335,9 +335,16 @@ test('confirmed401及refresh拒絕清除整頁私有內容並停止輪詢', asyn
   await f.hidden(); await f.stopped();
 });
 
-test('正常核對本人廚房訂單後只開啟一次列印，沒有新增補印POST', async t => {
-  const f = await fixture(t, 1440);
+test('手機備餐單顯示訂購者與電話，核對後只開啟一次列印', async t => {
+  const f = await fixture(t, 390);
   await f.ticket();
+  const ticket = f.page.locator('.meal-kitchen-ticket');
+  await ticket.getByText(`訂購者：${privateName}`, { exact: true }).waitFor();
+  await ticket.getByText(`電話：${order.contact_phone}`, { exact: true }).waitFor();
+  assert.doesNotMatch(await ticket.innerText(), /取餐碼|QR Code/);
+  if (process.env.BROWSER_SCREENSHOT_DIR) {
+    await f.page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/meal-kitchen-ticket-mobile.png` });
+  }
   await f.page.getByRole('button', { name: '開啟列印對話框', exact: true }).click();
   await f.page.getByText('已要求瀏覽器開啟列印對話框，請確認印表機與紙本結果；系統未記錄為列印成功。', { exact: true }).waitFor();
   assert.equal(await f.page.locator('.meal-kitchen-ticket-order').getByText(privateOrder, { exact: true }).isVisible(), true);

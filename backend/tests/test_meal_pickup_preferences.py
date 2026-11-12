@@ -27,7 +27,7 @@ async def meal_pickup_context(cash_context):
 def quote_body(c, **extra):
     return {
         "items": [{"offering_id": c.event.offerings[0].id, "quantity": 1}],
-        "contact_email": c.buyer.email,
+        "contact_phone": "0912345678", "contact_email": c.buyer.email,
         **extra,
     }
 
@@ -159,7 +159,7 @@ async def test_legacy_submission_can_be_replayed_after_preferences_are_added(cas
         {"event_id": c.event.id, "body": old_body}, sort_keys=True, ensure_ascii=False,
     ).encode()).hexdigest()
     await c.session.commit()
-    repeat = await create_cash(c, client_request_id=request_id, pickup_location_id=None, needs_utensils=False)
+    repeat = await create_cash(c, client_request_id=request_id, pickup_location_id=None, needs_utensils=False, contact_phone=None)
     assert repeat.status_code == 201, repeat.text
     assert repeat.json()["id"] == response.json()["id"]
     assert await c.session.scalar(select(func.count(Order.id))) == 1

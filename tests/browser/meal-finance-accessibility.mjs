@@ -42,6 +42,8 @@ async function fixture(t, width) {
     if (!path.startsWith('/v1/')) return req.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.com', display_name: '隔離買家', user_role: 'admin' } } });
     if (req.method() === 'GET') {
+      if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+      if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
       if (path === '/v1/platform') return route.fulfill({json:{orders_open:true,closed_message:''}});
       if (['/v1/products', '/v1/group-campaigns'].includes(path)) return route.fulfill({ json: [] });
       if (path === '/v1/pickup-locations') return route.fulfill({ json: [] });

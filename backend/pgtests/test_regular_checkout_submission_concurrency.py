@@ -142,7 +142,7 @@ async def test_unique_constraint_rejects_concurrent_other_channel_after_initial_
             async with api_test_context(other, [meals_router], settings=make_test_settings()) as other_client:
                 winner = await other_client.post(f"/v1/meal-events/{event_id}/orders", headers=auth_headers(c.buyer),
                                                  json={"client_request_id": c.payload["client_request_id"],
-                                                       "expected_total": 100, "contact_email": c.buyer.email,
+                                                       "expected_total": 100, "contact_phone": "0912345678", "contact_email": c.buyer.email,
                                                        "items": [{"offering_id": offering_id, "quantity": 1}]})
                 assert winner.status_code == 201, winner.text
                 winning_id = winner.json()["id"]

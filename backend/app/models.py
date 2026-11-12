@@ -362,6 +362,7 @@ class User(Base):
     )
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, unique=True, index=True)
     notification_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    meal_contact_phone_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     saved_mobile_barcode: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -563,6 +564,7 @@ class MemberRosterEntry(Base):
     legal_name_encrypted: Mapped[str] = mapped_column(Text)
     email_encrypted: Mapped[str] = mapped_column(Text)
     phone_encrypted: Mapped[str] = mapped_column(Text)
+    address_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     encryption_key_version: Mapped[str] = mapped_column(String(32), default="v1")
     share_certificate_number: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True
@@ -1092,6 +1094,7 @@ class Product(Base):
     allowed_shipping_channels: Mapped[List[str]] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     daily_sales_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
@@ -1855,6 +1858,7 @@ class MealScheduleTemplate(Base):
     cutoff_days_before: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     advance_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     weekdays: Mapped[list[int]] = mapped_column(JSON)
+    saturday_business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
     auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     offerings: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
@@ -2160,6 +2164,7 @@ class MealCancellationRequest(Base):
     __tablename__ = "meal_cancellation_requests"
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="status_valid"),
+        CheckConstraint("source IN ('admin', 'buyer')", name="source_valid"),
         CheckConstraint(
             "(status = 'pending' AND reviewed_at IS NULL AND reviewed_by_id IS NULL AND review_reason IS NULL) "
             "OR (status <> 'pending' AND reviewed_at IS NOT NULL AND reviewed_by_id IS NOT NULL AND review_reason IS NOT NULL)",
@@ -2175,6 +2180,7 @@ class MealCancellationRequest(Base):
     requested_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
     reason: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    source: Mapped[str] = mapped_column(String(10), default="buyer", server_default="buyer")
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     reviewed_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -2182,6 +2188,10 @@ class MealCancellationRequest(Base):
     order: Mapped["Order"] = relationship(back_populates="cancellation_requests")
     requested_by: Mapped["User"] = relationship(foreign_keys=[requested_by_id])
     reviewed_by: Mapped[Optional["User"]] = relationship(foreign_keys=[reviewed_by_id], lazy="selectin")
+
+    @property
+    def initiated_by_admin(self) -> bool:
+        return self.source == "admin"
 
     @property
     def reviewed_by_name(self) -> Optional[str]:
@@ -3158,6 +3168,7 @@ class MeetingResolution(Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     resolution_text: Mapped[str] = mapped_column(Text)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

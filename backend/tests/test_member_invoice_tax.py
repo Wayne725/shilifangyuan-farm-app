@@ -184,6 +184,7 @@ async def checkout_context(
         await session.flush()
         quote_path = f"/v1/meal-events/{event.id}/quote"
         create_path = f"/v1/meal-events/{event.id}/orders"
+        payload["contact_phone"] = "0912345678"
         payload["items"] = [{"offering_id": offering.id, "quantity": 1} for offering in offerings]
         sources = [offering.meal for offering in offerings]
     await session.commit()

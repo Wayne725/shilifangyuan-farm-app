@@ -4,19 +4,23 @@ import hmac
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..account_profiles import member_contact_from_profile
 from ..auth import (
     get_current_user,
     membership_type_for_user,
     require_active_member,
     require_admin,
 )
+from ..audited_changes import audit_changes
 from ..config import Settings, get_settings
+from ..contact_phone import normalize_contact_phone
 from ..sales_scope import require_sales_scope_allows
 from ..database import get_session
 from ..identity_numbers import next_identity_number
@@ -189,28 +193,22 @@ def _mask_phone(value: str) -> str:
 
 def _roster_response(
     entry: MemberRosterEntry,
-    cipher,
+    cipher: VersionedPIICipher,
+    linked_user: User | None = None,
 ) -> MemberRosterEntryRead:
-    aad = roster_aad(entry.id)
+    if linked_user is None:
+        aad = roster_aad(entry.id)
+        legal_name = cipher.decrypt_text(entry.legal_name_encrypted, associated_data=aad)
+        email = cipher.decrypt_text(entry.email_encrypted, associated_data=aad)
+        phone = cipher.decrypt_text(entry.phone_encrypted, associated_data=aad)
+    else:
+        legal_name, email, phone = member_contact_from_profile(linked_user, linked_user.member_profile, cipher)
     return MemberRosterEntryRead(
         id=entry.id,
         member_number=entry.member_number,
-        legal_name=cipher.decrypt_text(
-            entry.legal_name_encrypted,
-            associated_data=aad,
-        ),
-        email_masked=_mask_email(
-            cipher.decrypt_text(
-                entry.email_encrypted,
-                associated_data=aad,
-            )
-        ),
-        phone_masked=_mask_phone(
-            cipher.decrypt_text(
-                entry.phone_encrypted,
-                associated_data=aad,
-            )
-        ),
+        legal_name=legal_name,
+        email_masked=_mask_email(email),
+        phone_masked=_mask_phone(phone),
         share_certificate_number=entry.share_certificate_number,
         share_capital_amount=entry.share_capital_amount,
         share_count=entry.share_count,
@@ -1466,13 +1464,88 @@ async def list_member_roster(
 ) -> list[MemberRosterEntryRead]:
     entries = (
         await session.scalars(
-            select(MemberRosterEntry).order_by(
+            select(MemberRosterEntry)
+            .options(selectinload(MemberRosterEntry.claimed_user).selectinload(User.member_profile))
+            .order_by(
                 MemberRosterEntry.created_at.desc(), MemberRosterEntry.id.desc()
             )
         )
     ).all()
     cipher = _cipher(settings)
-    return [_roster_response(entry, cipher) for entry in entries]
+    return [_roster_response(entry, cipher, entry.claimed_user) for entry in entries]
+
+
+class RosterContactUpdate(BaseModel):
+    legal_name: str = Field(min_length=1, max_length=80)
+    email: EmailStr
+    phone: str = Field(min_length=8, max_length=40)
+    address: str = Field(default="", max_length=500)
+    expected_updated_at: datetime
+
+
+def _roster_contact(entry: MemberRosterEntry, cipher: VersionedPIICipher) -> dict[str, Any]:
+    aad = roster_aad(entry.id)
+    fields = {key: _decrypt_optional(cipher, getattr(entry, f"{key}_encrypted"), aad) or ""
+              for key in ("legal_name", "email", "phone", "address")}
+    return {**fields, "updated_at": _aware(entry.updated_at)}
+
+
+def _require_unlinked_roster_contact(entry: MemberRosterEntry | None) -> MemberRosterEntry:
+    if entry is None:
+        raise HTTPException(404, "找不到名冊資料")
+    if entry.claimed_user_id is not None:
+        raise HTTPException(409, "此社員已連結帳號，請改社員本人資料")
+    return entry
+
+
+@membership_router.get("/v1/admin/member-roster/{entry_id}/contact")
+async def read_roster_contact(
+    entry_id: str, response: Response, _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    entry = _require_unlinked_roster_contact(await session.get(MemberRosterEntry, entry_id))
+    response.headers["Cache-Control"] = "private, no-store"
+    return _roster_contact(entry, _cipher(settings))
+
+
+@membership_router.patch("/v1/admin/member-roster/{entry_id}/contact")
+async def correct_roster_contact(
+    entry_id: str, body: RosterContactUpdate, response: Response, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    entry = _require_unlinked_roster_contact(await session.scalar(
+        select(MemberRosterEntry).where(MemberRosterEntry.id == entry_id)
+        .with_for_update().execution_options(populate_existing=True)
+    ))
+    if _aware(entry.updated_at) != body.expected_updated_at:
+        raise HTTPException(409, "名冊資料已更新，請重新讀取後再修改")
+    cipher = _cipher(settings)
+    current = _roster_contact(entry, cipher)
+    try:
+        phone = normalize_phone(normalize_contact_phone(body.phone)) if body.phone != current["phone"] else body.phone
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    updates = {"legal_name": body.legal_name.strip(), "email": normalize_email(str(body.email)),
+               "phone": phone, "address": body.address.strip()}
+    if not updates["legal_name"]:
+        raise HTTPException(422, "請填寫社員姓名")
+    before, after = {}, {}
+    for key, value in updates.items():
+        if value != current[key]:
+            field = f"{key}_encrypted"
+            before[field] = getattr(entry, field)
+            after[field] = cipher.encrypt_text(value, associated_data=roster_aad(entry.id))
+            setattr(entry, field, after[field])
+    if before:
+        entry.encryption_key_version = cipher.current_version
+        if before.keys() & {"legal_name_encrypted", "email_encrypted", "phone_encrypted"}:
+            entry.pending_claim_user_id = None
+            entry.pending_claim_expires_at = None
+        audit_changes(session, admin.id, "member_roster_entry", entry.id, "member_roster.contact_corrected", before, after)
+        await session.commit()
+    response.headers["Cache-Control"] = "private, no-store"
+    return _roster_contact(entry, cipher)
+
 
 @membership_router.patch("/v1/admin/member-roster/{entry_id}/shares", response_model=MemberRosterEntryRead)
 async def update_roster_shares(
@@ -1491,7 +1564,9 @@ async def update_roster_shares(
         await session.rollback()
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     assert roster is not None
-    return _roster_response(roster, _cipher(settings))
+    linked_user = await session.get(User, roster.claimed_user_id, options=[selectinload(User.member_profile)],
+                                    populate_existing=True) if roster.claimed_user_id else None
+    return _roster_response(roster, _cipher(settings), linked_user)
 
 
 @membership_router.patch("/v1/admin/members/{membership_id}/shares", response_model=MembershipRead)

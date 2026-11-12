@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
+from ..account_profiles import member_contact_from_profile
 from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
@@ -58,20 +59,17 @@ async def _member_rows(session, settings, *, newest_first=False, member_number="
         roster_query = roster_query.where(MemberRosterEntry.member_number == member_number)
         member_query = member_query.where(Membership.member_number == member_number)
     roster = list(await session.scalars(roster_query))
-    by_number = {row.member_number: row for row in roster}
     joined = (await session.execute(member_query)).all()
     seen, rows = set(), []
     def decrypt(value, aad):
         return cipher.decrypt_text(value, associated_data=aad) if value else ""
     for membership, user, profile in joined:
-        entry = by_number.get(membership.member_number)
         if membership.member_number:
             seen.add(membership.member_number)
         aad = f"member-profile:{user.id}"
+        legal_name, email, phone = member_contact_from_profile(user, profile, cipher)
         row = {"id": membership.id, "source": "membership", "member_number": membership.member_number or membership.trainee_number or "",
-               "status": membership.status.value, "legal_name": decrypt(profile.legal_name_encrypted, aad) if profile else decrypt(entry.legal_name_encrypted, roster_aad(entry.id)) if entry else user.display_name,
-               "email": user.email or user.notification_email or (decrypt(entry.email_encrypted, roster_aad(entry.id)) if entry else ""),
-               "phone": decrypt(profile.phone_encrypted, aad) if profile else decrypt(entry.phone_encrypted, roster_aad(entry.id)) if entry else "",
+               "status": membership.status.value, "legal_name": legal_name, "email": email, "phone": phone,
                "share_certificate_number": membership.share_certificate_number, "share_count": membership.share_count,
                "share_capital_amount": membership.share_capital_amount, "share_subscribed_on": membership.share_subscribed_on,
                "share_paid_on": membership.share_paid_on, "activated_at": membership.activated_at,
@@ -86,6 +84,7 @@ async def _member_rows(session, settings, *, newest_first=False, member_number="
         rows.append({"id": entry.id, "source": "roster", "member_number": entry.member_number,
             "status": "active" if entry.is_active else "inactive", "legal_name": decrypt(entry.legal_name_encrypted, aad),
             "email": decrypt(entry.email_encrypted, aad), "phone": decrypt(entry.phone_encrypted, aad),
+            "address": decrypt(entry.address_encrypted, aad),
             "share_certificate_number": entry.share_certificate_number, "share_count": entry.share_count,
             "share_capital_amount": entry.share_capital_amount, "share_subscribed_on": entry.share_subscribed_on,
             "share_paid_on": entry.share_paid_on, "activated_at": entry.claimed_at,

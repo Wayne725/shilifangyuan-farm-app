@@ -37,11 +37,18 @@ async def test_admin_cancels_expired_uncollected_meal_once_without_releasing_pre
     admin_detail = await c.client.get(f"/v1/orders/{c.order.id}", headers=auth_headers(c.admin))
     buyer_detail = await c.client.get(f"/v1/meal-orders/{c.order.id}", headers=auth_headers(c.buyer))
     assert admin_detail.status_code == 200, admin_detail.text
-    assert "cancel" in admin_detail.json()["available_actions"]
+    can_cancel = payment_status in {PaymentStatus.PENDING, PaymentStatus.PAID}
+    assert ("cancel" in admin_detail.json()["available_actions"]) is can_cancel
     assert "cancel" not in buyer_detail.json()["available_actions"]
     path = f"/v1/admin/meal-orders/{c.order.id}/cancel"
     assert (await c.client.post(path, json={}, headers=auth_headers(c.buyer))).status_code == 403
     first = await c.client.post(path, json={}, headers=auth_headers(c.admin))
+    if not can_cancel:
+        assert first.status_code == 409, first.text
+        assert c.order.cancelled_at is None and c.order.payment_status == payment_status
+        assert await c.session.scalar(select(func.count(MealCancellationRequest.id))) == 0
+        assert await c.session.scalar(select(func.count(Refund.id))) == 0
+        return
     assert first.status_code == 200, first.text
     repeated = await c.client.post(path, json={}, headers=auth_headers(c.admin))
     assert repeated.status_code == 200 and first.json()["cancellation_request"] == repeated.json()["cancellation_request"]

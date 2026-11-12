@@ -25,17 +25,29 @@ async function fixture(t, width, admin = false, allowCash = true) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
-  const state = { order: structuredClone(order), locations: [], quotes: [], writes: [], unknown: [], errors: [] };
+  const state = {
+    order: structuredClone(order), locations: [], quotes: [], writes: [], unknown: [], errors: [], paymentAttempts: 0,
+    email: 'buyer@example.test', phone: '0912345678',
+    paymentUrl: `${base}/meal-orders?order_id=onsite-order`,
+  };
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
+    if (path === '/isolated-meal-payment') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>隔離付款頁</h1>' });
     if (!path.startsWith('/v1/')) return route.continue();
-    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: 'buyer@example.test', display_name: '隔離使用者', user_role: admin ? 'admin' : 'customer' } } });
+    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', email: state.email, display_name: '隔離使用者', user_role: admin ? 'admin' : 'customer' } } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: state.phone } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: state.locations });
     if (path === '/v1/meal-events/onsite-event') return route.fulfill({ json: { ...event, allow_cash_payment: allowCash } });
     if (path === '/v1/meal-events') return route.fulfill({ json: [event] });
     if (path === '/v1/meal-orders') return route.fulfill({ json: [state.order] });
+    if (path === '/v1/meal-orders/onsite-order') return route.fulfill({ json: state.order });
+    if (path === '/v1/orders/onsite-order/payment-attempts') {
+      state.paymentAttempts++;
+      return route.fulfill({ json: { payment_url: state.paymentUrl } });
+    }
     if (path === '/v1/admin/meals') return route.fulfill({ json: [] });
     if (path === '/v1/admin/meal-events') return route.fulfill({ json: [event] });
     if (path === '/v1/admin/meal-orders') return route.fulfill({ json: { items: [{ order: state.order, customer_name: '買家', customer_email: 'buyer@example.test', meal_period: 'lunch' }], total: 1, offset: 0, limit: 20 } });
@@ -50,8 +62,8 @@ async function fixture(t, width, admin = false, allowCash = true) {
       const body = request.postDataJSON();
       const location = state.locations.find(location => location.id === body.pickup_location_id);
       state.writes.push({ path, body });
-      state.order = { ...state.order, pickup_location_id: location?.id || null, venue_name: location?.name || event.location, pickup_address: location?.address || '', needs_utensils: body.needs_utensils };
-      return route.fulfill({ status: 201, json: { ...state.order, available_actions: ['request_cancellation'] } });
+      state.order = { ...state.order, payment_method: body.payment_method, invoice_status: 'not_eligible', available_actions: ['pay'], pickup_location_id: location?.id || null, venue_name: location?.name || event.location, pickup_address: location?.address || '', needs_utensils: body.needs_utensils };
+      return route.fulfill({ status: 201, json: state.order });
     }
     if (['/v1/orders/onsite-order/admin/cash-payment', '/v1/orders/onsite-order/admin/cash-unpaid'].includes(path)) {
       state.writes.push({ path, body: request.postDataJSON() });
@@ -68,24 +80,46 @@ async function fixture(t, width, admin = false, allowCash = true) {
 }
 
 for (const width of [390, 1280]) {
-  test(`${width}px 現場付款只建立未付款預訂，發票交給POS且無線上金流`, async t => {
+  test(`${width}px 舊場次即使開放現場付款，便當結帳只走線上付款並送出聯絡資料`, async t => {
     const { page, state } = await fixture(t, width);
+    state.email = null;
+    state.phone = null;
+    state.paymentUrl = `${base}/isolated-meal-payment`;
     await page.goto(`${base}/meals/onsite-event?pickup_at=2030-01-03T11%3A30`);
     await page.getByRole('button', { name: '增加蔬食便當', exact: true }).click();
-    await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
-    await page.getByRole('heading', { name: '合作社現場開票', exact: true }).waitFor();
-    assert.equal(await page.getByRole('region', { name: '電子發票設定' }).count(), 0);
-    assert.equal(await page.getByRole('combobox', { name: '開票時機', exact: true }).count(), 0);
+    await page.getByRole('heading', { name: '電子發票', exact: true }).waitFor();
+    const email = page.getByLabel('聯絡 Email', { exact: true });
+    const phone = page.getByLabel('聯絡電話', { exact: true });
+    const submit = page.getByRole('button', { name: '預訂並前往線上付款', exact: true });
+    assert.equal(await page.getByRole('radio', { name: '合作社現場付款', exact: true }).count(), 0);
+    assert.equal(await email.getAttribute('required'), '');
+    assert.equal(await phone.getAttribute('required'), '');
+    assert.equal(await email.inputValue(), '');
+    assert.equal(await phone.inputValue(), '');
+    assert.equal(await submit.isDisabled(), true);
+    await email.fill('order@example.test');
+    await phone.focus();
+    assert.equal(await submit.isDisabled(), true);
+    assert.equal(state.writes.length, 0);
+    await phone.fill('0911222333');
+    await email.fill('');
+    await phone.focus();
+    assert.equal(await submit.isDisabled(), true);
+    await page.getByText('請輸入有效的聯絡 Email', { exact: true }).waitFor();
+    await email.fill('receipt@example.test');
+    await phone.focus();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
-    if (process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/onsite-checkout-${width}.png`, fullPage: true });
-    await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).click();
-    await page.waitForURL('**/meal-orders?order_id=onsite-order');
-    await page.getByRole('heading', { name: '預訂成功・待現場付款', exact: true }).waitFor();
+    if (process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/online-contact-checkout-${width}.png`, fullPage: true });
+    await submit.click();
+    await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
     assert.equal(state.writes.length, 1);
-    assert.equal(state.writes[0].body.payment_method, 'cash_on_pickup');
+    assert.equal(state.paymentAttempts, 1);
+    assert.equal(state.writes[0].body.payment_method, 'online');
+    assert.equal(state.writes[0].body.contact_email, 'receipt@example.test');
+    assert.equal(state.writes[0].body.contact_phone, '0911222333');
+    assert.equal(state.writes[0].body.invoice_buyer_email, 'order@example.test');
     assert.equal(state.writes[0].body.pickup_location_id, null);
     assert.equal(state.writes[0].body.needs_utensils, false);
-    assert.equal('invoice_carrier_type' in state.writes[0].body, false);
     assert.equal('invoice_handling' in state.writes[0].body, false);
     assert.deepEqual(state.unknown, []); assert.deepEqual(state.errors, []);
   });
@@ -127,16 +161,14 @@ test('送單回應中斷後重試與重新整理沿用同一識別碼及備註',
   const url = `${base}/meals/onsite-event?pickup_at=2030-01-03T11%3A30`;
   await page.goto(url);
   await page.getByRole('button', {name: '增加蔬食便當', exact: true}).click();
-  await page.getByRole('radio', {name: '合作社現場付款', exact: true}).check();
   await page.getByLabel('餐點備註（選填）', {exact: true}).fill('飯少，不要辣');
-  await page.getByRole('button', {name: '確認預訂・現場付款', exact: true}).click();
+  await page.getByRole('button', {name: '預訂並前往線上付款', exact: true}).click();
   await page.getByText('測試連線中斷', {exact: true}).waitFor();
-  await page.getByRole('button', {name: '確認預訂・現場付款', exact: true}).click();
+  await page.getByRole('button', {name: '預訂並前往線上付款', exact: true}).click();
   await page.waitForFunction(() => document.querySelector('.form-error')?.textContent === '測試連線中斷');
   await page.reload();
-  await page.getByRole('radio', {name: '合作社現場付款', exact: true}).check();
   await page.getByLabel('餐點備註（選填）', {exact: true}).fill('飯少，不要辣');
-  await page.getByRole('button', {name: '確認預訂・現場付款', exact: true}).click();
+  await page.getByRole('button', {name: '預訂並前往線上付款', exact: true}).click();
   await page.waitForURL('**/meal-orders?order_id=onsite-order');
   assert.equal(attempts.length, 3);
   assert.equal(new Set(attempts.map(body => body.client_request_id)).size, 1);
@@ -166,14 +198,13 @@ for (const width of [390, 1280]) {
     await page.getByRole('option', { name: '合作社西站', exact: true }).waitFor({ state: 'attached' });
     assert.equal(await page.getByLabel('取餐點', { exact: true }).inputValue(), 'west');
     assert.equal(await page.getByLabel('是否需要餐具', { exact: true }).inputValue(), 'yes');
-    await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
     if (process.env.BROWSER_ARTIFACT_DIR) {
       await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); });
       await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/meal-pickup-${width === 390 ? 'mobile' : 'desktop'}.png`, fullPage: true });
     }
-    await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).click();
+    await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
     await page.waitForURL('**/meal-orders?order_id=onsite-order');
-    await page.getByRole('heading', { name: '預訂成功・待現場付款', exact: true }).waitFor();
+    await page.locator('.meal-order-detail').getByText(`訂單編號：${order.order_number}`, { exact: true }).waitFor();
     assert.equal(state.writes[0].body.pickup_location_id, 'west');
     assert.equal(state.writes[0].body.needs_utensils, true);
     assert.equal(state.quotes.at(-1).pickup_location_id, 'west');
@@ -190,12 +221,11 @@ test('取餐點載入失敗阻止便當送單，可重試恢復', async t => {
   await page.route('**/v1/pickup-locations', route => route.fulfill({ status: 503, json: { detail: '取餐點維護中' } }));
   await page.goto(`${base}/meals/onsite-event?pickup_at=2030-01-03T11%3A30`);
   await page.getByRole('button', { name: '增加蔬食便當', exact: true }).click();
-  await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
-  assert.equal(await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).isDisabled(), true);
   await page.getByRole('heading', { name: '取餐點暫時無法使用', exact: true }).waitFor({ timeout: 15000 });
   await page.unroute('**/v1/pickup-locations');
   await page.getByRole('button', { name: '重新連線', exact: true }).click();
-  await page.getByRole('button', { name: '確認預訂・現場付款', exact: true }).click();
+  await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
   await page.waitForURL('**/meal-orders?order_id=onsite-order');
   assert.equal(state.writes.length, 1);
   assert.equal(state.writes[0].body.pickup_location_id, null);
@@ -205,7 +235,18 @@ test('取餐點載入失敗阻止便當送單，可重試恢復', async t => {
 test('未開放的場次不顯示現場付款選項', async t => {
   const { page, state } = await fixture(t, 390, false, false);
   await page.goto(`${base}/meals/onsite-event?pickup_at=2030-01-03T11%3A30`);
-  await page.getByRole('radio', { name: '線上付款', exact: true }).waitFor();
+  await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).waitFor();
+  assert.equal(await page.getByLabel('聯絡 Email', { exact: true }).inputValue(), 'buyer@example.test');
+  await page.waitForFunction(() => document.querySelector('input[autocomplete=tel]')?.value === '0912345678');
   assert.equal(await page.getByRole('radio', { name: '合作社現場付款', exact: true }).count(), 0);
   assert.deepEqual(state.unknown, []);
+});
+
+test('390px 後台場次卡隱藏現場付款設定，既有場次仍可檢視', async t => {
+  const { page } = await fixture(t, 390, true);
+  await page.goto(`${base}/admin/meals?tab=events`);
+  await page.getByRole('heading', { name: event.title, exact: true }).waitFor();
+  assert.equal(await page.getByRole('checkbox', { name: '開放合作社現場付款', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '查看本場訂單與取餐時間' }).count(), 1);
+  if (process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/admin-online-meal-390.png`, fullPage: true });
 });

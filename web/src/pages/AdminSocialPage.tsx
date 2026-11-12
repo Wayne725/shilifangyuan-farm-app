@@ -13,6 +13,7 @@ import { MembershipAdmissionFeeSettings } from "../components/MembershipAdmissio
 import { activityAccessDenied, activityTime, retryActivityRead } from "../lib/activities";
 import { AdminNav } from "../components/AdminNav";
 import { MeetingFilters, MeetingSetup } from "../components/MeetingTools";
+import { MeetingDetailsEditor, ResolutionEditor } from "../components/MeetingEditors";
 import { filterMeetings, meetingAccessDenied, meetingCategoryName, meetingCategoryOptions, retryMeetingRead } from "../lib/meetings";
 import { type AdminMembership, MembershipStatusCard } from "../components/AdminMemberPanels";
 import { AdminReviewSection } from "../components/AdminReviewSection";
@@ -175,7 +176,7 @@ export function AdminSocialPage() {
           <MeetingSetup key={user?.id} onDone={refreshMeetings} onAccessDenied={() => setMeetingAccessRevoked(true)} />
           <MeetingFilters categories={meetingCategoryOptions(meetings.data || [])} categoryId={meetingCategory} keyword={meetingKeyword} onCategory={setMeetingCategory} onKeyword={setMeetingKeyword} />
           <AdminReviewSection icon={CalendarBlank} title="會議紀錄" count={visibleMeetings.length} pending={meetings.isPending} error={meetings.error?.message} empty={meetingCategory || meetingKeyword ? "沒有符合條件的會議" : "目前沒有會議"}>
-            {!meetings.isError && visibleMeetings.map((meeting) => <MeetingAdminCard key={meeting.id} meeting={meeting} memberships={memberships.data || []} proposals={proposals.data || []} onDone={refreshMeetings} />)}
+            {!meetings.isError && visibleMeetings.map((meeting) => <MeetingAdminCard key={meeting.id} meeting={meeting} memberships={memberships.data || []} proposals={proposals.data || []} onDone={refreshMeetings} onDenied={() => setMeetingAccessRevoked(true)} />)}
           </AdminReviewSection>
           </>}
         </Tabs.Content>
@@ -259,7 +260,7 @@ function MembershipReviewCard({ application, approvalBlockedReason, onDone }: { 
   );
 }
 
-function MeetingAdminCard({ meeting, memberships, proposals, onDone }: { meeting: Meeting; memberships: AdminMembership[]; proposals: Proposal[]; onDone: () => void }) {
+function MeetingAdminCard({ meeting, memberships, proposals, onDone, onDenied }: { meeting: Meeting; memberships: AdminMembership[]; proposals: Proposal[]; onDone: () => void; onDenied: () => void }) {
   const [manage, setManage] = useState(false);
   const [memberId, setMemberId] = useState("");
   const [resolution, setResolution] = useState({ title: "", resolution_text: "", member_proposal_id: "" });
@@ -281,6 +282,7 @@ function MeetingAdminCard({ meeting, memberships, proposals, onDone }: { meeting
       <div className="meeting-admin-summary"><strong>{Math.round(meeting.attendance_rate * 100)}%</strong><small>{meeting.attended_count}/{meeting.eligible_member_count} 人</small><button type="button" onClick={() => setManage((value) => !value)}>{manage ? "收起管理" : "出席與決議"}</button></div>
       {manage && (
         <div className="meeting-admin-tools">
+          <MeetingDetailsEditor meeting={meeting} onDone={onDone} onDenied={onDenied} />
           <section>
             <h4>出席登記</h4>
             <label className="field"><span>正式社員</span><select value={memberId} onChange={(event) => setMemberId(event.target.value)}><option value="">選擇社員</option>{activeMemberships.map((membership) => <option key={membership.id} value={membership.user_id}>{membership.member_number || membership.user_id}</option>)}</select></label>
@@ -294,7 +296,7 @@ function MeetingAdminCard({ meeting, memberships, proposals, onDone }: { meeting
             <button type="button" disabled={!resolution.title.trim() || !resolution.resolution_text.trim() || createResolution.isPending} onClick={() => createResolution.mutate()}>儲存決議</button>
           </section>
           {(attendance.isError || createResolution.isError) && <p className="form-error">{attendance.error?.message || createResolution.error?.message}</p>}
-          {meeting.resolutions.length > 0 && <div className="meeting-resolution-admin-list">{meeting.resolutions.map((item) => <p key={item.id}><strong>{item.title}</strong><span>{item.resolution_text}</span></p>)}</div>}
+          {meeting.resolutions.length > 0 && <div className="meeting-resolution-admin-list">{meeting.resolutions.map((item) => <ResolutionEditor key={item.id} meetingId={meeting.id} resolution={item} onDone={onDone} onDenied={onDenied} />)}</div>}
         </div>
       )}
     </article>

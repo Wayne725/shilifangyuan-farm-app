@@ -2068,7 +2068,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
 
     order_payload = {
         "items": [{"offering_id": offering_id, "quantity": 1}],
-        "contact_email": applicant.email,
+        "contact_phone": "0912345678", "contact_email": applicant.email,
         "invoice_carrier_type": "ecpay",
     }
     quote = await client.post(
@@ -2388,7 +2388,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
             f"/v1/meal-events/{event_id}/orders",
             json={
                 "items": [{"offering_id": offering_id, "quantity": 1}],
-                "contact_email": user.email,
+                "contact_phone": "0912345678", "contact_email": user.email,
                 "invoice_carrier_type": "ecpay",
             },
             headers=auth_headers(user),
@@ -2468,7 +2468,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
             "items": [
                 {"offering_id": event_offering.id, "quantity": 1}
             ],
-            "contact_email": applicant.email,
+            "contact_phone": "0912345678", "contact_email": applicant.email,
             "invoice_carrier_type": "ecpay",
         },
         headers=auth_headers(applicant),
@@ -2754,7 +2754,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
         f"/v1/meal-events/{event_id}/quote",
         json={
             "items": [{"offering_id": offering_id, "quantity": 1}],
-            "contact_email": applicant.email,
+            "contact_phone": "0912345678", "contact_email": applicant.email,
         },
     )
     assert missing_required.status_code == 422
@@ -2768,7 +2768,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
                 "option_ids": [sushi_id, soda_id],
             }
         ],
-        "contact_email": applicant.email,
+        "contact_phone": "0912345678", "contact_email": applicant.email,
     }
     quote = await client.post(
         f"/v1/meal-events/{event_id}/quote",

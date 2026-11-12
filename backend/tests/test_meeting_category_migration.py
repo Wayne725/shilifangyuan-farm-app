@@ -48,13 +48,14 @@ def test_meeting_category_migration_preserves_history_and_rejects_lossy_downgrad
         with engine.connect() as connection:
             before = connection.execute(text("SELECT id,meeting_type,title,agenda,starts_at,location,created_by_id,created_at FROM meetings ORDER BY id")).all()
             attendances = connection.execute(text("SELECT * FROM meeting_attendances ORDER BY id")).all()
-            resolutions = connection.execute(text("SELECT * FROM meeting_resolutions ORDER BY id")).all()
+            resolutions = connection.execute(text("SELECT id,meeting_id,member_proposal_id,title,resolution_text,created_at FROM meeting_resolutions ORDER BY id")).all()
         command.upgrade(config, "head")
         command.check(config)
         with engine.connect() as connection:
             assert connection.execute(text("SELECT id,meeting_type,title,agenda,starts_at,location,created_by_id,created_at FROM meetings ORDER BY id")).all() == before
             assert connection.execute(text("SELECT * FROM meeting_attendances ORDER BY id")).all() == attendances
-            assert connection.execute(text("SELECT * FROM meeting_resolutions ORDER BY id")).all() == resolutions
+            assert connection.execute(text("SELECT id,meeting_id,member_proposal_id,title,resolution_text,created_at FROM meeting_resolutions ORDER BY id")).all() == resolutions
+            assert connection.execute(text("SELECT COUNT(*) FROM meeting_resolutions WHERE revoked_at IS NOT NULL")).scalar_one() == 0
             assert connection.execute(text("SELECT c.name FROM meetings m JOIN meeting_categories c ON c.id=m.category_id ORDER BY m.id")).scalars().all() == ["社員大會", "社務會議"]
         with engine.begin() as connection:
             connection.execute(text("UPDATE meeting_categories SET name='新名稱' WHERE legacy_type='affairs'"))

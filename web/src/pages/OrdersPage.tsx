@@ -346,7 +346,7 @@ function OrderWorkspace() {
               </div>
               {!selectedPaymentIsConfirming && selected.meal_booking_type === "business" && <BusinessMealPaymentStatus order={selected} onPay={() => openPayment.mutate(selected.id)} paying={openPayment.isPending} />}
 
-              <OrderCancellationContact />
+              {!["expired", "failed"].includes(selected.payment_status) && <OrderCancellationContact />}
             </article>
           )}
         </div>

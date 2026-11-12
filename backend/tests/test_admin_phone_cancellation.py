@@ -67,7 +67,7 @@ async def test_phone_cancellation_is_admin_only_atomic_and_idempotent(review_con
 
 
 @pytest.mark.parametrize("paid", [False, True])
-async def test_all_customer_cancel_routes_are_forbidden_without_side_effects(review_context, paid):
+async def test_customer_cannot_cancel_after_pickup_starts(review_context, paid):
     c = review_context
     if paid:
         await mark_paid(c)
@@ -77,7 +77,7 @@ async def test_all_customer_cancel_routes_are_forbidden_without_side_effects(rev
         for path in paths:
             result = await c.client.post(path, json={"reason": "請求退單"}, headers=auth_headers(actor))
             assert result.status_code == 403, result.text
-            assert "致電" in result.json()["detail"]
+            assert result.json()["detail"] == "退單請致電客服，由管理員協助辦理"
     assert before == (c.order.payment_status, c.order.invoice_status, c.reservation.status, c.offering.reserved_quantity, c.offering.paid_quantity)
     assert c.order.cancelled_at is None
     assert await count(c, MealCancellationRequest) == await count(c, Refund) == await count(c, AdminAudit) == 0

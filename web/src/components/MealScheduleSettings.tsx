@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { ApiError, apiFetch, formatMoney } from "../lib/api";
-import type { Meal, MealSchedule } from "../lib/types";
+import { formatMealDateTime, mealCanChangeOrderingPause } from "../lib/meal-time";
+import type { Meal, MealEvent, MealSchedule } from "../lib/types";
 import { DataState, LoadingLines } from "./Shared";
 import "./OrderCancellation.css";
 
 type ScheduleDraft = Omit<MealSchedule, "id" | "timezone" | "created_at">;
-type CalendarStatus = { available: boolean; from_date: string; to_date: string; message: string; source_url: string };
+type CalendarStatus = { available: boolean; from_date: string; to_date: string; message: string; source_url: string; update_year?: number | null };
 type DisableScope = "generation_only" | "pause_generated";
 type ScheduleDisablePreview = {
   preview_version: string;
@@ -26,7 +27,7 @@ const periodDefaults = {
   dinner: { pickup_start_time: "16:30", pickup_end_time: "18:00", cutoff_time: "20:00" },
 };
 
-export function MealScheduleSettings({ meals, onEventsChanged }: { meals: Meal[]; onEventsChanged: () => void }) {
+export function MealScheduleSettings({ meals, events, onEventsChanged }: { meals: Meal[]; events: MealEvent[]; onEventsChanged: () => void }) {
   const queryClient = useQueryClient();
   const schedules = useQuery({
     queryKey: ["admin-meal-schedules"],
@@ -51,6 +52,8 @@ export function MealScheduleSettings({ meals, onEventsChanged }: { meals: Meal[]
     {calendar.data && <div className="meal-calendar-status"><span className={`status-chip ${calendar.data.available ? "passed" : ""}`}>{calendar.data.available ? "工作日日曆已就緒" : "工作日日曆無法使用"}</span><span>{calendar.data.from_date} 至 {calendar.data.to_date}</span></div>}
     {calendar.data && !calendar.data.available && <p className="form-error" role="alert">{calendar.data.message}</p>}
     {calendar.isError && <p className="form-error" role="alert">{calendar.error.message}</p>}
+    {calendar.data?.update_year && <p role="status"><a href={calendar.data.source_url}>請更新 {calendar.data.update_year} 年官方日曆</a></p>}
+    <SaturdayEvents events={events} onChange={refresh} />
     <ScheduleForm key={`${editing?.id || "new"}-${formKey}`} initial={editing} meals={meals} schedules={schedules.data || []} onDone={onSaved} onCancel={() => setEditing(null)} />
     {schedules.isPending && <LoadingLines count={2} />}
     {schedules.isError && <DataState kind="error" title="每日排程無法讀取" detail={schedules.error.message} onAction={() => schedules.refetch()} />}
@@ -111,7 +114,7 @@ function ScheduleCard({ schedule, onEdit, onDone, onDisabled }: {
       <div><dt>供餐</dt><dd>{schedule.pickup_start_time.slice(0, 5)}–{schedule.pickup_end_time < schedule.pickup_start_time ? "次日 " : ""}{schedule.pickup_end_time.slice(0, 5)}</dd></div>
       <div><dt>截單</dt><dd>{`取餐前 ${cutoff.cutoff_days_before} 天`} {cutoff.cutoff_time}</dd></div>
       <div><dt>預先建立</dt><dd>未來 {schedule.advance_days} 天</dd></div>
-      <div><dt>星期</dt><dd>{schedule.weekdays.map((day) => `${weekdays[day]}${day > 4 ? "（需特殊加開）" : ""}`).join("、")}</dd></div>
+      <div><dt>星期</dt><dd>{[...schedule.weekdays.filter(day => day < 5).map(day => weekdays[day]), ...(schedule.saturday_business_only ? ["週六・只接受會餐"] : [])].join("、")}</dd></div>
       <div><dt>新場次</dt><dd>{schedule.auto_publish ? "自動發布" : "僅草稿，需另行發布"}</dd></div>
     </dl>
     <div className="form-actions">
@@ -178,17 +181,44 @@ function ScheduleCard({ schedule, onEdit, onDone, onDisabled }: {
   </article>;
 }
 
+function SaturdayEvents({ events, onChange }: { events: MealEvent[]; onChange: () => void }) {
+  const now = Date.now();
+  const saturdays = events.filter(event => event.business_only && event.schedule_template_id
+    && event.service_date && new Date(`${event.service_date}T00:00:00Z`).getUTCDay() === 6
+    && Date.parse(event.pickup_ends_at) > now)
+    .sort((a, b) => Date.parse(a.pickup_starts_at) - Date.parse(b.pickup_starts_at));
+  const change = useMutation({
+    mutationFn: (event: MealEvent) => apiFetch(`/v1/admin/meal-events/${event.id}/ordering-pause`, {
+      method: "PATCH", body: JSON.stringify({ paused: !event.ordering_paused, expected_version: event.ordering_pause_version ?? 0 }),
+    }),
+    onSuccess: onChange,
+    onError: onChange,
+  });
+  if (!saturdays.length) return null;
+  return <section aria-label="接下來的週六會餐">
+    <h2>接下來的週六會餐</h2>
+    <ul>{saturdays.map(event => <li key={event.id}>
+      <strong>{event.title}</strong> · {formatMealDateTime(event.pickup_starts_at)}
+      {event.status === "draft" && " · 草稿"}
+      {event.status === "cancelled" && " · 已取消"}
+      {mealCanChangeOrderingPause(event, now) && <button className="button button-quiet" type="button" disabled={change.isPending}
+        onClick={() => change.mutate(event)}>{event.ordering_paused ? "恢復這週預訂" : "停用這週預訂"}</button>}
+    </li>)}</ul>
+    {change.isError && <p className="form-error" role="alert">{change.error.message}</p>}
+  </section>;
+}
+
 function ScheduleForm({ initial, meals, schedules, onDone, onCancel }: { initial: MealSchedule | null; meals: Meal[]; schedules: MealSchedule[]; onDone: () => void; onCancel: () => void }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<ScheduleDraft>(() => initial ? {
     title: initial.title, location: initial.location, meal_period: initial.meal_period,
     pickup_start_time: initial.pickup_start_time.slice(0, 5), pickup_end_time: initial.pickup_end_time.slice(0, 5), ...scheduleCutoff(initial),
     advance_days: initial.advance_days,
-    weekdays: initial.weekdays, enabled: initial.enabled, auto_publish: initial.auto_publish,
+    weekdays: initial.weekdays.filter(day => day < 5), saturday_business_only: initial.saturday_business_only ?? false, enabled: initial.enabled, auto_publish: initial.auto_publish,
     offerings: initial.offerings,
   } : {
     title: "", location: "", meal_period: "lunch", ...periodDefaults.lunch,
-    cutoff_days_before: 1, advance_days: 7, weekdays: [0, 1, 2, 3, 4], enabled: false, auto_publish: false, offerings: [],
+    cutoff_days_before: 1, advance_days: 7, weekdays: [0, 1, 2, 3, 4], saturday_business_only: false, enabled: false, auto_publish: false, offerings: [],
   });
   const selected = new Set(draft.offerings.map((offering) => offering.meal_id));
   const minutes = (value: string) => { const [hours, minute] = value.split(":").map(Number); return hours * 60 + minute; };
@@ -244,7 +274,7 @@ function ScheduleForm({ initial, meals, schedules, onDone, onCancel }: { initial
     <button className="button button-quiet" type="button" onClick={() => setDraft({ ...draft, ...periodDefaults[draft.meal_period], cutoff_days_before: 1 })}>套用{draft.meal_period === "lunch" ? "午餐" : "晚餐"}預設時段</button>
     {invalidTime && <p className="form-error">開始與結束時間不可相同；預訂最晚於取餐前一天 20:00 截止。</p>}
     {invalidAdvance && <p className="form-error">預先建立天數必須大於提前截單天數。</p>}
-    <fieldset><legend>每週供餐日</legend><div className="meal-choice-grid">{weekdays.map((label, day) => (day < 5 || initial?.weekdays.includes(day)) && <label className="meal-choice" key={day}><input type="checkbox" disabled={day > 4 && !draft.weekdays.includes(day)} checked={draft.weekdays.includes(day)} onChange={() => setDraft({ ...draft, weekdays: draft.weekdays.includes(day) ? draft.weekdays.filter((value) => value !== day) : [...draft.weekdays, day].sort() })} /><span>{label}{day > 4 && "（需特殊加開）"}</span></label>)}</div></fieldset>
+    <fieldset><legend>每週供餐日</legend><div className="meal-choice-grid">{weekdays.map((label, day) => day < 5 && <label className="meal-choice" key={day}><input type="checkbox" checked={draft.weekdays.includes(day)} onChange={() => setDraft({ ...draft, weekdays: draft.weekdays.includes(day) ? draft.weekdays.filter((value) => value !== day) : [...draft.weekdays, day].sort() })} /><span>{label}</span></label>)}<label className="meal-choice"><input type="checkbox" checked={draft.saturday_business_only} onChange={event => setDraft({ ...draft, saturday_business_only: event.target.checked })} /><span>週六・只接受會餐</span></label></div></fieldset>
     <fieldset><legend>每日餐點與供應份數</legend>{counterpart && <button className="button button-quiet" type="button" onClick={syncCounterpartMenu}>同步另一餐別菜單</button>}<div className="meal-choice-grid">{meals.filter((meal) => meal.is_active || selected.has(meal.id)).map((meal) => <label className="meal-choice" key={meal.id}><input type="checkbox" checked={selected.has(meal.id)} onChange={() => setDraft({ ...draft, offerings: selected.has(meal.id) ? draft.offerings.filter((item) => item.meal_id !== meal.id) : [...draft.offerings, { meal_id: meal.id, price: meal.price, capacity: 20, position: draft.offerings.length }] })} /><span><strong>{meal.name}{!meal.is_active && "（餐點已停用）"}</strong><small>{formatMoney(meal.price)}</small></span></label>)}</div></fieldset>
     {draft.offerings.map((offering) => <div className="meal-offering-editor" key={offering.meal_id}>
       <strong>{meals.find((meal) => meal.id === offering.meal_id)?.name || "餐點暫無法讀取"}</strong>
@@ -254,6 +284,6 @@ function ScheduleForm({ initial, meals, schedules, onDone, onCancel }: { initial
     <label className="meal-choice"><input type="checkbox" disabled={initial?.enabled === true} checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>啟用每日自動產生場次</span></label>
     <label className="meal-choice"><input type="checkbox" checked={draft.auto_publish} onChange={(event) => setDraft({ ...draft, auto_publish: event.target.checked })} /><span>新產生場次自動發布並開放預訂（未勾選僅建立草稿）</span></label>
     {save.isError && <p className="form-error">{save.error.message}</p>}
-    <div className="form-actions">{initial && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}<button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || !draft.weekdays.length || !draft.offerings.length || invalidTime || invalidAdvance || save.isPending}>{save.isPending ? "儲存中…" : "儲存每日排程"}</button></div>
+    <div className="form-actions">{initial && <button className="button button-quiet" type="button" onClick={onCancel}>取消編輯</button>}<button className="button button-primary" disabled={!draft.title.trim() || !draft.location.trim() || (!draft.weekdays.length && !draft.saturday_business_only) || !draft.offerings.length || invalidTime || invalidAdvance || save.isPending}>{save.isPending ? "儲存中…" : "儲存每日排程"}</button></div>
   </form>;
 }

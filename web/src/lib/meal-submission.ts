@@ -9,9 +9,9 @@ const markerKey = (key: string) => `meal-submission-current:${key.slice(submissi
 
 export function mealSubmissionFingerprint(userId: string, input: MealSubmission): string {
   const { saveCarrier: _saveCarrier, ...invoicePreference } = input.invoicePreference;
-  const { invoiceHandling, mealBookingType, ...orderInput } = input;
+  const { invoiceHandling, mealBookingType, contactPhone: _contactPhone, ...orderInput } = input;
   const legacyInvoiceHandling = input.paymentMethod === "cash_on_pickup" ? "external" : "on_payment";
-  // Preserve existing retry keys; saving an account preference is not a new order.
+  // Preserve retry keys across checkout preference and contact form changes.
   return JSON.stringify({ userId, ...orderInput,
     ...(mealBookingType === "business" ? { mealBookingType } : {}),
     ...(invoiceHandling && invoiceHandling !== legacyInvoiceHandling ? { invoiceHandling } : {}), invoicePreference });

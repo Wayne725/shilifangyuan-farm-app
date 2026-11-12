@@ -46,6 +46,8 @@ async function fixture(t, { width = 390, calendarStatus = 200, products = [] } =
         if (method === 'POST' && url.pathname === '/v1/auth/refresh') {
           return route.fulfill({ status: 401, json: { detail: '隔離測試未登入' } });
         }
+        if (url.pathname === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+        if (url.pathname === '/v1/meal-announcements') return route.fulfill({ json: [] });
         if (method === 'GET' && url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (method === 'GET' && url.pathname === calendarPath) {
           mealReads.push(calendarPath);

@@ -27,10 +27,12 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
     await context.route('**/*', (route) => {
       const request = route.request(), url = new URL(request.url()), path = url.pathname;
       if (url.origin !== base) return route.abort();
-      if (path === '/isolated-line-payment') return route.fulfill({ contentType: 'text/html', body: '<h1>隔離線上付款</h1>' });
+      if (path === '/isolated-line-payment') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>隔離線上付款</h1>' });
       if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
       if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'line-buyer', display_name: 'LINE顧客', email: null, notification_email: saved ? 'saved@example.com' : null, membership_type: 'nonmember', user_role: 'customer' } } });
       if (request.method() === 'GET') {
+        if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+        if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
         if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });
         if (path === '/v1/orders') return route.fulfill({ json: [] });
@@ -72,8 +74,7 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
     await page.clock.install({ time: new Date('2030-01-02T01:00:00Z') });
     await page.goto(`${base}${channel === 'regular' ? '/checkout' : channel === 'meal' ? '/meals/line-meal?pickup_at=2030-01-03T11%3A00' : '/groups/line-group'}`);
     if (channel === 'meal') await page.getByRole('button', { name: '增加隔離便當', exact: true }).click();
-    const email = page.getByRole('textbox', { name: '發票通知 Email', exact: true });
-    if (channel === 'meal' && await page.getByRole('button', { name: '修改發票設定', exact: true }).count()) await page.getByRole('button', { name: '修改發票設定', exact: true }).click();
+    const email = page.getByRole('textbox', { name: channel === 'meal' ? '聯絡 Email' : '發票通知 Email', exact: true });
     const pay = page.getByRole('button', { name: /^(前往線上付款|預訂並前往線上付款|參加並前往付款)$/ });
     await email.waitFor();
     if (saved) await page.waitForFunction(() => document.querySelector('input[type=email]')?.value === 'saved@example.com');
@@ -82,6 +83,7 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
       assert.equal(writes.length, 0);
       assert.equal(await pay.isEnabled(), false);
       await email.fill('checkout@example.com');
+      if (channel === 'meal') await email.blur();
     }
     if (channel === 'regular') {
       await page.getByRole('combobox', { name: '取貨地點', exact: true }).selectOption('pickup-campus');
@@ -93,6 +95,7 @@ for (const width of [1440, 390]) for (const channel of ['regular', 'meal', 'grou
     assert.equal(writes[0].body.contact_email, saved ? 'saved@example.com' : 'checkout@example.com');
     assert.equal(writes[0].body.invoice_buyer_email, writes[0].body.contact_email);
     if (channel === 'regular') assert.equal(writes[0].body.pickup_location_id, 'pickup-campus');
+    if (channel === 'meal') assert.equal(writes[0].body.contact_phone, '0912345678');
     assert.deepEqual(unknown, []);
     assert.deepEqual(errors, []);
   });

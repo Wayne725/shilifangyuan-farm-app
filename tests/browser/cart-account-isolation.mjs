@@ -25,6 +25,8 @@ async function fixture(t, { owner = 'A', legacy = false } = {}) {
     if (path === '/v1/auth/logout') { state.owner = null; return route.fulfill({ status: 204 }); }
     if (path === '/v1/auth/login') { state.owner = req.postDataJSON().email.split('@')[0]; return route.fulfill({ json: { access_token: `synthetic-${state.owner}`, user: user(state.owner) } }); }
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { enabled: false, ready: false } });
+    if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+    if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/products') return route.fulfill({ json: [product] });
     if (path === `/v1/products/${product.id}`) return route.fulfill({ json: product });

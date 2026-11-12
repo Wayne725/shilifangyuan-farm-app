@@ -318,7 +318,7 @@ test('社員交易回應不明時鎖定核對資料，重試沿用原 UUID 與�
   const retry = region.getByRole('button', { name: '重試同一筆交易', exact: true });
   await retry.waitFor();
   assert.equal(await region.getByLabel('登記手機', { exact: true }).isDisabled(), true);
-  assert.equal(await region.getByRole('button', { name: '現場客人', exact: true }).isDisabled(), true);
+  assert.equal(await region.getByRole('button', { name: '一般顧客', exact: true }).isDisabled(), true);
   await retry.click();
   await region.getByText(/已記錄收款.*O2030010201/).waitFor();
   assert.equal(state.posts.length, 2);

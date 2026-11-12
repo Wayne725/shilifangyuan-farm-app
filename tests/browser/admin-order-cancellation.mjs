@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import test from 'node:test';
+import test, { after, before } from 'node:test';
 
 const { chromium, webkit } = createRequire(import.meta.url)('playwright');
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
+let browser;
+before(async () => {
+  browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
+});
+after(() => browser?.close());
 const target = new URL(process.env.BROWSER_TEST_URL || 'http://127.0.0.1:4185');
 if (!['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('Use isolated local fixtures only');
 const base = target.origin;
@@ -47,9 +52,8 @@ for (const channel of ['regular', 'meal_preorder']) {
 }
 
 async function fixture(t, { role = 'admin', width = 1280, phone = '', channel = 'regular', status = 'paid', legacyCancellationApi = false } = {}) {
-  const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
-  t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block', reducedMotion: 'reduce' });
+  t.after(() => context.close());
   const state = {
     order: { ...structuredClone(channel === 'meal_preorder' ? meal : regular), sales_channel: channel, payment_status: status },
     settings: { version: 1, orders_open: true, closed_message: '暫停接受新訂單', support_phone: phone, printer_brand: '', printer_model: '', printer_connection: 'unknown', kitchen_sound: false },
@@ -150,6 +154,7 @@ for (const channel of ['regular', 'group', 'meal_preorder']) {
     const contact = page.getByRole('region', { name: '電話聯絡退單', exact: true });
     await contact.getByRole('link').waitFor();
     assert.equal(await contact.getByRole('link').getAttribute('href'), 'tel:+886223456789');
+    assert.equal(await page.getByText('申請退單', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: /申請退單|申請取消|辦理退單|取消訂單/ }).count(), 0);
     assert.deepEqual(state.writes, []);
     await assertClean(page, state);
@@ -285,23 +290,85 @@ for (const [label, override, expectedLink] of [
 }
 
 for (const [stateName, status, normalized, label, canCancel] of [
-  ['逾時未取', 'picked_up', 'no_show', '逾時未取', true],
-  ['實際已交付', 'picked_up', 'picked_up', '已完成', false],
-  ['已取消', 'cancelled', 'no_show', '已取消', false],
+  ['過去未交付', 'picked_up', 'no_show', '已結束', true],
+  ['實際已交付', 'picked_up', 'picked_up', '已結束', false],
+  ['已取消', 'cancelled', 'no_show', null, false],
 ]) {
   test(`後台訂單區分${stateName}便當，依原權限顯示退單動作`, async t => {
     const { page, state } = await fixture(t, { width: 390, channel: 'meal_preorder' });
     state.order.fulfillment_status = status;
-    state.order.fulfillment = { status: normalized };
+    state.order.fulfillment = { status: normalized, pickup_ends_at: '2030-01-01T13:30:00+08:00' };
     state.order.available_actions = canCancel ? ['cancel'] : [];
+    if (status === 'cancelled') state.order.payment_status = 'refunded';
     await page.goto(`${base}/admin?section=orders`);
     const card = page.locator('.operations-list article');
-    await card.getByLabel(`履約：${label}`, { exact: true }).waitFor();
+    await card.getByText(state.order.order_number, { exact: true }).waitFor();
+    if (label) await card.getByText(label, { exact: true }).waitFor();
+    else {
+      await card.getByLabel('付款：已退款', { exact: true }).waitFor();
+      assert.equal(await card.getByText('已結束', { exact: true }).count(), 0);
+    }
+    assert.doesNotMatch(await card.innerText(), /逾時未取|已完成取餐/);
     assert.equal(await card.getByRole('button', { name: '辦理退單', exact: true }).count(), Number(canCancel));
     assert.deepEqual(state.writes, []);
     await assertClean(page, state);
   });
 }
+
+for (const [status, label] of [['expired', '付款逾期'], ['failed', '付款失敗']]) {
+  test(`390px 便當${label}時買家與後台都沒有退單動作`, async t => {
+    const customer = await fixture(t, { role: 'customer', width: 390, phone: '02-2345-6789', channel: 'meal_preorder', status });
+    const admin = await fixture(t, { width: 390, channel: 'meal_preorder', status });
+    for (const { state } of [customer, admin]) {
+      state.order.available_actions = ['cancel', 'request_cancellation'];
+      state.order.cancellation_request = { id: 'historical', order_id: state.order.id, status: 'pending', reason: '歷史紀錄', requested_at: '2030-01-01T09:00:00+08:00' };
+    }
+    await customer.page.goto(`${base}/meal-orders`);
+    const detail = customer.page.locator('.meal-order-detail');
+    await detail.getByText(label, { exact: true }).waitFor();
+    assert.doesNotMatch(await detail.innerText(), /申請退單|電話聯絡退單|退單申請待審核/);
+    await admin.page.goto(`${base}/admin?section=orders`);
+    const card = admin.page.locator('.operations-list article');
+    await card.getByLabel(`付款：${label}`, { exact: true }).waitFor();
+    assert.equal(await card.getByRole('button', { name: '辦理退單', exact: true }).count(), 0);
+    assert.equal(await card.getByRole('link', { name: /退單/ }).count(), 0);
+    await card.getByRole('link', { name: '查看便當訂單', exact: true }).click();
+    const mealCard = admin.page.locator('.meal-operation-order');
+    await mealCard.getByLabel(`付款：${label}`, { exact: true }).waitFor();
+    assert.equal(await mealCard.getByRole('button', { name: '辦理退單', exact: true }).count(), 0);
+    assert.equal(await mealCard.getByRole('link', { name: '審核這筆退單', exact: true }).count(), 0);
+    if (process.env.BROWSER_ARTIFACT_DIR) {
+      await mealCard.scrollIntoViewIfNeeded();
+      await admin.page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/meal-no-cancellation-${status}-390.png` });
+    }
+    for (const { page, state } of [customer, admin]) {
+      assert.deepEqual(state.writes, []);
+      await assertClean(page, state);
+    }
+  });
+}
+
+test('390px 管理員可在退單審核找到代辦退單的買家姓名及電話', async t => {
+  const { page, state } = await fixture(t, { width: 390, channel: 'meal_preorder', status: 'refunded' });
+  state.order.invoice_status = 'voided';
+  state.order.payment_method = 'online';
+  state.order.contact_phone = '0912345678';
+  state.order.cancellation_request = {
+    id: 'admin-filed', order_id: state.order.id, status: 'approved', source: 'admin', initiated_by_admin: true,
+    reason: '電話確認', requested_at: '2030-01-01T09:00:00+08:00', reviewed_by_name: '隔離管理員', reviewed_at: '2030-01-01T09:00:00+08:00',
+  };
+  await page.goto(`${base}/admin/meals?tab=cancellations`);
+  await page.getByLabel('退單審核狀態').selectOption('approved');
+  const card = page.locator('.meal-cancellation-card');
+  await card.getByText('隔離買家・0912345678・合作社', { exact: true }).waitFor();
+  assert.equal(await card.getByRole('button', { name: '核准退單', exact: true }).count(), 0);
+  if (process.env.BROWSER_ARTIFACT_DIR) {
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/admin-filed-meal-cancellation-390.png` });
+  }
+  assert.deepEqual(state.writes, []);
+  await assertClean(page, state);
+});
 
 for (const rejectionOnly of [false, true]) {
   test(rejectionOnly ? '訂單查詢直接開啟僅可拒絕的便當退單' : '今日待辦直接開啟指定便當退單', async t => {

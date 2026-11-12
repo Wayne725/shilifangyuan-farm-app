@@ -65,6 +65,8 @@ async function fixture(t, selected) {
           user: { id: 'isolated-buyer', email: buyerEmail, display_name: '隔離買家', user_role: 'customer' } } });
       }
       if (method === 'GET') {
+        if (url.pathname === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
+        if (url.pathname === '/v1/meal-announcements') return route.fulfill({ json: [] });
         if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
         if (url.pathname === '/v1/products') return route.fulfill({ json: catalog });
         if (['/v1/group-campaigns', '/v1/meal-events/calendar', '/v1/shipping-rates'].includes(url.pathname)) return route.fulfill({ json: [] });

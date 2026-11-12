@@ -13,7 +13,7 @@ from app.invoice_timing import pickup_invoice_due
 from app.models import FulfillmentState, InventoryReservation, InvoiceBuyerType, MealEventOffering, Order, OrderItem, PaymentMethod, PaymentStatus, PrintJob, ReservationStatus, SalesChannel
 from app.order_summary import OrderSummaryFilters, build_print_summary
 from app.printer_worker import process_print_job
-from app.printing import enqueue_cancellation_print, format_receipt, order_print_snapshot, printer_fingerprint
+from app.printing import enqueue_cancellation_print, format_receipt, open_receipt_content, order_print_snapshot, printer_fingerprint
 from app.integrations.feie import configured_region
 from app.summary_printing import format_summary_pages, summary_fingerprint
 from tests.support import api_test_context, auth_headers, make_test_settings
@@ -52,8 +52,9 @@ async def test_business_unpaid_preparation_prints_once_and_payment_does_not_repr
     assert await process_print_job(c.settings, factory=c.factory)
     job = await read_job(c)
     assert job.status == 'simulated'
-    assert '會餐' in job.content and '未付款' in job.content and '15989995' in job.content
-    assert '會餐合成單位' in job.content and '<QR>' not in job.content
+    content = open_receipt_content(job.content, job.order_id, c.settings)
+    assert '會餐' in content and '未付款' in content and '15989995' in content
+    assert '會餐合成單位' in content and '<QR>' not in content and '取餐碼' not in content
     assert '發票' not in job.content
     async with c.factory() as session:
         order = await session.get(Order, c.order_id)
@@ -110,7 +111,8 @@ async def test_known_unsent_business_retry_refreshes_payment_label(print_context
         await session.commit()
     assert await process_print_job(c.settings, factory=c.factory)
     job = await read_job(c)
-    assert job.status == 'simulated' and '已付款' in job.content and '未付款' not in job.content
+    content = open_receipt_content(job.content, job.order_id, c.settings)
+    assert job.status == 'simulated' and '已付款' in content and '未付款' not in content
 
 
 async def test_business_amendment_and_cancellation_are_distinct_and_deduplicated(print_context):
@@ -132,7 +134,8 @@ async def test_business_amendment_and_cancellation_are_distinct_and_deduplicated
     assert await process_print_job(c.settings, factory=c.factory)
     async with c.factory() as session:
         cancellation = await session.scalar(select(PrintJob).where(PrintJob.order_id == c.order_id, PrintJob.kind == 'cancellation'))
-        assert cancellation.status == 'simulated' and '取消通知' in cancellation.content and '會餐' in cancellation.content
+        content = open_receipt_content(cancellation.content, cancellation.order_id, c.settings)
+        assert cancellation.status == 'simulated' and '取消通知' in content and '會餐' in content
 
 
 async def test_pending_business_is_visible_and_preparable_in_kitchen_without_general_unpaid(kitchen_context):
