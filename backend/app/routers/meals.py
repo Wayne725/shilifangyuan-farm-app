@@ -111,6 +111,7 @@ from ..models import (
 )
 from ..schemas import (
     ActivityReview,
+    AdminMealEventRead,
     MealAdminOrderPage,
     MealCreate,
     MealCancellationQueueRead,
@@ -119,6 +120,7 @@ from ..schemas import (
     MealCancellationRequestRead,
     MealCancellationReview,
     MealEventActionRequest,
+    MealEventArchiveUpdate,
     MealEventCalendarRead,
     MealEventCancelRequest,
     MealDisasterAnnouncement,
@@ -219,13 +221,19 @@ def _remaining_meal_ordering_start(event: MealEvent, now: datetime) -> datetime 
     return None
 
 
-def _require_meal_ordering_adjustable(event: MealEvent, now: datetime) -> None:
+def _meal_ordering_adjustment_blocked_reason(event: MealEvent, now: datetime) -> str | None:
     if event.status not in {MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN}:
-        raise HTTPException(409, "此場次目前無法調整接單狀態")
+        return "此場次目前無法調整接單狀態"
     if reason := meal_calendar_blocked_reason(event):
-        raise HTTPException(409, reason)
+        return reason
     if _remaining_meal_ordering_start(event, now) is None:
-        raise HTTPException(409, "本場次已無可預訂的取餐時段")
+        return "本場次已無可預訂的取餐時段"
+    return None
+
+
+def _require_meal_ordering_adjustable(event: MealEvent, now: datetime) -> None:
+    if reason := _meal_ordering_adjustment_blocked_reason(event, now):
+        raise HTTPException(409, reason)
 
 
 def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
@@ -253,8 +261,8 @@ def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
     }
 
 
-def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRead:
-    return MealEventRead(
+def _meal_event_fields(event: MealEvent, *, can_edit: bool) -> dict[str, Any]:
+    return dict(
         **_meal_event_booking_fields(event),
         ordering_pause_version=event.ordering_pause_version,
         allow_cash_payment=event.allow_cash_payment,
@@ -282,6 +290,17 @@ def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRe
             )
             if offering.is_active
         ],
+    )
+
+
+def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRead:
+    return MealEventRead(**_meal_event_fields(event, can_edit=can_edit))
+
+
+def _admin_meal_event_read(event: MealEvent, *, can_edit: bool = False) -> AdminMealEventRead:
+    return AdminMealEventRead(
+        **_meal_event_fields(event, can_edit=can_edit),
+        archived_at=_aware(event.archived_at) if event.archived_at is not None else None,
     )
 
 
@@ -1819,12 +1838,12 @@ async def edit_meal(
 
 @meals_router.get(
     "/v1/admin/meal-events",
-    response_model=list[MealEventRead],
+    response_model=list[AdminMealEventRead],
 )
 async def admin_list_meal_events(
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
-) -> list[MealEventRead]:
+) -> list[AdminMealEventRead]:
     events = (
         await session.scalars(
             select(MealEvent)
@@ -1842,10 +1861,40 @@ async def admin_list_meal_events(
         select(Order.meal_event_id).where(Order.meal_event_id.in_([event.id for event in events])).distinct()
     ))
     now = datetime.now(timezone.utc)
-    return [_meal_event_read(
+    return [_admin_meal_event_read(
         event,
         can_edit=_meal_event_allows_edit(event, now) and event.id not in ordered_event_ids,
     ) for event in events]
+
+
+@meals_router.patch("/v1/admin/meal-events/{event_id}/archive", response_model=AdminMealEventRead)
+async def archive_meal_event(
+    event_id: str,
+    body: MealEventArchiveUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> AdminMealEventRead:
+    event = await _load_event(session, event_id, for_update=True, refresh_existing=True)
+    if event is None:
+        raise HTTPException(404, "找不到便當場次")
+    if event.status not in {MealEventStatus.COMPLETED, MealEventStatus.CANCELLED}:
+        raise HTTPException(409, "只有已完成或已取消的場次可以封存")
+    previous = event.archived_at
+    if (previous is not None) == body.archived:
+        return _admin_meal_event_read(event)
+
+    archived_at = datetime.now(timezone.utc) if body.archived else None
+    updated_id = await session.scalar(
+        update(MealEvent).where(MealEvent.id == event.id, MealEvent.archived_at == previous)
+        .values(archived_at=archived_at).returning(MealEvent.id)
+        .execution_options(synchronize_session="fetch"),
+    )
+    if updated_id is None:
+        raise HTTPException(409, "封存狀態已更新，請重新整理後再試")
+    audit_changes(session, admin.id, "meal_event", event.id, "meal_event.archive_update",
+                  {"archived_at": _aware(previous) if previous is not None else None}, {"archived_at": archived_at})
+    await session.commit()
+    return _admin_meal_event_read(event)
 
 
 def _configured_event_values(body: MealEventCreate, *, existing: MealEvent | None = None) -> dict:
@@ -2425,6 +2474,7 @@ async def _meal_disaster_plan(
             by_event[order.meal_event_id].append(order)
     event_summaries = []
     fingerprint = []
+    now = datetime.now(timezone.utc)
     for event in events:
         orders = by_event[event.id]
         active = _event_cancellation_active_orders(orders)
@@ -2434,6 +2484,9 @@ async def _meal_disaster_plan(
             "id": event.id, "title": event.title, "period": meal_period(event),
             "order_count": len(active), "paid_count": len(paid),
             "paid_total": sum(order.amount_total for order in paid), "blocked": blocked,
+            "ordering_paused": event.ordering_paused_at is not None,
+            "ordering_pause_version": event.ordering_pause_version,
+            "ordering_pause_blocked_reason": _meal_ordering_adjustment_blocked_reason(event, now),
         })
         fingerprint.append([event.id, event.title, event.status.value, blocked, [
             [order.id, order.revision, order.payment_status.value, order.amount_total] for order in active

@@ -1793,6 +1793,7 @@ class MealEvent(Base):
     business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     ordering_paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     ordering_pause_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))

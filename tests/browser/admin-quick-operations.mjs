@@ -110,6 +110,7 @@ for (const width of [1440, 390]) {
     state.events = [{ id: 'scheduled', title: '每日供餐 2030-01-03', location: '合作社', status: 'published', can_edit: false, schedule_template_id: 'template', offerings: [],
       pickup_starts_at: `${date}T11:00:00+08:00`, pickup_ends_at: `${date}T13:30:00+08:00` }];
     await page.goto(`${base}/admin/meals?tab=events`);
+    await page.getByText('建立便當場次', { exact: true }).filter({ visible: true }).click();
     const form = page.locator('form').filter({ has: page.getByRole('heading', { name: '建立便當場次', exact: true }) });
     await form.getByLabel('取餐地點', { exact: true }).fill('合作社');
     await form.getByRole('status').filter({ hasText: '相同地點已有重疊場次' }).waitFor();

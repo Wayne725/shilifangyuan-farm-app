@@ -290,8 +290,8 @@ for (const [label, override, expectedLink] of [
 }
 
 for (const [stateName, status, normalized, label, canCancel] of [
-  ['過去未交付', 'picked_up', 'no_show', '已結束', true],
-  ['實際已交付', 'picked_up', 'picked_up', '已結束', false],
+  ['過去未交付', 'picked_up', 'no_show', '取餐時段已結束', true],
+  ['實際已交付', 'picked_up', 'picked_up', '取餐時段已結束', false],
   ['已取消', 'cancelled', 'no_show', null, false],
 ]) {
   test(`後台訂單區分${stateName}便當，依原權限顯示退單動作`, async t => {
@@ -306,7 +306,7 @@ for (const [stateName, status, normalized, label, canCancel] of [
     if (label) await card.getByText(label, { exact: true }).waitFor();
     else {
       await card.getByLabel('付款：已退款', { exact: true }).waitFor();
-      assert.equal(await card.getByText('已結束', { exact: true }).count(), 0);
+      assert.equal(await card.getByText('取餐時段已結束', { exact: true }).count(), 0);
     }
     assert.doesNotMatch(await card.innerText(), /逾時未取|已完成取餐/);
     assert.equal(await card.getByRole('button', { name: '辦理退單', exact: true }).count(), Number(canCancel));

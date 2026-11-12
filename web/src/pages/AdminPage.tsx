@@ -219,7 +219,7 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
             </span>}
             <OrderStatusBadge kind="payment" status={order.payment_status} label={order.payment_status === "expired" && !order.cancelled_at ? "付款逾期" : undefined} />
             {order.sales_channel === "meal_preorder"
-              ? mealServiceEnded(order) && <span className="status-chip">已結束</span>
+              ? mealServiceEnded(order) && <span className="status-chip">取餐時段已結束</span>
               : <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} label={pickupFulfillmentLabel(order)} />}
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />
             {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {shipmentStatusLabel(order.shipment.status)}</span>}

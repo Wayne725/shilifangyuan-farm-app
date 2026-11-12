@@ -107,7 +107,7 @@ async def test_buyer_cancellation_is_forbidden_before_and_after_pickup(review_co
 
 async def test_disaster_batch_cancels_lunch_and_dinner_and_notifies_every_order(schedule_context):
     client, session, admin, buyer, meal = schedule_context
-    day = datetime.now(TAIPEI).date() + timedelta(days=1)
+    day = datetime.now(TAIPEI).date() + timedelta(days=2)
     events = []
     users = [buyer] + [User(email=f"meal-buyer-{n}@example.test", display_name=f"隔離買家 {n}", password_hash="test") for n in range(1, 6)]
     session.add_all(users)
@@ -142,9 +142,23 @@ async def test_disaster_batch_cancels_lunch_and_dinner_and_notifies_every_order(
     assert (await client.post(preview_path, headers=auth_headers(buyer), json=payload)).status_code == 403
     preview = (await client.post(preview_path, headers=admin_headers, json=payload)).json()
     assert len(preview["events"]) == 2 and sum(row["paid_total"] for row in preview["events"]) == 200
+    lunch = next(row for row in preview["events"] if row["period"] == "lunch")
+    assert lunch["ordering_pause_blocked_reason"] is None and lunch["ordering_paused"] is False
+    pause_path = f"/v1/admin/meal-events/{lunch['id']}/ordering-pause"
+    pause = await client.patch(pause_path, headers=admin_headers, json={
+        "paused": True, "expected_version": lunch["ordering_pause_version"],
+    })
+    assert pause.status_code == 200, pause.text
+    refreshed = (await client.post(preview_path, headers=admin_headers, json=payload)).json()
+    paused_lunch = next(row for row in refreshed["events"] if row["period"] == "lunch")
+    assert paused_lunch["ordering_paused"] is True and paused_lunch["ordering_pause_version"] == 1
+    assert paused_lunch["order_count"] == 3 and paused_lunch["paid_total"] == 100
+    assert not next(row for row in refreshed["events"] if row["period"] == "dinner")["ordering_paused"]
+    assert not list(await session.scalars(select(Refund)))
+    assert not list(await session.scalars(select(Notification)))
     bad = await client.post(cancel_path, headers=admin_headers, json={**payload, "preview_token": "0" * 64})
     assert bad.status_code == 409 and all(event.status == MealEventStatus.PUBLISHED for event in events)
-    body = {**payload, "preview_token": preview["preview_token"], "announcement": "颱風期間暫停供餐"}
+    body = {**payload, "preview_token": refreshed["preview_token"], "announcement": "颱風期間暫停供餐"}
     result = await client.post(cancel_path, headers=admin_headers, json=body)
     assert result.status_code == 200, result.text
     assert result.json() == {"cancelled_event_count": 2, "order_count": 6, "paid_count": 2, "paid_total": 200}

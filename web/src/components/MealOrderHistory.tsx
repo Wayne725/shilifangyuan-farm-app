@@ -101,9 +101,9 @@ export function MealOrderHistory({ orderId, embedded = false }: { orderId?: stri
 function MealOrderState({ order, ended, onPay, paying }: { order: MealOrder; ended: boolean; onPay: () => void; paying: boolean }) {
   if (order.cancelled_at || order.fulfillment_status === "cancelled") return <p>訂單已取消</p>;
   if (order.meal_booking_type === "business" && ["pending", "failed", "expired"].includes(order.payment_status)) {
-    return <>{ended && <p>已結束</p>}<BusinessMealPaymentStatus order={order} onPay={onPay} paying={paying} /></>;
+    return <>{ended && <p>取餐時段已結束</p>}<BusinessMealPaymentStatus order={order} onPay={onPay} paying={paying} /></>;
   }
-  if (ended) return <p>已結束</p>;
+  if (ended) return <p>取餐時段已結束</p>;
   if (order.payment_method === "cash_on_pickup" && order.payment_status === "pending") {
     return <div className="credential-pending cash-payment-pending"><Money size={34} weight="light" /><h3>預訂成功・待現場付款</h3><p>應付金額 {formatMoney(order.amount_total)}。</p></div>;
   }

@@ -554,6 +554,7 @@ export interface MealCalendarEvent extends MealEventTiming {
 }
 
 export interface MealEvent extends MealEventTiming {
+  archived_at?: string | null;
   can_edit?: boolean;
   schedule_template_id?: string | null;
   allow_cash_payment?: boolean;

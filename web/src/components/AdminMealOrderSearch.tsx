@@ -16,7 +16,7 @@ import "./AdminMealFilters.css";
 
 const pageSize = 20;
 const emptyFilters = { search: "", date_from: "", date_to: "", meal_period: "all", pickup_time: "", payment_status: "", fulfillment_status: "", invoice_status: "", review_status: "all", work_queue: "all" };
-const fulfillmentLabels: Record<string, string> = { pending: "待確認", preparing: "製作中", ready: "待取餐", ready_for_pickup: "待取餐", picked_up: "已取餐", no_show: "已結束", cancelled: "已取消" };
+const fulfillmentLabels: Record<string, string> = { pending: "待確認", preparing: "製作中", ready: "待取餐", ready_for_pickup: "待取餐", picked_up: "已取餐", no_show: "取餐時段已結束", cancelled: "已取消" };
 const reviewLabels = { pending: "退單待審", approved: "退單已核准", rejected: "退單未核准" };
 const workQueues = [
   { key: "pending_cancellation", title: "退單待審", detail: "等待核准或拒絕" },
@@ -106,7 +106,7 @@ function MealOperationOrder({ item }: { item: MealAdminOrderItem }) {
     {order.pickup_address && <p>取餐地址：{order.pickup_address}</p>}
     <p>餐具：{order.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
     <p>{order.items.map((meal) => `${meal.meal_name} × ${meal.quantity}`).join("、")}</p>
-    <div className="operation-state"><OrderStatusBadge kind="payment" status={order.payment_status} label={order.payment_status === "expired" && !order.cancelled_at ? "付款逾期" : undefined} /><OrderStatusBadge kind="fulfillment" status={order.cancelled_at ? "cancelled" : order.fulfillment_status} label={order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "已結束" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"} /><OrderStatusBadge kind="invoice" status={order.invoice_status} /></div>
+    <div className="operation-state"><OrderStatusBadge kind="payment" status={order.payment_status} label={order.payment_status === "expired" && !order.cancelled_at ? "付款逾期" : undefined} /><OrderStatusBadge kind="fulfillment" status={order.cancelled_at ? "cancelled" : order.fulfillment_status} label={order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "取餐時段已結束" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"} /><OrderStatusBadge kind="invoice" status={order.invoice_status} /></div>
     {cancellation && <p className="meal-order-review-status">{reviewLabels[cancellation.status]}{cancellation.status === "pending" && "，訂單尚未取消"}</p>}
     <p>付款方式：{order.payment_method === "cash_on_pickup" ? "合作社現場付款" : "線上付款"}</p>
     <OrderQuantityAmendment order={order} disabled={update.isPending} />

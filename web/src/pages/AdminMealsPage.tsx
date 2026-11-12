@@ -21,7 +21,7 @@ import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, formatMoney } from "../lib/api";
 import { mealEventStatusLabel } from "../lib/labels";
-import { formatMealDateTime, mealCanChangeOrderingPause, shiftMealDate, taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
+import { formatMealDateTime, mealCanChangeOrderingPause, mealServiceDate, shiftMealDate, taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import type { Meal, MealEvent, MealOrder } from "../lib/types";
 import { OptionalMark } from "../components/OptionalMark";
 
@@ -85,11 +85,13 @@ export function AdminMealsPage() {
           <AdminMealCancellations key={JSON.stringify([routeSearch.order_id, routeSearch.q])} initialSearch={routeSearch.q} initialOrderId={routeSearch.order_id} />
         </Tabs.Content>
         <Tabs.Content className="tab-content" value="events">
-          <EventCreateForm meals={meals.data || []} events={events.data || []} onDone={refreshEvents} />
+          <details className="meal-event-create">
+            <summary>建立便當場次</summary>
+            <EventCreateForm meals={meals.data || []} events={events.data || []} onDone={refreshEvents} />
+          </details>
           {events.isPending && <LoadingLines count={4} />}
           {events.isError && <DataState kind="error" title="便當場次無法讀取" detail={events.error.message} />}
-          {events.data?.length === 0 && <DataState title="目前沒有便當場次" detail="先建立餐點，再建立第一個預訂場次。" />}
-          <div className="admin-review-list">{events.data?.map((event) => <MealEventCard key={event.id} event={event} meals={meals.data || []} onDone={refreshEvents} />)}</div>
+          {events.data && <MealEventList events={events.data} meals={meals.data || []} onDone={refreshEvents} />}
         </Tabs.Content>
         <Tabs.Content className="tab-content" value="disaster"><MealDisasterCancellation onDone={refreshEvents} /></Tabs.Content>
         <Tabs.Content className="tab-content" value="schedules"><MealScheduleSettings meals={meals.data || []} events={events.data || []} onEventsChanged={refreshEvents} /></Tabs.Content>
@@ -102,6 +104,88 @@ export function AdminMealsPage() {
       </Tabs.Root>
     </section>
   );
+}
+
+const eventStatuses = ["draft", "published", "ordering_closed", "pickup_open", "completed", "cancelled"];
+const eventListPageSize = 10;
+const emptyEventSearch = { date: "", status: "", query: "" };
+
+function adminMealEventLabel(status: string) {
+  return status === "pickup_open" ? "供餐中" : mealEventStatusLabel(status);
+}
+
+function MealEventList({ events, meals, onDone }: { events: MealEvent[]; meals: Meal[]; onDone: () => void }) {
+  const [draft, setDraft] = useState(emptyEventSearch);
+  const [search, setSearch] = useState(emptyEventSearch);
+  const [page, setPage] = useState(1);
+  const [archiveMessage, setArchiveMessage] = useState("");
+  const queryClient = useQueryClient();
+  const archive = useMutation({
+    mutationFn: (event: MealEvent) => apiFetch<MealEvent>(`/v1/admin/meal-events/${event.id}/archive`, {
+      method: "PATCH",
+      body: JSON.stringify({ archived: !event.archived_at }),
+    }),
+    onMutate: () => setArchiveMessage(""),
+    onSuccess: async (event) => {
+      await queryClient.cancelQueries({ queryKey: ["admin-meal-events"] });
+      queryClient.setQueryData<MealEvent[]>(["admin-meal-events"], (entries) => entries?.map((entry) => entry.id === event.id ? event : entry));
+      setArchiveMessage(event.archived_at ? `已封存「${event.title}」` : `已還原「${event.title}」`);
+      onDone();
+    },
+    onError: () => onDone(),
+  });
+  const now = Date.now();
+  const keyword = search.query.trim().toLowerCase();
+  const matches = events.filter((event) => {
+    if (Boolean(event.archived_at) !== (search.status === "archived")) return false;
+    if (search.status === "paused" && !event.ordering_paused) return false;
+    if (eventStatuses.includes(search.status) && search.status !== event.status) return false;
+    if (search.date && mealServiceDate(event) !== search.date) return false;
+    return !keyword || [event.title, event.location].some((value) => value.toLowerCase().includes(keyword));
+  }).sort((left, right) => {
+    const leftPast = Date.parse(left.pickup_ends_at) <= now;
+    const rightPast = Date.parse(right.pickup_ends_at) <= now;
+    if (leftPast !== rightPast) return leftPast ? 1 : -1;
+    const byPickup = Date.parse(left.pickup_starts_at) - Date.parse(right.pickup_starts_at);
+    return leftPast ? -byPickup : byPickup;
+  });
+  const lastPage = Math.max(1, Math.ceil(matches.length / eventListPageSize));
+  const currentPage = Math.min(page, lastPage);
+  const offset = (currentPage - 1) * eventListPageSize;
+
+  return <>
+    <form className="meal-event-search" aria-label="查詢場次" onSubmit={(event) => {
+      event.preventDefault();
+      setSearch(draft);
+      setPage(1);
+    }}>
+      <div className="field-grid three-columns">
+        <label className="field"><span>供餐日期</span><input type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label>
+        <label className="field"><span>場次狀態</span><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
+          <option value="">全部未封存</option>
+          {eventStatuses.map((status) => <option key={status} value={status}>{adminMealEventLabel(status)}</option>)}
+          <option value="paused">新預訂已暫停</option>
+          <option value="archived">已封存</option>
+        </select></label>
+        <label className="field"><span>場次名稱或地點</span><input type="search" value={draft.query} onChange={(event) => setDraft({ ...draft, query: event.target.value })} /></label>
+      </div>
+      <div className="form-actions">
+        <button className="button button-primary" type="submit">查詢場次</button>
+        <button className="button button-quiet" type="button" onClick={() => { setDraft(emptyEventSearch); setSearch(emptyEventSearch); setPage(1); }}>清除查詢</button>
+      </div>
+    </form>
+    {archiveMessage && <p className="form-success" role="status">{archiveMessage}</p>}
+    {archive.isError && <p className="form-error" role="alert">{archive.error.message}</p>}
+    <div className="meal-event-results">
+      <p role="status">{matches.length ? `共 ${matches.length} 個場次` : events.length ? "沒有符合條件的場次" : "目前沒有便當場次"}</p>
+      {lastPage > 1 && <nav className="meal-event-pagination" aria-label="場次分頁">
+        <button className="button button-quiet" type="button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>上一頁</button>
+        <span role="status">第 {currentPage}／{lastPage} 頁</span>
+        <button className="button button-quiet" type="button" disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)}>下一頁</button>
+      </nav>}
+    </div>
+    {matches.length > 0 && <div className="admin-review-list">{matches.slice(offset, offset + eventListPageSize).map((event) => <MealEventCard key={event.id} event={event} meals={meals} onDone={onDone} onArchive={() => archive.mutate(event)} archiving={archive.isPending} />)}</div>}
+  </>;
 }
 
 function MealCreateForm({ onDone }: { onDone: () => void }) {
@@ -223,7 +307,7 @@ function EventCreateForm({ meals, events = [], onDone, initial, onCancel }: { me
 
 const MAX_OFFERING_CAPACITY = 100_000;
 
-function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal[]; onDone: () => void }) {
+function MealEventCard({ event, meals, onDone, onArchive, archiving }: { event: MealEvent; meals: Meal[]; onDone: () => void; onArchive: () => void; archiving: boolean }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [reason, setReason] = useState("");
@@ -295,7 +379,8 @@ function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal
   const eventActionPending = action.isPending || changeOrderingPause.isPending || increaseCapacity.isPending;
   return <article className="admin-review-card meal-event-admin-card">
     <div className="review-card-copy">
-      <span className="status-chip">{event.status === "pickup_open" ? "供餐中" : mealEventStatusLabel(event.status)}</span>
+      <span className="status-chip">{adminMealEventLabel(event.status)}</span>
+      {event.archived_at && <span className="status-chip">已封存</span>}
       {orderingPaused && <span className="status-chip" role="status">新預訂已暫停</span>}
       {event.business_only && <span className="status-chip">僅開放會餐</span>}
       <h3>{event.title}</h3>
@@ -338,7 +423,9 @@ function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal
     <div className="review-card-actions"><label className="field"><span>處理原因<OptionalMark /></span><input value={reason} onChange={(input) => setReason(input.target.value)} /></label><div><button type="button" disabled={eventActionPending} onClick={() => action.mutate("duplicate")}><Copy size={16} />複製至隔日</button>{canChangeOrderingPause && <button type="button" disabled={eventActionPending} onClick={() => changeOrderingPause.mutate(!orderingPaused)}>{orderingPaused ? "恢復新預訂" : "暫停新預訂"}</button>}{event.status === "draft" && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("publish")}><SealCheck size={16} />發布</button>}{!["draft", "cancelled", "completed"].includes(event.status) && Date.parse(event.pickup_ends_at) <= Date.now() && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("complete")}>結束場次</button>}{!["cancelled", "completed"].includes(event.status) && <button type="button" disabled={eventActionPending} onClick={() => action.mutate("cancel")}>取消場次</button>}<Link to="/meals/$eventId" params={{ eventId: event.id }}>查看前台</Link></div></div>
     {action.isError && <p className="form-error">{action.error.message}</p>}
     {changeOrderingPause.isError && <p className="form-error" role="alert">{changeOrderingPause.error.message}</p>}
-    <div className="form-actions"><button className="button button-quiet" type="button" disabled={event.can_edit !== true || eventActionPending} onClick={() => setEditing(!editing)}>{editing ? "收起場次編輯" : "手動編輯場次"}</button>{event.can_edit !== true && <span className="field-help">已有訂單或場次已截止，不能修改原場次。</span>}</div>
+    <div className="form-actions"><button className="button button-quiet" type="button" disabled={event.can_edit !== true || eventActionPending} onClick={() => setEditing(!editing)}>{editing ? "收起場次編輯" : "手動編輯場次"}</button>{event.can_edit !== true && <span className="field-help">已有訂單或場次已截止，不能修改原場次。</span>}
+      {["completed", "cancelled"].includes(event.status) && <button className="button button-quiet" type="button" disabled={eventActionPending || archiving} onClick={onArchive}>{event.archived_at ? "還原場次" : "封存場次"}</button>}
+    </div>
     {editing && <EventCreateForm key={event.id} meals={meals} initial={event} onCancel={() => setEditing(false)} onDone={() => { setEditing(false); onDone(); }} />}
     {event.business_only && <p className="meal-payment-options">取餐當日線上付款</p>}
     {event.same_day_preparation_minutes != null && <p className="meal-payment-options">當日訂餐 · 線上付款</p>}
@@ -373,7 +460,7 @@ function EventPickupOrders({ eventId }: { eventId: string }) {
         <p>餐具：{order.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
         <p>{order.items.map((item) => `${item.meal_name} × ${item.quantity}`).join("、")}</p>
         <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} taxAmount={order.tax_amount} invoiceTax={order.invoice_tax} invoiceStatus={order.invoice_status} />
-        <p>{({ paid: "已付款", pending: "待付款", refunded: "已退款", refund_pending: "退款中", late_paid_refund_required: "付款晚到，退款處理中", expired: "付款逾期", failed: "付款失敗" } as Record<string, string>)[order.payment_status] || order.payment_status} · {order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "已結束" : "供餐中"}</p>
+        <p>{({ paid: "已付款", pending: "待付款", refunded: "已退款", refund_pending: "退款中", late_paid_refund_required: "付款晚到，退款處理中", expired: "付款逾期", failed: "付款失敗" } as Record<string, string>)[order.payment_status] || order.payment_status} · {order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "取餐時段已結束" : "供餐中"}</p>
       </article>)}</div>
     </section>}
   </div>;
