@@ -12,7 +12,7 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, captureSessionIdentityGuard, formatDateTime, formatMoney } from "../lib/api";
 import { campaignAccessDenied, campaignDateTime, campaignScheduleError, campaignStatusLabel, campaignTimestamp, defaultReviewDeadline, groupProposalStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
-import { taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
+import { taipeiDate, taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import type { GroupBundle, GroupCampaign, GroupVoteProposal, Product } from "../lib/types";
 import { OptionalMark } from "../components/OptionalMark";
@@ -52,8 +52,6 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
   const refreshProposals = () => queryClient.invalidateQueries({ queryKey: ["group-vote-proposals"] });
   const refreshCampaigns = () => queryClient.invalidateQueries({ queryKey: ["group-campaigns"] });
   const refreshBundles = () => queryClient.invalidateQueries({ queryKey: ["group-bundles"] });
-  const visibleProposals = (proposals.data || []).filter(proposal =>
-    view !== "voting" || (proposal.status === "voting" && campaignTimestamp(proposal.deadline) > now));
   const visibleCampaigns = (campaigns.data || []).filter(campaign => {
     if (view === "active") return campaign.is_public !== false && campaignTimestamp(campaign.deadline) > now
       && ["recruiting", "confirmed"].includes(campaign.decision_status);
@@ -71,10 +69,23 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
       }}>
         <Tabs.List className="tab-list" aria-label="共同購買管理分類"><Tabs.Trigger value="proposals">提案審核</Tabs.Trigger><Tabs.Trigger value="campaigns">正式共同購買</Tabs.Trigger><Tabs.Trigger value="bundles">固定套組</Tabs.Trigger><Tabs.Trigger value="wishes">願望管理</Tabs.Trigger></Tabs.List>
         <Tabs.Content className="tab-content" value="proposals">
-          <label className="field social-review-scope"><span>提案範圍</span><select value={view === "voting" ? view : ""} onChange={event => void navigate({ search: { tab: "proposals", view: event.target.value === "voting" ? "voting" : undefined }, resetScroll: false })}><option value="">全部</option><option value="voting">投票中</option></select></label>
-          <AdminGroupSection title="共同購買提案" count={visibleProposals.length} pending={proposals.isPending} error={proposals.error?.message}>
-            <div className="admin-review-list">{visibleProposals.map((proposal) => <GroupProposalReview key={proposal.id} proposal={proposal} campaign={campaigns.data?.find((campaign) => campaign.source_proposal_id === proposal.id)} products={products.data || []} bundles={bundles.data || []} onAccessDenied={onAccessDenied} onDone={() => { refreshProposals(); refreshCampaigns(); }} />)}</div>
-          </AdminGroupSection>
+          <GroupProposalList
+            proposals={proposals.data ?? []}
+            pending={proposals.isPending}
+            error={proposals.error?.message}
+            votingOnly={view === "voting"}
+            onScopeChange={(votingOnly) => void navigate({ search: { tab: "proposals", view: votingOnly ? "voting" : undefined }, resetScroll: false })}
+            now={now}
+            renderProposal={(proposal) => <GroupProposalReview
+              key={proposal.id}
+              proposal={proposal}
+              campaign={campaigns.data?.find((campaign) => campaign.source_proposal_id === proposal.id)}
+              products={products.data ?? []}
+              bundles={bundles.data ?? []}
+              onAccessDenied={onAccessDenied}
+              onDone={() => { refreshProposals(); refreshCampaigns(); }}
+            />}
+          />
         </Tabs.Content>
         <Tabs.Content className="tab-content" value="campaigns">
           <CampaignCreateForm products={products.data || []} bundles={bundles.data || []} onAccessDenied={onAccessDenied} onDone={refreshCampaigns} />
@@ -98,14 +109,85 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
   );
 }
 
-function AdminGroupSection({ title, count, pending, error, children }: { title: string; count: number; pending: boolean; error?: string; children: React.ReactNode }) {
-  return <section className="admin-review-section"><div className="section-title-row"><div><p className="eyebrow">GROUP WORKFLOW / 共同購買流程</p><h2>{title}</h2></div><span>{count}</span></div>{pending && <LoadingLines count={3} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && <DataState title={`目前沒有${title}`} detail="新的項目會出現在這裡。" />}{children}</section>;
+const emptyProposalSearch = { query: "", from: "", through: "" };
+const proposalPageSize = 10;
+
+function GroupProposalList({ proposals, pending, error, votingOnly, onScopeChange, now, renderProposal }: {
+  proposals: GroupVoteProposal[];
+  pending: boolean;
+  error?: string;
+  votingOnly: boolean;
+  onScopeChange: (votingOnly: boolean) => void;
+  now: number;
+  renderProposal: (proposal: GroupVoteProposal) => React.ReactNode;
+}) {
+  const [draft, setDraft] = useState(emptyProposalSearch);
+  const [search, setSearch] = useState(emptyProposalSearch);
+  const [page, setPage] = useState(1);
+  const invalidRange = Boolean(draft.from && draft.through && draft.from > draft.through);
+  const keyword = search.query.trim().toLowerCase();
+  const hasDateFilter = Boolean(search.from || search.through);
+  const matches = proposals.filter((proposal) => {
+    if (votingOnly && !(proposal.status === "voting" && campaignTimestamp(proposal.deadline) > now)) return false;
+    if (keyword && !proposal.target_name.toLowerCase().includes(keyword)) return false;
+    if (!hasDateFilter) return true;
+    const created = taipeiDate(campaignTimestamp(proposal.created_at));
+    return created && (!search.from || created >= search.from) && (!search.through || created <= search.through);
+  });
+  const pageCount = Math.max(1, Math.ceil(matches.length / proposalPageSize));
+  const currentPage = Math.min(page, pageCount);
+  const start = (currentPage - 1) * proposalPageSize;
+
+  return <>
+    <form className="admin-order-search" aria-label="查詢共同購買提案" onSubmit={(event) => {
+      event.preventDefault();
+      if (invalidRange) return;
+      setSearch(draft);
+      setPage(1);
+    }}>
+      <label className="field"><span>提案標題</span><input type="search" value={draft.query} maxLength={120} onChange={(event) => setDraft({ ...draft, query: event.target.value })} /></label>
+      <label className="field"><span>提案日期起</span><input type="date" value={draft.from} onChange={(event) => setDraft({ ...draft, from: event.target.value })} /></label>
+      <label className="field"><span>提案日期迄</span><input type="date" value={draft.through} onChange={(event) => setDraft({ ...draft, through: event.target.value })} /></label>
+      <label className="field"><span>提案範圍</span><select value={votingOnly ? "voting" : ""} onChange={(event) => {
+        onScopeChange(event.target.value === "voting");
+        setPage(1);
+      }}><option value="">全部</option><option value="voting">投票中</option></select></label>
+      <button className="button button-primary" type="submit" disabled={invalidRange}>查詢提案</button>
+      <button className="button button-quiet" type="button" onClick={() => {
+        setDraft(emptyProposalSearch);
+        setSearch(emptyProposalSearch);
+        setPage(1);
+        if (votingOnly) onScopeChange(false);
+      }}>清除查詢</button>
+    </form>
+    {invalidRange && <p className="form-error" role="alert">結束日期不可早於開始日期</p>}
+    <AdminGroupSection
+      title="共同購買提案"
+      count={matches.length}
+      pending={pending}
+      error={error}
+      empty={keyword || hasDateFilter || votingOnly ? <DataState title="沒有符合條件的提案" detail="請調整查詢條件。" /> : undefined}
+    >
+      {pageCount > 1 && <nav className="admin-pagination" aria-label="團購提案分頁">
+        <button className="button button-quiet" type="button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>上一頁</button>
+        <span role="status">第 {currentPage}／{pageCount} 頁</span>
+        <button className="button button-quiet" type="button" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>下一頁</button>
+      </nav>}
+      <div className="admin-review-list">{matches.slice(start, start + proposalPageSize).map(renderProposal)}</div>
+    </AdminGroupSection>
+  </>;
+}
+
+function AdminGroupSection({ title, count, pending, error, empty, children }: { title: string; count: number; pending: boolean; error?: string; empty?: React.ReactNode; children: React.ReactNode }) {
+  return <section className="admin-review-section"><div className="section-title-row"><div><p className="eyebrow">GROUP WORKFLOW / 共同購買流程</p><h2>{title}</h2></div><span>{count}</span></div>{pending && <LoadingLines count={3} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && (empty || <DataState title={`目前沒有${title}`} detail="新的項目會出現在這裡。" />)}{children}</section>;
 }
 
 function GroupProposalReview({ proposal, campaign, products, bundles, onDone, onAccessDenied }: { proposal: GroupVoteProposal; campaign?: GroupCampaign; products: Product[]; bundles: GroupBundle[]; onDone: () => void; onAccessDenied: () => void }) {
   const [threshold, setThreshold] = useState(proposal.threshold || 10);
   const [deadline, setDeadline] = useState(localDateTime(7));
   const [reason, setReason] = useState("");
+  const created = taipeiDate(campaignTimestamp(proposal.created_at));
+  const deadlineLabel = campaign ? `${campaignDateTime(campaign.deadline)} 付款截止` : proposal.status === "converted" ? "" : proposal.deadline ? `${formatDateTime(proposal.deadline)} 投票截止` : "待審核設定期限";
   const action = useMutation({
     mutationFn: async (decision: "approve" | "reject") => {
       if (decision === "approve") return apiFetch(`/v1/vote-proposals/${proposal.id}/admin/approve`, { method: "POST", body: JSON.stringify({ threshold, deadline: taipeiInputToIso(deadline) }) });
@@ -117,7 +199,7 @@ function GroupProposalReview({ proposal, campaign, products, bundles, onDone, on
   });
   return (
     <article className="admin-review-card group-proposal-card">
-      <div className="review-card-copy"><span className="status-chip">{groupProposalStatusLabel(proposal.status)}</span><h3>{proposal.target_name}</h3>{campaign && <p>供應商品：{campaign.target_type === "bundle" ? bundles.find(item => item.id === campaign.target_id)?.name || campaign.title : products.find(item => item.id === campaign.target_id)?.name || campaign.title}</p>}{proposal.request_details && <p className="group-request-details">{proposal.request_details}</p>}<p>{campaign ? `已付款 ${campaign.paid_quantity}/${campaign.min_paid_quantity} ${campaignUnit(campaign, products)}` : proposal.status === "converted" ? "已開團" : `投票 ${proposal.vote_count}/${proposal.threshold} 人 · 預估 ${proposal.estimated_quantity} 組`}</p><small>{campaign ? `${campaignDateTime(campaign.deadline)} 付款截止` : proposal.status === "converted" ? "" : proposal.deadline ? `${formatDateTime(proposal.deadline)} 投票截止` : "待審核設定期限"}</small></div>
+      <div className="review-card-copy"><span className="status-chip">{groupProposalStatusLabel(proposal.status)}</span><h3>{proposal.target_name}</h3>{campaign && <p>供應商品：{campaign.target_type === "bundle" ? bundles.find(item => item.id === campaign.target_id)?.name || campaign.title : products.find(item => item.id === campaign.target_id)?.name || campaign.title}</p>}{proposal.request_details && <p className="group-request-details">{proposal.request_details}</p>}<p>{campaign ? `已付款 ${campaign.paid_quantity}/${campaign.min_paid_quantity} ${campaignUnit(campaign, products)}` : proposal.status === "converted" ? "已開團" : `投票 ${proposal.vote_count}/${proposal.threshold} 人 · 預估 ${proposal.estimated_quantity} 組`}</p><small>{[created && `${created.replaceAll("-", "/")} 提案`, deadlineLabel].filter(Boolean).join(" · ")}</small></div>
       <div className="review-card-actions schedule-fields">
         {proposal.status === "pending_review" && <><label className="field"><span>投票門檻（人）</span><input min={1} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /></label><label className="field"><span>投票截止（台灣）</span><input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label></>}
 

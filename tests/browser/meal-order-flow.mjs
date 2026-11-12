@@ -306,7 +306,8 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
     if (method === 'POST' && path === '/v1/admin/meal-disaster/preview') {
       const payload = request.postDataJSON();
       state.writes.push({ path, payload });
-      const events = state.events.filter(event => event.service_date === payload.service_date && payload.periods.includes(event.meal_period));
+      const events = state.events.filter(event => event.service_date === payload.service_date && payload.periods.includes(event.meal_period)
+        && !['cancelled', 'completed'].includes(event.status));
       return route.fulfill({ json: { preview_token: 'a'.repeat(64), events: events.map(event => ({
         id: event.id, title: event.title, period: event.meal_period, order_count: 3, paid_count: 1, paid_total: 120, blocked: false,
         ordering_paused: event.ordering_paused ?? false, ordering_pause_version: event.ordering_pause_version ?? 0,
@@ -328,6 +329,12 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
         return route.fulfill({ status: 409, json: { detail: '接單狀態已更新，請重新整理後再試' } });
       }
       Object.assign(event, { ordering_paused: payload.paused, ordering_pause_version: version + 1 });
+      return route.fulfill({ json: event });
+    }
+    if (method === 'POST' && path === '/v1/admin/meal-events/scheduled-lunch/cancel') {
+      state.writes.push({ path, payload: request.postDataJSON() });
+      const event = state.events.find(item => item.id === 'scheduled-lunch');
+      Object.assign(event, { status: 'cancelled', can_edit: false });
       return route.fulfill({ json: event });
     }
     if (method === 'GET' && path === '/v1/admin/meal-events') {
@@ -718,7 +725,7 @@ for (const width of [390, 1440]) {
     await status.selectOption('archived');
     await submit();
     await card.getByRole('button', { name: '查看本場訂單與取餐時間' }).waitFor();
-    await card.getByRole('button', { name: '還原場次' }).click();
+    await card.getByRole('button', { name: '取消封存' }).click();
     await card.waitFor({ state: 'hidden' });
     await status.selectOption('completed');
     await submit();
@@ -924,7 +931,7 @@ test('手機尺寸颱風停餐先顯示午晚餐與退款，確認後公告', { 
   await page.getByLabel('停餐日期', { exact: true }).fill('2026-09-17');
   await page.getByRole('button', { name: '預覽影響場次' }).click();
   await page.getByText(/隔離每日晚餐.*3 筆訂單/).waitFor();
-  await page.getByRole('button', { name: '確認停餐', exact: true }).click();
+  await page.getByRole('button', { name: '取消供餐與退款', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByText(/將退款 2 筆、共 \$240，無法復原/).waitFor();
   assert.equal(state.writes.length, 1);
@@ -961,6 +968,54 @@ test('手機後台從天災預覽暫停和恢復選定場次的新預訂', { tim
   assert.ok(state.writes.every(write => !write.path.endsWith('/cancel')));
   assert.deepEqual(state.unknownApi, []);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+});
+
+test('手機天災預覽保留已取消場次並只計入仍可取消的場次', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  Object.assign(state.events[0], { status: 'cancelled', ordering_paused: true, can_edit: false });
+  await page.goto(`${base}/admin/meals?tab=disaster`);
+  await page.getByLabel('停餐日期', { exact: true }).fill('2026-09-17');
+  await page.getByRole('button', { name: '預覽影響場次' }).click();
+  const history = page.getByRole('list', { name: '已取消場次' });
+  await history.getByText(/隔離每日午餐.*已取消/).waitFor({ timeout: 5000 });
+  assert.equal(await history.getByRole('button').count(), 0);
+  assert.equal(await page.getByRole('list', { name: '影響場次' }).getByText(/隔離每日午餐/).count(), 0);
+  await page.getByRole('button', { name: '取消供餐與退款', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByText('取消 2026-09-17 的 1 個場次', { exact: true }).waitFor();
+  await dialog.getByText(/將退款 1 筆、共 \$120/).waitFor();
+  await dialog.getByRole('button', { name: '返回' }).click();
+  await page.getByRole('checkbox', { name: '晚餐', exact: true }).uncheck();
+  await page.getByRole('button', { name: '預覽影響場次' }).click();
+  await history.getByText(/隔離每日午餐.*已取消/).waitFor();
+  assert.equal(await page.getByRole('button', { name: '取消供餐與退款', exact: true }).count(), 0);
+  await page.getByRole('link', { name: '查看當日場次' }).click();
+  await page.waitForURL(url => url.searchParams.get('tab') === 'events' && url.searchParams.get('date') === '2026-09-17');
+  assert.equal(await page.getByLabel('供餐日期', { exact: true }).inputValue(), '2026-09-17');
+  assert.ok(state.writes.every(write => write.path.endsWith('/preview')));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+});
+
+test('手機場次取消先確認，已取消場次不顯示恢復新預訂', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  Object.assign(state.events[0], { ordering_paused: true });
+  Object.assign(state.events[1], { status: 'cancelled', ordering_paused: true, can_edit: false });
+  await page.goto(`${base}/admin/meals?tab=events`);
+  const lunch = page.getByRole('article').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
+  const dinner = page.getByRole('article').filter({ has: page.getByRole('heading', { name: '隔離每日晚餐', exact: true }) });
+  await dinner.getByText('已取消', { exact: true }).waitFor();
+  assert.equal(await dinner.getByText('新預訂已暫停', { exact: true }).count(), 0);
+  assert.equal(await dinner.getByRole('button', { name: '恢復新預訂', exact: true }).count(), 0);
+  await lunch.getByRole('button', { name: '取消場次', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByText(/取消本場訂單，並為已付款的訂單安排退款/).waitFor({ timeout: 5000 });
+  await dialog.getByRole('button', { name: '返回' }).click();
+  assert.deepEqual(state.writes, []);
+  await lunch.getByLabel('處理原因').fill('隔離驗收');
+  await lunch.getByRole('button', { name: '取消場次', exact: true }).click();
+  await dialog.getByRole('button', { name: '取消場次並退款', exact: true }).click();
+  await lunch.getByText('已取消', { exact: true }).waitFor();
+  assert.deepEqual(state.writes, [{ path: '/v1/admin/meal-events/scheduled-lunch/cancel', payload: { reason: '隔離驗收' } }]);
 });
 
 test('手機尺寸便當建立付款失敗，原訂單保留原因並可重新付款', { timeout: 20000 }, async t => {
