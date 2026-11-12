@@ -39,7 +39,6 @@ from ..domain import (
     invoice_estimated_tax_amount,
     member_sale_is_tax_exempt,
     admin_meal_cancellation_allowed,
-    meal_cancellation_request_allowed,
     order_available_actions,
     order_amendment_blocked_reason,
     sale_tax_type,
@@ -572,6 +571,7 @@ async def _publish_meal_refund_notification(
     dedupe_key: str,
     event_type: str = "refund_completed",
 ) -> None:
+    email = order.contact_email or await session.scalar(select(User.email).where(User.id == order.user_id))
     service = NotificationService(SQLAlchemyNotificationRepository(session))
     await service.publish(
         NotificationCommand(
@@ -580,7 +580,7 @@ async def _publish_meal_refund_notification(
             title=title,
             body=body,
             data=data,
-            email=order.contact_email,
+            email=email,
             dedupe_key=dedupe_key,
         )
     )
@@ -1155,7 +1155,7 @@ async def create_meal_order(
 def _cancellation_request_read(request: MealCancellationRequest) -> MealCancellationRequestRead:
     return MealCancellationRequestRead(
         id=request.id, order_id=request.order_id, reason=request.reason,
-        status=request.status, requested_at=_aware(request.requested_at),
+        status=request.status, source=request.source, requested_at=_aware(request.requested_at),
         reviewed_by_id=request.reviewed_by_id,
         reviewed_by_name=request.reviewed_by_name,
         reviewed_at=_aware(request.reviewed_at) if request.reviewed_at else None,
@@ -1184,22 +1184,9 @@ async def _locked_cancellation_order(session: AsyncSession, order_id: str) -> Or
 async def request_meal_cancellation(
     order_id: str,
     body: MealCancellationRequestCreate,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
 ) -> MealCancellationRequestRead:
-    order = await _locked_cancellation_order(session, order_id)
-    if order.user_id != user.id:
-        raise HTTPException(404, "找不到便當訂單")
-    existing = next((item for item in order.cancellation_requests if item.status == "pending"), None)
-    if existing is not None:
-        return _cancellation_request_read(existing)
-    if not meal_cancellation_request_allowed(order):
-        raise HTTPException(409, "此訂單已無法自行申請退單，請聯絡合作社")
-    request = MealCancellationRequest(order_id=order.id, requested_by_id=user.id, reason=body.reason, status="pending")
-    session.add(request)
-    await session.commit()
-    await session.refresh(request)
-    return _cancellation_request_read(request)
+    raise HTTPException(status_code=403, detail="退單請致電客服，由管理員協助辦理")
 
 
 @meals_router.get("/v1/admin/meal-cancellation-requests", response_model=MealCancellationQueueRead)
@@ -1213,14 +1200,18 @@ async def list_meal_cancellation_requests(
     offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> MealCancellationQueueRead:
     query = select(MealCancellationRequest).join(Order).where(Order.sales_channel == SalesChannel.MEAL_PREORDER)
     from .meal_cancellation_reports import cancellation_filters
     query = cancellation_filters(query, starts_on, ends_on, search, order_id=order_id)
     if review_status != "all":
         query = query.where(MealCancellationRequest.status == review_status)
+    if review_status == "pending":
+        query = query.where(Order.payment_status.not_in({PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     requests = list(await session.scalars(query.options(
+        selectinload(MealCancellationRequest.order).selectinload(Order.user),
         selectinload(MealCancellationRequest.order).selectinload(Order.items).selectinload(OrderItem.selected_options),
         selectinload(MealCancellationRequest.order).selectinload(Order.meal_event),
         selectinload(MealCancellationRequest.order).selectinload(Order.fulfillment),
@@ -1228,13 +1219,12 @@ async def list_meal_cancellation_requests(
         selectinload(MealCancellationRequest.order).selectinload(Order.cancellation_requests),
         selectinload(MealCancellationRequest.order).selectinload(Order.amendments),
         selectinload(MealCancellationRequest.order).selectinload(Order.payment_attempts),
-        selectinload(MealCancellationRequest.requested_by),
     ).order_by(MealCancellationRequest.requested_at.desc(), MealCancellationRequest.id).offset(offset).limit(limit)))
     return MealCancellationQueueRead(
         items=[{
             "request": _cancellation_request_read(request),
-            "order": await _meal_order_read(session, request.order, True),
-            "customer_name": request.requested_by.display_name,
+            "order": await _meal_order_read(session, request.order, True, settings=settings),
+            "customer_name": request.order.user.display_name,
             "customer_email": request.order.contact_email,
             "can_approve": admin_meal_cancellation_allowed(request.order),
         } for request in requests], total=total or 0, limit=limit, offset=offset,
@@ -1374,14 +1364,14 @@ async def admin_cancel_meal_order(
 ) -> MealOrderRead:
     order = await _locked_cancellation_order(session, order_id)
     if order.cancelled_at is not None:
-        return await _meal_order_read(session, order, True)
+        return await _meal_order_read(session, order, True, settings=settings)
     pending = next((request for request in order.cancellation_requests if request.status == "pending"), None)
     if pending is not None:
         await review_meal_cancellation(pending.id, MealCancellationReview(decision="approve", reason=body.reason), admin, session, settings)
-        return await _meal_order_read(session, order, True)
+        return await _meal_order_read(session, order, True, settings=settings)
     now = datetime.now(timezone.utc)
     request = MealCancellationRequest(order_id=order.id, requested_by_id=admin.id, reason=body.reason,
-        status="approved", requested_at=now, reviewed_by_id=admin.id, reviewed_by=admin, reviewed_at=now, review_reason=body.reason)
+        status="approved", source="admin", requested_at=now, reviewed_by_id=admin.id, reviewed_by=admin, reviewed_at=now, review_reason=body.reason)
     await _cancel_approved_meal_order(session, order, request, admin, settings, now)
     order.cancellation_requests.append(request)
     session.add(request)
@@ -1396,7 +1386,7 @@ async def admin_cancel_meal_order(
     )
     await session.commit()
     wake_printer()
-    return await _meal_order_read(session, order, True)
+    return await _meal_order_read(session, order, True, settings=settings)
 
 
 async def _validate_schedule_meals(session: AsyncSession, body: MealScheduleInput) -> None:
@@ -1755,13 +1745,19 @@ async def edit_meal(
     meal_id: str, body: MealDetailsUpdate, admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> MealRead:
-    current_price = await session.scalar(select(Meal.price).where(Meal.id == meal_id))
-    if current_price is None:
+    current = (await session.execute(
+        select(Meal.price, Meal.tax_type, Meal.is_active, Meal.updated_at).where(Meal.id == meal_id)
+    )).one_or_none()
+    if current is None:
         raise HTTPException(404, "找不到餐點")
+    if _aware(current.updated_at) != body.expected_updated_at:
+        raise HTTPException(409, "餐點資料已更新，請重新讀取後再修改")
+    price_changed = current.price != body.price
+    requires_impact = price_changed or current.tax_type != body.tax_type or (current.is_active and not body.is_active)
     templates = []
-    if current_price != body.price:
+    if price_changed:
         templates = list(await session.scalars(select(MealScheduleTemplate).order_by(MealScheduleTemplate.id).with_for_update()))
-    events = await meal_edit_events(session, meal_id, lock=True)
+    events = await meal_edit_events(session, meal_id, lock=True) if requires_impact else []
     meal = await session.scalar(select(Meal).where(Meal.id == meal_id)
         .options(selectinload(Meal.option_groups).selectinload(MealOptionGroup.options))
         .with_for_update().execution_options(populate_existing=True))
@@ -2296,6 +2292,11 @@ def _was_picked_up(order: Order) -> bool:
     )
 
 
+def _event_cancellation_active_orders(orders: list[Order]) -> list[Order]:
+    return [order for order in orders if order.cancelled_at is None
+            and order.payment_status not in {PaymentStatus.EXPIRED, PaymentStatus.FAILED}]
+
+
 async def _cancel_meal_event_orders(
     session: AsyncSession, event: MealEvent, orders: list[Order], admin: User, settings: Settings, reason: str,
 ) -> None:
@@ -2306,9 +2307,7 @@ async def _cancel_meal_event_orders(
     event.status = MealEventStatus.CANCELLED
     event.cancelled_at = now
     event.cancellation_reason = reason
-    for order in orders:
-        if order.cancelled_at is not None:
-            continue
+    for order in _event_cancellation_active_orders(orders):
         await _release_active_meal_reservations(session, order, now)
         was_paid = order.payment_status == PaymentStatus.PAID
         if was_paid:
@@ -2411,7 +2410,7 @@ async def _meal_disaster_plan(
     fingerprint = []
     for event in events:
         orders = by_event[event.id]
-        active = [order for order in orders if order.cancelled_at is None]
+        active = _event_cancellation_active_orders(orders)
         paid = [order for order in active if order.payment_status == PaymentStatus.PAID]
         blocked = any(_was_picked_up(order) for order in orders)
         event_summaries.append({

@@ -189,7 +189,7 @@ async def test_paid_redeemed_order_cannot_cancel_while_cutoff_is_still_future(ov
     redeemed = await client.post(f"/v1/admin/meal-events/{event.id}/redeem", json={"pickup_code": order.fulfillment.pickup_code}, headers=auth_headers(admin))
     assert redeemed.status_code == 200
     cancelled = await client.post(f"/v1/meal-orders/{order.id}/cancel", json={"reason": "已取餐不可退"}, headers=auth_headers(buyer))
-    assert cancelled.status_code == 409
+    assert cancelled.status_code == 403
     assert order.payment_status == PaymentStatus.PAID
     assert order.fulfillment_status == FulfillmentStatus.PICKED_UP
     assert await session.scalar(select(func.count(Refund.id))) == 0

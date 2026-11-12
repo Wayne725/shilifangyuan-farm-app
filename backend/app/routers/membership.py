@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..account_profiles import member_contact_from_profile
 from ..auth import (
     get_current_user,
     membership_type_for_user,
@@ -192,28 +193,22 @@ def _mask_phone(value: str) -> str:
 
 def _roster_response(
     entry: MemberRosterEntry,
-    cipher,
+    cipher: VersionedPIICipher,
+    linked_user: User | None = None,
 ) -> MemberRosterEntryRead:
-    aad = roster_aad(entry.id)
+    if linked_user is None:
+        aad = roster_aad(entry.id)
+        legal_name = cipher.decrypt_text(entry.legal_name_encrypted, associated_data=aad)
+        email = cipher.decrypt_text(entry.email_encrypted, associated_data=aad)
+        phone = cipher.decrypt_text(entry.phone_encrypted, associated_data=aad)
+    else:
+        legal_name, email, phone = member_contact_from_profile(linked_user, linked_user.member_profile, cipher)
     return MemberRosterEntryRead(
         id=entry.id,
         member_number=entry.member_number,
-        legal_name=cipher.decrypt_text(
-            entry.legal_name_encrypted,
-            associated_data=aad,
-        ),
-        email_masked=_mask_email(
-            cipher.decrypt_text(
-                entry.email_encrypted,
-                associated_data=aad,
-            )
-        ),
-        phone_masked=_mask_phone(
-            cipher.decrypt_text(
-                entry.phone_encrypted,
-                associated_data=aad,
-            )
-        ),
+        legal_name=legal_name,
+        email_masked=_mask_email(email),
+        phone_masked=_mask_phone(phone),
         share_certificate_number=entry.share_certificate_number,
         share_capital_amount=entry.share_capital_amount,
         share_count=entry.share_count,
@@ -1469,13 +1464,15 @@ async def list_member_roster(
 ) -> list[MemberRosterEntryRead]:
     entries = (
         await session.scalars(
-            select(MemberRosterEntry).order_by(
+            select(MemberRosterEntry)
+            .options(selectinload(MemberRosterEntry.claimed_user).selectinload(User.member_profile))
+            .order_by(
                 MemberRosterEntry.created_at.desc(), MemberRosterEntry.id.desc()
             )
         )
     ).all()
     cipher = _cipher(settings)
-    return [_roster_response(entry, cipher) for entry in entries]
+    return [_roster_response(entry, cipher, entry.claimed_user) for entry in entries]
 
 
 class RosterContactUpdate(BaseModel):
@@ -1493,14 +1490,20 @@ def _roster_contact(entry: MemberRosterEntry, cipher: VersionedPIICipher) -> dic
     return {**fields, "updated_at": _aware(entry.updated_at)}
 
 
+def _require_unlinked_roster_contact(entry: MemberRosterEntry | None) -> MemberRosterEntry:
+    if entry is None:
+        raise HTTPException(404, "找不到名冊資料")
+    if entry.claimed_user_id is not None:
+        raise HTTPException(409, "此社員已連結帳號，請改社員本人資料")
+    return entry
+
+
 @membership_router.get("/v1/admin/member-roster/{entry_id}/contact")
 async def read_roster_contact(
     entry_id: str, response: Response, _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    entry = await session.get(MemberRosterEntry, entry_id)
-    if entry is None:
-        raise HTTPException(404, "找不到名冊資料")
+    entry = _require_unlinked_roster_contact(await session.get(MemberRosterEntry, entry_id))
     response.headers["Cache-Control"] = "private, no-store"
     return _roster_contact(entry, _cipher(settings))
 
@@ -1510,10 +1513,10 @@ async def correct_roster_contact(
     entry_id: str, body: RosterContactUpdate, response: Response, admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    entry = await session.scalar(select(MemberRosterEntry).where(MemberRosterEntry.id == entry_id)
-        .with_for_update().execution_options(populate_existing=True))
-    if entry is None:
-        raise HTTPException(404, "找不到名冊資料")
+    entry = _require_unlinked_roster_contact(await session.scalar(
+        select(MemberRosterEntry).where(MemberRosterEntry.id == entry_id)
+        .with_for_update().execution_options(populate_existing=True)
+    ))
     if _aware(entry.updated_at) != body.expected_updated_at:
         raise HTTPException(409, "名冊資料已更新，請重新讀取後再修改")
     cipher = _cipher(settings)
@@ -1561,7 +1564,9 @@ async def update_roster_shares(
         await session.rollback()
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     assert roster is not None
-    return _roster_response(roster, _cipher(settings))
+    linked_user = await session.get(User, roster.claimed_user_id, options=[selectinload(User.member_profile)],
+                                    populate_existing=True) if roster.claimed_user_id else None
+    return _roster_response(roster, _cipher(settings), linked_user)
 
 
 @membership_router.patch("/v1/admin/members/{membership_id}/shares", response_model=MembershipRead)

@@ -340,19 +340,10 @@ function MealEventCard({ event, meals, onDone }: { event: MealEvent; meals: Meal
     {changeOrderingPause.isError && <p className="form-error" role="alert">{changeOrderingPause.error.message}</p>}
     <div className="form-actions"><button className="button button-quiet" type="button" disabled={event.can_edit !== true || eventActionPending} onClick={() => setEditing(!editing)}>{editing ? "收起場次編輯" : "手動編輯場次"}</button>{event.can_edit !== true && <span className="field-help">已有訂單或場次已截止，不能修改原場次。</span>}</div>
     {editing && <EventCreateForm key={event.id} meals={meals} initial={event} onCancel={() => setEditing(false)} onDone={() => { setEditing(false); onDone(); }} />}
-    <MealPaymentOptions event={event} onDone={onDone} />
+    {event.business_only && <p className="meal-payment-options">取餐當日線上付款</p>}
+    {event.same_day_preparation_minutes != null && <p className="meal-payment-options">當日訂餐 · 線上付款</p>}
     <EventPickupOrders eventId={event.id} />
   </article>;
-}
-
-function MealPaymentOptions({ event, onDone }: { event: MealEvent; onDone: () => void }) {
-  const update = useMutation({
-    mutationFn: (allow: boolean) => apiFetch(`/v1/admin/meal-events/${event.id}/payment-options`, { method: "PATCH", body: JSON.stringify({ allow_cash_payment: allow }) }),
-    onSuccess: onDone,
-  });
-  if (event.business_only) return <p className="meal-payment-options">取餐當日線上付款</p>;
-  if (event.same_day_preparation_minutes != null) return <p className="meal-payment-options">當日訂餐 · 線上付款</p>;
-  return <div className="meal-payment-options"><label className="check-field"><input type="checkbox" checked={Boolean(event.allow_cash_payment)} disabled={update.isPending || ["cancelled", "completed"].includes(event.status)} onChange={input => update.mutate(input.target.checked)} />開放合作社現場付款</label>{update.isError && <p className="form-error" role="alert">{update.error.message}</p>}</div>;
 }
 
 function EventPickupOrders({ eventId }: { eventId: string }) {
@@ -441,7 +432,7 @@ function shiftEvent(event: MealEvent): EventDraft {
   const shifted: EventDraft = {
     ...eventDraft(event), title: event.title.replace(/(?:（隔日）)+$/u, ""),
     booking_policy: event.booking_policy === "special" ? "special" : "workday",
-    allow_cash_payment: Boolean(event.allow_cash_payment),
+    allow_cash_payment: false,
     ordering_starts_at: shift(event.ordering_starts_at), ordering_ends_at: shift(event.ordering_ends_at),
     pickup_starts_at: shift(event.pickup_starts_at), pickup_ends_at: shift(event.pickup_ends_at),
   };

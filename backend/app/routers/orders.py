@@ -748,7 +748,7 @@ async def admin_cancel_order(
     await _cancel_approved_order(session, order, admin, body.reason)
     now = datetime.now(timezone.utc)
     request = MealCancellationRequest(order=order, requested_by_id=admin.id, reason=body.reason,
-        status="approved", requested_at=now, reviewed_by_id=admin.id, reviewed_by=admin, reviewed_at=now, review_reason=body.reason)
+        status="approved", source="admin", requested_at=now, reviewed_by_id=admin.id, reviewed_by=admin, reviewed_at=now, review_reason=body.reason)
     session.add(request)
     await session.flush()
     session.add(AdminAudit(actor_id=admin.id, action="order_cancellation.approved", aggregate_type="order", aggregate_id=order.id,

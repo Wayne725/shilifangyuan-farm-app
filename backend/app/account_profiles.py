@@ -9,7 +9,7 @@ from .audited_changes import audit_changes
 from .config import Settings
 from .contact_phone import decrypt_contact_phone, normalize_contact_phone
 from .integrations.common import IntegrationError
-from .integrations.pii_crypto import pii_cipher_from_settings
+from .integrations.pii_crypto import VersionedPIICipher, pii_cipher_from_settings
 from .models import MemberProfile, RefreshSession, User, utcnow
 
 
@@ -31,6 +31,19 @@ class AccountProfileRead(BaseModel):
     display_name: str
     phone: str | None
     is_active: bool
+
+
+def member_contact_from_profile(
+    user: User, profile: MemberProfile | None, cipher: VersionedPIICipher,
+) -> tuple[str, str, str]:
+    aad = f"member-profile:{user.id}"
+    name = cipher.decrypt_text(profile.legal_name_encrypted, associated_data=aad) if profile else ""
+    email = user.email or user.notification_email or ""
+    if user.meal_contact_phone_encrypted:
+        phone = cipher.decrypt_text(user.meal_contact_phone_encrypted, associated_data=f"meal-contact:{user.id}")
+    else:
+        phone = cipher.decrypt_text(profile.phone_encrypted, associated_data=aad) if profile else ""
+    return name or user.display_name, email, phone
 
 
 async def account_phone(session: AsyncSession, user: User, settings: Settings) -> str | None:

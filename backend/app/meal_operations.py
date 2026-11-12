@@ -31,7 +31,8 @@ def _work_conditions(now: datetime):
         )
 
     return {
-        "pending_cancellation": exists().where(MealCancellationRequest.order_id == Order.id, MealCancellationRequest.status == "pending"),
+        "pending_cancellation": and_(Order.payment_status.not_in({PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+            exists().where(MealCancellationRequest.order_id == Order.id, MealCancellationRequest.status == "pending")),
         "refund_attention": or_(
             Order.payment_status.in_({PaymentStatus.REFUND_PENDING, PaymentStatus.LATE_PAID_REFUND_REQUIRED}),
             exists().where(Refund.order_id == Order.id, or_(
@@ -93,6 +94,8 @@ async def search_meal_orders(session: AsyncSession, filters: MealOrderSearchFilt
     if filters.review_status != "all":
         latest_status = select(MealCancellationRequest.status).where(MealCancellationRequest.order_id == Order.id).order_by(MealCancellationRequest.requested_at.desc(), MealCancellationRequest.id.desc()).limit(1).correlate(Order).scalar_subquery()
         query = query.where(latest_status.is_(None) if filters.review_status == "none" else latest_status == filters.review_status)
+        if filters.review_status == "pending":
+            query = query.where(Order.payment_status.not_in({PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
     if filters.work_queue != "all":
         query = query.where(_work_conditions(datetime.now(timezone.utc))[filters.work_queue])
     total = await session.scalar(select(func.count()).select_from(query.subquery()))

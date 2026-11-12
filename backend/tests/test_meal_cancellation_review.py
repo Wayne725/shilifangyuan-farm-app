@@ -11,6 +11,7 @@ from app.integrations.common import HTTPResponse
 from app.integrations.fanyu_invoice import FanyuInvoiceAdapter
 from app.integrations.payment_service import SQLAlchemyPaymentCallbackRepository
 from app.meal_schedules import TAIPEI
+from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.models import (
     AdminAudit, FulfillmentMethod, FulfillmentState, FulfillmentStatus,
     InventoryReservation, Invoice, InvoiceStatus, Meal, MealCancellationRequest,
@@ -281,7 +282,9 @@ async def test_failed_refund_creation_keeps_application_and_order_unchanged(revi
 async def test_permissions_validation_queue_search_and_generic_cancel_bypass(review_context):
     c = review_context
     path = f"/v1/meal-orders/{c.order.id}/cancellation-requests"
-    assert (await c.client.post(path, json={"reason": "他人訂單"}, headers=auth_headers(c.other))).status_code == 404
+    denied = await c.client.post(path, json={"reason": "他人訂單"}, headers=auth_headers(c.other))
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "退單請致電客服，由管理員協助辦理"
     for reason in ["", "  ", "x" * 2001]:
         assert (await c.client.post(path, json={"reason": reason}, headers=auth_headers(c.buyer))).status_code == 422
     request = await submit(c)
@@ -301,6 +304,58 @@ async def test_permissions_validation_queue_search_and_generic_cancel_bypass(rev
         assert len(response.json()["items"]) == min(1, expected)
     empty = await c.client.get("/v1/admin/meal-cancellation-requests?search=NO-SUCH-ORDER", headers=auth_headers(c.admin))
     assert empty.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_filed_cancellation_lists_buyer_and_phone_in_fresh_identity_map(review_context):
+    c = review_context
+    c.order.fulfillment.recipient_phone_encrypted = pii_cipher_from_settings(make_test_settings()).encrypt_text(
+        "0912345678", associated_data=f"order-fulfillment:{c.order.fulfillment.id}:recipient_phone",
+    )
+    await c.session.commit()
+    buyer_id, buyer_name = c.buyer.id, c.buyer.display_name
+    headers = auth_headers(c.admin)
+    cancelled = await c.client.post(f"/v1/admin/meal-orders/{c.order.id}/cancel", json={}, headers=headers)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["cancellation_request"]["source"] == "admin"
+    c.session.expunge_all()
+    assert not any(isinstance(row, User) and row.id == buyer_id for row in c.session.identity_map.values())
+
+    response = await c.client.get("/v1/admin/meal-cancellation-requests?review_status=approved", headers=headers)
+    assert response.status_code == 200, response.text
+    item, = response.json()["items"]
+    assert item["customer_name"] == item["order"]["customer_name"] == buyer_name
+    assert item["order"]["contact_phone"] == "0912345678"
+    assert item["request"]["source"] == "admin"
+    assert item["request"]["initiated_by_admin"] is True
+
+
+@pytest.mark.parametrize("status", [PaymentStatus.EXPIRED, PaymentStatus.FAILED])
+@pytest.mark.asyncio
+async def test_unpaid_terminal_meal_order_does_not_offer_or_allow_cancellation(review_context, status):
+    c = review_context
+    c.order.payment_status = status
+    request = await submit(c)
+    headers = auth_headers(c.admin)
+
+    result = await c.client.post(f"/v1/admin/meal-orders/{c.order.id}/cancel", json={}, headers=headers)
+    assert result.status_code == 409, result.text
+    assert (await review(c, request)).status_code == 409
+    orders = await c.client.get(f"/v1/admin/meal-events/{c.event.id}/orders", headers=headers)
+    assert orders.status_code == 200, orders.text
+    assert "cancel" not in orders.json()[0]["available_actions"]
+    queue = await c.client.get("/v1/admin/meal-cancellation-requests", headers=headers)
+    assert queue.json()["total"] == 0
+    history = await c.client.get("/v1/admin/meal-cancellation-requests?review_status=all", headers=headers)
+    assert history.json()["items"][0]["can_approve"] is False
+    assert c.order.payment_status == status and c.order.cancelled_at is None
+    assert await count(c, MealCancellationRequest) == 1
+    assert await count(c, Refund) == 0
+    event_cancelled = await c.client.post(f"/v1/admin/meal-events/{c.event.id}/cancel", json={"reason": "停餐"}, headers=headers)
+    assert event_cancelled.status_code == 200, event_cancelled.text
+    assert c.order.payment_status == status and c.order.cancelled_at is None
+    assert c.order.fulfillment.status == FulfillmentState.PENDING_CONFIRMATION
+    assert await count(c, Notification) == 0
 
 
 @pytest.mark.asyncio

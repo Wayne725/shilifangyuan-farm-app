@@ -614,6 +614,7 @@ export interface MealSchedule {
 
 export interface MealCancellationRequest {
   initiated_by_admin?: boolean;
+  source?: "admin" | "buyer";
   id: string;
   order_id: string;
   reason: string;

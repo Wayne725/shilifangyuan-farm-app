@@ -142,7 +142,8 @@ async def test_real_pg_42_to_45_then_merged_head_preserves_account_and_guest_col
     assert await version(database) == database.head
     assert {name: await table_rows(database, name) for name in tables} == before_refused_downgrade
     assert await table_rows(database, "users") == [
-        {**row, "data_consent_version": None, "data_consented_at": None} for row in before_users
+        {**row, "data_consent_version": None, "data_consented_at": None, "meal_contact_phone_encrypted": None}
+        for row in before_users
     ]
 
 

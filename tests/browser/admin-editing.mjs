@@ -13,12 +13,12 @@ const rosterPath = '/v1/admin/member-roster/roster/contact';
 const meetingPath = '/v1/admin/meetings/meeting';
 const resolutionPath = `${meetingPath}/resolutions/resolution`;
 
-async function fixture(t, path, role = 'admin') {
+async function fixture(t, path, role = 'admin', { linkedRoster = false } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', timezoneId: 'Asia/Taipei' });
   const state = {
-    writes: [], errors: [], unknown: [],
+    reads: [], writes: [], errors: [], unknown: [],
     meal: { id: 'meal', name: '隔離餐點', description: '原說明', price: 100, tax_type: 'taxable', is_active: true, updated_at: version, option_groups: [] },
     profile: { display_name: '原帳號姓名', phone: '0912345678', is_active: true },
     roster: { legal_name: '原名冊姓名', email: 'roster@example.test', phone: '0912345678', address: '原地址', updated_at: version },
@@ -37,7 +37,8 @@ async function fixture(t, path, role = 'admin') {
     if (endpoint === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated',
       user: { id: role === 'admin' ? 'admin' : 'buyer', email: 'user@example.test',
         display_name: role === 'admin' ? '管理員' : state.profile.display_name, user_role: role, membership_type: 'nonmember' } } });
-    if (method !== 'GET') {
+    if (method === 'GET') state.reads.push(endpoint);
+    else {
       const payload = request.postData() ? request.postDataJSON() : {};
       state.writes.push({ endpoint, method, payload });
       let data;
@@ -60,7 +61,7 @@ async function fixture(t, path, role = 'admin') {
         membership_type: 'nonmember', ...state.profile }], total: 1 },
       '/v1/auth/profile': state.profile, [adminPath]: state.profile,
       '/v1/admin/member-roster': [{ id: 'roster', member_number: 'M1', legal_name: state.roster.legal_name, email_masked: 'r***@example.test',
-        phone_masked: '******5678', share_count: 0, share_capital_amount: 0, is_active: true, claimed: false }],
+        phone_masked: '******5678', share_count: 0, share_capital_amount: 0, is_active: true, claimed: linkedRoster }],
       [rosterPath]: state.roster, '/v1/admin/activities': [state.activity],
       '/v1/admin/meetings': [state.meeting], '/v1/admin/meeting-categories': [category],
       '/v1/admin/member-proposals': [], '/v1/admin/members': [],
@@ -102,6 +103,19 @@ test('390px 編輯餐點須確認已發布場次', async t => {
   assert.deepEqual(state.writes[0].payload.confirmed_event_ids, ['event']);
 });
 
+test('390px 只改餐點說明可直接儲存', async t => {
+  const { page, state } = await fixture(t, '/admin/meals?tab=meals');
+  await page.getByRole('button', { name: '編輯餐點', exact: true }).click();
+  const form = page.getByRole('form', { name: '編輯餐點' });
+  await form.getByLabel('說明').fill('更新餐點說明');
+  assert.equal(await form.getByRole('checkbox').count(), 0);
+  await evidence(page, state, 'edit-meal-description');
+  await form.getByRole('button', { name: '儲存餐點' }).click();
+  await page.getByText('更新餐點說明', { exact: true }).waitFor();
+  assert.deepEqual(state.writes[0].payload.confirmed_event_ids, []);
+  assert.equal(state.reads.includes('/v1/admin/meals/meal/edit-impact'), false);
+});
+
 for (const admin of [true, false]) {
   test(`390px ${admin ? '後台可更名並停用帳號' : '會員中心可更改姓名和電話'}`, async t => {
     const { page, state } = await fixture(t, admin ? '/admin/users' : '/account', admin ? 'admin' : 'customer');
@@ -131,6 +145,15 @@ test('390px 更正名冊地址後顯示新姓名', async t => {
   await form.getByRole('button', { name: '儲存名冊更正' }).click();
   await page.getByRole('heading', { name: /新名冊姓名/ }).waitFor();
   assert.equal(state.writes[0].payload.address, '隔離測試新地址');
+});
+
+test('390px 已連結名冊提示更新社員本人資料', async t => {
+  const { page, state } = await fixture(t, '/admin/users?tab=roster', 'admin', { linkedRoster: true });
+  const card = page.locator('.roster-entry-card');
+  await card.getByText('此社員已連結帳號，請改社員本人資料').waitFor();
+  assert.equal(await card.getByRole('button', { name: '更正名冊資料' }).count(), 0);
+  assert.equal(state.reads.includes(rosterPath), false);
+  await evidence(page, state, 'linked-roster');
 });
 
 test('390px 編輯活動地點時顯示通知提示並保存', async t => {

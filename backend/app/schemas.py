@@ -629,7 +629,7 @@ class InvoicePreferenceInput(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def use_checkout_notification_email(cls, value):
+    def checkout_contact_email(cls, value):
         if isinstance(value, dict) and value.get("contact_email") is None and value.get("invoice_buyer_email"):
             return {**value, "contact_email": value["invoice_buyer_email"]}
         return value
@@ -1776,6 +1776,13 @@ class MealOrderCreate(InvoicePreferenceInput):
     pickup_location_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
     needs_utensils: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def checkout_contact_email(cls, value):
+        if isinstance(value, dict) and not value.get("contact_email"):
+            raise ValueError("請填寫聯絡 Email")
+        return value
+
     @model_validator(mode="after")
     def external_invoice_requires_onsite(self):
         if self.meal_booking_type == "business":
@@ -1891,6 +1898,7 @@ class MealCancellationRequestRead(ApiModel):
     order_id: str
     reason: str
     status: Literal["pending", "approved", "rejected"]
+    source: Literal["admin", "buyer"] = "buyer"
     requested_at: datetime
     reviewed_by_id: Optional[str] = None
     reviewed_by_name: Optional[str] = None

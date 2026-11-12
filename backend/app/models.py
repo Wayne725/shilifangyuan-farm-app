@@ -2164,6 +2164,7 @@ class MealCancellationRequest(Base):
     __tablename__ = "meal_cancellation_requests"
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="status_valid"),
+        CheckConstraint("source IN ('admin', 'buyer')", name="source_valid"),
         CheckConstraint(
             "(status = 'pending' AND reviewed_at IS NULL AND reviewed_by_id IS NULL AND review_reason IS NULL) "
             "OR (status <> 'pending' AND reviewed_at IS NOT NULL AND reviewed_by_id IS NOT NULL AND review_reason IS NOT NULL)",
@@ -2179,6 +2180,7 @@ class MealCancellationRequest(Base):
     requested_by_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
     reason: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending")
+    source: Mapped[str] = mapped_column(String(10), default="buyer", server_default="buyer")
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     reviewed_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -2189,7 +2191,7 @@ class MealCancellationRequest(Base):
 
     @property
     def initiated_by_admin(self) -> bool:
-        return self.requested_by_id == self.reviewed_by_id and self.requested_at == self.reviewed_at
+        return self.source == "admin"
 
     @property
     def reviewed_by_name(self) -> Optional[str]:

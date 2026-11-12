@@ -217,7 +217,7 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
             {(order.invoice_followup_reason || order.invoice_followup_required) && <span className="status-chip">
               {order.invoice_followup_reason ? invoiceFollowupCopy[order.invoice_followup_reason].label : "發票待合作社處理"}
             </span>}
-            <OrderStatusBadge kind="payment" status={order.payment_status} />
+            <OrderStatusBadge kind="payment" status={order.payment_status} label={order.payment_status === "expired" && !order.cancelled_at ? "付款逾期" : undefined} />
             {order.sales_channel === "meal_preorder"
               ? mealServiceEnded(order) && <span className="status-chip">已結束</span>
               : <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} label={pickupFulfillmentLabel(order)} />}
@@ -299,14 +299,15 @@ function AdminOrderAction({
 }) {
   const invoiceControl = <AdminStatusQuery orderId={order.id} kind="invoice" disabled={busy} />;
   if (order.sales_channel === "meal_preorder") {
-    const pendingCancellation = order.cancellation_request?.status === "pending";
+    const paymentFailed = ["expired", "failed"].includes(order.payment_status);
+    const pendingCancellation = !paymentFailed && order.cancellation_request?.status === "pending";
     const canManageMeal = order.payment_status !== "refunded" && order.fulfillment_status !== "cancelled" && !order.cancelled_at;
     return <div className="operation-actions">
       {(pendingCancellation || canManageMeal) && <Link
         className="button button-quiet"
         to="/admin/meals"
         search={{ tab: pendingCancellation ? "cancellations" : "orders", q: order.order_number, order_id: pendingCancellation ? order.id : undefined }}
-      >{pendingCancellation ? "審核便當退單" : "便當取餐與退單"}</Link>}
+      >{pendingCancellation ? "審核便當退單" : paymentFailed ? "查看便當訂單" : "便當取餐與退單"}</Link>}
       {invoiceControl}
     </div>;
   }

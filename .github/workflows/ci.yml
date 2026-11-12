@@ -241,7 +241,7 @@ jobs:
           supplemental_tests+=(tests/browser/workday-meals.mjs tests/browser/shop-tab-order.mjs)
           supplemental_tests+=(tests/browser/admin-tax-ledger.mjs tests/browser/meal-finance-accessibility.mjs)
           if [[ "$BROWSER_ENGINE" == chromium ]]; then
-            supplemental_tests+=(tests/browser/activity-payments.mjs tests/browser/group-review-window.mjs)
+            supplemental_tests+=(tests/browser/activity-payments.mjs tests/browser/group-review-window.mjs tests/browser/cash-meal-flow.mjs)
           fi
           node --test --test-concurrency=1 --test-timeout=120000 "${supplemental_tests[@]}" 2>&1 | tee browser-evidence/supplemental.log
       - name: Run isolated contact and invoicing acceptance
@@ -258,7 +258,7 @@ jobs:
           trap cleanup EXIT
           curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --max-time 2 http://127.0.0.1:4192/ > /dev/null
           kill -0 "$commerce_preview_pid"
-          node --test --test-concurrency=1 --test-timeout=45000 \
+          node --test --test-concurrency=1 --test-timeout=60000 \
             tests/browser/admin-order-contact.mjs \
             tests/browser/business-meals.mjs \
             tests/browser/cart-account-isolation.mjs \

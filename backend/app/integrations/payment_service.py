@@ -1982,6 +1982,7 @@ class SQLAlchemyPaymentCallbackRepository:
             else await self.session.get(User, attempt.membership_charge.user_id)
         )
         if owner is not None:
+            email = (order.contact_email if order is not None else None) or owner.email
             service = NotificationService(
                 SQLAlchemyNotificationRepository(self.session)
             )
@@ -2003,7 +2004,7 @@ class SQLAlchemyPaymentCallbackRepository:
                         "refund_purpose": refund.purpose,
                         "order_revision": attempt.order_revision if order else None,
                     },
-                    email=(order.contact_email if order is not None else owner.email) if notify_email else None,
+                    email=email if notify_email else None,
                     dedupe_key=f"refund:{refund.id}",
                 )
             )

@@ -113,7 +113,12 @@ function RosterEntryCard({ entry, adminId, request }: PanelProps & { entry: Memb
         <p>{entry.email_masked} · {entry.phone_masked || "未提供電話"}</p>
         <small>股金 {entry.share_capital_amount} 元 · {entry.share_count} 股</small>
       </div>
-      <div className="review-card-actions"><strong>{entry.claimed ? "已連結社員帳號" : "等待社員完成名冊核對"}</strong>{entry.claimed_at && <small>{formatDateTime(entry.claimed_at)}</small>}<RosterContactEditor entryId={entry.id} adminId={adminId} request={request} /><ShareholdingEditor record={entry} source="roster" adminId={adminId} request={request} /></div>
+      <div className="review-card-actions">
+        <strong>{entry.claimed ? "此社員已連結帳號，請改社員本人資料" : "等待社員完成名冊核對"}</strong>
+        {entry.claimed_at && <small>{formatDateTime(entry.claimed_at)}</small>}
+        {!entry.claimed && <RosterContactEditor entryId={entry.id} adminId={adminId} request={request} />}
+        <ShareholdingEditor record={entry} source="roster" adminId={adminId} request={request} />
+      </div>
     </article>
   );
 }

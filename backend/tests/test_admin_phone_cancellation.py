@@ -76,10 +76,8 @@ async def test_customer_cannot_cancel_after_pickup_starts(review_context, paid):
     for actor in [c.buyer, c.other]:
         for path in paths:
             result = await c.client.post(path, json={"reason": "請求退單"}, headers=auth_headers(actor))
-            if path.startswith("/v1/orders"):
-                assert result.status_code == 403, result.text
-            else:
-                assert result.status_code == (409 if actor is c.buyer else 404), result.text
+            assert result.status_code == 403, result.text
+            assert result.json()["detail"] == "退單請致電客服，由管理員協助辦理"
     assert before == (c.order.payment_status, c.order.invoice_status, c.reservation.status, c.offering.reserved_quantity, c.offering.paid_quantity)
     assert c.order.cancelled_at is None
     assert await count(c, MealCancellationRequest) == await count(c, Refund) == await count(c, AdminAudit) == 0

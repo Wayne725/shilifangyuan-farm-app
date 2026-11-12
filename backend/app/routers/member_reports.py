@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
+from ..account_profiles import member_contact_from_profile
 from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
@@ -58,28 +59,23 @@ async def _member_rows(session, settings, *, newest_first=False, member_number="
         roster_query = roster_query.where(MemberRosterEntry.member_number == member_number)
         member_query = member_query.where(Membership.member_number == member_number)
     roster = list(await session.scalars(roster_query))
-    by_number = {row.member_number: row for row in roster}
     joined = (await session.execute(member_query)).all()
     seen, rows = set(), []
     def decrypt(value, aad):
         return cipher.decrypt_text(value, associated_data=aad) if value else ""
     for membership, user, profile in joined:
-        entry = by_number.get(membership.member_number)
         if membership.member_number:
             seen.add(membership.member_number)
         aad = f"member-profile:{user.id}"
+        legal_name, email, phone = member_contact_from_profile(user, profile, cipher)
         row = {"id": membership.id, "source": "membership", "member_number": membership.member_number or membership.trainee_number or "",
-               "status": membership.status.value, "legal_name": decrypt(entry.legal_name_encrypted, roster_aad(entry.id)) if entry else decrypt(profile.legal_name_encrypted, aad) if profile else user.display_name,
-               "email": decrypt(entry.email_encrypted, roster_aad(entry.id)) if entry else user.email or user.notification_email or "",
-               "phone": decrypt(entry.phone_encrypted, roster_aad(entry.id)) if entry else decrypt(profile.phone_encrypted, aad) if profile else "",
+               "status": membership.status.value, "legal_name": legal_name, "email": email, "phone": phone,
                "share_certificate_number": membership.share_certificate_number, "share_count": membership.share_count,
                "share_capital_amount": membership.share_capital_amount, "share_subscribed_on": membership.share_subscribed_on,
                "share_paid_on": membership.share_paid_on, "activated_at": membership.activated_at,
                "_created_at": membership.created_at}
         for name in ("birth_date", "gender", "place_of_origin", "occupation", "address", "registered_address", "correspondence_address", "landline_phone", "line_id", "emergency_contact"):
             row[name] = decrypt(getattr(profile, f"{name}_encrypted"), aad) if profile else ""
-        if entry and entry.address_encrypted:
-            row["address"] = decrypt(entry.address_encrypted, roster_aad(entry.id))
         rows.append(row)
     for entry in roster:
         if entry.member_number in seen:

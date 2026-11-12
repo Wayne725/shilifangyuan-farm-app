@@ -1,13 +1,15 @@
+import csv
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 
 import pytest
 from sqlalchemy import select
 
 from app.integrations.pii_crypto import pii_cipher_from_settings
-from app.member_claims import roster_aad
+from app.member_claims import attach_roster_membership, roster_aad
 from app.models import (
     Activity, ActivityRegistration, ActivityRegistrationStatus, ActivityStatus, AdminAudit,
-    MealScheduleTemplate, MeetingCategory, MeetingResolution, MemberRosterEntry, Membership, MembershipStatus,
+    MealScheduleTemplate, MeetingCategory, MeetingResolution, MemberProfile, MemberRosterEntry, Membership, MembershipStatus,
     Notification, OutboxEvent, Product, User, UserRole,
 )
 from app.routers.admin_users import admin_users_router
@@ -75,15 +77,33 @@ async def test_meal_edit_affects_new_order_with_confirmation_and_preserves_origi
     assert (await _audit(session, "meal_offering.price_update")).data["after"]["price"] == 145
     assert template.offerings[0]["price"] == 145
     assert (await _audit(session, "meal_schedule.price_update")).data["before"]["offerings"][0]["price"] == 100
-    paused = await client.patch(path, json={**body, "is_active": False, "confirmed_event_ids": [event.id],
-        "expected_updated_at": response.json()["updated_at"]}, headers=auth_headers(admin))
+    pause_body = {**body, "is_active": False, "expected_updated_at": response.json()["updated_at"]}
+    assert (await client.patch(path, json=pause_body, headers=auth_headers(admin))).status_code == 409
+    paused = await client.patch(path, json={**pause_body, "confirmed_event_ids": [event.id]}, headers=auth_headers(admin))
     assert paused.status_code == 200, paused.text
     assert (await client.post(order_path, json=order_body, headers=auth_headers(buyer))).status_code == 409
     detail = (await client.get(f"/v1/meal-events/{event.id}")).json()
     assert detail["offerings"][0]["is_active"] is False
-    resumed = await client.patch(path, json={**body, "confirmed_event_ids": [event.id],
+    resumed = await client.patch(path, json={**body,
         "expected_updated_at": paused.json()["updated_at"]}, headers=auth_headers(admin))
     assert resumed.status_code == 200, resumed.text
+
+
+async def test_meal_text_update_saves_without_impact_confirmation(booking_context):
+    client, _, _, admin, event, _ = booking_context
+    headers = auth_headers(admin)
+    meal = (await client.get("/v1/admin/meals", headers=headers)).json()[0]
+    path = f"/v1/admin/meals/{meal['id']}"
+    assert (await client.get(f"{path}/edit-impact", headers=headers)).json() == [{"id": event.id, "title": event.title}]
+    body = {key: meal[key] for key in ("name", "description", "price", "tax_type", "is_active")}
+    body.update(description="更新餐點說明", expected_updated_at=meal["updated_at"])
+    result = await client.patch(path, json=body, headers=headers)
+    assert result.status_code == 200 and result.json()["description"] == "更新餐點說明"
+    body.update(name="更新餐點名稱", expected_updated_at=result.json()["updated_at"])
+    result = await client.patch(path, json=body, headers=headers)
+    assert result.status_code == 200 and result.json()["name"] == "更新餐點名稱"
+    body.update(tax_type="tax_exempt", expected_updated_at=result.json()["updated_at"])
+    assert (await client.patch(path, json=body, headers=headers)).status_code == 409
 
 
 async def test_account_edit_reuses_checkout_phone_and_revokes_tokens(editing_context):
@@ -199,6 +219,41 @@ async def test_roster_correction_is_private_and_audited(editing_context):
     assert audit.actor_id == admin.id and "隔離地址" not in str(audit.data)
     entry = await session.get(MemberRosterEntry, row["id"])
     assert pii_cipher_from_settings(settings).decrypt_text(entry.address_encrypted, associated_data=roster_aad(entry.id)) == "隔離地址 100 號"
+
+
+async def test_linked_roster_and_csv_follow_member_contact(editing_context):
+    session, client, admin, buyer, settings = editing_context
+    headers = auth_headers(admin)
+    original = {"member_number": "M-LINKED", "legal_name": "原名冊姓名", "email": "roster@example.com", "phone": "0911111111"}
+    created = await client.post("/v1/admin/member-roster", headers=headers, json=original)
+    assert created.status_code == 201, created.text
+    entry = await session.get(MemberRosterEntry, created.json()["id"])
+    cipher = pii_cipher_from_settings(settings)
+    entry.address_encrypted = cipher.encrypt_text("匯入地址", associated_data=roster_aad(entry.id))
+    profile = {"legal_name": "本人姓名", "phone": "0922222222", "birth_date": "", "address": "本人地址", "emergency_contact": ""}
+    session.add(MemberProfile(user_id=buyer.id, consent_version="test", consented_at=datetime.now(timezone.utc), **{
+        f"{key}_encrypted": cipher.encrypt_text(value, associated_data=f"member-profile:{buyer.id}") for key, value in profile.items()
+    }))
+    await attach_roster_membership(session, entry, buyer)
+    await session.commit()
+    path = f"/v1/admin/member-roster/{entry.id}/contact"
+    assert (await client.get(path, headers=headers)).status_code == 409
+    blocked = await client.patch(path, headers=headers, json={
+        "legal_name": "修改名冊", "email": "edited@example.com", "phone": "0933333333",
+        "expected_updated_at": entry.updated_at.replace(tzinfo=timezone.utc).isoformat(),
+    })
+    assert blocked.status_code == 409 and "社員本人資料" in blocked.json()["detail"]
+    report = await client.get("/v1/admin/member-register", headers=headers)
+    assert report.json()["items"][0]["phone"] == "0922222222"
+    updated = await client.patch("/v1/auth/profile", headers=auth_headers(buyer), json={"phone": "0944444444"})
+    assert updated.status_code == 200, updated.text
+    report = (await client.get("/v1/admin/member-register", headers=headers)).json()["items"][0]
+    assert (report["legal_name"], report["email"], report["phone"], report["address"]) == ("本人姓名", buyer.email, "0944444444", "本人地址")
+    roster = (await client.get("/v1/admin/member-roster", headers=headers)).json()[0]
+    assert roster["claimed"] and roster["legal_name"] == "本人姓名" and roster["phone_masked"].endswith("4444")
+    exported = await client.get("/v1/admin/member-register.csv", headers=headers)
+    assert exported.status_code == 200, exported.text
+    assert next(csv.DictReader(StringIO(exported.content.decode("utf-8-sig"))))["手機"] == "0944444444"
 
 
 async def test_product_archive_is_recoverable_without_republishing(editing_context):

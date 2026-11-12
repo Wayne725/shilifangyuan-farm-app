@@ -2106,7 +2106,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
     assert created_order.json()["paid_at"] is None
     assert created_order.json()["pickup_code"] is None
     assert created_order.json()["pickup_qr_payload"] is None
-    assert created_order.json()["available_actions"] == ["amend_quantities", "pay", "request_cancellation"]
+    assert created_order.json()["available_actions"] == ["amend_quantities", "pay"]
 
     pending_order = await client.get(
         f"/v1/meal-orders/{created_order.json()['id']}",
@@ -2157,7 +2157,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         json={"reason": "行程異動"},
         headers=auth_headers(applicant),
     )
-    assert cancelled.status_code == 201 and cancelled.json()["status"] == "pending"
+    assert cancelled.status_code == 403
     assert offering.reserved_quantity == 1
     approved = await client.post(
         f"/v1/admin/meal-orders/{created_order.json()['id']}/cancel",
@@ -2420,7 +2420,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
         json={"reason": "臨時有事"},
         headers=auth_headers(applicant),
     )
-    assert buyer_cancel.status_code == 201 and buyer_cancel.json()["status"] == "pending"
+    assert buyer_cancel.status_code == 403
     assert buyer_order.payment_status == PaymentStatus.PAID
     approved = await client.post(
         f"/v1/admin/meal-orders/{buyer_order.id}/cancel",

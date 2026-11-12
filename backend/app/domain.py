@@ -291,20 +291,6 @@ def meal_payment_window_open(order: Order, now: datetime) -> bool:
     )
 
 
-def meal_cancellation_request_allowed(order: Order, now: Optional[datetime] = None) -> bool:
-    current = now or utcnow()
-    event = order.__dict__.get("meal_event")
-    fulfillment = order.__dict__.get("fulfillment")
-    if event is None or fulfillment is None:
-        return False
-    pickup = fulfillment.pickup_at or fulfillment.pickup_starts_at or event.pickup_starts_at
-    return (
-        current < aware(pickup)
-        and event.status != MealEventStatus.COMPLETED
-        and admin_meal_cancellation_allowed(order, current)
-    )
-
-
 def admin_meal_cancellation_allowed(order: Order, now: Optional[datetime] = None) -> bool:
     current = now or utcnow()
     event = order.__dict__.get("meal_event")
@@ -312,7 +298,7 @@ def admin_meal_cancellation_allowed(order: Order, now: Optional[datetime] = None
     if (order.sales_channel != SalesChannel.MEAL_PREORDER or order.cancelled_at is not None
         or order.fulfillment_status == FulfillmentStatus.CANCELLED
         or event is None or event.status == MealEventStatus.CANCELLED or fulfillment is None
-        or order.payment_status not in {PaymentStatus.PENDING, PaymentStatus.PAID, PaymentStatus.EXPIRED, PaymentStatus.FAILED}):
+        or order.payment_status not in {PaymentStatus.PENDING, PaymentStatus.PAID}):
         return False
     if order.payment_status != PaymentStatus.PAID and order.paid_at is not None:
         return False
@@ -522,10 +508,6 @@ def order_available_actions(
             }
         ):
             actions.append("advance_shipment")
-    if not viewer_is_admin and is_meal and meal_cancellation_request_allowed(order, current) and not any(
-        request.status == "pending" for request in order.__dict__.get("cancellation_requests", [])
-    ):
-        actions.append("request_cancellation")
     return list(dict.fromkeys(actions))
 
 

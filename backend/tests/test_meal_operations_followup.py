@@ -36,6 +36,7 @@ async def test_automatic_saturday_catering_uses_official_holiday_note(schedule_c
             assert event is None
             return
         assert event.business_only and event.booking_policy == "special"
+        assert event.ordering_starts_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI) == friday.replace(hour=0)
         assert event.ordering_ends_at.replace(tzinfo=timezone.utc).astimezone(TAIPEI) == friday.replace(hour=20)
         detail = await client.get(f"/v1/meal-events/{event.id}")
         assert detail.json()["business_only"]
@@ -51,17 +52,27 @@ def test_remind_in_july_of_last_loaded_year():
     assert calendar_status(date(2027, 7, 1))["update_year"] == 2028
 
 
-async def test_phone_required_encrypted_and_reused_in_both_admin_views(cash_context):
+async def test_contact_required_encrypted_and_reused_in_both_admin_views(cash_context):
     c = cash_context
     root = f"/v1/meal-events/{c.event.id}/orders"
     body = {"items": [{"offering_id": c.event.offerings[0].id, "quantity": 1}], "contact_email": c.buyer.email}
     headers = auth_headers(c.buyer)
     assert (await c.client.get("/v1/meal-checkout/contact", headers=headers)).json() == {"phone": None}
+    for email in (None, "", "invalid-email"):
+        invalid_email = await c.client.post(root, headers=headers, json={
+            **body, "contact_email": email, "invoice_buyer_email": c.buyer.email, "contact_phone": "0912345678",
+        })
+        assert invalid_email.status_code == 422, invalid_email.text
     missing = await c.client.post(root, headers=headers, json=body)
     assert missing.status_code == 422 and missing.json()["detail"] == "請填寫聯絡電話"
-    created = await c.client.post(root, headers=headers, json={**body, "contact_phone": "0912 345 678"})
+    created = await c.client.post(root, headers=headers, json={
+        **body, "contact_email": "order-contact@example.com", "invoice_buyer_email": c.buyer.email,
+        "contact_phone": "0912 345 678",
+    })
     assert created.status_code == 201, created.text
     assert created.json()["contact_phone"] is None
+    stored = await c.session.get(Order, created.json()["id"])
+    assert stored.contact_email == "order-contact@example.com" and stored.invoice_buyer_email == c.buyer.email
     assert c.buyer.meal_contact_phone_encrypted and "0912345678" not in c.buyer.meal_contact_phone_encrypted
     saved = await c.client.get("/v1/meal-checkout/contact", headers=headers)
     assert saved.json() == {"phone": "0912345678"} and "no-store" in saved.headers["cache-control"]
@@ -72,25 +83,26 @@ async def test_phone_required_encrypted_and_reused_in_both_admin_views(cash_cont
     search = await c.client.get("/v1/admin/meal-orders", headers=admin)
     for row in roster.json() + [item["order"] for item in search.json()["items"]]:
         assert row["contact_phone"] == "0912345678"
-        assert row["customer_name"] == c.buyer.display_name and row["customer_email"] == c.buyer.email
+        expected_email = "order-contact@example.com" if row["id"] == stored.id else c.buyer.email
+        assert row["customer_name"] == c.buyer.display_name and row["customer_email"] == expected_email
 
 
-async def test_buyer_cancellation_cutoff_and_admin_override(review_context):
+async def test_buyer_cancellation_is_forbidden_before_and_after_pickup(review_context):
     c = review_context
     c.order.fulfillment.pickup_at = c.now + timedelta(minutes=20)
     await c.session.commit()
     buyer = auth_headers(c.buyer)
     path = f"/v1/meal-orders/{c.order.id}/cancellation-requests"
-    with time_machine.travel(c.now + timedelta(minutes=20), tick=False):
-        assert (await c.client.post(path, headers=buyer, json={"reason": "改期"})).status_code == 409
-    before = await c.client.post(path, headers=buyer, json={"reason": "改期"})
-    assert before.status_code == 201, before.text
-    again = await c.client.post(path, headers=buyer, json={"reason": "改期"})
-    assert again.json()["id"] == before.json()["id"]
+    for now in (c.now, c.now + timedelta(minutes=20)):
+        with time_machine.travel(now, tick=False):
+            denied = await c.client.post(path, headers=buyer, json={"reason": "改期"})
+            assert denied.status_code == 403, denied.text
+            assert denied.json()["detail"] == "退單請致電客服，由管理員協助辦理"
     with time_machine.travel(c.now + timedelta(minutes=20), tick=False):
         admin = await c.client.post(f"/v1/admin/meal-orders/{c.order.id}/cancel", headers=auth_headers(c.admin), json={"reason": "同意退單"})
         assert admin.status_code == 200, admin.text
         assert admin.json()["cancelled_at"]
+        assert admin.json()["cancellation_request"]["source"] == "admin"
 
 
 async def test_disaster_batch_cancels_lunch_and_dinner_and_notifies_every_order(schedule_context):

@@ -122,6 +122,20 @@ async def test_obsolete_payment_and_refund_do_not_change_current_revision(databa
 
 
 @pytest.mark.asyncio
+async def test_refund_email_falls_back_to_account_without_order_contact(database_session):
+    owner, _, order, old, _ = await make_revised_order(database_session)
+    order.contact_email = ""
+    await database_session.commit()
+    repository = SQLAlchemyPaymentCallbackRepository(database_session)
+    assert await repository.apply_raygate_payment_callback("old-paid", success_payload(old)) == "late_paid_refund_required"
+    refunded = _callback_payload(old, status=3, return_code="0000", message="已退款", associated_order_id="OLD-REFUND")
+    assert await repository.apply_raygate_payment_callback("old-refunded", refunded) == "refunded"
+    emails = list(await database_session.scalars(select(OutboxEvent).where(OutboxEvent.event_type == "send_email")))
+    refund_email = next(event for event in emails if event.payload["event_type"] == "refund_completed")
+    assert refund_email.payload["to_email"] == owner.email
+
+
+@pytest.mark.asyncio
 async def test_external_obsolete_refund_without_local_request_does_not_bind_current_refund(database_session):
     _, _, order, old, latest = await make_revised_order(database_session, current_paid=True)
     unrelated = Refund(order=order, amount=300, status=RefundStatus.PENDING, reason="目前版本待退", requested_by_id=order.user_id)

@@ -500,27 +500,22 @@ function legacyMealSubmissionKey(paymentMethod, invoiceHandling, invoicePreferen
   return `meal-submission:${createHash('sha256').update(oldFingerprint).digest('hex')}`;
 }
 
-for (const { name, results, submit, recover, method = 'online', handling = 'pickup_day' } of [
+for (const { name, results, submit, recover } of [
   { name: '找回已成立的原單', results: [orderId], submit: false, recover: true },
   { name: '未成立時沿用原識別，以新版預設送單', results: [null], submit: true, recover: false },
   { name: '舊請求先完成時找回原單', results: [null, orderId], submit: true, recover: true },
   { name: '舊 API 暫時無查詢入口時開啟訂單中心', results: ['old_api'], submit: false, recover: false },
-  { name: '現場付款的取餐日開票找回原單', results: [orderId], submit: false, recover: true, method: 'cash_on_pickup' },
-  { name: '現場付款的收款後開票找回原單', results: [orderId], submit: false, recover: true, method: 'cash_on_pickup', handling: 'on_payment' },
 ]) {
   test(`一般便當更新後重試舊開票請求，${name}`, { timeout: 25000 }, async (t) => {
     const { page, state } = await scheduleFixture(t);
-    const cash = method === 'cash_on_pickup';
-    state.events[0].allow_cash_payment = cash;
     state.submissionResults = [...results];
     state.conflictOnCreate = submit && recover;
     const requestId = '680456c6-b8af-4b63-83b0-1a3b5f86da43';
-    const key = legacyMealSubmissionKey(method, handling);
+    const key = legacyMealSubmissionKey('online', 'pickup_day');
     await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
     await page.evaluate(([key, id]) => sessionStorage.setItem(key, id), [key, requestId]);
     await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
-    if (cash) await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
-    await page.getByRole('button', { name: cash ? '確認預訂・現場付款' : '預訂並前往線上付款', exact: true }).click();
+    await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
     if (submit && !recover) {
       await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
     } else {
@@ -536,24 +531,24 @@ for (const { name, results, submit, recover, method = 'online', handling = 'pick
   });
 }
 
-for (const { handling, defaultOnline } of [
-  { handling: 'pickup_day', defaultOnline: false },
-  { handling: 'on_payment', defaultOnline: false },
-  { handling: 'pickup_day', defaultOnline: true },
+for (const { handling, company } of [
+  { handling: 'pickup_day', company: true },
+  { handling: 'on_payment', company: true },
+  { handling: 'pickup_day', company: false },
 ]) {
-  test(`舊公司發票現金單待確認時先查看訂單（${handling}${defaultOnline ? '，新版預設線上付款' : ''}）`, { timeout: 25000 }, async (t) => {
+  test(`舊${company ? '公司' : '個人'}發票現金單待確認時先查看訂單（${handling}）`, { timeout: 25000 }, async (t) => {
     const { page, state } = await scheduleFixture(t);
     state.events[0].allow_cash_payment = true;
     const requestId = '680456c6-b8af-4b63-83b0-1a3b5f86da43';
-    const key = legacyMealSubmissionKey('cash_on_pickup', handling, {
+    const key = legacyMealSubmissionKey('cash_on_pickup', handling, company ? {
       buyerType: 'company', buyerTaxId: '12345675', buyerName: '隔離測試公司',
       buyerEmail: 'schedule@example.test', carrierType: 'cloud',
-    });
+    } : undefined);
     await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
     await page.evaluate(([key, id]) => sessionStorage.setItem(key, id), [key, requestId]);
     await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
-    if (!defaultOnline) await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
-    await page.getByRole('button', { name: defaultOnline ? '預訂並前往線上付款' : '確認預訂・現場付款', exact: true }).click();
+    assert.equal(await page.getByRole('radio', { name: '合作社現場付款', exact: true }).count(), 0);
+    await page.getByRole('button', { name: '預訂並前往線上付款', exact: true }).click();
     await page.getByText('先前送出的便當訂單可能已成立。', { exact: false }).waitFor();
     assert.equal(await page.getByRole('link', { name: '查看便當訂單', exact: true }).getAttribute('href'), '/meal-orders');
     assert.equal(new URL(page.url()).pathname, '/meals/scheduled-lunch');
@@ -568,8 +563,9 @@ for (const { handling, defaultOnline } of [
       await page.getByText('請再確認是否另下一筆。', { exact: false }).waitFor();
       assert.deepEqual(state.orders, []);
       await separate.click();
-      await page.waitForURL(`**/meal-orders?order_id=${orderId}`);
+      await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
       assert.equal(state.orders.length, 1);
+      assert.equal(state.orders[0].payment_method, 'online');
       assert.notEqual(state.orders[0].client_request_id, requestId);
       assert.equal(state.orders[0].kitchen_note, '隔離新訂單');
       assert.equal(Object.hasOwn(state.orders[0], 'invoice_handling'), false);
@@ -579,24 +575,23 @@ for (const { handling, defaultOnline } of [
   });
 }
 
-test('首次現金便當照常送出，回應失敗後重用新版識別並清除成功紀錄', { timeout: 25000 }, async (t) => {
+test('首次線上便當照常送出，回應失敗後重用新版識別並清除成功紀錄', { timeout: 25000 }, async (t) => {
   const { page, state } = await scheduleFixture(t);
   state.events[0].allow_cash_payment = true;
   state.rejectOrderOnce = true;
   await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
   await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).click();
-  await page.getByRole('radio', { name: '合作社現場付款', exact: true }).check();
-  const submit = page.getByRole('button', { name: '確認預訂・現場付款', exact: true });
+  const submit = page.getByRole('button', { name: '預訂並前往線上付款', exact: true });
   await submit.click({ trial: true });
   await submit.evaluate(button => { button.click(); button.click(); });
   await page.getByText('隔離測試暫未收到回應', { exact: true }).waitFor();
   assert.equal(state.orders.length, 1);
   const id = state.orders[0].client_request_id;
-  const key = legacyMealSubmissionKey('cash_on_pickup');
+  const key = legacyMealSubmissionKey('online');
   const marker = key.replace('meal-submission:', 'meal-submission-current:');
   assert.deepEqual(await page.evaluate(keys => keys.map(item => sessionStorage.getItem(item)), [key, marker]), [id, id]);
   await submit.click();
-  await page.waitForURL(`**/meal-orders?order_id=${orderId}`);
+  await page.getByRole('heading', { name: '隔離付款頁', exact: true }).waitFor();
   assert.deepEqual(state.orders.map(order => order.client_request_id), [id, id]);
   assert.deepEqual(state.submissionLookups, []);
   assert.deepEqual(await page.evaluate(keys => keys.map(item => sessionStorage.getItem(item)), [key, marker]), [null, null]);

@@ -13,7 +13,9 @@ export function AdminOrderCancellationReview({ order }: { order: Order }) {
     mutationFn: (decision: "approve" | "reject") => apiFetch<Order>(`/v1/orders/${order.id}/admin/cancellation-requests/${request?.id}/review`, { method: "POST", body: JSON.stringify({ decision, reason }) }),
     onSuccess: () => client.invalidateQueries(),
   });
-  if (!request || (order.sales_channel === "meal_preorder" && request.status === "pending")) return null;
+  if (!request || (request.status === "pending" && (
+    order.sales_channel === "meal_preorder" || ["expired", "failed"].includes(order.payment_status)
+  ))) return null;
   return <section className="order-cancellation-review" aria-label="退單審核">
     <h3>{request.status === "pending" ? "退單待審核" : request.status === "approved" ? "退單已核准" : "退單未核准"}</h3>
     {request.reason && <p>{request.initiated_by_admin ? "退單原因" : "買家申請原因"}：{request.reason}</p>}

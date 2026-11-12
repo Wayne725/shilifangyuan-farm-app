@@ -18,22 +18,24 @@ function MealDetailsForm({ meal, onDone }: { meal: Meal; onDone: () => void }) {
   const [draft, setDraft] = useState(() => ({
     name: meal.name, description: meal.description, price: meal.price, tax_type: meal.tax_type, is_active: meal.is_active,
   }));
-  const [version] = useState(meal.updated_at);
+  const [original] = useState(meal);
   const [confirmed, setConfirmed] = useState(false);
-  const impact = useQuery({ queryKey: ["meal-edit-impact", meal.id], retry: false, refetchOnWindowFocus: false,
+  const requiresImpact = draft.price !== original.price || draft.tax_type !== original.tax_type || (original.is_active && !draft.is_active);
+  const impact = useQuery({ queryKey: ["meal-edit-impact", meal.id], enabled: requiresImpact, retry: false, refetchOnWindowFocus: false,
     queryFn: ({ signal }) => apiFetch<Array<{ id: string; title: string }>>(`/v1/admin/meals/${meal.id}/edit-impact`, { signal }) });
-  const affected = impact.data || [];
+  const affected = requiresImpact ? (impact.data ?? []) : [];
   const change = <K extends keyof typeof draft>(key: K, value: typeof draft[K]) => {
     setDraft(current => ({ ...current, [key]: value }));
-    setConfirmed(false);
+    if (key === "price" || key === "tax_type" || key === "is_active") setConfirmed(false);
   };
   const save = useMutation({
     mutationFn: () => apiFetch(`/v1/admin/meals/${meal.id}`, { method: "PATCH", body: JSON.stringify({
-      ...draft, expected_updated_at: version, confirmed_event_ids: confirmed ? affected.map(event => event.id) : [],
+      ...draft, expected_updated_at: original.updated_at, confirmed_event_ids: confirmed ? affected.map(event => event.id) : [],
     }) }),
     onSuccess: onDone,
   });
-  const canSave = impact.isSuccess && !impact.isFetching && (!affected.length || confirmed) && !save.isPending;
+  const error = (requiresImpact ? impact.error : null) || save.error;
+  const canSave = (!requiresImpact || (impact.isSuccess && !impact.isFetching && (!affected.length || confirmed))) && !save.isPending;
   return <form className="social-form" aria-label="編輯餐點" onSubmit={event => {
     event.preventDefault();
     if (canSave) save.mutate();
@@ -46,8 +48,8 @@ function MealDetailsForm({ meal, onDone }: { meal: Meal; onDone: () => void }) {
     {affected.length > 0 && <fieldset><legend>已發布場次</legend><ul>{affected.map(event => <li key={event.id}>{event.title}</li>)}</ul>
       <label className="check-field"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />確認影響上述場次的新訂單</label>
     </fieldset>}
-    {(impact.error || save.error) && <p className="form-error" role="alert">{impact.error?.message || save.error?.message}</p>}
-    {(impact.isError || save.isError) && <button type="button" className="button button-quiet" onClick={() => { setConfirmed(false); void impact.refetch(); }}>重新讀取場次</button>}
+    {error && <p className="form-error" role="alert">{error.message}</p>}
+    {requiresImpact && (impact.isError || save.isError) && <button type="button" className="button button-quiet" onClick={() => { setConfirmed(false); void impact.refetch(); }}>重新讀取場次</button>}
     <button className="button button-system" disabled={!canSave}>儲存餐點</button>
   </form>;
 }
