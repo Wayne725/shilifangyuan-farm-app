@@ -84,7 +84,8 @@ async def generate_scheduled_meal_events(
         active_ids = set(await session.scalars(
             select(Meal.id).where(Meal.id.in_(meal_ids), Meal.is_active.is_(True))
         ))
-        if active_ids != meal_ids:
+        active_offerings = [item for item in template.offerings if item["meal_id"] in active_ids]
+        if not active_offerings:
             continue
         existing_dates = set(await session.scalars(
             select(MealEvent.service_date).where(
@@ -144,7 +145,7 @@ async def generate_scheduled_meal_events(
                 pickup_ends_at=(pickup_end + timedelta(minutes=30)).astimezone(timezone.utc),
                 status=MealEventStatus.PUBLISHED if template.auto_publish else MealEventStatus.DRAFT,
                 created_by_id=template.created_by_id,
-                offerings=[MealEventOffering(**item) for item in template.offerings],
+                offerings=[MealEventOffering(**item) for item in active_offerings],
             )
             session.add(event)
             await session.flush()

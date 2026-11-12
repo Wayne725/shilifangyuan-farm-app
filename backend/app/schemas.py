@@ -229,6 +229,7 @@ class ProductRead(ApiModel):
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
     is_active: bool
     daily_sales_enabled: bool
+    archived_at: Optional[datetime] = None
 
 
 class ProductCreate(BaseModel):
@@ -2370,6 +2371,7 @@ class MeetingResolutionRead(ApiModel):
     resolution_text: str
     member_proposal_id: Optional[str]
     created_at: datetime
+    revoked_at: Optional[datetime] = None
 
     @field_validator("created_at")
     @classmethod
@@ -2390,6 +2392,7 @@ class MeetingRead(ApiModel):
     eligible_member_count: int
     attendance_rate: float
     resolutions: List[MeetingResolutionRead]
+    can_delete: bool = False
 
     @field_validator("starts_at")
     @classmethod

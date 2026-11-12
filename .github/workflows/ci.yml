@@ -276,7 +276,9 @@ jobs:
             tests/browser/frontend-recovery.mjs 2>&1 | tee -a browser-evidence/commerce.log
           if [[ "$BROWSER_ENGINE" == chromium ]]; then
             node --test --test-concurrency=1 --test-timeout=45000 \
-              tests/browser/admin-style-roster-csv.mjs 2>&1 | tee -a browser-evidence/commerce.log
+              tests/browser/admin-style-roster-csv.mjs \
+              tests/browser/admin-editing.mjs \
+              tests/browser/catalog-sale-controls.mjs 2>&1 | tee -a browser-evidence/commerce.log
           fi
       - uses: actions/upload-artifact@v4
         if: always()

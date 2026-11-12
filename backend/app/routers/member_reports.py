@@ -69,15 +69,17 @@ async def _member_rows(session, settings, *, newest_first=False, member_number="
             seen.add(membership.member_number)
         aad = f"member-profile:{user.id}"
         row = {"id": membership.id, "source": "membership", "member_number": membership.member_number or membership.trainee_number or "",
-               "status": membership.status.value, "legal_name": decrypt(profile.legal_name_encrypted, aad) if profile else decrypt(entry.legal_name_encrypted, roster_aad(entry.id)) if entry else user.display_name,
-               "email": user.email or user.notification_email or (decrypt(entry.email_encrypted, roster_aad(entry.id)) if entry else ""),
-               "phone": decrypt(profile.phone_encrypted, aad) if profile else decrypt(entry.phone_encrypted, roster_aad(entry.id)) if entry else "",
+               "status": membership.status.value, "legal_name": decrypt(entry.legal_name_encrypted, roster_aad(entry.id)) if entry else decrypt(profile.legal_name_encrypted, aad) if profile else user.display_name,
+               "email": decrypt(entry.email_encrypted, roster_aad(entry.id)) if entry else user.email or user.notification_email or "",
+               "phone": decrypt(entry.phone_encrypted, roster_aad(entry.id)) if entry else decrypt(profile.phone_encrypted, aad) if profile else "",
                "share_certificate_number": membership.share_certificate_number, "share_count": membership.share_count,
                "share_capital_amount": membership.share_capital_amount, "share_subscribed_on": membership.share_subscribed_on,
                "share_paid_on": membership.share_paid_on, "activated_at": membership.activated_at,
                "_created_at": membership.created_at}
         for name in ("birth_date", "gender", "place_of_origin", "occupation", "address", "registered_address", "correspondence_address", "landline_phone", "line_id", "emergency_contact"):
             row[name] = decrypt(getattr(profile, f"{name}_encrypted"), aad) if profile else ""
+        if entry and entry.address_encrypted:
+            row["address"] = decrypt(entry.address_encrypted, roster_aad(entry.id))
         rows.append(row)
     for entry in roster:
         if entry.member_number in seen:
@@ -86,6 +88,7 @@ async def _member_rows(session, settings, *, newest_first=False, member_number="
         rows.append({"id": entry.id, "source": "roster", "member_number": entry.member_number,
             "status": "active" if entry.is_active else "inactive", "legal_name": decrypt(entry.legal_name_encrypted, aad),
             "email": decrypt(entry.email_encrypted, aad), "phone": decrypt(entry.phone_encrypted, aad),
+            "address": decrypt(entry.address_encrypted, aad),
             "share_certificate_number": entry.share_certificate_number, "share_count": entry.share_count,
             "share_capital_amount": entry.share_capital_amount, "share_subscribed_on": entry.share_subscribed_on,
             "share_paid_on": entry.share_paid_on, "activated_at": entry.claimed_at,

@@ -564,6 +564,7 @@ class MemberRosterEntry(Base):
     legal_name_encrypted: Mapped[str] = mapped_column(Text)
     email_encrypted: Mapped[str] = mapped_column(Text)
     phone_encrypted: Mapped[str] = mapped_column(Text)
+    address_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     encryption_key_version: Mapped[str] = mapped_column(String(32), default="v1")
     share_certificate_number: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, unique=True, index=True
@@ -1093,6 +1094,7 @@ class Product(Base):
     allowed_shipping_channels: Mapped[List[str]] = mapped_column(JSON, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     daily_sales_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
@@ -3164,6 +3166,7 @@ class MeetingResolution(Base):
     )
     title: Mapped[str] = mapped_column(String(160))
     resolution_text: Mapped[str] = mapped_column(Text)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -218,7 +218,9 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
               {order.invoice_followup_reason ? invoiceFollowupCopy[order.invoice_followup_reason].label : "發票待合作社處理"}
             </span>}
             <OrderStatusBadge kind="payment" status={order.payment_status} />
-            <OrderStatusBadge kind="fulfillment" status={displayedFulfillmentStatus(order)} label={pickupFulfillmentLabel(order)} />
+            {order.sales_channel === "meal_preorder"
+              ? mealServiceEnded(order) && <span className="status-chip">已結束</span>
+              : <OrderStatusBadge kind="fulfillment" status={order.fulfillment_status} label={pickupFulfillmentLabel(order)} />}
             <OrderStatusBadge kind="invoice" status={order.invoice_status} />
             {order.sales_channel !== "meal_preorder" && order.shipment && <span className="system-state"><Truck size={16} />{shippingChannelLabels[order.shipment.channel]} · {shipmentStatusLabel(order.shipment.status)}</span>}
           </div>
@@ -268,16 +270,16 @@ function InvoiceFollowupAction({ reason, invoice }: { reason: InvoiceFollowupRea
   return <small className="no-action">{action}{reference && <> {reference}</>}</small>;
 }
 
-function displayedFulfillmentStatus(order: Order) {
-  if (order.sales_channel === "meal_preorder" && order.fulfillment_status === "picked_up" &&
-      !order.cancelled_at && order.fulfillment?.status === "no_show") return "no_show";
-  return order.fulfillment_status;
+function mealServiceEnded(order: Order) {
+  if (order.cancelled_at || order.fulfillment_status === "cancelled") return false;
+  return order.fulfillment?.status === "no_show" ||
+    (order.fulfillment?.pickup_ends_at && Date.parse(order.fulfillment.pickup_ends_at) <= Date.now());
 }
 
 function pickupFulfillmentLabel(order: Order) {
   if (order.fulfillment_method !== "cooperative_pickup" || order.payment_status !== "paid") return;
-  if (order.fulfillment_status === "pending_confirmation") return "待備貨";
-  if (order.fulfillment_status === "ready_for_pickup") return "待取貨";
+  if (order.fulfillment_status === "pending_confirmation" || order.fulfillment_status === "preparing") return "準備中";
+  if (order.fulfillment_status === "ready_for_pickup") return "可領取";
 }
 
 function AdminOrderAction({
@@ -329,7 +331,7 @@ function AdminOrderAction({
       fulfillmentControl = <button type="button" disabled={busy} onClick={() => onShipment("delivered")}>模擬已送達</button>;
     }
   } else if (order.fulfillment_status === "preparing") {
-    fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("ready_for_pickup")}>標記待取貨</button>;
+    fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("ready_for_pickup")}>標記可領取</button>;
   } else if (order.fulfillment_status === "ready_for_pickup") {
     fulfillmentControl = <button type="button" disabled={busy} onClick={() => onFulfillment("picked_up")}>完成取貨</button>;
   }

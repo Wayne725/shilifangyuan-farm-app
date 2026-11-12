@@ -14,6 +14,7 @@ import { AdminMealOrderSearch } from "../components/AdminMealOrderSearch";
 import { MealScheduleSettings } from "../components/MealScheduleSettings";
 import { MealEventConflicts } from "../components/MealEventConflicts";
 import { MealOptionsEditor } from "../components/MealOptionsEditor";
+import { MealDetailsEditor } from "../components/MealDetailsEditor";
 import { MealImageEditor } from "../components/MealImageEditor";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
@@ -58,6 +59,7 @@ export function AdminMealsPage() {
 
   const refreshMeals = () => {
     void queryClient.invalidateQueries({ queryKey: ["admin-meals"] });
+    void queryClient.invalidateQueries({ queryKey: ["admin-meal-events"] });
     void queryClient.invalidateQueries({ queryKey: ["meal-events"] });
     void queryClient.invalidateQueries({ queryKey: ["meal-event"] });
   };
@@ -95,7 +97,7 @@ export function AdminMealsPage() {
           <MealCreateForm onDone={refreshMeals} />
           {meals.isPending && <LoadingLines count={3} />}
           {meals.isError && <DataState kind="error" title="餐點資料無法讀取" detail={meals.error.message} />}
-          <div className="admin-record-grid">{meals.data?.map((meal) => <article className="admin-record-card" key={meal.id}><BowlFood size={22} weight="light" /><span className={`status-chip ${meal.is_active ? "passed" : ""}`}>{meal.is_active ? "啟用" : "停用"}</span><h3>{meal.name}</h3><p>{meal.description || "尚未填寫餐點介紹"}</p><dl><div><dt>售價</dt><dd>{formatMoney(meal.price)}</dd></div><div><dt>選項</dt><dd>{meal.option_groups.length} 組</dd></div><div><dt>稅別</dt><dd>{meal.tax_type === "taxable" ? "應稅" : "免稅"}</dd></div></dl><MealOptionsEditor meal={meal} onDone={refreshMeals} /><MealImageEditor meal={meal} onDone={refreshMeals} /></article>)}</div>
+          <div className="admin-record-grid">{meals.data?.map((meal) => <article className="admin-record-card" key={meal.id}><BowlFood size={22} weight="light" /><span className={`status-chip ${meal.is_active ? "passed" : ""}`}>{meal.is_active ? "啟用" : "停用"}</span><h3>{meal.name}</h3><p>{meal.description || "尚未填寫餐點介紹"}</p><dl><div><dt>售價</dt><dd>{formatMoney(meal.price)}</dd></div><div><dt>選項</dt><dd>{meal.option_groups.length} 組</dd></div><div><dt>稅別</dt><dd>{meal.tax_type === "taxable" ? "應稅" : "免稅"}</dd></div></dl><MealDetailsEditor meal={meal} onDone={refreshMeals} /><MealOptionsEditor meal={meal} onDone={refreshMeals} /><MealImageEditor meal={meal} onDone={refreshMeals} /></article>)}</div>
         </Tabs.Content>
       </Tabs.Root>
     </section>

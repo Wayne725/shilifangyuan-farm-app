@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hmac
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ..audited_changes import audit_changes
 from ..auth import get_optional_user, require_admin
 from ..config import Settings, get_settings
 from ..database import get_session
@@ -20,6 +22,7 @@ from ..models import (
     Supplier,
     User,
     UserRole,
+    utcnow,
 )
 from ..schemas import (
     BundleCreate,
@@ -62,12 +65,16 @@ def bundle_read(bundle: GroupBundle) -> BundleRead:
 async def list_products(
     current_user: Optional[User] = Depends(get_optional_user),
     session: AsyncSession = Depends(get_session),
+    archive: Literal["current", "archived"] = "current",
 ) -> List[Product]:
     query = select(Product).options(selectinload(Product.supplier))
     if current_user is not None and current_user.user_role == UserRole.ADMIN:
+        query = query.where(Product.archived_at.is_not(None) if archive == "archived" else Product.archived_at.is_(None))
         query = query.order_by(Product.created_at.desc(), Product.id.desc())
     else:
-        query = query.where(Product.is_active.is_(True)).order_by(Product.category, Product.name)
+        if archive == "archived":
+            raise HTTPException(403, "需要管理員權限")
+        query = query.where(Product.is_active.is_(True), Product.archived_at.is_(None)).order_by(Product.category, Product.name)
     result = await session.scalars(query)
     return list(result)
 
@@ -79,7 +86,7 @@ async def get_product(
 ) -> Product:
     product = await session.scalar(
         select(Product)
-        .where(Product.id == product_id, Product.is_active.is_(True))
+        .where(Product.id == product_id, Product.is_active.is_(True), Product.archived_at.is_(None))
         .options(selectinload(Product.supplier))
     )
     if product is None:
@@ -134,6 +141,8 @@ async def update_product(
     if product is None:
         raise HTTPException(status_code=404, detail="找不到商品")
     updates = body.model_dump(exclude_unset=True, mode="json")
+    if product.archived_at is not None and updates.get("is_active"):
+        raise HTTPException(409, "請先解除封存")
     if updates.get("supplier_id") is not None and updates["supplier_id"] != product.supplier_id:
         supplier = await session.scalar(
             select(Supplier).where(
@@ -152,17 +161,10 @@ async def update_product(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="社員價不可高於非社員價",
         )
+    before = {field: getattr(product, field) for field in updates}
     for field, value in updates.items():
         setattr(product, field, value)
-    session.add(
-        AdminAudit(
-            actor_id=admin.id,
-            action="product.update",
-            aggregate_type="product",
-            aggregate_id=product.id,
-            data={"changed_fields": sorted(updates)},
-        )
-    )
+    audit_changes(session, admin.id, "product", product.id, "product.update", before, updates)
     try:
         await session.commit()
     except IntegrityError as exc:
@@ -176,6 +178,31 @@ async def update_product(
         .where(Product.id == product.id)
         .options(selectinload(Product.supplier))
     )
+
+
+class ProductArchiveUpdate(BaseModel):
+    archived: bool
+
+
+@catalog_router.patch("/v1/admin/products/{product_id}/archive", response_model=ProductRead)
+async def archive_product(
+    product_id: str, body: ProductArchiveUpdate, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> Product:
+    product = await session.scalar(select(Product).where(Product.id == product_id)
+        .options(selectinload(Product.supplier)).with_for_update())
+    if product is None:
+        raise HTTPException(404, "找不到商品")
+    before = {"archived_at": product.archived_at, "is_active": product.is_active}
+    if body.archived and product.archived_at is None:
+        product.archived_at = utcnow()
+        product.is_active = False
+    elif not body.archived:
+        product.archived_at = None
+    audit_changes(session, admin.id, "product", product.id, "product.archive_update", before,
+                  {"archived_at": product.archived_at, "is_active": product.is_active})
+    await session.commit()
+    return product
 
 
 @catalog_router.get("/v1/group-bundles", response_model=List[BundleRead])

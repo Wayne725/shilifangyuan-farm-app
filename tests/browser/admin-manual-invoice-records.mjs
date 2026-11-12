@@ -211,7 +211,7 @@ for (const [label, path, legacyOrderApi, width] of [
     const cards = page.locator('.operations-list article');
     await cards.getByText('原單聯絡人', { exact: true }).waitFor();
     assert.equal(await cards.count(), 1);
-    await cards.getByLabel('履約：待備貨', { exact: true }).waitFor();
+    await cards.getByLabel('履約：準備中', { exact: true }).waitFor();
     await cards.getByRole('button', { name: '進入備貨', exact: true }).waitFor();
     assert.equal(await cards.getByText('O20300102100', { exact: true }).count(), 0);
     assert.equal(await cards.getByRole('button', { name: '辦理退單', exact: true }).count(), 1);
@@ -228,7 +228,7 @@ for (const [label, path, legacyOrderApi, width] of [
       await page.getByRole('button', { name: '搜尋', exact: true }).click();
       await cards.getByText('相似編號聯絡人', { exact: true }).waitFor();
       assert.equal(await cards.count(), 2);
-      await cards.getByLabel('履約：待取貨', { exact: true }).waitFor();
+      await cards.getByLabel('履約：可領取', { exact: true }).waitFor();
       await cards.getByRole('button', { name: '完成取貨', exact: true }).waitFor();
       assert.equal(state.orderReads.at(-1).order_id, undefined);
     }

@@ -24,6 +24,7 @@ export interface AuthActionResponse {
 }
 
 export interface Product {
+  archived_at?: string | null;
   id: string;
   product_number?: string | null;
   sku?: string | null;
@@ -288,6 +289,7 @@ export interface MeetingCategory {
 }
 
 export interface Meeting {
+  can_delete?: boolean;
   id: string;
   title: string;
   starts_at: string;
@@ -303,6 +305,7 @@ export interface Meeting {
     id: string;
     title: string;
     resolution_text: string;
+    revoked_at?: string | null;
     member_proposal_id?: string | null;
     created_at: string;
   }>;

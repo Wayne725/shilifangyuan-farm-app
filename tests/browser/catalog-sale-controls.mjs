@@ -33,7 +33,15 @@ async function fixture(t, width, { role = 'admin', patchError = '', deferPatch =
     if (path === '/v1/platform' && request.method() === 'GET') return route.fulfill({ json: { orders_open: true } });
     if (path === '/v1/products' && request.method() === 'GET') {
       state.reads++;
-      return route.fulfill({ json: structuredClone(state.items) });
+      const archived = url.searchParams.get('archive') === 'archived';
+      return route.fulfill({ json: state.items.filter(item => Boolean(item.archived_at) === archived) });
+    }
+    if (path === '/v1/admin/products/new/archive' && request.method() === 'PATCH') {
+      const item = state.items.find(item => item.id === 'new');
+      const { archived } = request.postDataJSON();
+      item.archived_at = archived ? '2030-01-02T01:00:00Z' : null;
+      if (archived) item.is_active = false;
+      return route.fulfill({ json: item });
     }
     if (path === '/v1/admin/suppliers') return route.fulfill({ json: [{ id: 'supplier-1', business_name: '山城農場', is_active: activeSupplier }] });
     if (path === '/v1/admin/pickup-locations') return route.fulfill({ json: [] });
@@ -66,6 +74,21 @@ async function verify(page, state) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 }
 
+test('390px 商品封存從預設清單消失，解除封存後維持未開放', async t => {
+  const { page, state } = await fixture(t, 390);
+  await card(page).getByRole('button', { name: '封存商品', exact: true }).click();
+  await card(page).getByRole('button', { name: '確認停止販售並封存' }).click();
+  await card(page).waitFor({ state: 'detached' });
+  await page.getByRole('group', { name: '販售狀態' }).getByRole('button', { name: '已封存' }).click();
+  await card(page).getByText('已封存', { exact: true }).waitFor();
+  if (process.env.ADMIN_EDITING_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.ADMIN_EDITING_ARTIFACT_DIR}/product-archive-390.png`, fullPage: true });
+  await card(page).getByRole('button', { name: '解除封存' }).click();
+  await card(page).waitFor({ state: 'detached' });
+  await page.getByRole('group', { name: '販售狀態' }).getByRole('button', { name: '未開放', exact: true }).click();
+  await card(page).getByText('未開放', { exact: true }).waitFor();
+  await verify(page, state);
+});
+
 test('商品清單有可直接操作的搜尋與停售入口', async t => {
   const { page, state } = await fixture(t, 1280);
   await page.getByRole('heading', { name: '商品清單', exact: true }).waitFor();
@@ -93,11 +116,11 @@ for (const width of [390, 1280]) {
     }
     const filters = page.getByRole('group', { name: '販售狀態', exact: true });
     await search.fill('');
-    await filters.getByRole('button', { name: '不可販售', exact: true }).click();
+    await filters.getByRole('button', { name: '未開放', exact: true }).click();
     await card(page, '停售測試醬油').waitFor();
     assert.equal(await page.locator('article.admin-record-card').count(), 1);
-    assert.equal(await filters.getByRole('button', { name: '不可販售', exact: true }).getAttribute('aria-pressed'), 'true');
-    await filters.getByRole('button', { name: '可販售', exact: true }).click();
+    assert.equal(await filters.getByRole('button', { name: '未開放', exact: true }).getAttribute('aria-pressed'), 'true');
+    await filters.getByRole('button', { name: '開放', exact: true }).click();
     await card(page).waitFor();
     assert.equal(await page.locator('article.admin-record-card').count(), 2);
     await card(page, '共同購買專用商品').getByText('未上架', { exact: true }).waitFor();
@@ -146,7 +169,7 @@ test('停售失敗顯示錯誤，保留原可販售狀態', async t => {
   const { page, state } = await fixture(t, 1280, { patchError: detail });
   await card(page).getByRole('button', { name: '停止販售', exact: true }).click();
   await card(page).getByRole('alert').getByText(detail, { exact: true }).waitFor();
-  assert.equal(await card(page).getByText('可販售', { exact: true }).count(), 1);
+  assert.equal(await card(page).getByText('開放', { exact: true }).count(), 1);
   assert.equal(await card(page).getByRole('button', { name: '停止販售', exact: true }).isEnabled(), true);
   assert.equal(await card(page).getByRole('button', { name: '恢復販售', exact: true }).count(), 0);
   assert.equal(state.items[0].is_active, true);

@@ -23,18 +23,29 @@ async function fixture(t, { width = 1280, role = 'admin', membership = 'active',
     const req = route.request(), url = new URL(req.url()), path = url.pathname, method = req.method();
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return method === 'GET' ? route.continue() : route.abort();
-    if (path === '/v1/auth/refresh') return route.fulfill({ status: role === 'guest' ? 401 : 200, json: role === 'guest' ? { detail: '隔離訪客' } : { access_token: 'isolated-meetings', user: { id: 'local-user', email: 'isolated@example.test', display_name: '隔離使用者', user_role: role, membership_type: membership === 'active' ? 'member' : 'nonmember' } } });
+    if (path === '/v1/auth/refresh') {
+      if (role === 'guest' || state.sessionRevoked) return route.fulfill({ status: 401, json: { detail: '隔離登入已失效' } });
+      return route.fulfill({ json: { access_token: 'isolated-meetings', user: { id: 'local-user', email: 'isolated@example.test', display_name: '隔離使用者', user_role: role, membership_type: membership === 'active' ? 'member' : 'nonmember' } } });
+    }
     if (method === 'GET') state.reads.push(path); else state.writes.push({ method, path, body: req.postDataJSON() });
+    if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true } });
+    if (path === '/v1/admin/membership/admissions') return route.fulfill({ json: { items: [], total: 0 } });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: ['active', 'suspended'].includes(membership) ? 'member' : membership === 'trainee' ? 'trainee' : 'nonmember', membership: { status: membership } } });
     if (path === '/v1/meeting-categories' || path === '/v1/admin/meeting-categories') {
       if (method === 'POST' && path.startsWith('/v1/admin/')) {
         const body = req.postDataJSON(); const record = { ...body, id: 'new-category', updated_at: version }; state.categories.push(record); return route.fulfill({ json: record });
       }
-      if (method === 'GET') return route.fulfill({ status: state.categoryFailure || 200, json: state.categoryFailure ? { detail: '隔離類別無法讀取' } : state.categories.filter(c => path.startsWith('/v1/admin/') || c.is_active).sort((a,b) => a.sort_order - b.sort_order) });
+      if (method === 'GET') {
+        if (state.categoryFailure === 401) state.sessionRevoked = true;
+        return route.fulfill({ status: state.categoryFailure || 200, json: state.categoryFailure ? { detail: '隔離類別無法讀取' } : state.categories.filter(c => path.startsWith('/v1/admin/') || c.is_active).sort((a,b) => a.sort_order - b.sort_order) });
+      }
     }
     if (path.startsWith('/v1/admin/meeting-categories/') && method === 'PATCH') {
       const record = state.categories.find(c => c.id === path.split('/').at(-1));
-      if (state.patchFailure) return route.fulfill({ status: state.patchFailure, json: { detail: state.patchFailure === 409 ? '類別資料已更新，請重新載入後核對' : '隔離儲存失敗' } });
+      if (state.patchFailure) {
+        if (state.patchFailure === 401) state.sessionRevoked = true;
+        return route.fulfill({ status: state.patchFailure, json: { detail: state.patchFailure === 409 ? '類別資料已更新，請重新載入後核對' : '隔離儲存失敗' } });
+      }
       const body = req.postDataJSON(); assert.equal(body.expected_updated_at, record.updated_at);
       Object.assign(record, { name: body.name, sort_order: body.sort_order, is_active: body.is_active, updated_at: '2030-01-02T00:00:00Z' }); return route.fulfill({ json: record });
     }
@@ -44,7 +55,10 @@ async function fixture(t, { width = 1280, role = 'admin', membership = 'active',
         if (state.createFailure) return route.fulfill({ status: state.createFailure, json: { detail: '此會議類別已停用，請重新選擇' } });
         const body = req.postDataJSON(), record = { ...makeMeeting('new-meeting', 'affairs', body.title), ...body }; state.meetings.push(record); return route.fulfill({ json: record });
       }
-      if (method === 'GET') return route.fulfill({ status: state.meetingFailure || 200, json: state.meetingFailure ? { detail: '隔離會議讀取失敗' } : mappedMeetings() });
+      if (method === 'GET') {
+        if (state.meetingFailure === 401) state.sessionRevoked = true;
+        return route.fulfill({ status: state.meetingFailure || 200, json: state.meetingFailure ? { detail: '隔離會議讀取失敗' } : mappedMeetings() });
+      }
     }
     if (['/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/admin/members', '/v1/admin/member-roster', '/v1/wishes', '/v1/notifications'].includes(path) && method === 'GET') return route.fulfill({ json: [] });
     state.unknown.push(`${method} ${path}`); return route.fulfill({ status: 404, json: { detail: '未定義隔離API' } });
@@ -130,15 +144,17 @@ for (const membership of ['nonmember', 'trainee', 'suspended']) test(`${membersh
   assert.ok(!state.reads.some(path => ['/v1/meetings', '/v1/meeting-categories'].includes(path))); await page.goto(`${base}/admin/social`); await page.getByRole('heading', { name: '社務管理只向管理者開放。', exact: true }).waitFor(); assert.ok(!state.reads.some(path => path.startsWith('/v1/admin/'))); await clean(page, state);
 });
 for (const endpoint of ['meeting', 'category']) for (const status of [401, 403]) test(`${endpoint} API ${status} 覆蓋社員快取資格，不再重試且隱藏會議與類別`, async t => {
-  const { page, state, member } = await fixture(t, { role: 'customer', [`${endpoint}Failure`]: status }); await member(); await page.getByRole('heading', { name: '此功能開放給正式社員', exact: true }).waitFor();
+  const { page, state, member } = await fixture(t, { role: 'customer', [`${endpoint}Failure`]: status }); await member();
+  await page.getByRole('heading', { name: status === 401 ? '登入後查看各項會議' : '此功能開放給正式社員', exact: true }).waitFor();
   assert.equal(await page.locator('.meeting-list article, .meeting-filters').count(), 0);
-  assert.equal(state.reads.filter(path => path === (endpoint === 'meeting' ? '/v1/meetings' : '/v1/meeting-categories')).length, status === 401 ? 2 : 1);
+  assert.equal(state.reads.filter(path => path === (endpoint === 'meeting' ? '/v1/meetings' : '/v1/meeting-categories')).length, 1);
   await clean(page, state);
 });
 for (const status of [401, 403]) test(`管理員類別修改 ${status} 後清除管理草稿及歷史顯示`, async t => {
   const { page, state, admin } = await fixture(t); await admin(); await page.locator('.meeting-category-panel > summary').click();
   const row = page.getByRole('article', { name: '類別 社務會議', exact: true }); await row.getByRole('button', { name: '編輯', exact: true }).click(); await row.getByLabel('類別名稱', { exact: true }).fill('不得殘留的管理草稿');
-  state.patchFailure = status; await row.getByRole('button', { name: '儲存類別', exact: true }).click(); await page.getByText('會議管理權限已失效', { exact: true }).waitFor();
+  state.patchFailure = status; await row.getByRole('button', { name: '儲存類別', exact: true }).click();
+  await page.getByText(status === 401 ? '社務管理只向管理者開放。' : '會議管理權限已失效', { exact: true }).waitFor();
   assert.equal(await page.locator('.meeting-category-row, .meeting-admin-card, .meeting-filters').count(), 0); assert.equal(await page.locator('input').evaluateAll(inputs => inputs.some(input => input.value === '不得殘留的管理草稿')), false);
   await clean(page, state);
 });
@@ -165,12 +181,12 @@ for (const status of [401, 403]) {
     const { page, state } = await fixture(t, { categoryFailure: status });
     await page.goto(`${base}/admin/social`);
     await page.getByRole('tab', { name: '會議管理', exact: true }).click();
-    await page.getByText('會議管理權限已失效', { exact: true }).waitFor();
+    await page.getByText(status === 401 ? '社務管理只向管理者開放。' : '會議管理權限已失效', { exact: true }).waitFor();
     assert.ok(state.reads.includes('/v1/admin/meetings'));
     assert.equal(await page.locator('.meeting-category-row, .meeting-admin-card, .meeting-filters').count(), 0);
     assert.equal(await page.getByRole('button', { name: '出席與決議', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '建立會議', exact: true }).count(), 0);
-    assert.equal(state.reads.filter(path => path === '/v1/admin/meeting-categories').length, status === 401 ? 2 : 1);
+    assert.equal(state.reads.filter(path => path === '/v1/admin/meeting-categories').length, 1);
     assert.equal(state.writes.length, 0); await clean(page, state);
   });
   test(`管理員類別快取重新讀取 ${status} 清除父層會議資料及管理入口`, async t => {
@@ -183,11 +199,11 @@ for (const status of [401, 403]) {
     state.categoryFailure = status;
     await page.clock.fastForward(31_000);
     await page.getByRole('tab', { name: '會議管理', exact: true }).click();
-    await page.getByText('會議管理權限已失效', { exact: true }).waitFor();
+    await page.getByText(status === 401 ? '社務管理只向管理者開放。' : '會議管理權限已失效', { exact: true }).waitFor();
     assert.equal(await page.locator('.meeting-category-row, .meeting-admin-card, .meeting-filters').count(), 0);
     assert.equal(await page.getByRole('button', { name: '出席與決議', exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '建立會議', exact: true }).count(), 0);
-    assert.equal(state.reads.filter(path => path === '/v1/admin/meeting-categories').length - before, status === 401 ? 2 : 1);
+    assert.equal(state.reads.filter(path => path === '/v1/admin/meeting-categories').length - before, 1);
     assert.equal(state.writes.length, 0); await clean(page, state);
   });
 }

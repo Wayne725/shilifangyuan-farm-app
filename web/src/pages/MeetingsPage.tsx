@@ -77,7 +77,7 @@ export function MeetingsPage() {
                   const title = item.title || item.label || item.subject;
                   return <li key={index}>{typeof title === "string" ? title : `議程 ${index + 1}`}</li>;
                 })}</ul>}
-                {meeting.resolutions.length > 0 && <div className="meeting-resolutions">{meeting.resolutions.map((resolution) => <p key={resolution.id}><strong>{resolution.title}</strong><span>{resolution.resolution_text}</span></p>)}</div>}
+                {meeting.resolutions.length > 0 && <div className="meeting-resolutions">{meeting.resolutions.map((resolution) => <p key={resolution.id}><strong>{resolution.title}{resolution.revoked_at && "（已撤銷）"}</strong><span>{resolution.resolution_text}</span></p>)}</div>}
                 <div className="meeting-attendance"><strong>{Math.round(meeting.attendance_rate * 100)}%</strong><small>{meeting.attended_count}/{meeting.eligible_member_count} 人出席</small></div>
               </article>
             ))}

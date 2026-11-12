@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..admin_explanations import AdminExplanation
+from ..audited_changes import audit_changes
 from ..auth import get_current_user, require_active_member, require_admin
 from ..database import get_session
 from ..order_categories import FinancialOrderCategory, financial_order_category_condition
@@ -789,16 +790,20 @@ def _meeting_fields(meeting: Meeting) -> dict[str, Any]:
         "starts_at": aware(meeting.starts_at), "location": meeting.location}
 
 
-async def _meeting_list(session: AsyncSession) -> list[dict[str, Any]]:
+async def _meeting_list(session: AsyncSession, *, admin: bool = False) -> list[dict[str, Any]]:
     meetings = (await session.scalars(select(Meeting).options(selectinload(Meeting.category))
         .order_by(Meeting.starts_at.desc()))).all()
     active_members = int(await session.scalar(select(func.count(Membership.id)).where(Membership.status == MembershipStatus.ACTIVE)) or 0)
     result = []
     for meeting in meetings:
-        attended = int(await session.scalar(select(func.count(MeetingAttendance.id)).where(MeetingAttendance.meeting_id == meeting.id, MeetingAttendance.attended.is_(True))) or 0)
+        attendance_count, attended = (await session.execute(select(
+            func.count(MeetingAttendance.id),
+            func.count(MeetingAttendance.id).filter(MeetingAttendance.attended.is_(True)),
+        ).where(MeetingAttendance.meeting_id == meeting.id))).one()
         resolutions = (await session.scalars(select(MeetingResolution).where(MeetingResolution.meeting_id == meeting.id).order_by(MeetingResolution.created_at))).all()
         result.append({**_meeting_fields(meeting), "attended_count": attended, "eligible_member_count": active_members,
-            "attendance_rate": attended / active_members if active_members else 0, "resolutions": resolutions})
+            "attendance_rate": attended / active_members if active_members else 0, "resolutions": resolutions,
+            "can_delete": admin and not attendance_count and not resolutions})
     return result
 
 
@@ -815,7 +820,30 @@ async def list_admin_meetings(
     _admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    return await _meeting_list(session)
+    return await _meeting_list(session, admin=True)
+
+
+async def _meeting_category_for_input(session: AsyncSession, body: MeetingCreate, existing_id: str | None = None) -> tuple[MeetingCategory, MeetingType]:
+    category_filter = (MeetingCategory.id == body.category_id if body.category_id is not None
+                       else MeetingCategory.legacy_type == body.meeting_type.value)
+    category = await session.scalar(select(MeetingCategory).where(category_filter)
+        .execution_options(populate_existing=True).with_for_update(read=True))
+    if category is None:
+        raise HTTPException(404, "找不到會議類別")
+    if not category.is_active and category.id != existing_id:
+        raise HTTPException(409, "此會議類別已停用，請重新選擇")
+    legacy_type = MeetingType(category.legacy_type or MeetingType.AFFAIRS.value)
+    if body.meeting_type is not None and body.meeting_type != legacy_type:
+        raise HTTPException(422, "會議類別與舊版會議類型不一致")
+    return category, legacy_type
+
+
+async def _locked_meeting(session: AsyncSession, meeting_id: str) -> Meeting:
+    meeting = await session.scalar(select(Meeting).where(Meeting.id == meeting_id)
+        .options(selectinload(Meeting.category)).with_for_update().execution_options(populate_existing=True))
+    if meeting is None:
+        raise HTTPException(404, "找不到會議")
+    return meeting
 
 
 @cooperative_router.post("/v1/admin/meetings", status_code=status.HTTP_201_CREATED)
@@ -824,17 +852,7 @@ async def create_meeting(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    category_filter = (MeetingCategory.id == body.category_id if body.category_id is not None
-                       else MeetingCategory.legacy_type == body.meeting_type.value)
-    category = await session.scalar(select(MeetingCategory).where(category_filter)
-        .execution_options(populate_existing=True).with_for_update(read=True))
-    if category is None:
-        raise HTTPException(status_code=404, detail="找不到會議類別")
-    if not category.is_active:
-        raise HTTPException(status_code=409, detail="此會議類別已停用，請重新選擇")
-    legacy_type = MeetingType(category.legacy_type or MeetingType.AFFAIRS.value)
-    if body.meeting_type is not None and body.meeting_type != legacy_type:
-        raise HTTPException(status_code=422, detail="會議類別與舊版會議類型不一致")
+    category, legacy_type = await _meeting_category_for_input(session, body)
     meeting = Meeting(created_by_id=admin.id, category=category, meeting_type=legacy_type,
         **body.model_dump(exclude={"category_id", "meeting_type"}))
     session.add(meeting)
@@ -843,6 +861,38 @@ async def create_meeting(
         aggregate_id=meeting.id, data={"title": meeting.title, "category_id": category.id, "category_name": category.name}))
     await session.commit()
     return _meeting_fields(meeting)
+
+
+@cooperative_router.patch("/v1/admin/meetings/{meeting_id}")
+async def edit_meeting(
+    meeting_id: str, body: MeetingCreate, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    meeting = await _locked_meeting(session, meeting_id)
+    before = _meeting_fields(meeting)
+    category, legacy_type = await _meeting_category_for_input(session, body, meeting.category_id)
+    for key, value in body.model_dump(exclude={"category_id", "meeting_type"}).items():
+        setattr(meeting, key, value)
+    meeting.category_id, meeting.category, meeting.meeting_type = category.id, category, legacy_type
+    after = _meeting_fields(meeting)
+    audit_changes(session, admin.id, "meeting", meeting.id, "meeting.update", before, after)
+    await session.commit()
+    return after
+
+
+@cooperative_router.delete("/v1/admin/meetings/{meeting_id}", status_code=204)
+async def delete_empty_meeting(
+    meeting_id: str, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+) -> Response:
+    meeting = await _locked_meeting(session, meeting_id)
+    for model in (MeetingAttendance, MeetingResolution):
+        if await session.scalar(select(model.id).where(model.meeting_id == meeting_id).limit(1)):
+            raise HTTPException(409, "已有出席或決議紀錄，不能刪除會議")
+    audit_changes(session, admin.id, "meeting", meeting_id, "meeting.delete",
+                  {"meeting": _meeting_fields(meeting)}, {"meeting": None})
+    await session.delete(meeting)
+    await session.commit()
+    return Response(status_code=204)
 
 
 class AttendanceUpsert(BaseModel):
@@ -857,6 +907,7 @@ async def upsert_attendance(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    await _locked_meeting(session, meeting_id)
     attendance = await session.scalar(select(MeetingAttendance).where(MeetingAttendance.meeting_id == meeting_id, MeetingAttendance.member_id == body.member_id))
     if attendance is None:
         attendance = MeetingAttendance(meeting_id=meeting_id, member_id=body.member_id)
@@ -882,8 +933,7 @@ async def create_meeting_resolution(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    if await session.get(Meeting, meeting_id) is None:
-        raise HTTPException(status_code=404, detail="找不到會議")
+    await _locked_meeting(session, meeting_id)
     resolution = MeetingResolution(meeting_id=meeting_id, **body.model_dump())
     session.add(resolution)
     await session.flush()
@@ -893,11 +943,70 @@ async def create_meeting_resolution(
             action="meeting_resolution.create",
             aggregate_type="meeting_resolution",
             aggregate_id=resolution.id,
-            data={"meeting_id": meeting_id, "title": resolution.title},
+            data={"meeting_id": meeting_id, "after": body.model_dump()},
         )
     )
     await session.commit()
     return {"id": resolution.id, "meeting_id": meeting_id, **body.model_dump()}
+
+
+class ResolutionEdit(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    resolution_text: str = Field(min_length=1, max_length=20000)
+
+
+async def _meeting_resolution(session: AsyncSession, meeting_id: str, resolution_id: str, *, lock: bool = False) -> MeetingResolution:
+    query = select(MeetingResolution).where(MeetingResolution.id == resolution_id, MeetingResolution.meeting_id == meeting_id)
+    resolution = await session.scalar(query.with_for_update() if lock else query)
+    if resolution is None:
+        raise HTTPException(404, "找不到決議")
+    return resolution
+
+
+@cooperative_router.patch("/v1/admin/meetings/{meeting_id}/resolutions/{resolution_id}")
+async def edit_meeting_resolution(
+    meeting_id: str, resolution_id: str, body: ResolutionEdit, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    resolution = await _meeting_resolution(session, meeting_id, resolution_id, lock=True)
+    if resolution.revoked_at is not None:
+        raise HTTPException(409, "已撤銷決議不能修改")
+    updates = {"title": body.title.strip(), "resolution_text": body.resolution_text.strip()}
+    if not all(updates.values()):
+        raise HTTPException(422, "請填寫決議主旨與內容")
+    before = {key: getattr(resolution, key) for key in updates}
+    audit_changes(session, admin.id, "meeting_resolution", resolution.id, "meeting_resolution.update", before, updates)
+    for key, value in updates.items():
+        setattr(resolution, key, value)
+    await session.commit()
+    return {"id": resolution.id, **updates}
+
+
+@cooperative_router.post("/v1/admin/meetings/{meeting_id}/resolutions/{resolution_id}/revoke")
+async def revoke_meeting_resolution(
+    meeting_id: str, resolution_id: str, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    resolution = await _meeting_resolution(session, meeting_id, resolution_id, lock=True)
+    if resolution.revoked_at is None:
+        resolution.revoked_at = utcnow()
+        audit_changes(session, admin.id, "meeting_resolution", resolution.id, "meeting_resolution.revoke",
+                      {"revoked_at": None}, {"revoked_at": resolution.revoked_at})
+        await session.commit()
+    return {"id": resolution.id, "revoked_at": aware(resolution.revoked_at)}
+
+
+@cooperative_router.get("/v1/admin/meetings/{meeting_id}/resolutions/{resolution_id}/history")
+async def meeting_resolution_history(
+    meeting_id: str, resolution_id: str, _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    await _meeting_resolution(session, meeting_id, resolution_id)
+    rows = await session.execute(select(AdminAudit, User.display_name).join(User, User.id == AdminAudit.actor_id)
+        .where(AdminAudit.aggregate_type == "meeting_resolution", AdminAudit.aggregate_id == resolution_id)
+        .order_by(AdminAudit.created_at.desc(), AdminAudit.id.desc()))
+    return [{"id": audit.id, "actor": actor, "created_at": aware(audit.created_at), "action": audit.action,
+             "before": audit.data.get("before"), "after": audit.data.get("after")} for audit, actor in rows]
 
 
 @cooperative_router.get("/v1/admin/supplier-orders.csv")

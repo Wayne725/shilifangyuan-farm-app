@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..admin_explanations import AdminExplanation
+from ..account_profiles import AccountProfileRead, AdminAccountUpdate, read_account_profile, update_account_profile
 from ..admin_membership_phone import MembershipPhoneCheck, verify_offline_roster_phone
 from ..auth import membership_type_for_user, require_admin
 from ..config import Settings, get_settings
@@ -67,6 +68,29 @@ async def list_registered_users(
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     users = await session.scalars(query.options(selectinload(User.membership)).order_by(User.created_at.desc(), User.id).offset(offset).limit(limit))
     return {"items": [_user_item(user) for user in users], "total": total or 0, "limit": limit, "offset": offset}
+
+
+@admin_users_router.get("/{user_id}/profile", response_model=AccountProfileRead)
+async def get_registered_profile(
+    user_id: str, response: Response, _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
+) -> AccountProfileRead:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "找不到帳號")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await read_account_profile(session, user, settings)
+
+
+@admin_users_router.patch("/{user_id}/profile", response_model=AccountProfileRead)
+async def edit_registered_profile(
+    user_id: str, body: AdminAccountUpdate, request: Request, response: Response, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
+) -> AccountProfileRead:
+    if request.headers.get("X-Expected-User-ID", admin.id) != admin.id:
+        raise HTTPException(409, "登入帳號已變更，請重新整理後再試")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await update_account_profile(session, user_id, admin, body, settings)
 
 
 @admin_users_router.post("/{user_id}/membership-phone-check")

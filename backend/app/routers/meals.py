@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel, Field
 from sqlalchemy import false, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -25,7 +26,9 @@ from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..integrations.common import IntegrationError
 from ..invoice_tax_summary import invoice_tax_summary
 from ..database import get_session
-from ..contact_phone import decrypt_contact_phone, normalize_contact_phone
+from ..account_profiles import account_phone, set_account_phone
+from ..audited_changes import audit_changes
+from ..contact_phone import decrypt_contact_phone
 from ..order_numbers import allocate_order_number
 from ..order_history import OrderHistoryQuery, read_order_history
 from ..printing import enqueue_order_print, enqueue_cancellation_print
@@ -85,7 +88,6 @@ from ..models import (
     InvoiceStatus,
     Meal,
     MealCancellationRequest,
-    MemberProfile,
     MealEvent,
     MealEventOffering,
     MealEventStatus,
@@ -272,7 +274,7 @@ def _meal_event_read(event: MealEvent, *, can_edit: bool = False) -> MealEventRe
                 paid_quantity=offering.paid_quantity,
                 available_quantity=meal_available_quantity(offering),
                 position=offering.position,
-                is_active=offering.is_active,
+                is_active=offering.is_active and offering.meal.is_active,
                 option_groups=_meal_option_groups_read(offering.meal),
             )
             for offering in sorted(
@@ -603,20 +605,6 @@ def _meal_order_query():
     )
 
 
-async def _saved_meal_contact(session: AsyncSession, user: User, settings: Settings) -> str | None:
-    ciphertext = user.meal_contact_phone_encrypted
-    aad = f"meal-contact:{user.id}"
-    if not ciphertext:
-        ciphertext = await session.scalar(select(MemberProfile.phone_encrypted).where(MemberProfile.user_id == user.id))
-        aad = f"member-profile:{user.id}"
-    if not ciphertext:
-        return None
-    try:
-        return normalize_contact_phone(pii_cipher_from_settings(settings).decrypt_text(ciphertext, associated_data=aad))
-    except (IntegrationError, ValueError):
-        return None
-
-
 @meals_router.get("/v1/meal-checkout/contact", response_model=MealContactRead)
 async def get_meal_checkout_contact(
     response: Response,
@@ -625,7 +613,7 @@ async def get_meal_checkout_contact(
     settings: Settings = Depends(get_settings),
 ) -> MealContactRead:
     response.headers["Cache-Control"] = "private, no-store"
-    return MealContactRead(phone=await _saved_meal_contact(session, user, settings))
+    return MealContactRead(phone=await account_phone(session, user, settings))
 
 
 @meals_router.get(
@@ -762,7 +750,7 @@ async def list_meal_event_calendar(
     settings: Settings = Depends(get_settings),
 ) -> list[MealEventCalendarRead]:
     # SQLite can use the event ID index when this boolean predicate is an inequality.
-    active = MealEventOffering.is_active != false()
+    active = (MealEventOffering.is_active != false()) & MealEventOffering.meal.has(Meal.is_active.is_(True))
     available = MealEventOffering.capacity > MealEventOffering.paid_quantity + MealEventOffering.reserved_quantity
     events = await session.execute(_public_meal_event_query(
         settings,
@@ -848,6 +836,8 @@ async def quote_meal_order(
         offering = by_id.get(requested.offering_id)
         if offering is None:
             raise HTTPException(status_code=404, detail="找不到便當品項")
+        if not offering.meal.is_active:
+            raise HTTPException(409, "此便當已停售")
         try:
             validate_meal_preorder(
                 event,
@@ -1023,7 +1013,7 @@ async def create_meal_order(
     quote = await quote_meal_order(event_id, body, session, settings, user)
     if body.expected_total is not None and body.expected_total != quote.amount_total:
         raise HTTPException(status_code=409, detail="價格或優惠已變動，請重新確認訂單明細")
-    contact_phone = body.contact_phone or await _saved_meal_contact(session, user, settings)
+    contact_phone = body.contact_phone or await account_phone(session, user, settings)
     if contact_phone is None:
         raise HTTPException(422, "請填寫聯絡電話")
     by_id = {offering.id: offering for offering in event.offerings}
@@ -1138,9 +1128,7 @@ async def create_meal_order(
         )
         order.fulfillment.encryption_key_version = cipher.current_version
         if body.contact_phone:
-            user.meal_contact_phone_encrypted = cipher.encrypt_text(
-                contact_phone, associated_data=f"meal-contact:{user.id}",
-            )
+            set_account_phone(user, contact_phone, settings)
     except IntegrationError as exc:
         raise HTTPException(status_code=503, detail="聯絡電話目前無法安全儲存，請稍後再試") from exc
     qr_token = _pickup_qr_payload(order)
@@ -1730,6 +1718,89 @@ async def admin_create_meal(
         )
     )
     assert meal is not None
+    return MealRead.model_validate(meal)
+
+
+class MealDetailsUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(max_length=5000)
+    price: int = Field(ge=0, le=1_000_000)
+    tax_type: TaxType
+    is_active: bool
+    expected_updated_at: datetime
+    confirmed_event_ids: set[str] = Field(default_factory=set)
+
+
+async def meal_edit_events(session: AsyncSession, meal_id: str, *, lock: bool = False) -> list[MealEvent]:
+    query = select(MealEvent).where(
+        MealEvent.pickup_ends_at > datetime.now(timezone.utc),
+        MealEvent.status.in_([MealEventStatus.DRAFT, MealEventStatus.PUBLISHED, MealEventStatus.PICKUP_OPEN]),
+        MealEvent.offerings.any((MealEventOffering.meal_id == meal_id) & MealEventOffering.is_active.is_(True)),
+    ).order_by(MealEvent.id)
+    return list(await session.scalars(query.with_for_update() if lock else query))
+
+
+@meals_router.get("/v1/admin/meals/{meal_id}/edit-impact")
+async def preview_meal_edit(
+    meal_id: str, _admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+) -> list[dict[str, str]]:
+    if await session.get(Meal, meal_id) is None:
+        raise HTTPException(404, "找不到餐點")
+    return [{"id": event.id, "title": event.title} for event in await meal_edit_events(session, meal_id)
+            if event.status != MealEventStatus.DRAFT]
+
+
+@meals_router.patch("/v1/admin/meals/{meal_id}", response_model=MealRead)
+async def edit_meal(
+    meal_id: str, body: MealDetailsUpdate, admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> MealRead:
+    current_price = await session.scalar(select(Meal.price).where(Meal.id == meal_id))
+    if current_price is None:
+        raise HTTPException(404, "找不到餐點")
+    templates = []
+    if current_price != body.price:
+        templates = list(await session.scalars(select(MealScheduleTemplate).order_by(MealScheduleTemplate.id).with_for_update()))
+    events = await meal_edit_events(session, meal_id, lock=True)
+    meal = await session.scalar(select(Meal).where(Meal.id == meal_id)
+        .options(selectinload(Meal.option_groups).selectinload(MealOptionGroup.options))
+        .with_for_update().execution_options(populate_existing=True))
+    if meal is None:
+        raise HTTPException(404, "找不到餐點")
+    if _aware(meal.updated_at) != body.expected_updated_at:
+        raise HTTPException(409, "餐點資料已更新，請重新讀取後再修改")
+    updates = body.model_dump(exclude={"expected_updated_at", "confirmed_event_ids"})
+    updates["name"] = body.name.strip()
+    if not updates["name"]:
+        raise HTTPException(422, "請填寫餐點名稱")
+    before = {key: getattr(meal, key) for key in updates}
+    if before == updates:
+        return MealRead.model_validate(meal)
+    if {event.id for event in events if event.status != MealEventStatus.DRAFT} - body.confirmed_event_ids:
+        raise HTTPException(409, "請先確認會受影響的已發布場次")
+    for key, value in updates.items():
+        setattr(meal, key, value)
+    audit_changes(session, admin.id, "meal", meal.id, "meal.details_update", before, updates)
+    if body.price != before["price"] and events:
+        offerings = await session.scalars(select(MealEventOffering).where(
+            MealEventOffering.meal_event_id.in_([event.id for event in events]),
+            MealEventOffering.meal_id == meal_id, MealEventOffering.is_active.is_(True),
+            MealEventOffering.price == before["price"],
+        ).order_by(MealEventOffering.id).with_for_update())
+        for offering in offerings:
+            audit_changes(session, admin.id, "meal_event_offering", offering.id, "meal_offering.price_update",
+                          {"price": offering.price}, {"price": body.price})
+            offering.price = body.price
+    for template in templates:
+        updated_offerings = [
+            {**item, "price": body.price} if item["meal_id"] == meal_id and item["price"] == before["price"] else item
+            for item in template.offerings
+        ]
+        if updated_offerings != template.offerings:
+            audit_changes(session, admin.id, "meal_schedule_template", template.id, "meal_schedule.price_update",
+                          {"offerings": template.offerings}, {"offerings": updated_offerings})
+            template.offerings = updated_offerings
+    await session.commit()
     return MealRead.model_validate(meal)
 
 
