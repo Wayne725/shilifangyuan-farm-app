@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.integrations.payment_service import SQLAlchemyPaymentCallbackRepository, create_payment_attempt
 from app.models import Order, PaymentStatus, PrintJob
 from app.printer_worker import process_print_job
-from app.printing import format_receipt, printer_fingerprint
+from app.printing import format_receipt, open_receipt_content, printer_fingerprint
 from app.routers.printers import printers_router
 from tests.support import api_test_context, auth_headers
 from tests.test_cash_payments import cash_context, create_cash, action, approve_cancellation
@@ -112,7 +112,8 @@ async def test_old_frozen_unpaid_receipt_requires_new_paid_reprint(print_context
     async with c.factory() as session:
         reprint = await session.get(PrintJob, response.json()["id"])
         assert reprint.status == "simulated" and reprint.snapshot["payment_status"] == "已付款"
-        assert reprint.content != content and "補印" in reprint.content
+        printed = open_receipt_content(reprint.content, c.order_id, c.settings)
+        assert printed != content and "補印" in printed
 
 
 async def test_verified_online_payment_dispatches_once_after_duplicate_callback(cash_context):

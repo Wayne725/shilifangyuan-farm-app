@@ -59,7 +59,7 @@ class RecordingFeie:
 @pytest.mark.parametrize("has_phone", [True, False])
 async def test_order_snapshot_records_phone_or_order_email_and_taipei_order_time(cash_context, has_phone):
     c = cash_context
-    c.settings.printer_enabled = True
+    c.settings.printer_enabled = has_phone
     if has_phone:
         cipher = configure_test_cipher(c.settings)
         c.session.add(MemberProfile(user_id=c.buyer.id,
@@ -67,17 +67,22 @@ async def test_order_snapshot_records_phone_or_order_email_and_taipei_order_time
             legal_name_encrypted="unused", birth_date_encrypted="unused", address_encrypted="unused",
             emergency_contact_encrypted="unused", consent_version="test", consented_at=datetime.now(timezone.utc)))
         await c.session.commit()
-    response = await create_cash(c, client_request_id=str(uuid4()), contact_email="receipt-contact@example.com")
+    response = await create_cash(c, client_request_id=str(uuid4()), contact_email="receipt-contact@example.com",
+        contact_phone=None if has_phone else "0912345678")
     assert response.status_code == 201, response.text
     order = await c.session.get(Order, response.json()["id"])
-    job = await c.session.scalar(select(PrintJob).where(PrintJob.order_id == order.id))
     if has_phone:
+        job = await c.session.scalar(select(PrintJob).where(PrintJob.order_id == order.id))
         assert job.snapshot.get("customer_phone_encrypted")
         assert "customer_phone" not in job.snapshot
         assert printing.render_receipt_snapshot(job.snapshot, order.id, c.settings)["customer_phone"] == "0900123456"
         assert "customer_email" not in job.snapshot
     else:
+        order.fulfillment.recipient_phone_encrypted = None
+        c.settings.printer_enabled = True
+        job = await printing.enqueue_order_print(c.session, order, c.buyer, c.settings)
         assert "customer_phone" not in job.snapshot
+        assert "customer_phone_encrypted" not in job.snapshot
         assert job.snapshot.get("customer_email") == "receipt-contact@example.com"
     assert job.snapshot.get("ordered_at") == taipei_time(order.created_at)
 
@@ -97,7 +102,9 @@ async def test_first_submission_refreshes_confirmed_linepay_and_persists_taipei_
     class ObserveDurableContext(RecordingFeie):
         async def submit(self, content):
             claimed = await read_job(c)
-            assert claimed.status == "sending" and claimed.content == content
+            assert claimed.status == "sending"
+            assert printing.open_receipt_content(claimed.content, c.order_id, settings) == content
+            assert "0912345678" not in claimed.content
             assert claimed.snapshot["payment_method"] == "LINE Pay"
             assert claimed.snapshot["print_requested_at"] == taipei_time(now)
             return await super().submit(content)
@@ -108,7 +115,8 @@ async def test_first_submission_refreshes_confirmed_linepay_and_persists_taipei_
     assert job.status == "submitted"
     assert job.snapshot["payment_method"] == "LINE Pay" and job.snapshot["payment_status"] == "已付款"
     assert job.snapshot.get("print_requested_at") == taipei_time(now)
-    assert job.content == fake.contents[0] and "LINE Pay" in job.content
+    assert printing.open_receipt_content(job.content, c.order_id, settings) == fake.contents[0]
+    assert "LINE Pay" in fake.contents[0]
 
 
 @pytest.mark.parametrize("has_phone", [False, True])
@@ -122,6 +130,8 @@ async def test_safe_retry_keeps_first_content_payment_and_print_time_frozen(prin
         snapshot.pop("customer_email", None)
         snapshot["customer_phone_encrypted"] = cipher.encrypt_text("0900123456",
             associated_data=f"receipt-contact:{c.order_id}:phone")
+    else:
+        snapshot.pop("customer_phone_encrypted", None)
     await set_job(c, mode="live", printer_fingerprint=printing.printer_fingerprint(settings), snapshot=snapshot)
     fake = RecordingFeie(fail_first=True)
     now = datetime.now(timezone.utc) + timedelta(seconds=1)
@@ -172,18 +182,23 @@ async def test_recipient_phone_takes_priority_over_profile_and_time_crosses_midn
 @pytest.mark.parametrize("configure_key", [True, False])
 async def test_unreadable_phone_falls_back_to_order_email_without_losing_order(cash_context, configure_key):
     c = cash_context
-    c.settings.printer_enabled = True
-    if configure_key:
-        configure_test_cipher(c.settings)
     c.session.add(MemberProfile(user_id=c.buyer.id, phone_encrypted="invalid-phone-envelope",
         legal_name_encrypted="unused", birth_date_encrypted="unused", address_encrypted="unused",
         emergency_contact_encrypted="unused", consent_version="test", consented_at=datetime.now(timezone.utc)))
     await c.session.commit()
     response = await create_cash(c, client_request_id=str(uuid4()), contact_email="safe-fallback@example.com")
     assert response.status_code == 201, response.text
-    job = await c.session.scalar(select(PrintJob).where(PrintJob.order_id == response.json()["id"]))
+    order = await c.session.get(Order, response.json()["id"])
+    order.fulfillment.recipient_phone_encrypted = "invalid-order-phone-envelope"
+    c.settings.printer_enabled = True
+    if configure_key:
+        configure_test_cipher(c.settings)
+    else:
+        c.settings.pii_encryption_keys_json = "{}"
+    job = await printing.enqueue_order_print(c.session, order, c.buyer, c.settings)
     assert job.snapshot["customer_email"] == "safe-fallback@example.com"
     assert "customer_phone" not in job.snapshot
+    assert "customer_phone_encrypted" not in job.snapshot
 
 
 @pytest.mark.parametrize("excluded", [

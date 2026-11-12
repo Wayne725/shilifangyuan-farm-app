@@ -984,16 +984,33 @@ async def create_meal_order(
         fingerprint_body.pop("pickup_location_id")
     if not body.needs_utensils:
         fingerprint_body.pop("needs_utensils")
-    fingerprint = hashlib.sha256(json.dumps({"event_id": event_id, "body": fingerprint_body}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def submission_fingerprint(payload: dict) -> str:
+        serialized = json.dumps({"event_id": event_id, "body": payload}, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(serialized.encode()).hexdigest()
+
+    fingerprint = submission_fingerprint(fingerprint_body)
+    legacy_fingerprint = submission_fingerprint({**fingerprint_body, "contact_phone": body.contact_phone}) if body.contact_phone else None
     submitting_user_id = user.id
 
     async def existing_submission():
         if body.client_request_id is None:
             return None
         existing = await session.scalar(_meal_order_query().where(Order.user_id == submitting_user_id, Order.client_request_id == str(body.client_request_id)))
-        if existing is not None and existing.request_fingerprint != fingerprint:
+        if existing is None:
+            return None
+        if legacy_fingerprint and existing.request_fingerprint == legacy_fingerprint:
+            return await _meal_order_read(session, existing)
+        if existing.request_fingerprint != fingerprint:
             raise HTTPException(409, "此送單識別碼已使用，請重新確認訂單")
-        return await _meal_order_read(session, existing) if existing is not None else None
+        if body.contact_phone:
+            fulfillment = existing.fulfillment
+            saved_phone = decrypt_contact_phone(
+                fulfillment.recipient_phone_encrypted, f"order-fulfillment:{fulfillment.id}:recipient_phone", settings,
+            ) if fulfillment else None
+            if saved_phone != body.contact_phone:
+                raise HTTPException(409, "此送單識別碼已使用，請重新確認訂單")
+        return await _meal_order_read(session, existing)
 
     existing = await existing_submission()
     if existing is not None:

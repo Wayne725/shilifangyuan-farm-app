@@ -105,12 +105,13 @@ async def test_only_confirmed_paid_uncancelled_orders_allow_manual_print(manual_
     assert result.status_code == 201, result.text
     job = await stored(c, result.json()["id"])
     assert job.kind == kind and c.buyer.email not in json.dumps(job.snapshot)
-    assert "customer_email_encrypted" in job.snapshot
+    assert "customer_phone_encrypted" in job.snapshot and "0912345678" not in json.dumps(job.snapshot)
     assert await process_print_job(c.settings, factory=c.factory)
     job = await stored(c, job.id)
     assert job.status == "simulated" and job.content.startswith("receipt-content:v1:")
     content = open_receipt_content(job.content, c.order_id, c.settings)
-    assert "付款狀態" in content and "履約狀態" in content and c.buyer.email in content
+    assert "付款狀態" in content and "履約狀態" in content and "0912345678" in content
+    assert c.buyer.email not in content and "取餐碼" not in content and "876543" not in content
     assert "<CB>管理員補印</CB>" in content
     if kind == "reference":
         assert "<CB>請勿製作</CB>" in content

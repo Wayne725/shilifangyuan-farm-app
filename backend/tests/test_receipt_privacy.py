@@ -41,7 +41,7 @@ async def test_phone_order_never_persists_plaintext_in_snapshot_or_receipt(cash_
         legal_name_encrypted="unused", birth_date_encrypted="unused", address_encrypted="unused",
         emergency_contact_encrypted="unused", consent_version="test", consented_at=datetime.now(timezone.utc)))
     await c.session.commit()
-    response = await create_cash(c, client_request_id=str(uuid4()))
+    response = await create_cash(c, client_request_id=str(uuid4()), contact_phone=None)
     assert response.status_code == 201, response.text
     c.order_id = response.json()["id"]
     c.job_id = await c.session.scalar(select(PrintJob.id).where(PrintJob.order_id == c.order_id))

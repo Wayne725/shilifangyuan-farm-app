@@ -27,8 +27,8 @@ def test_receipt_has_readable_sections_and_phone_first():
     content = format_receipt(sample_receipt())
     plain = receipt_preview(content)
     assert "<CB>便當訂餐單</CB>" in content
-    assert "<CB>取餐碼 123456</CB>" in content
-    assert "<L><BOLD>顧客：測試顧客</BOLD></L>" in content
+    assert "取餐碼" not in plain and "123456" not in plain
+    assert "<CB>訂購者：測試顧客</CB>" in content
     assert "電話：0900000000" in plain and "sample@example.com" not in plain
     assert plain.index("訂購：2026-11-01 18:20") < plain.index("取餐：2026-11-02 11:30")
     assert plain.index("取餐點：合作社門市") < plain.index("2 × 香烤雞腿便當")
