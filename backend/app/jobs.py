@@ -921,20 +921,19 @@ async def _reconcile_meal_events(
                 trigger="legacy_meal_no_show",
             )
         event.status = MealEventStatus.COMPLETED
-        from .cash_payments import expire_cash_order
+        from .cash_payments import expire_cash_orders
         pending_cash = list(await session.scalars(select(Order).where(
             Order.meal_event_id == event.id, Order.payment_method == PaymentMethod.CASH_ON_PICKUP,
-            Order.payment_status == PaymentStatus.PENDING,
+            Order.payment_status == PaymentStatus.PENDING, Order.meal_booking_type != "business",
         ).options(selectinload(Order.reservations), selectinload(Order.fulfillment)).with_for_update()))
-        for order in pending_cash:
-            await expire_cash_order(session, order, now)
+        await expire_cash_orders(session, pending_cash, now)
         changed += 1
     await session.commit()
     return changed
 
 
 async def _reconcile_expired_cash_orders(session: AsyncSession, now: datetime, limit: int) -> None:
-    from .cash_payments import expire_cash_order
+    from .cash_payments import expire_cash_orders
     orders = list(await session.scalars(select(Order).where(
         Order.payment_method == PaymentMethod.CASH_ON_PICKUP,
         Order.payment_status == PaymentStatus.PENDING,
@@ -944,8 +943,7 @@ async def _reconcile_expired_cash_orders(session: AsyncSession, now: datetime, l
         ),
     ).options(selectinload(Order.reservations), selectinload(Order.fulfillment))
       .order_by(Order.id).limit(limit).with_for_update()))
-    for order in orders:
-        await expire_cash_order(session, order, now)
+    await expire_cash_orders(session, orders, now)
     await session.commit()
 
 

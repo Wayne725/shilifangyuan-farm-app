@@ -4,6 +4,7 @@ from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from .admin_work_queues import today_uncollected_business_cash_order, unpaid_business_order, uncollected_business_cash_order
 from .meal_schedules import TAIPEI
 from .models import (
     FulfillmentState, Invoice, InvoiceStatus, MealCancellationRequest, MealEvent,
@@ -59,6 +60,7 @@ def _work_conditions(now: datetime):
             MealEvent.status.not_in({MealEventStatus.CANCELLED, MealEventStatus.COMPLETED}),
             MealEvent.pickup_ends_at > now,
         ),
+        "today_business_cash_uncollected": today_uncollected_business_cash_order(now),
     }
 
 
@@ -69,8 +71,9 @@ def _orders_query():
 async def search_meal_orders(session: AsyncSession, filters: MealOrderSearchFilters):
     query = _orders_query()
     if filters.business_unpaid:
-        query = query.where(Order.meal_booking_type == "business", Order.cancelled_at.is_(None),
-            Order.payment_status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}))
+        query = query.where(unpaid_business_order())
+    if filters.cash_uncollected:
+        query = query.where(uncollected_business_cash_order())
     if filters.search.strip():
         query = query.where(or_(*(column.icontains(filters.search.strip(), autoescape=True) for column in [Order.order_number, Order.contact_email, User.email, User.display_name])))
     if filters.date_from:

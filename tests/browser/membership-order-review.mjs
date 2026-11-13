@@ -17,6 +17,8 @@ async function fixture(t, width) {
     if (url.origin !== base) { if (!['https://fonts.googleapis.com', 'https://fonts.gstatic.com'].includes(url.origin)) state.unknown.push(url.origin); return route.abort(); }
     if (!path.startsWith('/v1/')) return route.continue();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'buyer', user_role: 'admin', display_name: '隔離測試', email: 'buyer@example.com', membership_type: 'nonmember' } } });
+    if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '' } });
+    if (path === '/v1/notifications') return route.fulfill({ json: [] });
     if (path === '/v1/members/me') return route.fulfill({ json: { membership_type: 'nonmember', membership: { id: 'removed', status: 'suspended', member_number: 'ORIGINAL-001' } } });
     if (path === '/v1/membership/application') {
       if (req.method() === 'PUT') { state.profile = req.postDataJSON(); state.applicationStatus = 'draft'; state.writes.push({ path, body: state.profile }); }
@@ -71,8 +73,10 @@ for (const width of [1440, 816, 390]) {
     const review = page.getByRole('region', { name: '退單審核', exact: true });
     await review.getByRole('heading', { name: '退單待審核', exact: true }).waitFor();
     assert.deepEqual(state.writes, []);
-    await page.getByLabel('只看退單待審', { exact: true }).check();
-    await page.getByRole('button', { name: '放大', exact: true }).click(); await layout(page, state);
+    assert.equal(await page.getByRole('checkbox', { name: '只看退單待審', exact: true }).count(), 0);
+    await page.locator('summary[aria-label="文字大小"]').click();
+    await page.getByRole('group', { name: '文字大小', exact: true }).getByRole('button', { name: '放大', exact: true }).click();
+    await layout(page, state);
     await review.getByRole('button', { name: /核准退單並退款/ }).click();
     await review.getByRole('heading', { name: '退單已核准', exact: true }).waitFor();
     assert.equal(state.writes.length, 1); assert.equal(state.writes[0].body.decision, 'approve');

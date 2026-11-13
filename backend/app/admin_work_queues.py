@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Literal
 
 from sqlalchemy import Date, and_, case, cast, func, or_, select
@@ -52,6 +52,21 @@ def unpaid_business_order():
         Order.meal_booking_type == "business",
         Order.cancelled_at.is_(None),
         Order.payment_status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED, PaymentStatus.FAILED}),
+    )
+
+
+def uncollected_business_cash_order():
+    return and_(unpaid_business_order(), Order.payment_method == PaymentMethod.CASH_ON_PICKUP)
+
+
+def today_uncollected_business_cash_order(now: datetime):
+    opening = datetime.combine(now.astimezone(TAIPEI).date(), time.min, TAIPEI)
+    start = opening.astimezone(timezone.utc)
+    end = start + timedelta(days=1)
+    pickup = func.coalesce(OrderFulfillment.pickup_at, OrderFulfillment.pickup_starts_at)
+    return and_(
+        uncollected_business_cash_order(), Order.payment_status == PaymentStatus.PENDING,
+        Order.fulfillment.has(and_(pickup >= start, pickup < end)),
     )
 
 
@@ -164,6 +179,7 @@ async def admin_today_counts(session: AsyncSession) -> dict[str, int]:
         ).label("pending_admissions"),
         count(Order, pending_order_cancellation()).label("pending_order_cancellations"),
         count(Order, unpaid_business_order()).label("unpaid_business_orders"),
+        count(Order, today_uncollected_business_cash_order(now)).label("today_business_cash_uncollected"),
         count(ActivityRefundRequest, ActivityRefundRequest.status == "pending_review").label("pending_activity_refunds"),
         count(Activity, *active_activity).label("active_activities"),
         count(

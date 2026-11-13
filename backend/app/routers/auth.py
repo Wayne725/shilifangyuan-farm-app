@@ -10,7 +10,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..account_profiles import AccountProfileRead, AccountProfileUpdate, read_account_profile, update_account_profile
+from ..account_profiles import AccountProfileRead, AccountProfileUpdate, read_account_profile, save_verified_phone_if_missing, update_account_profile
 from ..auth import (
     decode_token,
     get_active_user_for_access,
@@ -48,6 +48,7 @@ from ..member_claims import (
     MemberClaimError,
     attach_roster_membership,
     normalize_email,
+    roster_aad,
     reserve_roster_claim,
     verified_roster_entry,
 )
@@ -445,6 +446,13 @@ async def verify_email(
                 status_code=409,
                 detail="社員認領保留已失效，請聯絡合作社協助重新核對",
             )
+        try:
+            phone = pii_cipher_from_settings(settings).decrypt_text(
+                roster_entry.phone_encrypted, associated_data=roster_aad(roster_entry.id),
+            )
+        except IntegrationError as exc:
+            raise HTTPException(503, "社員名冊驗證服務尚未完成設定") from exc
+        await save_verified_phone_if_missing(session, user, phone, settings)
         await attach_roster_membership(session, roster_entry, user)
     await session.execute(
         update(EmailVerificationToken)

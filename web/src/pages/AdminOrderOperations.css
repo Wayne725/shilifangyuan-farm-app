@@ -97,6 +97,10 @@
 .admin-orders-panel .admin-order-search { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; }
 .admin-orders-panel .admin-order-search > label { min-width: 0; flex: 1 1 240px; }
 .admin-orders-panel .admin-order-search select { width: 100%; min-width: 0; min-height: 52px; font: inherit; color: var(--ink); background: var(--paper-light); border: 1px solid var(--line-strong); padding: 12px; }
+.admin-order-period { flex: 1 1 100%; min-width: 0; margin: 0; border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
+.admin-order-period legend { margin-bottom: 8px; padding: 0; font-weight: 600; }
+.admin-order-period label { flex: 1 1 175px; }
+.admin-order-period input { min-height: 52px; }
 @media (max-width: 600px) { .admin-orders-panel .admin-order-search > label, .admin-orders-panel .admin-order-search > .button { flex-basis: 100%; } }
 .admin-order-contact {
   display: flex;

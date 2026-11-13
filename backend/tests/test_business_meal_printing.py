@@ -13,7 +13,7 @@ from app.invoice_timing import pickup_invoice_due
 from app.models import FulfillmentState, InventoryReservation, InvoiceBuyerType, MealEventOffering, Order, OrderItem, PaymentMethod, PaymentStatus, PrintJob, ReservationStatus, SalesChannel
 from app.order_summary import OrderSummaryFilters, build_print_summary
 from app.printer_worker import process_print_job
-from app.printing import enqueue_cancellation_print, format_receipt, open_receipt_content, order_print_snapshot, printer_fingerprint
+from app.printing import stop_cancelled_order_prints, format_receipt, open_receipt_content, order_print_snapshot, printer_fingerprint
 from app.integrations.feie import configured_region
 from app.summary_printing import format_summary_pages, summary_fingerprint
 from tests.support import api_test_context, auth_headers, make_test_settings
@@ -115,7 +115,7 @@ async def test_known_unsent_business_retry_refreshes_payment_label(print_context
     assert job.status == 'simulated' and '已付款' in content and '未付款' not in content
 
 
-async def test_business_amendment_and_cancellation_are_distinct_and_deduplicated(print_context):
+async def test_business_amendment_prints_but_cancellation_does_not(print_context):
     c = print_context
     await make_business(c)
     assert await process_print_job(c.settings, factory=c.factory)
@@ -127,15 +127,10 @@ async def test_business_amendment_and_cancellation_are_distinct_and_deduplicated
         order = await session.get(Order, c.order_id)
         order.cancelled_at = datetime.now(timezone.utc)
         order.cancellation_reason = '會餐取消'
-        await enqueue_cancellation_print(session, order, c.settings)
-        await enqueue_cancellation_print(session, order, c.settings)
+        await stop_cancelled_order_prints(session, order)
         await session.commit()
-        assert await session.scalar(select(func.count(PrintJob.id)).where(PrintJob.order_id == c.order_id, PrintJob.kind == 'cancellation')) == 1
-    assert await process_print_job(c.settings, factory=c.factory)
-    async with c.factory() as session:
-        cancellation = await session.scalar(select(PrintJob).where(PrintJob.order_id == c.order_id, PrintJob.kind == 'cancellation'))
-        content = open_receipt_content(cancellation.content, cancellation.order_id, c.settings)
-        assert cancellation.status == 'simulated' and '取消通知' in content and '會餐' in content
+        assert await session.scalar(select(func.count(PrintJob.id)).where(PrintJob.order_id == c.order_id)) == 2
+    assert not await process_print_job(c.settings, factory=c.factory)
 
 
 async def test_pending_business_is_visible_and_preparable_in_kitchen_without_general_unpaid(kitchen_context):

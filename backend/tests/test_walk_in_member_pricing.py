@@ -1,5 +1,7 @@
 import asyncio
+import base64
 from datetime import datetime, timezone
+import json
 from uuid import uuid4
 
 import pytest
@@ -10,14 +12,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config import get_settings
+from app.account_profiles import set_account_phone
 from app.database import Base, create_engine, get_session
 from app.integrations.invoice_service import invoice_request_from_order
+from app.integrations.pii_crypto import pii_cipher_from_settings
 from app.member_claims import roster_aad
 from app.models import (
     AdminAudit, FulfillmentMethod, InventoryReservation, Meal, MemberProfile, MemberRosterEntry, Membership,
     MembershipStatus, Order, OrderItem, OrderKind, OutboxEvent, PaymentAttempt, PaymentStatus, PointAccount,
     PointTransaction, Product, TaxType, User, UserRole, WalkInRequestGuard, WalkInSale,
 )
+from app.phone_lookup import phone_lookup_digest
 from app.routers import walk_in_sales
 from app.routers.cooperative import cooperative_router
 from app.routers.orders import load_order
@@ -40,7 +45,9 @@ async def seed_member(session, user, settings, status=MembershipStatus.ACTIVE, *
     if with_profile:
         session.add(MemberProfile(
             user_id=user.id, phone_encrypted=cipher.encrypt_text(PHONE, associated_data=f"member-profile:{user.id}"),
-            legal_name_encrypted="unused", birth_date_encrypted="unused", address_encrypted="unused",
+            phone_lookup=phone_lookup_digest(PHONE, cipher),
+            legal_name_encrypted=cipher.encrypt_text(user.display_name, associated_data=f"member-profile:{user.id}"),
+            birth_date_encrypted="unused", address_encrypted="unused",
             emergency_contact_encrypted="unused", consent_version="test", consented_at=datetime.now(timezone.utc),
         ))
     product = Product(
@@ -74,6 +81,80 @@ def collection_payload(quote_request, quote):
 
 async def read_quote(c, body, actor=None):
     return await c.client.post("/v1/admin/walk-in-sales/member-quote", json=body, headers=auth_headers(actor or c.admin))
+
+
+async def lookup_phone(c, phone=PHONE, actor=None):
+    return await c.client.post("/v1/admin/walk-in-sales/member-phone", json={"phone": phone}, headers=auth_headers(actor or c.admin))
+
+
+async def test_counter_phone_prefers_linked_account_and_supports_key_rotation(walk_in_context):
+    c = walk_in_context
+    membership, _ = await seed_member(c.session, c.customer, c.settings)
+    before = await lookup_phone(c, "+886 (900) 123-456")
+    assert before.status_code == 200, before.text
+    assert before.headers["cache-control"] == "private, no-store"
+    assert before.json()["phone_masked"] == "******3456"
+    selected = before.json()["matches"][0]
+    assert selected["id"] == f"membership:{membership.id}"
+    assert selected["personal_tax_type"] == "tax_exempt" and selected["company_tax_type"] == "taxable"
+    assert PHONE not in before.text and c.customer.display_name not in before.text
+    assert (await lookup_phone(c, actor=c.customer)).status_code == 403
+    first = await post(c, payload(phone=PHONE, phone_match_id=selected["id"], unit_price=137, sale_category="product"))
+    assert first.status_code == 201, first.text
+    order = await load_order(c.session, first.json()["order_id"])
+    assert order.verified_counter_membership_id == membership.id and order.verified_counter_roster_entry_id is None
+    assert order.items[0].tax_type == TaxType.TAX_EXEMPT and order.items[0].unit_price == 137
+    ciphertext = order.fulfillment.recipient_phone_encrypted
+    assert PHONE not in ciphertext
+    assert pii_cipher_from_settings(c.settings).decrypt_text(
+        ciphertext, associated_data=f"order-fulfillment:{order.fulfillment.id}:recipient_phone",
+    ) == PHONE
+    listing = await c.client.get(f"/v1/admin/order-search?order_id={order.id}", headers=auth_headers(c.admin))
+    assert listing.json()["items"][0]["contact_phone"] == "******3456"
+    new_keys = {**json.loads(c.settings.pii_encryption_keys_json), "v2": base64.b64encode(b"s" * 32).decode()}
+    c.settings.pii_encryption_keys_json = json.dumps(new_keys)
+    c.settings.pii_encryption_current_version = "v2"
+    assert (await lookup_phone(c)).json() == before.json()
+    set_account_phone(c.customer, "0922222222", c.settings)
+    await c.session.commit()
+    assert (await lookup_phone(c)).json()["status"] == "no_match"
+    assert (await lookup_phone(c, "0922222222")).json()["matches"] == [selected]
+
+
+async def test_duplicate_and_roster_only_counter_phone_require_explicit_member(walk_in_context):
+    c = walk_in_context
+    membership, _ = await seed_member(c.session, c.customer, c.settings)
+    cipher = pii_cipher_from_settings(c.settings)
+    entry_id = str(uuid4())
+    aad = roster_aad(entry_id)
+    entry = MemberRosterEntry(
+        id=entry_id, member_number="ROSTER-001", legal_name_encrypted=cipher.encrypt_text("王測試", associated_data=aad),
+        email_encrypted=cipher.encrypt_text("roster@example.test", associated_data=aad),
+        phone_encrypted=cipher.encrypt_text(PHONE, associated_data=aad), phone_lookup=phone_lookup_digest(PHONE, cipher),
+    )
+    c.session.add(entry)
+    await c.session.commit()
+    response = await lookup_phone(c)
+    assert [match["id"] for match in response.json()["matches"]] == [f"roster:{entry_id}", f"membership:{membership.id}"]
+    assert response.json()["matches"][0]["name"] == "王○○"
+    assert (await post(c, payload(phone=PHONE))).status_code == 409
+    assert (await post(c, payload(phone="0911111111", phone_match_id=f"roster:{entry_id}"))).status_code == 409
+    body = payload(phone=PHONE, phone_match_id=f"roster:{entry_id}")
+    created = await post(c, body)
+    assert created.status_code == 201, created.text
+    order = await load_order(c.session, created.json()["order_id"])
+    assert order.verified_counter_roster_entry_id == entry_id and order.verified_counter_membership_id is None
+    assert order.user_id is None and order.member_tax_exempt_snapshot
+    assert (await post(c, body)).status_code == 200
+    assert (await post(c, {**body, "phone": "0911111111"})).status_code == 409
+    membership.status = MembershipStatus.SUSPENDED
+    entry.is_active = False
+    await c.session.commit()
+    assert (await lookup_phone(c)).json()["status"] == "inactive"
+    guest = await post(c, payload(phone=PHONE))
+    assert guest.status_code == 201, guest.text
+    guest_order = await c.session.get(Order, guest.json()["order_id"])
+    assert guest_order.verified_counter_roster_entry_id is None and guest_order.verified_counter_membership_id is None
 
 
 @pytest.mark.parametrize(

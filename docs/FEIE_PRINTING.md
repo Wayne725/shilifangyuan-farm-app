@@ -42,11 +42,11 @@
 | 檔案 | 用途 |
 | --- | --- |
 | `backend/app/integrations/feie.py` | 中國／亞太端點白名單、簽章、送印、查單、設備狀態、逾時分類 |
-| `backend/app/printing.py` | 不可變訂單快照、58mm 換行、取消通知、管理員讀取格式 |
+| `backend/app/printing.py` | 不可變訂單快照、58mm 換行、取消後停止送印、管理員讀取格式 |
 | `backend/app/printer_worker.py` | 背景喚醒／輪詢、資料庫 claim／租約、有限安全重試與查單 |
 | `backend/app/models.py`、`schemas.py` | PrintJob、便當備註及送單去重識別碼 |
 | `backend/alembic/versions/0030_feie_print_jobs.py` | 列印工作及訂單欄位遷移，接續 0029 現場付款版本 |
-| `backend/app/routers/meals.py` | 交易內排單、重送回傳原訂單、核准退單／整場取消通知 |
+| `backend/app/routers/meals.py` | 交易內排單、重送回傳原訂單、核准退單／整場取消時停止送印 |
 | `backend/app/routers/printers.py`、`main.py` | 管理 API、權限稽核、啟動背景程序 |
 | `web/src/components/CloudPrintPanel.*`、`pages/AdminKitchenPage.tsx` | 設備查詢、狀態篩選／分頁、預覽、補印、人工紙本核對 |
 | `web/src/lib/commerce.ts`、`pages/MealEventPage.tsx` | 餐點備註、送單 UUID；同一分頁工作階段重試／重新整理沿用識別碼 |
@@ -61,14 +61,14 @@
 - `failed`：本地內容過長、文件明確拒絕、可確定未送出的連線失敗達重試上限，或取消前尚未發送。
 - `unknown`：read/write timeout、HTTP 異常、無效回應、成功卻缺雲端 ID、發送中程序中斷。沒有雲端 ID 就無法可靠查回那張單，須核對紙本，**絕不自動重送**。
 - `simulated`：Dry Run 已產生排版內容，沒有網路請求、雲端 ID 或實體成功時間。
-- 每個原單及取消通知各有唯一 `event_key`；補印有獨立 UUID，並關聯原工作、原因及管理員稽核。同一補印 request_id 重送只回傳原補印工作。
+- 每個原單有唯一 `event_key`；補印有獨立 UUID，並關聯原工作、原因及管理員稽核。同一補印 request_id 重送只回傳原補印工作。
 - 訂單以 `(user_id, client_request_id)` 唯一約束去重。同一 UUID、同一內容回傳原訂單；換內容卻沿用 UUID 回 409。舊客戶端不送 UUID 仍相容，但沒有此去重保護。前端以 SHA-256 摘要作 sessionStorage 鍵，不把姓名／信箱直接放進儲存鍵；已成功回應會清除識別碼。
 - 先持久化 sending 與租約才送 API。程序在送出後中斷時，租約到期改 unknown，不重新發送。多個程序以訂單鎖、工作鎖與條件更新 claim；worker 不在網路等待時持有資料庫交易。
 - 正式／模擬模式與設備身分各自保存在工作上，改設定不會把既有模擬單自動變成正式單，也不把舊單送去新設備。管理員可明確建立新補印工作。
 - 新工作快照保存 `printer_region`；舊工作缺此欄位只視為 JP，未知區域保持停送。fingerprint 計算不變，原本已包含 URL／USER／SN。worker 與查單比對模式、fingerprint、區域；跨區補印回 409。同區改設備或模擬轉正式的明確手動補印仍保留。
 - 送單成功不等待列印。列印錯誤留在 PrintJob，訂單及庫存保留不會因供應商故障回滾。
 
-核准單筆退單或取消整場時：尚未發送的原工作停止；若曾發送／可能有紙本，另存取消通知，含原單號及停止製作標示。原工作仍 sending 時先等其結果。取消通知本身也有狀態，結果不明時同樣需廚房人工處理，不能保證斷網期間即時出紙。
+核准單筆退單、取消整場或天災停餐後，尚未送出的訂餐單停止發送。場次名單標示「已取消」，並從備餐份數扣除。背景工作會將歷史佇列中尚未送出的取消通知標成停止列印，保留歷史紀錄。飛鵝已接受的工作仍可查詢結果。
 
 58mm 使用保守 32 顯示格（中文字占兩格），選項、500 字內備註、單價／數量／總額、台灣取餐日期時間及付款狀態皆有保留；不插入切紙指令。使用者的 `< > &` 換為全形並移除控制字元，避免印表機標籤注入。超過 5,000 UTF-8 bytes 整張標 failed，保留原單供人工處理，不默默截掉餐點。小票付款狀態於首次送印時封存；確認收款後原待送工作才會發送，已送原單不因重複付款通知再次出單。手動補印使用最新付款狀態。
 
@@ -78,7 +78,7 @@
 
 | 變數 | 預設／用途 |
 | --- | --- |
-| `PRINTER_ENABLED` | false：不建立新訂單原單、不處理舊工作、不查設備；既有單取消仍保存待處理通知 |
+| `PRINTER_ENABLED` | false：停止建立新訂餐單、處理工作及查詢設備 |
 | `PRINTER_DRY_RUN` | true：只產生模擬單，完全不送飛鵝 |
 | `PRINTER_WORKER_ENABLED` | true：隨 FastAPI 啟動處理程序；獨立 worker 時 web 可設 false |
 | `FEIE_USER`、`FEIE_UKEY`、`FEIE_PRINTER_SN` | 後端秘密設定；Dry Run 可留空 |

@@ -15,7 +15,7 @@ from app.models import (
     Refund, RefundStatus, User, UserRole,
 )
 from app.printer_worker import process_print_job
-from app.printing import enqueue_cancellation_print
+from app.printing import stop_cancelled_order_prints
 from app.recovery_quarantine import (
     Item, RecoveryHoldActive, Resolution, arm_cutover, begin_cutover, resolve_hold,
 )
@@ -153,7 +153,7 @@ async def test_order_cancellation_preserves_exact_held_invoice_and_print_evidenc
     await _hold(session, "outbox", held_invoice.id)
     await _hold(session, "print_job", held_print.id)
     await cancel_unissued_invoice_jobs(session, order)
-    await enqueue_cancellation_print(session, order, make_test_settings())
+    await stop_cancelled_order_prints(session, order)
     await session.commit()
     for row in (held_invoice, other_invoice, held_print, other_print):
         await session.refresh(row)

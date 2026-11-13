@@ -17,6 +17,7 @@ from .integrations.pii_crypto import (
 )
 from .integrations.r2_storage import r2_document_storage_from_settings
 from .member_claims import roster_aad
+from .phone_lookup import phone_lookup_digest
 from .membership_demo_documents import DEMO_MEMBERSHIP_DOCUMENTS
 from .models import (
     Activity,
@@ -157,6 +158,7 @@ def _build_demo_roster_entry(
             "0911888777",
             associated_data=aad,
         ),
+        phone_lookup=phone_lookup_digest("0911888777", cipher),
         encryption_key_version=cipher.current_version,
         share_certificate_number="DEMO-SHARE-0099",
         share_capital_amount=3000,
@@ -709,6 +711,7 @@ async def seed_demo_data(session: AsyncSession) -> dict[str, int]:
                 "0912345678",
                 associated_data=aad,
             ),
+            phone_lookup=phone_lookup_digest("0912345678", seed_cipher),
             birth_date_encrypted=seed_cipher.encrypt_text(
                 "1990-01-01",
                 associated_data=aad,

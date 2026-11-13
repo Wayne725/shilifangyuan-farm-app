@@ -208,7 +208,7 @@ async def test_global_summary_counts_each_order_once_and_links_to_matching_queue
     c = operations_context
     result = await c.client.get("/v1/admin/meal-operations-summary", headers=auth_headers(c.admin))
     assert result.status_code == 200, result.text
-    assert result.json() == {"today": "2030-01-02", "pending_cancellation": 1, "refund_attention": 2, "invoice_attention": 2, "today_pickup": 2}
+    assert result.json() == {"today": "2030-01-02", "pending_cancellation": 1, "refund_attention": 2, "invoice_attention": 2, "today_pickup": 2, "today_business_cash_uncollected": 0}
     for queue, expected in {"pending_cancellation": ["ready"], "refund_attention": ["first", "future"], "invoice_attention": ["first", "legacy"], "today_pickup": ["first", "ready"]}.items():
         assert ids(await search(c, work_queue=queue)) == {c.orders[label].id for label in expected}
     c.order.payment_status = PaymentStatus.REFUNDED

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.integrations.feie import FeieClient, FeieError, configuration_read
 from app.models import AdminAudit, Order, PaymentStatus, PrintJob
 from app.printer_worker import process_print_job
-from app.printing import enqueue_cancellation_print, format_receipt, printer_fingerprint, wrap_text
+from app.printing import stop_cancelled_order_prints, format_receipt, printer_fingerprint, wrap_text
 from app.routers.printers import printers_router
 from tests.support import api_test_context, auth_headers, make_test_settings
 from tests.test_cash_payments import cash_context, create_cash, approve_cancellation, action
@@ -392,25 +392,23 @@ async def test_disabled_or_mode_switch_cannot_turn_dry_run_jobs_live(print_conte
     assert fake.submissions == 0
 
 
-@pytest.mark.parametrize("status,expected", [("pending", 1), ("printed", 2), ("sending", 2), ("unknown", 2)])
-async def test_cancellation_stops_unsent_or_enqueues_unique_notice(print_context, status, expected):
+@pytest.mark.parametrize("status", ["pending", "printed", "sending", "unknown"])
+async def test_cancellation_stops_unsent_and_keeps_existing_print_evidence(print_context, status):
     c = print_context
     await set_job(c, status=status)
     async with c.factory() as session:
         order = await session.get(Order, c.order_id)
         order.cancelled_at = datetime.now(timezone.utc)
         order.cancellation_reason = "管理員核准取消"
-        await enqueue_cancellation_print(session, order, c.settings)
+        await stop_cancelled_order_prints(session, order)
         await session.flush()
-        await enqueue_cancellation_print(session, order, c.settings)
+        await stop_cancelled_order_prints(session, order)
         await session.commit()
         jobs = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == c.order_id)))
-        assert len(jobs) == expected
-        if expected == 2:
-            notice = next(job for job in jobs if job.kind == "cancellation")
-            assert "取消通知" in format_receipt(notice.snapshot)
-        else:
-            assert jobs[0].status == "failed"
+        assert [job.id for job in jobs] == [c.job_id]
+        assert jobs[0].status == ("failed" if status == "pending" else status)
+        if status == "pending":
+            assert jobs[0].last_error == "order_cancelled_before_send"
 
 
 async def test_admin_permissions_reprint_ack_audit_and_idempotency(print_context):
@@ -434,7 +432,7 @@ async def test_admin_permissions_reprint_ack_audit_and_idempotency(print_context
         assert "test-secret" not in (await client.get(url, headers=headers)).text
 
 
-async def test_approved_cancellation_route_enqueues_notice_in_same_transaction(print_context):
+async def test_approved_cancellation_route_does_not_send_notice(print_context):
     c = print_context
     order = await c.session.get(Order, c.order_id)
     order.payment_status, order.paid_at = PaymentStatus.PENDING, None
@@ -445,7 +443,7 @@ async def test_approved_cancellation_route_enqueues_notice_in_same_transaction(p
     await approve_cancellation(c, c.order_id)
     async with c.factory() as session:
         notices = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == c.order_id, PrintJob.kind == "cancellation")))
-        assert len(notices) == 1
+        assert notices == []
         assert (await session.get(Order, c.order_id)).cancelled_at is not None
 
 
@@ -492,7 +490,7 @@ async def test_disabled_and_dry_run_client_cannot_send_even_with_credentials():
             FeieClient(settings)
 
 
-async def test_live_reprint_after_dry_run_gets_live_cancellation_notice(print_context):
+async def test_cancellation_never_enqueues_notices_for_prior_print_modes(print_context):
     c = print_context
     await set_job(c, status="simulated")
     settings = live_settings()
@@ -504,10 +502,10 @@ async def test_live_reprint_after_dry_run_gets_live_cancellation_notice(print_co
         order = await session.get(Order, c.order_id)
         order.cancelled_at = datetime.now(timezone.utc)
         order.cancellation_reason = "管理員取消"
-        await enqueue_cancellation_print(session, order, settings)
+        await stop_cancelled_order_prints(session, order)
         await session.commit()
         notices = list(await session.scalars(select(PrintJob).where(PrintJob.order_id == c.order_id, PrintJob.kind == "cancellation")))
-        assert {notice.mode for notice in notices} == {"live", "dry_run"}
+        assert notices == []
 
 
 async def test_second_worker_cannot_send_while_first_is_waiting_on_cloud(print_context):

@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from .business_meals import business_payment_window, is_business_meal
 from .config import Settings
 from .integrations.notifications import NotificationCommand, NotificationService, SQLAlchemyNotificationRepository
-from .models import FulfillmentStatus, MealEventStatus, Notification, Order, OrderFulfillment, PaymentStatus
+from .models import FulfillmentStatus, MealEventStatus, Notification, Order, OrderFulfillment, PaymentMethod, PaymentStatus
 
 
 TAIPEI = ZoneInfo('Asia/Taipei')
@@ -83,10 +83,14 @@ async def enqueue_business_payment_reminders(
         email = _email_address(order.contact_email, order.invoice_buyer_email,
             order.user.notification_email, order.user.email)
         link = f"{settings.web_base_url.rstrip('/')}/meal-orders?{urlencode({'order_id': order.id})}"
+        instruction = (
+            '請於取餐時付現給工作人員，發票會在收款後開立。'
+            if order.payment_method == PaymentMethod.CASH_ON_PICKUP
+            else '請於今天 23:59 前完成線上付款，並至訂單頁確認付款與發票狀態。'
+        )
         await service.publish(NotificationCommand(
             user_id=order.user_id, event_type=PAYMENT_REMINDER, title='會餐取餐日付款提醒',
-            body=f'您的會餐訂單 {order.order_number} 尚待付款，金額 NT${order.amount_total}。'
-                 f'請於今天 23:59 前完成線上付款，並至訂單頁確認付款與發票狀態。\n{link}',
+            body=f'您的會餐訂單 {order.order_number} 尚待付款，金額 NT${order.amount_total}。{instruction}\n{link}',
             email=email, data={'order_id': order.id, 'url': link},
             dedupe_key=f'business-payment-reminder:{order.id}', created_at=current,
         ))

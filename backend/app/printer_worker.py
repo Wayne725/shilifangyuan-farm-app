@@ -45,7 +45,8 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 PrintJob.kind.in_({"cancellation", "summary", "reference"}),
                 PrintJob.reprint_of_id.is_not(None),
                 and_(PrintJob.kind == "order", PrintJob.snapshot["manual"].as_boolean().is_(True)),
-                and_(Order.meal_booking_type == "business", Order.payment_status == PaymentStatus.PENDING),
+                and_(Order.meal_booking_type == "business",
+                    Order.payment_status.in_({PaymentStatus.PENDING, PaymentStatus.EXPIRED})),
                 Order.cancelled_at.is_not(None), Order.fulfillment_status == FulfillmentStatus.CANCELLED,
                 Order.payment_status.in_([PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED]),
                 and_(Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None)),
@@ -62,6 +63,10 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
             return True
         if job.status not in {"pending", "submitted", "unknown"} or _aware(job.next_attempt_at) > now or (job.lease_until and _aware(job.lease_until) > now):
             return True
+        if job.kind == "cancellation" and job.status == "pending":
+            job.status, job.last_error = "failed", "cancellation_printing_disabled"
+            await session.commit()
+            return True
         pending_summary = job.kind == "summary" and job.status == "pending"
         if pending_summary and not (source_ids := summary_source_ids(job.snapshot)):
             job.status, job.last_error = "failed", "summary_changed_before_send"
@@ -73,7 +78,7 @@ async def process_print_job(settings: Settings, *, factory=SessionLocal, client=
                 job.status, job.last_error = "failed", blocked
                 await session.commit()
                 return True
-        if job.kind in {"cancellation", "amendment"} and job.status == "pending":
+        if job.kind == "amendment" and job.status == "pending":
             sending = await session.scalar(select(PrintJob.id).where(PrintJob.order_id == job.order_id, PrintJob.id != job.id, PrintJob.kind.in_({"order", "amendment"}), PrintJob.status == "sending").limit(1))
             if sending:
                 job.next_attempt_at = now + timedelta(seconds=settings.printer_poll_seconds)

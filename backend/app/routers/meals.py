@@ -31,7 +31,7 @@ from ..audited_changes import audit_changes
 from ..contact_phone import decrypt_contact_phone
 from ..order_numbers import allocate_order_number
 from ..order_history import OrderHistoryQuery, read_order_history
-from ..printing import enqueue_order_print, enqueue_cancellation_print
+from ..printing import enqueue_order_print, stop_cancelled_order_prints
 from ..printer_worker import wake_printer
 from ..platform_settings import require_accepting_orders
 from ..domain import (
@@ -825,7 +825,7 @@ async def quote_meal_order(
     business = body.meal_booking_type == "business"
     if event.business_only and not business:
         raise HTTPException(422, "此場次僅開放會餐")
-    if body.payment_method == PaymentMethod.CASH_ON_PICKUP and (same_day or not event.allow_cash_payment):
+    if body.payment_method == PaymentMethod.CASH_ON_PICKUP and not business and (same_day or not event.allow_cash_payment):
         raise HTTPException(status_code=422, detail="此場次未開放現場付款")
     pickup_location = None
     if body.pickup_location_id is not None:
@@ -1327,11 +1327,19 @@ async def _cancel_approved_meal_order(
         if not refund_queued:
             await reverse_order_purchase_points(session, order, refund.id)
             enqueue_invoice_adjustment_after_refund(session, order, refund)
+        cash = order.payment_method == PaymentMethod.CASH_ON_PICKUP
+        if cash:
+            refund_title = "現金退款待現場退還"
+            refund_body = f"訂單 {order.order_number} 已取消，待人員實際退還現金 NT${order.amount_total}。"
+        elif refund_queued:
+            refund_title = "便當退款申請已送出"
+            refund_body = f"訂單 {order.order_number} 已送出 NT${order.amount_total} 退款申請，待金流確認完成後會再通知。"
+        else:
+            refund_title = "便當退款紀錄已建立"
+            refund_body = f"訂單 {order.order_number} 已建立 NT${order.amount_total} 的 Sandbox 退款紀錄。"
         await _publish_meal_refund_notification(
             session, order,
-            title="便當退款申請已送出" if refund_queued else "便當退款紀錄已建立",
-            body=(f"訂單 {order.order_number} 已送出 NT${order.amount_total} 退款申請，待金流確認完成後會再通知。"
-                  if refund_queued else f"訂單 {order.order_number} 已建立 NT${order.amount_total} 的 Sandbox 退款紀錄。"),
+            title=refund_title, body=refund_body,
             data={"meal_event_id": order.meal_event.id, "order_id": order.id},
             dedupe_key=f"meal-order-refund:{order.id}",
             event_type="refund_requested" if refund_queued else "refund_completed",
@@ -1343,7 +1351,7 @@ async def _cancel_approved_meal_order(
     await cancel_unissued_invoice_jobs(session, order)
     order.fulfillment_status = FulfillmentStatus.CANCELLED
     order.fulfillment.status = FulfillmentState.CANCELLED
-    await enqueue_cancellation_print(session, order, settings)
+    await stop_cancelled_order_prints(session, order)
 
 
 @meals_router.post("/v1/admin/meal-cancellation-requests/{request_id}/review", response_model=MealCancellationRequestRead)
@@ -1418,7 +1426,8 @@ async def admin_cancel_meal_order(
         reason=body.reason, data={"request_id": request.id, "source": "phone"}))
     await _publish_meal_refund_notification(
         session, order, title="便當退單已辦理",
-        body=f"訂單 {order.order_number} 已由管理員辦理退單；款項與發票處理進度請查看訂單。",
+        body=f"訂單 {order.order_number} 已取消。"
+             + ("款項與發票處理進度請查看訂單。" if order.paid_at is not None else ""),
         data={"order_id": order.id, "request_id": request.id},
         dedupe_key=f"meal-cancellation-review:{request.id}", event_type="meal_cancellation_approved",
     )
@@ -1926,7 +1935,7 @@ def _configured_event_values(
     if business_only and same_day:
         raise HTTPException(422, "僅限會餐的場次須於取餐前預訂")
     if business_only and body.allow_cash_payment:
-        raise HTTPException(422, "僅限會餐的場次只支援線上付款")
+        raise HTTPException(422, "會餐現金付款不需另外啟用")
     if policy == "legacy":
         if business_only:
             raise HTTPException(422, "請選擇工作日或特殊日期規則以開放僅限會餐的場次")
@@ -2189,7 +2198,7 @@ async def update_meal_payment_options(
         raise HTTPException(status_code=409, detail="場次已結束或取消")
     if body.allow_cash_payment:
         if event.business_only:
-            raise HTTPException(422, "僅限會餐的場次只支援線上付款")
+            raise HTTPException(422, "會餐現金付款不需另外啟用")
         if event.same_day_preparation_minutes is not None:
             raise HTTPException(422, "開放當日訂餐的場次僅支援線上付款")
     event.allow_cash_payment = body.allow_cash_payment
@@ -2483,7 +2492,7 @@ async def _cancel_meal_event_orders(
                 data={"meal_event_id": event.id, "order_id": order.id},
                 dedupe_key=f"meal-event-cancelled:{event.id}:{order.id}", event_type="meal_event_cancelled",
             )
-        await enqueue_cancellation_print(session, order, settings)
+        await stop_cancelled_order_prints(session, order)
     session.add(
         AdminAudit(
             actor_id=admin.id,
@@ -2522,17 +2531,19 @@ async def _meal_disaster_plan(
         orders = by_event[event.id]
         active = _event_cancellation_active_orders(orders)
         paid = [order for order in active if order.payment_status == PaymentStatus.PAID]
+        paid_cash = [order for order in paid if order.payment_method == PaymentMethod.CASH_ON_PICKUP]
         blocked = any(_was_picked_up(order) for order in orders)
         event_summaries.append({
             "id": event.id, "title": event.title, "period": meal_period(event),
             "order_count": len(active), "paid_count": len(paid),
             "paid_total": sum(order.amount_total for order in paid), "blocked": blocked,
+            "cash_paid_count": len(paid_cash), "cash_paid_total": sum(order.amount_total for order in paid_cash),
             "ordering_paused": event.ordering_paused_at is not None,
             "ordering_pause_version": event.ordering_pause_version,
             "ordering_pause_blocked_reason": _meal_ordering_adjustment_blocked_reason(event, now),
         })
         fingerprint.append([event.id, event.title, event.status.value, blocked, [
-            [order.id, order.revision, order.payment_status.value, order.amount_total] for order in active
+            [order.id, order.revision, order.payment_status.value, order.payment_method.value, order.amount_total] for order in active
         ]])
     token = hashlib.sha256(json.dumps(
         [body.service_date.isoformat(), sorted(body.periods), fingerprint], ensure_ascii=False,
@@ -2580,6 +2591,8 @@ async def cancel_meal_disaster(
     return MealDisasterResult(
         cancelled_event_count=len(plan), order_count=sum(event.order_count for event in preview.events),
         paid_count=sum(event.paid_count for event in preview.events), paid_total=sum(event.paid_total for event in preview.events),
+        cash_paid_count=sum(event.cash_paid_count for event in preview.events),
+        cash_paid_total=sum(event.cash_paid_total for event in preview.events),
     )
 
 
@@ -2700,13 +2713,12 @@ async def complete_meal_event(
             trigger="legacy_meal_no_show",
         )
     event.status = MealEventStatus.COMPLETED
-    from ..cash_payments import expire_cash_order
+    from ..cash_payments import expire_cash_orders
     pending_cash = list(await session.scalars(select(Order).where(
         Order.meal_event_id == event.id, Order.payment_method == PaymentMethod.CASH_ON_PICKUP,
-        Order.payment_status == PaymentStatus.PENDING,
+        Order.payment_status == PaymentStatus.PENDING, Order.meal_booking_type != "business",
     ).options(selectinload(Order.reservations), selectinload(Order.fulfillment)).with_for_update()))
-    for order in pending_cash:
-        await expire_cash_order(session, order, now)
+    await expire_cash_orders(session, pending_cash, now)
     session.add(
         AdminAudit(
             actor_id=admin.id,

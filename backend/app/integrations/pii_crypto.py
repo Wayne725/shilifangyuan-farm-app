@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -192,6 +193,10 @@ class VersionedPIICipher:
                 "Decrypted PII JSON must be an object"
             )
         return value
+
+    def lookup_digests(self, value: str, *, purpose: str) -> dict[str, str]:
+        message = b"pii-lookup:" + purpose.encode("utf-8") + b"\x00" + value.encode("utf-8")
+        return {version: hmac.digest(key, message, "sha256").hex() for version, key in self._keys.items()}
 
     @staticmethod
     def _associated_data_bytes(value: Union[str, bytes]) -> bytes:

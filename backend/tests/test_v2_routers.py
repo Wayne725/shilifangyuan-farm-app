@@ -673,6 +673,9 @@ async def test_existing_member_registers_from_roster_and_gets_active_membership(
     assert claimed_membership.status == MembershipStatus.ACTIVE
     assert claimed_membership.member_number == "SLF-2019-0042"
     assert claimed_membership.share_capital_amount == 3000
+    assert claimed_user.meal_contact_phone_lookup is not None
+    profile = await client.get("/v1/auth/profile", headers=auth_headers(claimed_user))
+    assert profile.status_code == 200 and profile.json()["phone"] == "0912345678"
     await session.refresh(stored_roster)
     assert stored_roster.claimed_user_id == claimed_user.id
     assert stored_roster.pending_claim_user_id is None
@@ -726,6 +729,8 @@ async def test_existing_customer_account_can_claim_matching_member_roster(
     )
     assert mine.status_code == 200
     assert mine.json()["membership_type"] == "member"
+    profile = await client.get("/v1/auth/profile", headers=auth_headers(customer))
+    assert profile.status_code == 200 and profile.json()["phone"] == "0987654321"
 
 
 @pytest.mark.asyncio

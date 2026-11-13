@@ -6,6 +6,7 @@ import { ApiError, formatMoney, type apiFetch, type downloadApiFile } from "../l
 import { financeDateTime } from "../lib/meal-finance";
 import "../pages/AdminRecordsPage.css";
 import { OptionalMark } from "./OptionalMark";
+import { AdminMemberSpending } from "./AdminMemberSpending";
 import { MemberPointAdjustment, signedPoints } from "./MemberPointAdjustment";
 
 type Person = { id: string; source: "membership" | "roster"; member_number: string; legal_name: string; email: string; phone: string; status: string; share_certificate_number?: string; share_count?: number; share_capital_amount?: number; share_paid_on?: string };
@@ -18,12 +19,12 @@ export function AdminRecordsPanel({ adminId, request, downloadFile, tab, member,
   adminId: string;
   request: typeof apiFetch;
   downloadFile: typeof downloadApiFile;
-  tab: "members" | "payments" | "points";
+  tab: "members" | "payments" | "points" | "spending";
   member?: string;
   membership?: string;
 }) {
   const navigate = useNavigate({ from: "/admin/users" });
-  const openLedger = (ledger: "members" | "payments" | "points") => void navigate({ search: {
+  const openLedger = (ledger: "members" | "payments" | "points" | "spending") => void navigate({ search: {
     tab: "records", ledger: ledger === "members" ? undefined : ledger, member, membership,
   } });
   const [q, setQ] = useState(""), [search, setSearch] = useState("");
@@ -72,8 +73,9 @@ export function AdminRecordsPanel({ adminId, request, downloadFile, tab, member,
     : pointRows;
   const pointTarget = visiblePointRows.find((row) => row.user_id === pointTargetId && row.can_adjust);
   return <section className="admin-records-page"><h2>社員與收款紀錄</h2>
-    <nav className="admin-quick-buttons" aria-label="社員帳冊分類">{([ ["members", "社員股籍"], ["payments", "入社費與股金"], ["points", "累積點數"] ] as const).map(([value, label]) => <button className="button button-quiet" aria-pressed={tab === value} key={value} onClick={() => openLedger(value)}>{label}</button>)}</nav>
+    <nav className="admin-quick-buttons" aria-label="社員帳冊分類">{([ ["members", "社員股籍"], ["payments", "入社費與股金"], ["points", "累積點數"], ["spending", "社員消費紀錄"] ] as const).map(([value, label]) => <button className="button button-quiet" aria-pressed={tab === value} key={value} onClick={() => openLedger(value)}>{label}</button>)}</nav>
     {member && <div className="admin-quick-buttons"><span>社員編號 {member}</span><Link className="text-link" to="/admin/users" search={{ tab: "records", ledger: tab === "members" ? undefined : tab }}>清除社員篩選</Link></div>}
+    {tab === "spending" ? <AdminMemberSpending adminId={adminId} request={request} downloadFile={downloadFile} member={member} /> : <>
     <form className="admin-records-filters" onSubmit={event => {event.preventDefault(); setSearch(tab === "points" ? q.trim() : q); setOffset(0);}}><label className="field"><span>{tab === "points" ? "姓名、Email 或社員編號" : "姓名、Email、社員編號或股號"}</span><input value={q} onChange={event => setQ(event.target.value)} maxLength={120}/></label>
     {tab === "members" && <label className="field"><span>會籍狀態</span><select value={status} onChange={event => {setStatus(event.target.value); setOffset(0);}}><option value="active">正式社員</option><option value="all">全部名冊</option></select></label>}
     {tab === "payments" && <><label className="field"><span>款項</span><select value={kind} onChange={event => {setKind(event.target.value); setOffset(0);}}><option value="all">入社費與股金</option><option value="admission_fee">入社費</option><option value="share_capital">股金</option></select></label><label className="field"><span>收款日起</span><input type="date" value={start} onChange={event => {setStart(event.target.value); setOffset(0);}}/></label><label className="field"><span>收款日迄</span><input type="date" value={end} min={start} onChange={event => {setEnd(event.target.value); setOffset(0);}}/></label></>}
@@ -99,6 +101,7 @@ export function AdminRecordsPanel({ adminId, request, downloadFile, tab, member,
       }} />}
     {target && <ReceiptForm request={request} target={target} onClose={() => setTarget(null)} onSaved={() => {setTarget(null); openLedger("payments"); void client.invalidateQueries({queryKey: ["membership-payments"]});}}/>}
     {voidTarget && <form className="admin-records-form" onSubmit={event => {event.preventDefault(); voidReceipt.mutate();}}><h2>作廢線下收款紀錄</h2><p>{voidTarget.receipt_number} · {formatMoney(voidTarget.amount)}</p><label className="field"><span>作廢原因<OptionalMark /></span><input maxLength={1000} value={voidReason} onChange={event => setVoidReason(event.target.value)}/></label>{voidReceipt.isError && <p role="alert">{voidReceipt.error.message}</p>}<div className="form-actions"><button className="button button-primary" disabled={voidReceipt.isPending}>確認作廢紀錄</button><button type="button" className="button button-quiet" onClick={() => setVoidTarget(null)}>取消</button></div></form>}
+    </>}
     </section>;
 }
 function ReceiptForm({request, target, onClose, onSaved}: {request: typeof apiFetch; target: Person; onClose: () => void; onSaved: () => void}) {

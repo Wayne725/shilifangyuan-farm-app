@@ -363,6 +363,7 @@ class User(Base):
     email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True, unique=True, index=True)
     notification_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     meal_contact_phone_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meal_contact_phone_lookup: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     saved_mobile_barcode: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     display_name: Mapped[str] = mapped_column(String(80))
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -564,6 +565,7 @@ class MemberRosterEntry(Base):
     legal_name_encrypted: Mapped[str] = mapped_column(Text)
     email_encrypted: Mapped[str] = mapped_column(Text)
     phone_encrypted: Mapped[str] = mapped_column(Text)
+    phone_lookup: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     address_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     encryption_key_version: Mapped[str] = mapped_column(String(32), default="v1")
     share_certificate_number: Mapped[Optional[str]] = mapped_column(
@@ -618,6 +620,7 @@ class MemberProfile(Base):
     )
     legal_name_encrypted: Mapped[str] = mapped_column(Text)
     phone_encrypted: Mapped[str] = mapped_column(Text)
+    phone_lookup: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     birth_date_encrypted: Mapped[str] = mapped_column(Text)
     address_encrypted: Mapped[str] = mapped_column(Text)
     emergency_contact_encrypted: Mapped[str] = mapped_column(Text)
@@ -1968,13 +1971,20 @@ class Order(Base):
     __table_args__ = (
         CheckConstraint("amount_total >= 0", name="amount_total_nonnegative"),
         CheckConstraint("meal_booking_type IN ('standard', 'business')", name="meal_booking_type_valid"),
-        CheckConstraint("meal_booking_type != 'business' OR (sales_channel = 'meal_preorder' AND payment_method = 'online' AND invoice_buyer_type = 'company' AND invoice_handling IS NOT NULL AND invoice_handling = 'pickup_day' AND invoice_issue_after IS NOT NULL AND invoice_buyer_tax_id IS NOT NULL AND invoice_buyer_name IS NOT NULL)", name="business_meal_contract"),
+        CheckConstraint(
+            "meal_booking_type != 'business' OR (sales_channel = 'meal_preorder' "
+            "AND payment_method IN ('online', 'cash_on_pickup') AND invoice_buyer_type = 'company' "
+            "AND invoice_handling IS NOT NULL AND invoice_handling = 'pickup_day' AND invoice_issue_after IS NOT NULL "
+            "AND invoice_buyer_tax_id IS NOT NULL AND invoice_buyer_name IS NOT NULL)",
+            name="business_meal_contract",
+        ),
         UniqueConstraint("user_id", "client_request_id", name="uq_orders_user_client_request"),
         CheckConstraint(
-            "(customer_kind = 'account' AND user_id IS NOT NULL AND verified_counter_membership_id IS NULL) OR "
+            "(customer_kind = 'account' AND user_id IS NOT NULL AND verified_counter_membership_id IS NULL AND verified_counter_roster_entry_id IS NULL) OR "
             "(customer_kind = 'walk_in' AND user_id IS NULL AND sales_channel = 'regular' AND payment_method = 'cash_on_pickup' AND "
-            "((verified_counter_membership_id IS NULL AND membership_type_snapshot = 'nonmember' AND NOT member_tax_exempt_snapshot) OR "
-            "(verified_counter_membership_id IS NOT NULL AND membership_type_snapshot IN ('member', 'trainee') AND "
+            "(verified_counter_membership_id IS NULL OR verified_counter_roster_entry_id IS NULL) AND "
+            "((COALESCE(verified_counter_membership_id, verified_counter_roster_entry_id) IS NULL AND membership_type_snapshot = 'nonmember' AND NOT member_tax_exempt_snapshot) OR "
+            "(COALESCE(verified_counter_membership_id, verified_counter_roster_entry_id) IS NOT NULL AND membership_type_snapshot IN ('member', 'trainee') AND "
             "member_tax_exempt_snapshot = (membership_type_snapshot = 'member' AND invoice_buyer_type = 'personal'))))",
             name="customer_identity",
         ),
@@ -2010,6 +2020,10 @@ class Order(Base):
     customer_name_snapshot: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     verified_counter_membership_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("memberships.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    verified_counter_roster_entry_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("member_roster_entries.id", name="fk_orders_counter_roster", ondelete="RESTRICT"),
+        nullable=True, index=True,
     )
     group_campaign_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("group_campaigns.id", ondelete="RESTRICT"),

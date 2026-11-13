@@ -12,6 +12,7 @@ from app.integrations.payment_service import SQLAlchemyPaymentCallbackRepository
 from app.models import (InventoryReservation, Meal, MealEvent, MealEventOffering, MealEventStatus,
     Notification, Order, PaymentAttempt, PaymentStatus, Refund, ReservationStatus, User, UserRole)
 from app.routers.meals import meals_router
+from app.routers.orders import orders_router
 from pgtests.test_transaction_concurrency import postgres_sessions
 from tests.support import api_test_context, auth_headers, tomorrow_meal_timeline
 from tests.test_v2_payment_jobs import fake_payment, payment_settings, successful_callback
@@ -34,17 +35,17 @@ async def business_pg(postgres_sessions):
         session.add_all([event, *buyers])
         await session.commit()
         offering_id, event_id = event.offerings[0].id, event.id
-    async def create(buyer, request_id=None):
+    async def create(buyer, request_id=None, payment_method="online"):
         async with postgres_sessions() as session:
             async with api_test_context(session, [meals_router], settings=payment_settings()) as client:
                 body = {'meal_booking_type': 'business', 'invoice_buyer_type': 'company',
                     'invoice_buyer_tax_id': '15989995', 'invoice_buyer_name': '合成學校',
                     'invoice_buyer_email': buyer.email, "contact_phone": "0912345678", 'contact_email': buyer.email,
-                    'items': [{'offering_id': offering_id, 'quantity': 2}]}
+                    'items': [{'offering_id': offering_id, 'quantity': 2}], 'payment_method': payment_method}
                 if request_id:
                     body['client_request_id'] = request_id
                 return await client.post(f'/v1/meal-events/{event_id}/orders', json=body, headers=auth_headers(buyer))
-    return SimpleNamespace(sessions=postgres_sessions, buyers=buyers, offering_id=offering_id, create=create)
+    return SimpleNamespace(sessions=postgres_sessions, buyers=buyers, admin=admin, offering_id=offering_id, create=create)
 
 
 async def together(*operations):
@@ -69,6 +70,37 @@ async def test_business_last_portions_are_reserved_once_without_overselling(busi
         reservations = list(await session.scalars(select(InventoryReservation)))
         assert len(reservations) == 1 and reservations[0].quantity == 2
         assert reservations[0].payment_attempt_id is None
+
+
+async def test_parallel_business_cash_receipts_share_one_payment_and_invoice(business_pg):
+    c = business_pg
+    with time_machine.travel(BOOKING, tick=False):
+        created = await c.create(c.buyers[0], payment_method="cash_on_pickup")
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+    pickup_end = datetime.fromisoformat(created.json()["pickup_end"])
+
+    async def collect():
+        async with c.sessions() as session:
+            async with api_test_context(session, [orders_router], settings=payment_settings()) as client:
+                return await client.post(f"/v1/orders/{order_id}/admin/cash-payment", headers=auth_headers(c.admin),
+                                         json={"amount": 200})
+
+    from app.jobs import _reconcile_meal_events
+    from app.models import OutboxEvent
+    async with c.sessions() as session:
+        assert await _reconcile_meal_events(session, pickup_end, 5) == 1
+    with time_machine.travel(pickup_end + timedelta(hours=1), tick=False):
+        results = await together(collect(), collect())
+    assert all(result.status_code == 200 for result in results), [result.text for result in results]
+    assert results[0].json()["paid_at"] == results[1].json()["paid_at"]
+    async with c.sessions() as session:
+        offering = await session.get(MealEventOffering, c.offering_id)
+        assert offering.paid_quantity == 2 and offering.reserved_quantity == 0
+        assert await session.scalar(select(func.count(PaymentAttempt.id)).where(PaymentAttempt.order_id == order_id)) == 1
+        assert await session.scalar(select(func.count(OutboxEvent.id)).where(
+            OutboxEvent.aggregate_id == order_id, OutboxEvent.event_type == "invoice.issue_requested",
+        )) == 1
 
 
 async def test_replayed_business_booking_and_concurrent_payment_preserve_one_hold(business_pg, fake_payment):

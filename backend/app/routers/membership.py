@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..account_profiles import member_contact_from_profile
+from ..account_profiles import member_contact_from_profile, save_verified_phone_if_missing
 from ..auth import (
     get_current_user,
     membership_type_for_user,
@@ -49,6 +49,7 @@ from ..member_claims import (
 from ..member_shares import MemberSharesError, update_member_shares
 from ..membership_admission_guards import has_admission_round, require_legacy_admission_allowed
 from ..membership_demo_documents import is_demo_membership_document
+from ..phone_lookup import phone_lookup_digest
 from ..roster_csv import (
     MAX_CSV_BYTES, RosterCsvEntry, RosterCsvImport, RosterCsvImported,
     RosterCsvPreview, duplicate_numbers, parse_roster_csv,
@@ -397,6 +398,7 @@ async def _save_profile_and_application(
             body.phone,
             associated_data=_profile_aad(user.id),
         ),
+        "phone_lookup": phone_lookup_digest(body.phone, cipher),
         "birth_date_encrypted": cipher.encrypt_text(
             body.birth_date.isoformat(),
             associated_data=_profile_aad(user.id),
@@ -1070,7 +1072,9 @@ async def claim_existing_membership(
 ) -> MembershipPublicRead:
     if user.email_verified_at is None:
         raise HTTPException(status_code=403, detail="請先完成帳號 Email 驗證，再認領社員資格")
-    await session.scalar(select(User.id).where(User.id == user.id).with_for_update(key_share=True))
+    await session.scalar(
+        select(User).where(User.id == user.id).with_for_update(key_share=True).execution_options(populate_existing=True)
+    )
     try:
         entry = await verified_roster_entry(
             session,
@@ -1080,6 +1084,7 @@ async def claim_existing_membership(
             email=user.email,
             phone=body.phone,
         )
+        await save_verified_phone_if_missing(session, user, normalize_phone(body.phone), settings)
         membership = await attach_roster_membership(session, entry, user)
     except MemberClaimError as exc:
         if exc.code == "claimed":
@@ -1538,6 +1543,8 @@ async def correct_roster_contact(
             setattr(entry, field, after[field])
     if before:
         entry.encryption_key_version = cipher.current_version
+        if "phone_encrypted" in before:
+            entry.phone_lookup = phone_lookup_digest(phone, cipher)
         if before.keys() & {"legal_name_encrypted", "email_encrypted", "phone_encrypted"}:
             entry.pending_claim_user_id = None
             entry.pending_claim_expires_at = None
@@ -1654,6 +1661,7 @@ def _new_roster_entry(body: MemberRosterEntryCreate | RosterCsvEntry, cipher: Ve
             normalize_phone(body.phone),
             associated_data=aad,
         ),
+        phone_lookup=phone_lookup_digest(body.phone, cipher),
         encryption_key_version=cipher.current_version,
         share_certificate_number=certificate.strip() if certificate else None,
         share_capital_amount=body.share_capital_amount,

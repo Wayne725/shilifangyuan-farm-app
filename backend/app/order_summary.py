@@ -97,7 +97,8 @@ def _summary_lines(filters: OrderSummaryFilters, *, confirmed_paid: bool = False
         payment_allowed = and_(Order.payment_status == PaymentStatus.PAID, Order.paid_at.is_not(None))
         if filters.include_unpaid_business:
             payment_allowed = or_(payment_allowed, and_(Order.meal_booking_type == "business",
-                Order.payment_method == PaymentMethod.ONLINE, Order.payment_status == PaymentStatus.PENDING,
+                Order.payment_method.in_({PaymentMethod.ONLINE, PaymentMethod.CASH_ON_PICKUP}),
+                Order.payment_status == PaymentStatus.PENDING,
                 OrderFulfillment.status.in_([FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP])))
         query = query.where(active, payment_allowed)
     if filters.sales_channel != "all":

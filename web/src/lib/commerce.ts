@@ -362,7 +362,7 @@ export async function beginMealCheckout(input: {
   invoiceHandling?: "on_payment" | "pickup_day" | "external";
 }): Promise<MealCheckoutOutcome> {
   const business = input.mealBookingType === "business";
-  const paymentMethod = business ? "online" : input.paymentMethod || "online";
+  const paymentMethod = input.paymentMethod || "online";
   const invoiceHandling = business ? "pickup_day" : input.invoiceHandling;
   const legacyInvoiceHandling = paymentMethod === "cash_on_pickup" ? "external" : "on_payment";
   const order = await apiFetch<{ id: string; payment_method?: string; meal_booking_type?: string }>(
@@ -388,7 +388,7 @@ export async function beginMealCheckout(input: {
     },
   );
   if (business) {
-    return order.meal_booking_type === "business"
+    return order.meal_booking_type === "business" && (order.payment_method ?? "online") === paymentMethod
       ? { kind: "reserved", orderId: order.id }
       : { kind: "resume", orderId: order.id, message: "會餐預訂尚未確認，請聯絡合作社核對，勿重複下單。" };
   }

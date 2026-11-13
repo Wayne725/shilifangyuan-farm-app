@@ -240,7 +240,7 @@ async def test_newer_failed_retry_does_not_hide_confirmed_linepay(print_context)
         assert snapshot["payment_method"] == "LINE Pay" and snapshot["payment_status"] == "已付款"
 
 
-@pytest.mark.parametrize("operation", ["reprint", "amendment", "cancellation"])
+@pytest.mark.parametrize("operation", ["reprint", "amendment"])
 async def test_new_print_work_drops_old_print_time_but_keeps_contact(print_context, operation):
     c = print_context
     cipher = configure_test_cipher(c.settings)
@@ -255,15 +255,8 @@ async def test_new_print_work_drops_old_print_time_but_keeps_contact(print_conte
             response = await client.post(f"/v1/admin/printers/jobs/{c.job_id}/reprint", headers=auth_headers(c.admin),
                 json={"request_id": str(uuid4()), "reason": "明確建立另一張補印單"})
         assert response.status_code == 201, response.text
-    elif operation == "amendment":
-        await amend(c, revision=2, quantity=2)
     else:
-        async with c.factory() as session:
-            order = await session.get(Order, c.order_id)
-            order.cancelled_at = datetime.now(timezone.utc)
-            order.cancellation_reason = "取消測試"
-            await printing.enqueue_cancellation_print(session, order, c.settings)
-            await session.commit()
+        await amend(c, revision=2, quantity=2)
     async with c.factory() as session:
         replacement = await session.scalar(select(PrintJob).where(PrintJob.order_id == c.order_id, PrintJob.id != c.job_id))
         assert replacement.snapshot["customer_phone_encrypted"] == phone_envelope

@@ -29,7 +29,7 @@ const memberTabs = [
   { tab: "roster", label: "社員名冊" },
   { tab: "records", label: "社員帳冊" },
 ] as const;
-const memberQueryKeys = [["admin-registered-users"], ["admin-members"], ["admin-member-roster"], ["admin-roster-contact"], ["account-profile"], ["member-register"], ["membership-payments"], ["points-ledger"]] as const;
+const memberQueryKeys = [["admin-registered-users"], ["admin-members"], ["admin-member-roster"], ["admin-roster-contact"], ["account-profile"], ["member-register"], ["membership-payments"], ["points-ledger"], ["member-spending"], ["member-spending-details"]] as const;
 const initialAccounts = { draftSearch: "", search: "", kind: "all", offset: 0 };
 const membershipIdFormat = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 

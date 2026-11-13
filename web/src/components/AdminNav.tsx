@@ -1,7 +1,7 @@
 import { Link, useLocation } from "@tanstack/react-router";
 
 const groups = [
-  { label: "訂餐營運", links: [{to: "/admin", label: "訂單營運"}, {to: "/admin/meals", label: "便當管理"}, {to: "/admin/kitchen", label: "廚房出單"}] },
+  { label: "訂餐營運", links: [{to: "/admin", label: "訂單營運"}, {to: "/admin/meals", label: "便當管理"}] },
   { label: "商品", links: [{to: "/admin/catalog", label: "商品供應"}, {to: "/admin/groups", label: "共同購買管理"}, {to: "/admin/promotions", label: "促銷管理"}] },
   { label: "會員社務", links: [{to: "/admin/users", label: "會員管理"}, {to: "/admin/social", label: "社務管理"}] },
   { label: "財務", links: [{to: "/admin/finance", label: "銷售統計"}, {to: "/admin/accounting", label: "會計匯出"}, {to: "/admin/statements", label: "明細對帳"}, {to: "/admin/invoices", label: "發票"}] },
@@ -12,7 +12,8 @@ export function AdminNav() {
   const location = useLocation();
   const { pathname, search } = location;
   const today = pathname === "/admin" && !search.section && !search.q && !search.queue && !search.order_id;
-  const current = today ? undefined : groups.find(group => group.links.some(link => link.to === pathname));
+  const current = today ? undefined : groups.find(group => group.links.some(link => link.to === pathname))
+    ?? (pathname === "/admin/kitchen" ? groups[0] : undefined);
   return <div className="admin-navigation">
     <div className="admin-navigation-toolbar">
     <nav className="admin-workspace-links" aria-label="管理工作台分類">

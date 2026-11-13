@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .business_meals import business_payment_blocked_reason, business_payment_window, is_business_meal
 from .config import Settings
 from .invoice_timing import invoice_handling, pickup_invoice_due, cancel_unissued_invoice_jobs
 from .models import (
     AdminAudit, FulfillmentState, FulfillmentStatus, InventoryReservation,
     MealEvent, MealEventOffering, MealEventStatus, Order, PaymentAttempt,
     PaymentMethod, PaymentStatus, Refund, RefundStatus,
-    ReservationStatus, SalesChannel, PointAccount, PointTransaction, PointSourceType, MembershipType, InvoiceStatus, new_id,
+    ReservationStatus, SalesChannel, PointAccount, PointTransaction, PointSourceType, MembershipType, InvoiceStatus, User, new_id,
 )
 from .integrations.invoice_service import (
     enqueue_invoice_adjustment_after_refund, enqueue_invoice_issue,
@@ -29,21 +32,42 @@ def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+async def _lock_meal_offerings(
+    session: AsyncSession, offering_ids: Iterable[str | None],
+) -> dict[str, MealEventOffering]:
+    ids = {offering_id for offering_id in offering_ids if offering_id is not None}
+    if not ids:
+        return {}
+    offerings = await session.scalars(
+        select(MealEventOffering).where(MealEventOffering.id.in_(ids))
+        .order_by(MealEventOffering.id).with_for_update().execution_options(populate_existing=True)
+    )
+    return {offering.id: offering for offering in offerings}
+
+
 async def reserve_cash_order(session: AsyncSession, order: Order) -> None:
     if order.sales_channel != SalesChannel.MEAL_PREORDER or order.meal_event is None:
         raise PaymentApplicationError("現場付款目前僅支援便當")
     expires_at = order.meal_event.pickup_ends_at
-    for item in sorted(order.items, key=lambda line: line.source_meal_offering_id or line.source_product_id or ""):
-        offering = await session.scalar(select(MealEventOffering).where(
-            MealEventOffering.id == item.source_meal_offering_id,
-            MealEventOffering.meal_event_id == order.meal_event_id,
-        ).with_for_update().execution_options(populate_existing=True))
-        if offering is None or not offering.is_active or offering.capacity - offering.reserved_quantity - offering.paid_quantity < item.quantity:
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP and is_business_meal(order):
+        window = business_payment_window(order)
+        if window is None:
+            raise PaymentApplicationError("會餐取餐日期未提供")
+        expires_at = window[1]
+    quantities: dict[str, int] = defaultdict(int)
+    for item in order.items:
+        if item.source_meal_offering_id is None:
             raise PaymentApplicationError("便當剩餘數量不足")
-        offering.reserved_quantity += item.quantity
+        quantities[item.source_meal_offering_id] += item.quantity
+    offerings = await _lock_meal_offerings(session, quantities)
+    for offering_id, quantity in quantities.items():
+        offering = offerings.get(offering_id)
+        if (offering is None or offering.meal_event_id != order.meal_event_id or not offering.is_active
+            or offering.capacity - offering.reserved_quantity - offering.paid_quantity < quantity):
+            raise PaymentApplicationError("便當剩餘數量不足")
+        offering.reserved_quantity += quantity
         session.add(InventoryReservation(
-            order=order, source_meal_offering_id=item.source_meal_offering_id,
-            source_product_id=item.source_product_id, quantity=item.quantity,
+            order=order, source_meal_offering_id=offering_id, quantity=quantity,
             status=ReservationStatus.ACTIVE, expires_at=expires_at,
         ))
 
@@ -63,10 +87,17 @@ async def confirm_cash_payment(
         raise PaymentApplicationError("此訂單已有付款交易，不可再次收現金")
     if order.payment_status != PaymentStatus.PENDING or order.cancelled_at is not None or order.fulfillment_status == FulfillmentStatus.CANCELLED:
         raise PaymentApplicationError("此訂單目前不可收款")
-    if order.sales_channel == SalesChannel.MEAL_PREORDER:
-        event = await session.scalar(select(MealEvent).where(MealEvent.id == order.meal_event_id).with_for_update().execution_options(populate_existing=True))
-        if event is None or event.status in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED, MealEventStatus.DRAFT} or now >= _aware(event.pickup_ends_at):
-            raise PaymentApplicationError("場次已結束或取消，不可收款")
+    event = await session.scalar(select(MealEvent).where(MealEvent.id == order.meal_event_id).with_for_update().execution_options(populate_existing=True))
+    business = is_business_meal(order)
+    if business:
+        if blocked := business_payment_blocked_reason(order, now):
+            raise PaymentApplicationError(blocked)
+        if invoice_policy not in {None, "pickup_day"}:
+            raise PaymentApplicationError("會餐發票由系統於取餐日開立")
+        if collection_method != "cash":
+            raise PaymentApplicationError("會餐現場付款只收現金")
+    elif event is None or event.status in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED, MealEventStatus.DRAFT} or now >= _aware(event.pickup_ends_at):
+        raise PaymentApplicationError("場次已結束或取消，不可收款")
     active = [reservation for reservation in order.reservations if reservation.status == ReservationStatus.ACTIVE]
     expected: dict[tuple[str | None, str | None], int] = {}
     reserved: dict[tuple[str | None, str | None], int] = {}
@@ -80,7 +111,10 @@ async def confirm_cash_payment(
             raise PaymentApplicationError("訂單保留已過期，不可收款")
     if not active or reserved != expected:
         raise PaymentApplicationError("訂單保留數量不完整，不可收款")
-    if invoice_policy is not None:
+    if business:
+        order.invoice_handling = "pickup_day"
+        order.invoice_issue_after = business_payment_window(order)[0]
+    elif invoice_policy is not None:
         if invoice_policy not in {"external", "on_payment", "pickup_day"}:
             raise PaymentApplicationError("開票方式不正確")
         if order.__dict__.get("invoice") is not None:
@@ -94,13 +128,13 @@ async def confirm_cash_payment(
         provider_response={"confirmed_by_id": actor_id, "reason": reason, "confirmed_at": now.isoformat(), "collection_method": collection_method, "reference": reference},
     )
     session.add(attempt)
-    for reservation in sorted(active, key=lambda row: row.source_meal_offering_id or row.source_product_id or ""):
-        if reservation.source_meal_offering_id:
-            offering = await session.scalar(select(MealEventOffering).where(MealEventOffering.id == reservation.source_meal_offering_id).with_for_update().execution_options(populate_existing=True))
-            if offering is None or offering.reserved_quantity < reservation.quantity:
-                raise PaymentApplicationError("便當保留數量不一致")
-            offering.reserved_quantity -= reservation.quantity
-            offering.paid_quantity += reservation.quantity
+    offerings = await _lock_meal_offerings(session, (row.source_meal_offering_id for row in active))
+    for reservation in active:
+        offering = offerings.get(reservation.source_meal_offering_id)
+        if offering is None or offering.meal_event_id != order.meal_event_id or offering.reserved_quantity < reservation.quantity:
+            raise PaymentApplicationError("便當保留數量不一致")
+        offering.reserved_quantity -= reservation.quantity
+        offering.paid_quantity += reservation.quantity
         reservation.status = ReservationStatus.CONSUMED
         reservation.payment_attempt = attempt
     order.payment_status = PaymentStatus.PAID
@@ -155,33 +189,37 @@ async def confirm_cash_refund(
     await reverse_order_purchase_points(session, order, refund.id)
     enqueue_invoice_adjustment_after_refund(session, order, refund)
     if order.sales_channel == SalesChannel.MEAL_PREORDER:
+        email = order.contact_email or await session.scalar(select(User.email).where(User.id == order.user_id))
         await NotificationService(SQLAlchemyNotificationRepository(session)).publish(NotificationCommand(
             user_id=order.user_id, event_type="refund_completed", title="現金退款完成",
             body=f"訂單 {order.order_number} 已全額退款 NT${amount}。",
-            data={"order_id": order.id}, email=order.contact_email, dedupe_key=f"refund:{refund.id}",
+            data={"order_id": order.id}, email=email, dedupe_key=f"refund:{refund.id}",
         ))
     session.add(AdminAudit(actor_id=actor_id, action="order.cash_refund", aggregate_type="order", aggregate_id=order.id, reason=reason, data={"amount": amount, "refund_id": refund.id}))
 
 
-async def expire_cash_order(session: AsyncSession, order: Order, now: datetime) -> None:
-    if order.payment_method != PaymentMethod.CASH_ON_PICKUP or order.payment_status != PaymentStatus.PENDING:
-        return
-    for reservation in sorted(order.reservations, key=lambda row: row.source_meal_offering_id or row.source_product_id or ""):
-        if reservation.status != ReservationStatus.ACTIVE:
-            continue
-        if reservation.source_meal_offering_id:
-            offering = await session.scalar(select(MealEventOffering).where(MealEventOffering.id == reservation.source_meal_offering_id).with_for_update().execution_options(populate_existing=True))
-            if offering:
-                offering.reserved_quantity = max(0, offering.reserved_quantity - reservation.quantity)
+async def expire_cash_orders(session: AsyncSession, orders: Iterable[Order], now: datetime) -> None:
+    pending = [order for order in orders if (
+        order.payment_method == PaymentMethod.CASH_ON_PICKUP and order.payment_status == PaymentStatus.PENDING
+    )]
+    reservations = [row for order in pending for row in order.reservations if row.status == ReservationStatus.ACTIVE]
+    offerings = await _lock_meal_offerings(session, (row.source_meal_offering_id for row in reservations))
+    for reservation in reservations:
+        offering = offerings.get(reservation.source_meal_offering_id)
+        if offering is not None:
+            offering.reserved_quantity = max(0, offering.reserved_quantity - reservation.quantity)
         reservation.status = ReservationStatus.RELEASED
         reservation.released_at = now
-    order.payment_status = PaymentStatus.EXPIRED
-    order.cancelled_at = now
-    order.cancellation_reason = "現場付款逾期未完成"
-    order.fulfillment_status = FulfillmentStatus.CANCELLED
-    if order.fulfillment:
-        order.fulfillment.status = FulfillmentState.NO_SHOW
-        order.fulfillment.fulfilled_at = now
+    for order in pending:
+        order.payment_status = PaymentStatus.EXPIRED
+        if is_business_meal(order):
+            continue
+        order.cancelled_at = now
+        order.cancellation_reason = "現場付款逾期未完成"
+        order.fulfillment_status = FulfillmentStatus.CANCELLED
+        if order.fulfillment:
+            order.fulfillment.status = FulfillmentState.NO_SHOW
+            order.fulfillment.fulfilled_at = now
 
 
 async def _adjust_collection_points(session: AsyncSession, order: Order, direction: int, reference: str) -> None:
@@ -201,7 +239,7 @@ async def mark_cash_unpaid(session: AsyncSession, order: Order, *, amount: int, 
         raise PaymentApplicationError("此訂單已有開票紀錄，請使用退款與發票作廢流程")
     if "mark_cash_unpaid" not in order_available_actions(order, True, now) or amount != order.amount_total:
         raise PaymentApplicationError("此訂單目前無法更正為未付款")
-    if order.meal_event is None or now >= _aware(order.meal_event.pickup_ends_at):
+    if not is_business_meal(order) and (order.meal_event is None or now >= _aware(order.meal_event.pickup_ends_at)):
         raise PaymentApplicationError("場次已結束，無法更正收款")
     attempt = await session.scalar(select(PaymentAttempt).where(
         PaymentAttempt.order_id == order.id, PaymentAttempt.provider == "onsite",
@@ -212,9 +250,10 @@ async def mark_cash_unpaid(session: AsyncSession, order: Order, *, amount: int, 
     active = [row for row in order.reservations if row.status == ReservationStatus.CONSUMED and row.payment_attempt_id == attempt.id]
     if not active:
         raise PaymentApplicationError("訂單保留紀錄不完整，無法更正")
-    for reservation in sorted(active, key=lambda row: row.source_meal_offering_id or ""):
-        offering = await session.scalar(select(MealEventOffering).where(MealEventOffering.id == reservation.source_meal_offering_id).with_for_update().execution_options(populate_existing=True))
-        if offering is None or offering.paid_quantity < reservation.quantity:
+    offerings = await _lock_meal_offerings(session, (row.source_meal_offering_id for row in active))
+    for reservation in active:
+        offering = offerings.get(reservation.source_meal_offering_id)
+        if offering is None or offering.meal_event_id != order.meal_event_id or offering.paid_quantity < reservation.quantity:
             raise PaymentApplicationError("便當付款數量不一致")
         offering.paid_quantity -= reservation.quantity
         offering.reserved_quantity += reservation.quantity

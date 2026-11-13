@@ -1,6 +1,8 @@
 export interface KitchenOrder {
   meal_booking_type?: "standard" | "business";
   payment_status?: string;
+  payment_method?: string;
+  amount_total?: number;
   invoice_buyer_tax_id?: string | null;
   invoice_buyer_name?: string | null;
   id: string;

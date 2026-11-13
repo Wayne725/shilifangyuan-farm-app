@@ -5,7 +5,7 @@ import pytest
 
 from app.models import (
     FulfillmentMethod, FulfillmentState, FulfillmentStatus, Order, OrderFulfillment, OutboxEvent,
-    OutboxStatus, PaymentAttempt, PaymentStatus, Shipment, ShipmentStatus, ShippingChannel,
+    OutboxStatus, PaymentAttempt, PaymentStatus, SalesChannel, Shipment, ShipmentStatus, ShippingChannel,
     ShippingTemperature, User, UserRole,
 )
 from app.routers.operations import operations_router
@@ -35,6 +35,52 @@ async def test_admin_order_search_is_paginated_and_role_protected(database_sessi
         assert denied.status_code == 403
         invalid = await client.get('/v1/admin/order-search?limit=1000', headers=auth_headers(admin))
         assert invalid.status_code == 422
+
+
+async def test_admin_order_search_uses_taipei_date_bounds_and_grouped_refunds(database_session):
+    buyer, _, first = await make_regular_order(database_session)
+    admin = User(email="date-admin@example.test", display_name="管理員", password_hash="unused", user_role=UserRole.ADMIN)
+    first.created_at = datetime.fromisoformat("2030-01-01T15:59:59+00:00")
+    first.contact_email = "buyer@example.com"
+    first.payment_status = PaymentStatus.REFUNDED
+    rows = []
+    for index, state in enumerate(PaymentStatus):
+        meal = state in {PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED}
+        order = Order(
+            order_number=f"DATE-{index}", user_id=buyer.id, order_kind=first.order_kind,
+            membership_type_snapshot=first.membership_type_snapshot, amount_total=10,
+            contact_email="buyer@example.com", created_at=datetime.fromisoformat("2030-01-01T16:00:00+00:00"),
+            payment_status=state, sales_channel=(SalesChannel.MEAL_PREORDER if meal else
+                SalesChannel.GROUP if state == PaymentStatus.LATE_PAID_REFUND_REQUIRED else SalesChannel.REGULAR),
+        )
+        if meal:
+            order.fulfillment = OrderFulfillment(
+                method=FulfillmentMethod.EVENT_PICKUP, status=FulfillmentState.PENDING_CONFIRMATION,
+                pickup_at=datetime.fromisoformat("2030-01-02T16:00:00+00:00") if state == PaymentStatus.REFUND_PENDING else None,
+                pickup_starts_at=datetime.fromisoformat("2030-01-02T04:00:00+00:00"),
+            )
+        rows.append(order)
+    database_session.add_all([admin, *rows])
+    await database_session.commit()
+    by_state = {row.payment_status: row.id for row in rows}
+    path = "/v1/admin/order-search"
+    headers = auth_headers(admin)
+    async with api_test_context(database_session, [operations_router], settings=make_test_settings()) as client:
+        async def find(**params):
+            response = await client.get(path, params=params, headers=headers)
+            assert response.status_code == 200, response.text
+            return {row["id"] for row in response.json()["items"]}
+
+        refund_params = dict(refunds_only=True, starts_on="2030-01-02", ends_on="2030-01-02")
+        assert await find(**refund_params) == {by_state[state] for state in {
+            PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED,
+        }}
+        assert await find(**refund_params, order_category="group") == {by_state[PaymentStatus.LATE_PAID_REFUND_REQUIRED]}
+        assert await find(**refund_params, order_category="daily") == set()
+        assert await find(**refund_params, date_basis="pickup") == {by_state[PaymentStatus.REFUNDED]}
+        assert await find(date_basis="pickup", starts_on="2030-01-03") == {by_state[PaymentStatus.REFUND_PENDING]}
+        assert await find(payment_status="pending", ends_on="2030-01-02") == {by_state[PaymentStatus.PENDING]}
+        assert (await client.get(path, params={"starts_on": "2030-01-03", "ends_on": "2030-01-02"}, headers=headers)).status_code == 422
 
 
 @pytest.mark.parametrize(

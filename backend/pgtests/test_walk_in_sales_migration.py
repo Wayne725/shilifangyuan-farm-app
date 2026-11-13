@@ -15,8 +15,10 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_engine_from_config, async_sessionmaker, create_async_engine
 
-from app.config import Settings
+from app.integrations.pii_crypto import pii_cipher_from_settings
+from app.member_claims import roster_aad
 from app.models import BrowserRefreshSelection, MembershipType, Order, RefreshSession, User, UserRole
+from app.phone_lookup import phone_lookup_digest
 from app.routers.walk_in_sales import walk_in_sales_router
 from tests.support import api_test_context, auth_headers, make_test_settings
 from tests.test_walk_in_sales import payload
@@ -30,7 +32,7 @@ async def migrated_database(monkeypatch):
     schema = f"walkin_migration_{uuid4().hex}"
     admin_engine = create_async_engine(url)
     engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}})
-    settings = Settings(_env_file=None, environment="test", database_url=url.render_as_string(hide_password=False))
+    settings = make_test_settings(database_url=url.render_as_string(hide_password=False))
     monkeypatch.setattr("app.config.get_settings", lambda: settings)
 
     def scoped_migration_engine(configuration, **kwargs):
@@ -59,7 +61,7 @@ async def migrated_database(monkeypatch):
     try:
         async with admin_engine.begin() as connection:
             await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-        yield SimpleNamespace(engine=engine, sessions=async_sessionmaker(engine, expire_on_commit=False), migrate=migrate, head=head)
+        yield SimpleNamespace(engine=engine, sessions=async_sessionmaker(engine, expire_on_commit=False), migrate=migrate, head=head, settings=settings)
     finally:
         await engine.dispose()
         async with admin_engine.begin() as connection:
@@ -77,6 +79,81 @@ async def table_rows(database, name):
     async with database.engine.connect() as connection:
         rows = await connection.execute(text(f'SELECT * FROM "{name}"'))
         return sorted((dict(row) for row in rows.mappings()), key=lambda row: str(row.get("id") or row.get("order_id")))
+
+
+async def test_real_pg_counter_phone_migration_backfills_ciphertexts_and_matches_roster(migrated_database):
+    database = migrated_database
+    await database.migrate(command.upgrade, "0067_meal_event_archive")
+    cipher = pii_cipher_from_settings(database.settings)
+    owner_id, roster_id = str(uuid4()), str(uuid4())
+    claimed_user_id, claimed_roster_id = str(uuid4()), str(uuid4())
+    phones = ("0900123456", "0900234567", "+886 900-345-678")
+    ciphertexts = tuple(
+        cipher.encrypt_text(phone, associated_data=aad)
+        for phone, aad in zip(phones, (f"meal-contact:{owner_id}", f"member-profile:{owner_id}", roster_aad(roster_id)))
+    )
+    now = datetime.now(timezone.utc)
+    async with database.engine.begin() as connection:
+        await connection.execute(User.__table__.insert().values(
+            id=owner_id, email="migration-counter@example.com", display_name="合成收款員", password_hash="test",
+            user_role=UserRole.ADMIN, meal_contact_phone_encrypted=ciphertexts[0],
+        ))
+        await connection.execute(User.__table__.insert().values(
+            id=claimed_user_id, email="migration-claimed@example.com", display_name="合成認領社員", password_hash="test",
+        ))
+        profiles = await connection.run_sync(lambda sync: Table("member_profiles", MetaData(), autoload_with=sync))
+        await connection.execute(profiles.insert().values(
+            id=str(uuid4()), user_id=owner_id, phone_encrypted=ciphertexts[1], legal_name_encrypted="unused",
+            birth_date_encrypted="unused", address_encrypted="unused", emergency_contact_encrypted="unused",
+            encryption_key_version=cipher.current_version, consent_version="test", consented_at=now, created_at=now, updated_at=now,
+        ))
+        roster = await connection.run_sync(lambda sync: Table("member_roster_entries", MetaData(), autoload_with=sync))
+        await connection.execute(roster.insert().values(
+            id=roster_id, member_number="COUNTER-ROSTER", legal_name_encrypted=cipher.encrypt_text("王合成", associated_data=roster_aad(roster_id)),
+            email_encrypted="unused", phone_encrypted=ciphertexts[2], encryption_key_version=cipher.current_version,
+            created_at=now, updated_at=now,
+        ))
+        await connection.execute(roster.insert().values(
+            id=claimed_roster_id, member_number="COUNTER-CLAIMED", legal_name_encrypted="unused", email_encrypted="unused",
+            phone_encrypted=cipher.encrypt_text("0900456789", associated_data=roster_aad(claimed_roster_id)),
+            claimed_user_id=claimed_user_id, claimed_at=now, encryption_key_version=cipher.current_version,
+            created_at=now, updated_at=now,
+        ))
+        memberships = await connection.run_sync(lambda sync: Table("memberships", MetaData(), autoload_with=sync))
+        await connection.execute(memberships.insert().values(
+            id=str(uuid4()), user_id=claimed_user_id, member_number="COUNTER-CLAIMED", status="active",
+            created_at=now, updated_at=now,
+        ))
+    await database.migrate(command.upgrade, "head")
+    async with database.engine.connect() as connection:
+        for statement, phone, ciphertext in zip((
+            "SELECT meal_contact_phone_encrypted, meal_contact_phone_lookup FROM users WHERE id = :id",
+            "SELECT phone_encrypted, phone_lookup FROM member_profiles WHERE user_id = :id",
+            "SELECT phone_encrypted, phone_lookup FROM member_roster_entries WHERE id = :id",
+        ), phones, ciphertexts):
+            row = (await connection.execute(text(statement), {"id": roster_id if "roster" in statement else owner_id})).one()
+            assert tuple(row) == (ciphertext, phone_lookup_digest(phone, cipher))
+        ciphertext, digest = (await connection.execute(text(
+            "SELECT meal_contact_phone_encrypted, meal_contact_phone_lookup FROM users WHERE id = :id",
+        ), {"id": claimed_user_id})).one()
+        assert cipher.decrypt_text(ciphertext, associated_data=f"meal-contact:{claimed_user_id}") == "0900456789"
+        assert digest == phone_lookup_digest("0900456789", cipher)
+    async with database.sessions() as session:
+        admin = await session.get(User, owner_id)
+        async with api_test_context(session, [walk_in_sales_router], settings=database.settings) as client:
+            headers = auth_headers(admin)
+            lookup = await client.post("/v1/admin/walk-in-sales/member-phone", headers=headers, json={"phone": "0900345678"})
+            assert lookup.status_code == 200, lookup.text
+            assert lookup.json()["matches"][0]["id"] == f"roster:{roster_id}"
+            claimed = await client.post("/v1/admin/walk-in-sales/member-phone", headers=headers, json={"phone": "0900456789"})
+            assert claimed.status_code == 200 and claimed.json()["matches"][0]["id"].startswith("membership:")
+            sale = await client.post("/v1/admin/walk-in-sales", headers=headers, json=payload(phone="0900345678", phone_match_id=f"roster:{roster_id}"))
+            assert sale.status_code == 201, sale.text
+            order = await session.get(Order, sale.json()["order_id"])
+            assert order.verified_counter_roster_entry_id == roster_id and order.member_tax_exempt_snapshot
+    with pytest.raises(RuntimeError, match="已有名冊社員現場交易"):
+        await database.migrate(command.downgrade, "0067_meal_event_archive")
+    assert await version(database) == database.head
 
 
 @pytest.mark.asyncio
@@ -142,7 +219,8 @@ async def test_real_pg_42_to_45_then_merged_head_preserves_account_and_guest_col
     assert await version(database) == database.head
     assert {name: await table_rows(database, name) for name in tables} == before_refused_downgrade
     assert await table_rows(database, "users") == [
-        {**row, "data_consent_version": None, "data_consented_at": None, "meal_contact_phone_encrypted": None}
+        {**row, "data_consent_version": None, "data_consented_at": None, "meal_contact_phone_encrypted": None,
+         "meal_contact_phone_lookup": None}
         for row in before_users
     ]
 

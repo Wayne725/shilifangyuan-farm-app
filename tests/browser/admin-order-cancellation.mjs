@@ -208,8 +208,12 @@ test('管理員可設定與清空客服電話，消費者訂單跟隨已存電�
 for (const status of ['pending', 'paid']) {
   test(`管理員商品 ${status} 原因可留空，確認後才辦理退單`, async t => {
     const { page, state } = await fixture(t, { status });
+    await page.goto(`${base}/admin`);
+    await page.getByRole('list', { name: '今日待辦清單' }).waitFor();
+    assert.equal(await page.getByRole('link', { name: /待審退單/ }).count(), 0);
     await page.goto(`${base}/admin?section=orders`);
     await page.getByRole('button', { name: '辦理退單', exact: true }).click();
+    assert.equal(await page.getByRole('checkbox', { name: '只看退單待審', exact: true }).count(), 0);
     const dialog = page.getByRole('dialog', { name: '確認辦理退單', exact: true });
     const confirm = dialog.getByRole('button', { name: '確認退單', exact: true });
     assert.equal(await confirm.isEnabled(), true);
@@ -391,9 +395,22 @@ for (const rejectionOnly of [false, true]) {
     const link = page.getByRole('link', { name: '審核便當退單', exact: true });
     await link.waitFor();
     assert.equal(await link.count(), 1);
+    assert.equal(await page.getByRole('checkbox', { name: '只看退單待審', exact: true }).count(), 0);
     assert.equal(await page.getByRole('link', { name: '便當取餐與退單', exact: true }).count(), 0);
     assert.equal(state.orderSearches[0].q, rejectionOnly ? orderNumber : '');
     assert.equal(state.orderSearches[0].cancellation_pending, String(!rejectionOnly));
+    const clear = page.getByRole('button', { name: '清除退單待審篩選', exact: true });
+    if (rejectionOnly) {
+      assert.equal(await clear.count(), 0);
+    } else {
+      const unfiltered = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === '/v1/admin/order-search' && url.searchParams.get('cancellation_pending') === 'false';
+      });
+      await clear.click();
+      await unfiltered;
+      await clear.waitFor({ state: 'hidden' });
+    }
     await link.click();
 
     const reviewTab = page.getByRole('tab', { name: '退單審核', exact: true });

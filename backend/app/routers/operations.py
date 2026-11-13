@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
-from typing import Literal, Optional
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from ..admin_work_queues import InvoiceFollowupReason, admin_today_counts, invoice_followup_conditions, pending_order_cancellation, unpaid_business_order
 from ..auth import require_admin
-from ..business_meals import business_invoice_window_closed
+from ..business_meals import TAIPEI, business_invoice_window_closed
 from ..config import Settings, get_settings
 from ..database import get_session
 from ..invoice_timing import invoice_not_due
@@ -21,8 +21,10 @@ from ..order_categories import OrderCategory, order_category_condition
 from ..failed_jobs import JOB_KINDS, email_delivery_unknown, job_details, job_error_expression, job_error_summary, job_order_id_expression, job_title_expression
 from ..integrations.common import IntegrationError
 from ..integrations.pii_crypto import pii_cipher_from_settings
+from ..phone_lookup import mask_phone
 from ..models import (
     AdminAudit,
+    MealEvent,
     Order,
     OrderItem,
     OrderFulfillment,
@@ -32,6 +34,7 @@ from ..models import (
     InvoiceStatus,
     PaymentStatus,
     PickupLocation,
+    SalesChannel,
     Supplier,
     SupplierAccreditation,
     SupplierAccreditationStatus,
@@ -210,6 +213,8 @@ def admin_order_read(order: Order, settings: Settings, invoice_followup_reason: 
                 fulfillment.recipient_phone_encrypted,
                 associated_data=f"order-fulfillment:{fulfillment.id}:recipient_phone",
             )
+            if order.customer_kind == "walk_in":
+                phone = mask_phone(phone)
             phone_status = "available"
         except IntegrationError:
             phone_status = "unavailable"
@@ -230,6 +235,10 @@ class AdminOrderPage(BaseModel):
     offset: int
 
 
+OrderSearchCategory = OrderCategory | Literal["daily", "group"]
+OrderSearchDate = Annotated[date, Query(ge=date(2, 1, 1), le=date(9998, 12, 31))]
+
+
 @operations_router.get("/v1/admin/order-search", response_model=AdminOrderPage)
 async def search_admin_orders(
     response: Response,
@@ -238,8 +247,12 @@ async def search_admin_orders(
     cancellation_pending: bool = False,
     business_unpaid: bool = False,
     invoice_followup: bool = False,
-    order_category: OrderCategory = "all",
+    order_category: OrderSearchCategory = "all",
     payment_status: Optional[PaymentStatus] = None,
+    refunds_only: bool = False,
+    date_basis: Literal["ordered", "pickup"] = "ordered",
+    starts_on: OrderSearchDate | None = None,
+    ends_on: OrderSearchDate | None = None,
     limit: int = Query(default=12, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _admin: User = Depends(require_admin),
@@ -247,7 +260,24 @@ async def search_admin_orders(
     settings: Settings = Depends(get_settings),
 ) -> AdminOrderPage:
     response.headers["Cache-Control"] = "no-store"
-    query = select(Order).where(order_category_condition(order_category))
+    if starts_on and ends_on and ends_on < starts_on:
+        raise HTTPException(422, "結束日期不能早於開始日期")
+    if order_category in {"daily", "group"}:
+        channel = SalesChannel.REGULAR if order_category == "daily" else SalesChannel.GROUP
+        query = select(Order).where(Order.sales_channel == channel)
+    else:
+        query = select(Order).where(order_category_condition(order_category))
+    if starts_on or ends_on:
+        date_column = Order.created_at
+        if date_basis == "pickup":
+            query = query.where(Order.sales_channel == SalesChannel.MEAL_PREORDER).outerjoin(
+                Order.fulfillment,
+            ).outerjoin(Order.meal_event)
+            date_column = func.coalesce(OrderFulfillment.pickup_at, OrderFulfillment.pickup_starts_at, MealEvent.pickup_starts_at)
+        if starts_on:
+            query = query.where(date_column >= datetime.combine(starts_on, time.min, TAIPEI).astimezone(timezone.utc))
+        if ends_on:
+            query = query.where(date_column < datetime.combine(ends_on + timedelta(days=1), time.min, TAIPEI).astimezone(timezone.utc))
     if business_unpaid:
         query = query.where(unpaid_business_order())
     followup = invoice_followup_conditions(session, datetime.now(timezone.utc)) if invoice_followup else None
@@ -255,6 +285,10 @@ async def search_admin_orders(
         query = query.where(or_(*followup.values()))
     if payment_status is not None:
         query = query.where(Order.payment_status == payment_status)
+    if refunds_only:
+        query = query.where(Order.payment_status.in_({
+            PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED,
+        }))
     if cancellation_pending:
         query = query.where(pending_order_cancellation())
     if order_id is not None:

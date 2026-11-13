@@ -47,20 +47,26 @@ def _sales_scope(filters, *columns):
     return query
 
 
-def _receipts(filters):
+def order_receipts(orders):
     received = or_(PaymentAttempt.paid_at.is_not(None), PaymentAttempt.status.in_({
         PaymentStatus.PAID, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED,
     }))
-    orders = _sales_scope(filters, Order.id.label("order_id"))
     attempts = orders.join(PaymentAttempt, PaymentAttempt.order_id == Order.id).add_columns(
         PaymentAttempt.amount.label("amount"),
         func.coalesce(PaymentAttempt.paid_at, case((and_(PaymentAttempt.order_revision == Order.revision, PaymentAttempt.amount == Order.amount_total, PaymentAttempt.superseded_at.is_(None)), Order.paid_at))).label("occurred_at"),
+        PaymentAttempt.id.label("transaction_id"),
     ).where(received)
-    legacy = orders.add_columns(Order.amount_total.label("amount"), Order.paid_at.label("occurred_at")).where(
+    legacy = orders.add_columns(
+        Order.amount_total.label("amount"), Order.paid_at.label("occurred_at"), Order.id.label("transaction_id"),
+    ).where(
         Order.paid_at.is_not(None),
         ~exists().where(PaymentAttempt.order_id == Order.id, received),
     )
     return union_all(attempts, legacy).cte("meal_receipts")
+
+
+def _receipts(filters):
+    return order_receipts(_sales_scope(filters, Order.id.label("order_id")))
 
 
 def _search_condition(search):
@@ -114,7 +120,7 @@ async def meal_sales_details(session: AsyncSession, filters: MealSalesFilters):
     start, end = filters.bounds()
     receipt_rows = (await session.execute(select(receipts).where(receipts.c.order_id.in_([order.id for order, _ in orders])))).all() if orders else []
     period_receipts = defaultdict(int)
-    for order_id, amount, occurred_at in receipt_rows:
+    for order_id, amount, occurred_at, _ in receipt_rows:
         if _money_in_period(occurred_at, start, end):
             period_receipts[order_id] += amount
     details = []

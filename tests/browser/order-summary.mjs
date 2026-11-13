@@ -80,9 +80,18 @@ async function fixture(t, { width = 882, role = 'admin', failing = false, orderR
     }
     if (path === '/v1/admin/order-search') {
       const query = Object.fromEntries(url.searchParams); state.orderQueries.push(query);
-      const matched = orderRows.filter((row) => (query.order_category === 'all' || (query.order_category === 'meal' ? row.sales_channel === 'meal_preorder' : row.sales_channel !== 'meal_preorder'))
-        && (!query.q || `${row.order_number} ${row.contact_email} ${row.items.map((item) => item.product_name).join(' ')}`.includes(query.q))
-        && (!query.payment_status || row.payment_status === query.payment_status));
+      const channel = { meal: 'meal_preorder', daily: 'regular', group: 'group' }[query.order_category];
+      const refunds = ['refund_pending', 'refunded', 'late_paid_refund_required'];
+      const matched = orderRows.filter((row) => {
+        const timestamp = query.date_basis === 'pickup' ? row.fulfillment?.pickup_at : row.created_at;
+        const day = timestamp && new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei' }).format(new Date(timestamp));
+        return (!channel || channel === row.sales_channel)
+          && (!query.q || `${row.order_number} ${row.contact_email} ${row.items.map((item) => item.product_name).join(' ')}`.includes(query.q))
+          && (!query.payment_status || row.payment_status === query.payment_status)
+          && (query.refunds_only !== 'true' || refunds.includes(row.payment_status))
+          && (!query.starts_on || (day && day >= query.starts_on))
+          && (!query.ends_on || (day && day <= query.ends_on));
+      });
       const offset = Number(query.offset), limit = Number(query.limit);
       return route.fulfill({ json: { items: matched.slice(offset, offset + limit), total: matched.length, limit, offset } });
     }
@@ -377,9 +386,10 @@ for (const width of [1440, 390]) {
     const orderRows = Array.from({ length: 15 }, (_, index) => ({
       id: `isolated-order-${index}`, order_number: `CATEGORY-${String(index).padStart(2, '0')}`,
       sales_channel: index >= 13 ? 'meal_preorder' : index === 12 ? 'group' : 'regular',
-      contact_email: 'buyer@example.com', payment_status: index === 14 ? 'paid' : 'pending',
+      contact_email: 'buyer@example.com', payment_status: index === 14 ? 'paid' : index === 13 ? 'refund_pending' : 'pending',
       payment_method: 'online', fulfillment_method: 'cooperative_pickup', fulfillment_status: 'pending_confirmation',
       invoice_status: 'not_eligible', amount_total: 100, tax_amount: 0, member_tax_exempt_snapshot: false,
+      fulfillment: index >= 13 ? { pickup_at: index === 14 ? '2030-01-03T03:00:00Z' : '2030-01-02T03:00:00Z' } : undefined,
       available_actions: [], created_at: '2030-01-02T02:00:00Z',
       items: [{ product_name: index === 12 ? '共同購買白米' : index >= 13 ? '蔬食便當' : '日常白米', quantity: 1, unit_label: '份', subtotal: 100, unit_price: 100, tax_type: 'tax_exempt' }],
     }));
@@ -390,14 +400,17 @@ for (const width of [1440, 390]) {
     await pagination.getByRole('button', { name: '下一頁', exact: true }).click();
     await pagination.getByText('共 15 筆 · 第 2 頁', { exact: true }).waitFor();
     const categories = page.getByRole('combobox', { name: '訂單分類', exact: true });
-    await categories.selectOption('general');
-    await pagination.getByText('共 13 筆 · 第 1 頁', { exact: true }).waitFor();
+    await categories.selectOption('daily');
+    await pagination.getByText('共 12 筆 · 第 1 頁', { exact: true }).waitFor();
     assert.equal(state.orderQueries.at(-1).offset, '0');
+    await page.getByText(/^日常選品 ·/).first().waitFor();
+    await categories.selectOption('group');
+    await page.getByText(/^共同購買 ·/).waitFor();
     await page.getByLabel('搜尋訂單', { exact: true }).fill('共同購買白米');
     await page.getByRole('button', { name: '搜尋', exact: true }).click();
     await pagination.getByText('共 1 筆 · 第 1 頁', { exact: true }).waitFor();
     await page.locator('.operation-title strong').getByText('CATEGORY-12', { exact: true }).waitFor();
-    assert.equal(state.orderQueries.at(-1).order_category, 'general');
+    assert.equal(state.orderQueries.at(-1).order_category, 'group');
     await categories.selectOption('meal');
     await page.getByText('沒有符合條件的訂單。', { exact: true }).waitFor();
     assert.equal(state.orderQueries.at(-1).q, '共同購買白米');
@@ -408,6 +421,22 @@ for (const width of [1440, 390]) {
     await page.locator('.operation-title strong').getByText('CATEGORY-14', { exact: true }).waitFor();
     assert.equal(state.orderQueries.at(-1).order_category, 'meal');
     assert.equal(state.orderQueries.at(-1).payment_status, 'paid');
+    const payment = page.getByLabel('付款狀態', { exact: true });
+    assert.deepEqual(await payment.locator('option').allTextContents(), ['全部狀態', '已付款', '退款', '待付款']);
+    await payment.selectOption('refunds');
+    await page.locator('.operation-title strong').getByText('CATEGORY-13', { exact: true }).waitFor();
+    assert.equal(state.orderQueries.at(-1).refunds_only, 'true');
+    await payment.selectOption('');
+    await page.getByLabel('日期類型').selectOption('pickup');
+    await page.getByLabel('開始日期').fill('2030-01-03');
+    await page.getByLabel('結束日期').fill('2030-01-03');
+    await page.getByRole('button', { name: '搜尋', exact: true }).click();
+    await page.locator('.operation-title strong').getByText('CATEGORY-14', { exact: true }).waitFor();
+    assert.equal(await page.locator('.operation-title strong').count(), 1);
+    assert.equal(state.orderQueries.at(-1).date_basis, 'pickup');
+    assert.equal(state.orderQueries.at(-1).starts_on, '2030-01-03');
+    assert.equal(await page.getByRole('link', { name: '廚房出單', exact: true }).count(), 0);
+    await screenshot(page, `admin-order-date-filter-${width}.png`);
     await verify_read_only(page, state);
   });
 }

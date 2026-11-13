@@ -93,7 +93,10 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const contactEmailReady = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()) && contactEmail.trim().length <= 320;
   const contactPhoneReady = Boolean(contactPhone.trim()) && contactPhoneIsValid(contactPhone);
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
-  const setMealBookingType = (value: "standard" | "business") => setDraft(current => ({ ...current, mealBookingType: value === "business" ? "business" : undefined }));
+  const setMealBookingType = (value: "standard" | "business") => setDraft(current => ({
+    ...current, mealBookingType: value === "business" ? "business" : undefined,
+    businessCash: value === "business" ? current.businessCash : undefined,
+  }));
   const event = useQuery({
     queryKey: ["meal-event", eventId],
     queryFn: () => apiFetch<MealEvent>(`/v1/meal-events/${eventId}`),
@@ -102,6 +105,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const businessOnly = event.data?.business_only === true;
   const mealBookingType = businessOnly ? "business" : draft.mealBookingType || "standard";
   const business = mealBookingType === "business";
+  const cashBusiness = business && draft.businessCash === true;
+  const paymentMethod = cashBusiness ? "cash_on_pickup" as const : "online" as const;
   const [couponInput, setCouponInput] = useState("");
   const [couponCode, setCouponCode] = useState("");
   const [draftAdjusted, setDraftAdjusted] = useState(false);
@@ -167,7 +172,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   const quantityReady = !business || totalQuantity >= 2;
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, contactEmail.trim(), mealBookingType],
+    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, contactEmail.trim(), mealBookingType, paymentMethod],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
       body: JSON.stringify({
@@ -177,7 +182,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         pickup_location_id: pickupLocationId || null,
         needs_utensils: needsUtensils,
         contact_email: contactEmail.trim(),
-        payment_method: "online",
+        payment_method: paymentMethod,
         ...(business ? { meal_booking_type: "business", invoice_handling: "pickup_day" } : {}),
         ...invoicePreferencePayload(invoicePreference),
       }),
@@ -217,7 +222,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         items,
         contactEmail: contactEmail.trim(),
         invoicePreference,
-        paymentMethod: "online" as const,
+        paymentMethod,
         kitchenNote: kitchenNote.trim(),
         contactPhone: contactPhone.replace(/\s/g, ""),
       };
@@ -536,7 +541,6 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               );
             })}
           </div>
-          {business && <p className="meal-business-payment">付款方式：線上付款 · 取餐當日付款</p>}
           {activeOfferings.length === 0 && <DataState title="菜單待公告" detail="管理員公布餐點後即可選餐，請稍後再查看。" />}
         </div>
 
@@ -603,8 +607,13 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           {contactEmailError && <p id="meal-contact-email-error" className="form-error" role="alert">請輸入有效的聯絡 Email</p>}
           <label className="field"><span>聯絡電話</span><input type="tel" required autoComplete="tel" maxLength={40} value={contactPhone} aria-invalid={contactPhoneError} aria-describedby={contactPhoneError ? "meal-contact-phone-error" : undefined} onBlur={() => setTouched(current => ({ ...current, phone: true }))} onChange={event => setPhoneInput({ userId: user?.id || "", value: event.target.value })} /></label>
           {contactPhoneError && <p id="meal-contact-phone-error" className="form-error" role="alert">請輸入完整手機號碼或含區碼的市話</p>}
+          {business && <fieldset className="meal-booking-type meal-business-payment" disabled={checkout.isPending}>
+            <legend>付款方式</legend>
+            <label className={!cashBusiness ? "selected" : ""}><input type="radio" name="meal-payment-method" checked={!cashBusiness} onChange={() => setDraft(current => ({ ...current, businessCash: undefined }))} />線上付款（取餐當日）</label>
+            <label className={cashBusiness ? "selected" : ""}><input type="radio" name="meal-payment-method" checked={cashBusiness} onChange={() => setDraft(current => ({ ...current, businessCash: true }))} />現金付款（取餐時付現）</label>
+          </fieldset>}
           <div className="meal-checkout-settings">
-            {business && <p className="meal-business-invoice">發票於取餐當日開立</p>}
+            {business && <p className="meal-business-invoice">{cashBusiness ? "請於取餐時付現給工作人員，發票會在收款後開立。" : "發票於取餐當日開立"}</p>}
             <section className="meal-invoice-settings" aria-label="電子發票設定">
               <div className="meal-invoice-heading"><h3>電子發票</h3>
                 {invoicePreferenceIsValid(invoicePreference) && <button type="button" className="text-link" aria-expanded={editingInvoice} aria-controls="meal-invoice-fields" onClick={() => setEditingInvoice(!editingInvoice)}>{editingInvoice ? "完成發票設定" : "修改發票設定"}</button>}
@@ -628,7 +637,9 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
             </>
           ) : (
             <button className="button button-system full-width" type="button" disabled={checkoutDisabled} onClick={() => attemptCheckout()}>
-              {checkout.isPending ? "建立餐點訂單中…" : business ? "送出會餐訂單（取餐當日付款）" : "預訂並前往線上付款"}
+              {checkout.isPending ? "建立餐點訂單中…" : business
+                ? cashBusiness ? "送出會餐訂單（取餐時付現）" : "送出會餐訂單（取餐當日付款）"
+                : "預訂並前往線上付款"}
             </button>
           )}
           {business && !quantityReady && (submitted || touched.quantity) && <p className="form-error" role="alert">會餐至少 2 份</p>}

@@ -70,5 +70,5 @@ def test_quota_migration_adds_only_ephemeral_table_and_roundtrips(proposal_migra
     assert table_names() == tables_before_policy | {policies.name, "walk_in_request_guards"}
     database.assert_schema_matches()
     assert snapshot() == {**expected, "users": [
-        {**row, "meal_contact_phone_encrypted": None} for row in expected["users"]
+        {**row, "meal_contact_phone_encrypted": None, "meal_contact_phone_lookup": None} for row in expected["users"]
     ]}

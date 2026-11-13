@@ -1,5 +1,5 @@
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -24,6 +24,7 @@ from ..member_claims import roster_aad
 from ..member_point_adjustments import (
     MemberPointAdjustment, MemberPointAdjustmentReceipt, adjust_member_points, read_member_point_adjustment,
 )
+from ..member_spending import CATEGORIES, SpendFilters, SpendPeriod, spend_details, spend_summary
 from ..models import (AdminAudit, MemberProfile, MemberRosterEntry, Membership, MembershipCharge,
     MembershipChargeStatus, MembershipOfflineReceipt, MembershipStatus, PaymentStatus, PointAccount, PointTransaction,
     Refund, RefundStatus, User)
@@ -48,6 +49,85 @@ def _range(starts_on, ends_on):
     start = datetime.combine(starts_on, time.min, TAIPEI) if starts_on else None
     end = datetime.combine(ends_on + timedelta(days=1), time.min, TAIPEI) if ends_on else None
     return start, end
+
+
+@member_reports_router.get("/member-spending")
+async def read_member_spending(
+    filters: Annotated[SpendFilters, Query()],
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    response.headers["Cache-Control"] = "no-store"
+    return await spend_summary(session, filters, _cipher(settings))
+
+
+@member_reports_router.get("/member-spending.csv")
+async def export_member_spending(
+    filters: Annotated[SpendFilters, Query()],
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    result = await spend_summary(session, filters, _cipher(settings), export=True)
+    rows = result["items"]
+    await _audit_spending_export(session, admin.id, filters, len(rows), "summary")
+    return csv_response(
+        "member-spending.csv",
+        ["社員編號", "姓名", "會籍狀態", "消費金額合計", "筆數", "最近消費日", *CATEGORIES.values()],
+        ([row["member_number"], row["name"], row["status_label"], row["net_amount"], row["order_count"],
+          row["latest_paid_date"], *(row["categories"][key] for key in CATEGORIES)] for row in rows),
+    )
+
+
+async def _member_spending_details(session, period, member_id, settings, *, export=False):
+    result = await spend_details(session, period, str(member_id), _cipher(settings), export=export)
+    if result is None:
+        raise HTTPException(404, "找不到此社員")
+    return result
+
+
+@member_reports_router.get("/member-spending/{member_id}")
+async def read_member_spending_details(
+    member_id: UUID,
+    period: Annotated[SpendPeriod, Query()],
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    response.headers["Cache-Control"] = "no-store"
+    return await _member_spending_details(session, period, member_id, settings)
+
+
+@member_reports_router.get("/member-spending/{member_id}/details.csv")
+async def export_member_spending_details(
+    member_id: UUID,
+    period: Annotated[SpendPeriod, Query()],
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    result = await _member_spending_details(session, period, member_id, settings, export=True)
+    rows = result["items"]
+    await _audit_spending_export(session, admin.id, period, len(rows), "details", str(member_id))
+    return csv_response(
+        "member-spending-details.csv",
+        ["日期", "訂單編號", "類別", "金額", "付款方式", "發票號碼", "退款金額"],
+        ([row[key] for key in ("date", "order_number", "category_label", "amount", "payment_method", "invoice_number", "refunded")]
+         for row in rows),
+    )
+
+
+async def _audit_spending_export(session, admin_id, period, count, kind, member_id=None):
+    start, end = period.dates()
+    session.add(AdminAudit(
+        actor_id=admin_id, action="member_spending.exported", aggregate_type="member_spending",
+        aggregate_id=member_id or str(uuid4()),
+        data={"kind": kind, "count": count, "starts_on": start.isoformat(), "ends_on": end.isoformat()},
+    ))
+    await session.commit()
 
 
 async def _member_rows(session, settings, *, newest_first=False, member_number=""):

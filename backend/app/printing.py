@@ -71,7 +71,8 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
     title = "會餐備餐單" if business and snapshot.get("kind", "order") == "order" else titles.get(snapshot.get("kind", "order"), "便當訂餐單")
     add(title, "CB")
     if business:
-        add(f"會餐｜{snapshot['payment_status']}", "BOLD")
+        cash_status = snapshot.get("business_cash_status")
+        add(f"會餐｜{cash_status or snapshot['payment_status']}", "BOLD")
         add(f"統編：{snapshot.get('invoice_buyer_tax_id', '')}")
         add(f"抬頭：{snapshot.get('invoice_buyer_name', '')}")
     if snapshot.get("kind") == "reference":
@@ -241,6 +242,7 @@ async def fresh_receipt_snapshot(session: AsyncSession, snapshot: dict, order: O
     result = {key: value for key, value in snapshot.items()
               if key not in {"print_requested_at", "customer_phone", "customer_phone_encrypted", "customer_email", "customer_email_encrypted", "manual", "fulfillment_status_label"}}
     result.update(receipt_contact(snapshot, order.contact_email))
+    result.update(business_receipt_fields(order))
     result.setdefault("ordered_at", receipt_time(order.created_at))
     if "pickup_code" not in result:
         result["pickup_code"] = await session.scalar(select(OrderFulfillment.pickup_code).where(OrderFulfillment.order_id == order.id))
@@ -272,8 +274,14 @@ def order_print_snapshot(order: Order, customer_name: str, contact: dict | None 
 def business_receipt_fields(order: Order) -> dict:
     if order is None or not is_business_meal(order):
         return {}
+    cash_status = None
+    if order.payment_method == PaymentMethod.CASH_ON_PICKUP:
+        if order.payment_status == PaymentStatus.PENDING:
+            cash_status = f"現金付款・未收 NT${order.amount_total}"
+        elif order.payment_status == PaymentStatus.PAID:
+            cash_status = "現金已收"
     return {"meal_booking_type": "business", "invoice_buyer_tax_id": order.invoice_buyer_tax_id,
-            "invoice_buyer_name": order.invoice_buyer_name}
+            "invoice_buyer_name": order.invoice_buyer_name, "business_cash_status": cash_status}
 
 
 def business_preparation_window_open(order: Order, *, now: datetime | None = None) -> bool:
@@ -285,7 +293,7 @@ def business_preparation_window_open(order: Order, *, now: datetime | None = Non
         return False
     current = now or datetime.now(timezone.utc)
     pickup_end = pickup_end.replace(tzinfo=timezone.utc) if pickup_end.tzinfo is None else pickup_end
-    return bool(order.payment_method == PaymentMethod.ONLINE and order.cancelled_at is None
+    return bool(order.payment_method in {PaymentMethod.ONLINE, PaymentMethod.CASH_ON_PICKUP} and order.cancelled_at is None
         and order.fulfillment_status not in {FulfillmentStatus.CANCELLED, FulfillmentStatus.PICKED_UP}
         and fulfillment is not None and fulfillment.status in {
             FulfillmentState.PENDING_CONFIRMATION, FulfillmentState.PREPARING, FulfillmentState.READY_FOR_PICKUP}
@@ -375,27 +383,12 @@ async def enqueue_amendment_print(session: AsyncSession, order: Order, before_sn
             printer_fingerprint=fingerprint, snapshot=snapshot))
 
 
-async def enqueue_cancellation_print(session: AsyncSession, order: Order, settings: Settings) -> None:
+async def stop_cancelled_order_prints(session: AsyncSession, order: Order) -> None:
     # Called while holding the order lock, as is the worker claim.
     jobs, held_ids = await _locked_order_print_jobs(session, order.id)
-    originals = [job for job in jobs if job.kind in {"order", "amendment"}]
-    if not originals:
-        return
-    targets = {(job.mode, job.printer_fingerprint): job for job in originals
-               if job.status in {"sending", "submitted", "printed", "unknown", "simulated"}}
-    existing_targets = {(job.mode, job.printer_fingerprint) for job in jobs if job.kind == "cancellation"}
-    for job in originals:
-        if job.status == "pending" and job.id not in held_ids:
+    for job in jobs:
+        if job.status == "pending" and job.kind in {"order", "amendment", "reference"} and job.id not in held_ids:
             job.status, job.last_error = "failed", "order_cancelled_before_send"
-    for target, original in targets.items():
-        if target in existing_targets:
-            continue
-        latest = max((job for job in originals if (job.mode, job.printer_fingerprint) == target),
-            key=lambda job: (job.snapshot.get("revision", 1), job.created_at, job.id))
-        session.add(PrintJob(order_id=order.id, event_key=f"order:{order.id}:cancel:{original.mode}:{original.printer_fingerprint[:32]}", kind="cancellation",
-            mode=original.mode, printer_fingerprint=original.printer_fingerprint,
-            snapshot={**await fresh_receipt_snapshot(session, latest.snapshot, order), "printer_region": job_region(latest), "kind": "cancellation",
-                      "cancellation_reason": order.cancellation_reason, **await payment_snapshot_from_session(session, order)}))
 
 
 def confirmed_print_payment(order: Order) -> bool:

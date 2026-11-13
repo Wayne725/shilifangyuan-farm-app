@@ -13,7 +13,7 @@ from app.integrations.feie import FeieError
 from app.manual_order_printing import load_manual_print_order
 from app.models import AdminAudit, FulfillmentState, FulfillmentStatus, Order, OrderItemOption, PaymentStatus, PrintJob, SalesChannel
 from app.printer_worker import process_print_job
-from app.printing import enqueue_cancellation_print, open_receipt_content
+from app.printing import stop_cancelled_order_prints, open_receipt_content
 from app.routers.printers import printers_router
 from tests.support import api_test_context, auth_headers
 from tests.test_cash_payments import cash_context, create_cash
@@ -310,6 +310,8 @@ async def test_queued_cancellation_reprint_is_blocked_but_original_notice_is_pre
     await c.session.commit()
     assert await process_print_job(c.settings, factory=c.factory)
     assert (await stored(c, retry.id)).status == "failed"
+    assert (await stored(c, retry.id)).last_error == "cancellation_printing_disabled"
+    assert (await stored(c, source.id)).status == "printed"
 
 
 async def test_submitted_reference_after_refund_only_queries_without_resending(manual_context):
@@ -341,7 +343,7 @@ async def test_reference_reprint_allows_blank_note_but_legacy_route_is_rejected(
     assert result.status_code == 409 and "訂單頁" in result.text
 
 
-async def test_cancellation_after_manual_production_keeps_stop_notice_and_reason(manual_context):
+async def test_cancellation_after_manual_production_does_not_create_another_job(manual_context):
     c = manual_context
     await state(c, PaymentStatus.PAID)
     response, _ = await submit(c)
@@ -349,17 +351,10 @@ async def test_cancellation_after_manual_production_keeps_stop_notice_and_reason
     await process_print_job(c.settings, factory=c.factory)
     order = await state(c, PaymentStatus.REFUND_PENDING, cancelled=True)
     order.cancellation_reason = "顧客臨時取消"
-    await enqueue_cancellation_print(c.session, order, c.settings)
+    await stop_cancelled_order_prints(c.session, order)
     await c.session.commit()
-    cancellation = await c.session.scalar(select(PrintJob).where(PrintJob.kind == "cancellation"))
-    assert not cancellation.snapshot.get("manual")
-    assert await process_print_job(c.settings, factory=c.factory)
-    cancellation = await stored(c, cancellation.id)
-    content = open_receipt_content(cancellation.content, c.order_id, c.settings)
-    assert cancellation.status == "simulated"
-    assert "取消通知" in content and "請停止製作" in content and "顧客臨時取消" in content
-    assert "訂單紀錄單" not in content and "管理員補印" not in content
-    assert "履約狀態：製作中" not in content
+    assert await c.session.scalar(select(PrintJob).where(PrintJob.kind == "cancellation")) is None
+    assert not await process_print_job(c.settings, factory=c.factory)
 
 
 @pytest.mark.parametrize("fulfillment", [FulfillmentState.PREPARING, FulfillmentState.PICKED_UP])
