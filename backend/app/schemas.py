@@ -1593,6 +1593,10 @@ class MealEventCreate(BaseModel):
         return self
 
 
+class MealEventDraftCreate(MealEventCreate):
+    replaces_event_id: str | None = Field(default=None, min_length=1, max_length=36)
+
+
 class MealScheduleInput(BaseModel):
     title: str = Field(min_length=1, max_length=140)
     location: str = Field(min_length=1, max_length=240)
@@ -2104,6 +2108,7 @@ class MealDisasterAnnouncement(ApiModel):
     service_date: date
     periods: list[Literal["lunch", "dinner"]]
     message: str
+    cancelled_event_ids: list[str] = Field(default_factory=list)
 
 
 class OrderFulfillmentRead(ApiModel):

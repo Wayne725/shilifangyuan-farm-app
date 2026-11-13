@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.meal_booking import TAIPEI
 from app.models import (
-    FulfillmentMethod, FulfillmentState, MealEvent, MealEventOffering, MealEventStatus,
+    AdminAudit, FulfillmentMethod, FulfillmentState, MealEvent, MealEventOffering, MealEventStatus,
     FulfillmentStatus, InvoiceBuyerType, MembershipType, Notification, Order, OrderFulfillment, OrderKind, OutboxEvent, PaymentStatus, Refund,
     SalesChannel, User,
 )
@@ -172,7 +172,185 @@ async def test_disaster_batch_cancels_lunch_and_dinner_and_notifies_every_order(
     assert {email.payload["to_email"] for email in emails} == {owner.email for owner in users}
     assert (await client.get("/v1/meal-announcements")).json() == [{
         "service_date": day.isoformat(), "periods": ["dinner", "lunch"], "message": "颱風期間暫停供餐",
+        "cancelled_event_ids": sorted(event.id for event in events),
     }]
+    replacement = await create_disaster_meal(client, admin_headers, recovery_draft(
+        meal.id, day, location="測試", replaces_event_id=lunch["id"],
+    ))
+    orders = list(await session.scalars(select(Order)))
+    assert len(orders) == 6 and all(order.cancelled_at is not None for order in orders)
+    assert all(order.meal_event_id != replacement["id"] for order in orders)
+    assert len(list(await session.scalars(select(Refund)))) == 2
+
+
+def recovery_draft(meal_id, day, *, period="lunch", **overrides):
+    pickup_start, pickup_end = (time(11), time(13, 15)) if period == "lunch" else (time(16, 30), time(18, 30))
+    previous = day - timedelta(days=1)
+    return {
+        "title": period, "location": "原取餐區", "booking_policy": "special",
+        "ordering_starts_at": datetime.combine(previous, time.min, TAIPEI).isoformat(),
+        "ordering_ends_at": datetime.combine(previous, time(20), TAIPEI).isoformat(),
+        "pickup_starts_at": datetime.combine(day, pickup_start, TAIPEI).isoformat(),
+        "pickup_ends_at": datetime.combine(day, pickup_end, TAIPEI).isoformat(),
+        "offerings": [{"meal_id": meal_id, "price": 100, "capacity": 20}],
+        **overrides,
+    }
+
+
+async def create_disaster_meal(client, headers, body, *, publish=True):
+    response = await client.post("/v1/admin/meal-events", headers=headers, json=body)
+    assert response.status_code == 201, response.text
+    event = response.json()
+    assert event["status"] == "draft"
+    if publish:
+        response = await client.post(f"/v1/admin/meal-events/{event['id']}/publish", headers=headers)
+        assert response.status_code == 200, response.text
+    return event
+
+
+async def stop_disaster_meals(client, headers, day, *, periods=("lunch", "dinner"), announcement=""):
+    payload = {"service_date": day.isoformat(), "periods": list(periods)}
+    preview = await client.post("/v1/admin/meal-disaster/preview", headers=headers, json=payload)
+    assert preview.status_code == 200, preview.text
+    result = await client.post("/v1/admin/meal-disaster/cancel", headers=headers, json={
+        **payload, "preview_token": preview.json()["preview_token"], "announcement": announcement,
+    })
+    assert result.status_code == 200, result.text
+    return result.json()
+
+
+async def test_disaster_notice_clears_only_the_restored_cancelled_service(schedule_context):
+    client, session, admin, buyer, meal = schedule_context
+    day = date(2026, 11, 13)
+    with time_machine.travel(datetime(2026, 11, 11, 10, tzinfo=TAIPEI), tick=False):
+        headers = auth_headers(admin)
+        lunch_body = recovery_draft(meal.id, day)
+        dinner_body = recovery_draft(meal.id, day, period="dinner")
+        lunch = await create_disaster_meal(client, headers, lunch_body)
+        dinner = await create_disaster_meal(client, headers, dinner_body)
+        source = await session.get(MealEvent, lunch["id"])
+        source.pickup_slot_ends_at = datetime.combine(day, time(12, 45), TAIPEI).astimezone(timezone.utc)
+        source.meal_period = "lunch"
+        await session.commit()
+
+        rebuild = {**lunch_body, "replaces_event_id": lunch["id"]}
+        assert (await client.post("/v1/admin/meal-events", headers=auth_headers(buyer), json=rebuild)).status_code == 403
+        assert (await client.post("/v1/admin/meal-events", headers=headers, json=rebuild)).status_code == 409
+        assert (await client.post("/v1/admin/meal-events", headers=headers, json={
+            **rebuild, "replaces_event_id": "missing-event",
+        })).status_code == 404
+        assert (await stop_disaster_meals(client, headers, day, announcement="當天停餐"))["cancelled_event_count"] == 2
+
+        both_stopped = [{
+            "service_date": day.isoformat(), "periods": ["dinner", "lunch"], "message": "當天停餐",
+            "cancelled_event_ids": sorted([lunch["id"], dinner["id"]]),
+        }]
+        announcements = await client.get("/v1/meal-announcements")
+        assert announcements.headers["cache-control"] == "no-store"
+        assert announcements.json() == both_stopped
+
+        await create_disaster_meal(client, headers, {**rebuild, "location": "另一取餐區"})
+        await create_disaster_meal(client, headers, recovery_draft(meal.id, day + timedelta(days=1), replaces_event_id=lunch["id"]))
+        assert (await client.get("/v1/meal-announcements")).json() == both_stopped
+
+        replacement = await create_disaster_meal(client, headers, rebuild, publish=False)
+        replacement_id = replacement["id"]
+        assert replacement_id != lunch["id"] and replacement["schedule_template_id"] is None
+        assert replacement["pickup_slots"] == [
+            datetime.combine(day, time(hour, minute), TAIPEI).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            for hour, minute in [(11, 0), (11, 30), (12, 0), (12, 30)]
+        ]
+        assert (await client.get("/v1/meal-announcements")).json() == both_stopped
+        assert (await client.post("/v1/admin/meal-events", headers=headers, json=rebuild)).status_code == 409
+        audit = await session.scalar(select(AdminAudit).where(
+            AdminAudit.aggregate_id == replacement_id, AdminAudit.action == "meal_event.create",
+        ))
+        assert audit.data["replaces_event_id"] == lunch["id"]
+
+        result = await client.post(f"/v1/admin/meal-events/{replacement_id}/publish", headers=headers)
+        assert result.status_code == 200, result.text
+        assert source.status == MealEventStatus.CANCELLED
+        assert (await client.get("/v1/meal-announcements")).json() == [{
+            "service_date": day.isoformat(), "periods": ["dinner"], "message": "當天停餐",
+            "cancelled_event_ids": [dinner["id"]],
+        }]
+        calendar = await client.get("/v1/meal-events/calendar")
+        assert replacement_id in {event["id"] for event in calendar.json()}
+        assert lunch["id"] not in {event["id"] for event in calendar.json()}
+
+        await create_disaster_meal(client, headers, {**dinner_body, "replaces_event_id": dinner["id"]})
+        assert (await client.get("/v1/meal-announcements")).json() == []
+
+
+async def test_repeat_disaster_stop_preserves_newest_notice_until_replacement_is_published(schedule_context):
+    client, _session, admin, _buyer, meal = schedule_context
+    day = date(2026, 11, 13)
+    start = datetime(2026, 11, 11, 10, tzinfo=TAIPEI)
+    with time_machine.travel(start, tick=False):
+        headers = auth_headers(admin)
+        body = recovery_draft(meal.id, day)
+        lunch = await create_disaster_meal(client, headers, body)
+        assert (await stop_disaster_meals(client, headers, day))["cancelled_event_count"] == 1
+        assert (await client.get("/v1/meal-announcements")).json() == [{
+            "service_date": day.isoformat(), "periods": ["lunch"], "message": "颱風暫停供餐",
+            "cancelled_event_ids": [lunch["id"]],
+        }]
+        replacement = await create_disaster_meal(client, headers, {**body, "replaces_event_id": lunch["id"]})
+        assert (await client.get("/v1/meal-announcements")).json() == []
+
+    with time_machine.travel(start + timedelta(minutes=1), tick=False):
+        headers = auth_headers(admin)
+        await stop_disaster_meals(client, headers, day, announcement="再次停餐")
+        assert (await client.get("/v1/meal-announcements")).json() == [{
+            "service_date": day.isoformat(), "periods": ["lunch"], "message": "再次停餐",
+            "cancelled_event_ids": sorted([lunch["id"], replacement["id"]]),
+        }]
+        await create_disaster_meal(client, headers, {**body, "replaces_event_id": replacement["id"]})
+        assert (await client.get("/v1/meal-announcements")).json() == []
+
+
+async def test_disaster_notice_exposes_only_previously_public_event_ids(schedule_context):
+    client, session, admin, _buyer, meal = schedule_context
+    day = date(2026, 11, 13)
+    with time_machine.travel(datetime(2026, 11, 11, 10, tzinfo=TAIPEI), tick=False):
+        headers = auth_headers(admin)
+        lunch = await create_disaster_meal(client, headers, recovery_draft(meal.id, day))
+        draft = await create_disaster_meal(client, headers, recovery_draft(meal.id, day, period="dinner"), publish=False)
+        assert (await client.get(f"/v1/meal-events/{draft['id']}")).status_code == 404
+        assert (await stop_disaster_meals(client, headers, day))["cancelled_event_count"] == 2
+
+        response = await client.get("/v1/meal-announcements")
+        notice = {"service_date": day.isoformat(), "periods": ["dinner", "lunch"], "message": "颱風暫停供餐"}
+        assert response.json() == [{**notice, "cancelled_event_ids": [lunch["id"]]}]
+        assert draft["id"] not in response.text
+        audit = await session.scalar(select(AdminAudit).where(AdminAudit.action == "meal_disaster.cancel"))
+        assert set(audit.data["event_ids"]) == {lunch["id"], draft["id"]}
+        audit.data = {key: value for key, value in audit.data.items() if key != "public_event_ids"}
+        await session.commit()
+        assert (await client.get("/v1/meal-announcements")).json() == [{**notice, "cancelled_event_ids": []}]
+
+
+async def test_recovery_draft_requires_a_remaining_bookable_slot(schedule_context):
+    client, _session, admin, _buyer, meal = schedule_context
+    day = date(2026, 11, 13)
+    with time_machine.travel(datetime(2026, 11, 11, 10, tzinfo=TAIPEI), tick=False):
+        headers = auth_headers(admin)
+        body = recovery_draft(meal.id, day)
+        source = await create_disaster_meal(client, headers, body)
+        await stop_disaster_meals(client, headers, day)
+
+    with time_machine.travel(datetime.combine(day, time(10), TAIPEI), tick=False):
+        headers = auth_headers(admin)
+        later_raw_cutoff = {**body, "ordering_ends_at": datetime.combine(day, time(12), TAIPEI).isoformat()}
+        await create_disaster_meal(client, headers, later_raw_cutoff, publish=False)
+        for prep_minutes in (None, 240):
+            response = await client.post("/v1/admin/meal-events", headers=headers, json={
+                **later_raw_cutoff, "replaces_event_id": source["id"], "same_day_preparation_minutes": prep_minutes,
+            })
+            assert response.status_code == 422 and "已無可預訂的時段" in response.json()["detail"]
+        await create_disaster_meal(client, headers, {
+            **later_raw_cutoff, "replaces_event_id": source["id"], "same_day_preparation_minutes": 30,
+        }, publish=False)
 
 
 @pytest.mark.parametrize("booking_type", ["standard", "business"])

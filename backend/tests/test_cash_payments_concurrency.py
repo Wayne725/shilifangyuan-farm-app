@@ -51,6 +51,7 @@ async def cash_api(postgres_sessions):
         {
             "title": "隔離現場付款最後一份",
             "location": "離線測試取餐點",
+            "booking_policy": "special",
             "allow_cash_payment": True,
             **{key: value.isoformat() for key, value in tomorrow_meal_timeline(now).items()},
             "offerings": [{"meal_id": meal_response.json()["id"], "price": 100, "capacity": 1}],

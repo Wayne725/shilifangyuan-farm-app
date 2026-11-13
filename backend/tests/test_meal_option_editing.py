@@ -49,7 +49,7 @@ async def test_edits_update_live_choices_and_prices_but_preserve_order_snapshots
     meal = await create_meal(v2_context)
     option_id = meal["option_groups"][0]["options"][1]["id"]
     event = await client.post("/v1/admin/meal-events", headers=admin, json={
-        "title": "主食編輯驗證", "location": "清華大學",
+        "title": "主食編輯驗證", "location": "清華大學", "booking_policy": "special",
         **{key: value.isoformat() for key, value in tomorrow_meal_timeline(datetime.now(timezone.utc)).items()},
         "offerings": [{"meal_id": meal["id"], "price": 130, "capacity": 20}],
     })

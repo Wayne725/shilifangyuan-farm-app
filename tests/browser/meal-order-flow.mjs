@@ -301,7 +301,7 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
     if (method === 'GET' && ['/v1/products', '/v1/group-campaigns', '/v1/orders', '/v1/pickup-locations'].includes(path)) return route.fulfill({ json: [] });
     if (method === 'GET' && path === '/v1/meal-events/calendar') {
       state.reads.push(path);
-      return route.fulfill({ json: mealCalendarFixture(state.events) });
+      return route.fulfill({ json: mealCalendarFixture(state.events.filter(event => !['draft', 'cancelled', 'completed'].includes(event.status))) });
     }
     if (method === 'POST' && path === '/v1/admin/meal-disaster/preview') {
       const payload = request.postDataJSON();
@@ -317,7 +317,10 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
     if (method === 'POST' && path === '/v1/admin/meal-disaster/cancel') {
       const payload = request.postDataJSON();
       state.writes.push({ path, payload });
-      state.announcements = [{ service_date: payload.service_date, periods: payload.periods, message: payload.announcement }];
+      const affected = state.events.filter(event => event.service_date === payload.service_date && payload.periods.includes(event.meal_period));
+      for (const event of affected) Object.assign(event, { status: 'cancelled', can_edit: false });
+      state.announcements = [{ service_date: payload.service_date, periods: payload.periods, message: payload.announcement,
+        cancelled_event_ids: affected.map(event => event.id) }];
       return route.fulfill({ json: { cancelled_event_count: 2, order_count: 6, paid_count: 2, paid_total: 240 } });
     }
     if (method === 'PATCH' && path.endsWith('/ordering-pause')) {
@@ -340,6 +343,23 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
     if (method === 'GET' && path === '/v1/admin/meal-events') {
       state.adminEventReads++;
       return route.fulfill({ json: state.events });
+    }
+    if (method === 'POST' && path === '/v1/admin/meal-events') {
+      const payload = request.postDataJSON();
+      state.writes.push({ method, path, payload });
+      const source = state.events.find(event => event.id === payload.replaces_event_id && event.status === 'cancelled');
+      if (!source) return route.fulfill({ status: 409, json: { detail: '原場次未取消' } });
+      const { offerings, ...fields } = payload;
+      const draft = { ...source, ...fields, id: 'replacement-lunch', status: 'draft', can_edit: true,
+        schedule_template_id: null, offerings: source.offerings.filter(offering => offerings.some(item => item.meal_id === offering.meal_id)) };
+      state.events.push(draft);
+      return route.fulfill({ status: 201, json: draft });
+    }
+    if (method === 'POST' && path === '/v1/admin/meal-events/replacement-lunch/publish') {
+      state.writes.push({ method, path, payload: request.postDataJSON() });
+      const draft = state.events.find(event => event.id === 'replacement-lunch');
+      draft.status = 'published';
+      return route.fulfill({ json: draft });
     }
     if (method === 'PATCH' && path === '/v1/admin/meal-events/archivable-meal/archive') {
       const payload = request.postDataJSON();
@@ -740,9 +760,11 @@ test('便當後台每30秒更新場次，供餐狀態更新時仍隱藏核銷且
   await page.goto(`${base}/admin/meals`);
   await page.getByRole('tab', { name: '場次', exact: true }).click();
   const card = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
-  await card.getByRole('button', { name: '手動編輯場次', exact: true }).click();
-  await card.getByLabel('場次名稱', { exact: true }).fill('尚未儲存的午餐修改');
-  await card.getByLabel('取餐地點', { exact: true }).fill('尚未儲存的取餐地點');
+  await card.getByRole('button', { name: '編輯場次', exact: true }).click();
+  const editor = page.getByRole('form', { name: '編輯便當場次', exact: true });
+  await editor.getByText('名稱、地點、時間與餐點', { exact: true }).click();
+  await editor.getByLabel('場次名稱', { exact: true }).fill('尚未儲存的午餐修改');
+  await editor.getByLabel('取餐地點', { exact: true }).fill('尚未儲存的取餐地點');
   assert.equal(await card.getByRole('button', { name: '確認核銷', exact: true }).count(), 0);
   const mealReads = state.adminMealReads;
   const eventReads = state.adminEventReads;
@@ -750,8 +772,8 @@ test('便當後台每30秒更新場次，供餐狀態更新時仍隱藏核銷且
   await page.clock.fastForward(30000);
   await card.getByText('供餐中', { exact: true }).waitFor();
   assert.equal(await card.getByRole('button', { name: '確認核銷', exact: true }).count(), 0);
-  assert.equal(await card.getByLabel('場次名稱', { exact: true }).inputValue(), '尚未儲存的午餐修改');
-  assert.equal(await card.getByLabel('取餐地點', { exact: true }).inputValue(), '尚未儲存的取餐地點');
+  assert.equal(await editor.getByLabel('場次名稱', { exact: true }).inputValue(), '尚未儲存的午餐修改');
+  assert.equal(await editor.getByLabel('取餐地點', { exact: true }).inputValue(), '尚未儲存的取餐地點');
   assert.ok(state.adminEventReads > eventReads);
   assert.equal(state.adminMealReads, mealReads);
   assert.deepEqual(state.writes, []);
@@ -784,16 +806,21 @@ test('便當保留手動更新，409保存輸入且後端can_edit為false時不�
   await page.goto(`${base}/admin/meals`);
   await page.getByRole('tab', { name: '場次', exact: true }).click();
   const card = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
-  await card.getByRole('button', { name: '手動編輯場次', exact: true }).click();
-  await card.getByLabel('場次名稱', { exact: true }).fill('手動更新午餐');
-  await card.getByLabel('取餐開始（台灣時間）', { exact: true }).fill('2026-09-17T12:00');
-  await card.getByLabel('取餐結束（台灣時間）', { exact: true }).fill('2026-09-17T13:00');
+  await card.getByRole('button', { name: '編輯場次', exact: true }).click();
+  const editor = page.getByRole('form', { name: '編輯便當場次', exact: true });
+  const startsAt = editor.getByLabel('取餐開始（台灣時間）', { exact: true });
+  await editor.getByText('名稱、地點、時間與餐點', { exact: true }).waitFor();
+  assert.equal(await startsAt.isVisible(), false);
+  await editor.getByText('名稱、地點、時間與餐點', { exact: true }).click();
+  await editor.getByLabel('場次名稱', { exact: true }).fill('手動更新午餐');
+  await startsAt.fill('2026-09-17T12:00');
+  await editor.getByLabel('取餐結束（台灣時間）', { exact: true }).fill('2026-09-17T13:00');
   state.rejectEdit = true;
-  await card.getByRole('button', { name: '儲存場次修改', exact: true }).click();
-  await card.getByText('此場次已有訂單，不能修改原場次', { exact: true }).waitFor();
-  assert.equal(await card.getByLabel('場次名稱', { exact: true }).inputValue(), '手動更新午餐');
+  await editor.getByRole('button', { name: '儲存場次修改', exact: true }).click();
+  await editor.getByText('此場次已有訂單，不能修改原場次', { exact: true }).waitFor();
+  assert.equal(await editor.getByLabel('場次名稱', { exact: true }).inputValue(), '手動更新午餐');
   state.rejectEdit = false;
-  await card.getByRole('button', { name: '儲存場次修改', exact: true }).click();
+  await editor.getByRole('button', { name: '儲存場次修改', exact: true }).click();
   await page.getByRole('heading', { name: '手動更新午餐', exact: true }).waitFor();
   assert.equal(state.writes.length, 2);
   assert.equal(state.writes[1].payload.pickup_starts_at, '2026-09-17T04:00:00.000Z');
@@ -802,8 +829,26 @@ test('便當保留手動更新，409保存輸入且後端can_edit為false時不�
   await page.reload();
   const updated = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: '手動更新午餐', exact: true }) });
   await updated.getByRole('heading', { name: '手動更新午餐', exact: true }).waitFor();
-  assert.equal(await updated.getByRole('button', { name: '手動編輯場次', exact: true }).isDisabled(), true);
+  assert.equal(await updated.getByRole('button', { name: '編輯場次', exact: true }).isDisabled(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('快速切換僅開放會餐可直接儲存並保留取餐時間', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  Object.assign(state.events[0], { booking_policy: 'workday' });
+  await page.goto(`${base}/admin/meals?tab=events`);
+  const card = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
+  await card.getByRole('button', { name: '編輯場次', exact: true }).click();
+  const form = page.getByRole('form', { name: '編輯便當場次', exact: true });
+  await form.getByRole('checkbox', { name: '僅開放會餐', exact: true }).check();
+  assert.equal(await form.getByLabel('取餐開始（台灣時間）', { exact: true }).isVisible(), false);
+  await form.getByRole('button', { name: '儲存場次修改', exact: true }).click();
+  await card.getByText('僅開放會餐', { exact: true }).waitFor();
+  assert.equal(state.writes.length, 1);
+  assert.equal(state.writes[0].payload.business_only, true);
+  assert.equal(state.writes[0].payload.pickup_starts_at, '2026-09-17T03:00:00.000Z');
+  assert.equal(state.writes[0].payload.pickup_ends_at, '2026-09-17T05:30:00.000Z');
   assert.deepEqual(state.unknownApi, []);
 });
 
@@ -941,7 +986,8 @@ test('手機尺寸颱風停餐先顯示午晚餐與退款，確認後公告', { 
   assert.equal(state.writes[1].payload.reason, '颱風停止上班上課');
   assert.deepEqual(state.writes[1].payload.periods, ['lunch', 'dinner']);
   await page.goto(`${base}/shop?tab=meals`);
-  await page.getByRole('region', { name: '供餐公告' }).getByText(/颱風期間暫停供餐/).waitFor();
+  await page.getByRole('group', { name: '取餐日期' }).getByRole('button', { name: /9\/17.*颱風暫停供餐/ }).click();
+  await page.getByRole('list', { name: '停餐資訊' }).getByText(/午餐、晚餐 · 颱風期間暫停供餐/).waitFor();
   assert.deepEqual(state.unknownApi, []);
 });
 
@@ -1016,6 +1062,79 @@ test('手機場次取消先確認，已取消場次不顯示恢復新預訂', { 
   await dialog.getByRole('button', { name: '取消場次並退款', exact: true }).click();
   await lunch.getByText('已取消', { exact: true }).waitFor();
   assert.deepEqual(state.writes, [{ path: '/v1/admin/meal-events/scheduled-lunch/cancel', payload: { reason: '隔離驗收' } }]);
+});
+
+test('手機從天災取消紀錄帶入補開草稿，原場次維持取消', { timeout: 25000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  const original = state.events[0];
+  Object.assign(original, { status: 'cancelled', can_edit: false, booking_policy: 'workday', ordering_paused: true });
+  original.offerings.push({ ...original.offerings[0], id: 'old-offering', meal_id: 'inactive-meal', is_active: false });
+  await page.goto(`${base}/admin/meals?tab=disaster`);
+  await page.getByLabel('停餐日期', { exact: true }).fill('2026-09-17');
+  await page.getByRole('button', { name: '預覽影響場次', exact: true }).click();
+  await page.getByRole('link', { name: '為「隔離每日午餐」建立補開草稿', exact: true }).click();
+  const form = page.getByRole('form', { name: '建立補開草稿', exact: true });
+  assert.equal(await form.getByLabel('場次名稱', { exact: true }).inputValue(), original.title);
+  assert.equal(await form.getByLabel('取餐開始（台灣時間）', { exact: true }).inputValue(), '2026-09-17T11:00');
+  assert.equal(await form.getByLabel('份數', { exact: true }).count(), 1);
+  assert.equal(await form.getByLabel('份數', { exact: true }).inputValue(), '50');
+  assert.equal(state.writes.length, 1);
+  await captureMealScreenshot(page, 'meal-replacement-draft-mobile.png');
+  await form.getByRole('button', { name: '建立補開草稿', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '已建立「隔離每日午餐」草稿' }).waitFor();
+  assert.equal(state.writes.length, 2);
+  const request = state.writes[1];
+  assert.equal(request.method, 'POST');
+  assert.equal(request.path, '/v1/admin/meal-events');
+  assert.equal(request.payload.replaces_event_id, original.id);
+  assert.equal(request.payload.allow_cash_payment, false);
+  assert.deepEqual(request.payload.offerings, [{ meal_id: 'scheduled-meal', price: 120, capacity: 50, position: 0 }]);
+  assert.equal(state.events.find(event => event.id === original.id).status, 'cancelled');
+  assert.equal(state.events.find(event => event.id === 'replacement-lunch').status, 'draft');
+  const draft = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('button', { name: '發布', exact: true }) });
+  await draft.getByRole('button', { name: '發布', exact: true }).click();
+  await draft.waitFor({ state: 'hidden' });
+  assert.equal(state.writes.length, 3);
+  assert.equal(state.events.find(event => event.id === 'replacement-lunch').status, 'published');
+  assert.equal(state.events.find(event => event.id === original.id).status, 'cancelled');
+  assert.deepEqual(state.unknownApi, []);
+});
+
+test('已過期場次補開須選新供餐日期，避免誤建過去場次', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  Object.assign(state.events[0], { status: 'cancelled', can_edit: false, booking_policy: 'special',
+    ordering_starts_at: '2026-09-14T00:00:00Z', ordering_ends_at: '2026-09-14T12:00:00Z',
+    pickup_starts_at: '2026-09-15T03:00:00Z', pickup_ends_at: '2026-09-15T05:30:00Z', service_date: '2026-09-15' });
+  await page.goto(`${base}/admin/meals?tab=events&date=2026-09-15`);
+  await page.getByRole('link', { name: '建立補開草稿', exact: true }).click();
+  const form = page.getByRole('form', { name: '建立補開草稿', exact: true });
+  const save = form.getByRole('button', { name: '建立補開草稿', exact: true });
+  await form.getByRole('alert').filter({ hasText: '原取餐時段已過' }).waitFor();
+  assert.equal(await save.isDisabled(), true);
+  await form.getByLabel('取餐開始（台灣時間）', { exact: true }).fill('2026-09-18T11:00');
+  assert.equal(await form.getByLabel('取餐結束（台灣時間）', { exact: true }).inputValue(), '2026-09-18T13:30');
+  assert.equal(await save.isEnabled(), true);
+  assert.deepEqual(state.writes, []);
+  await form.getByRole('button', { name: '取消編輯', exact: true }).click();
+  await form.waitFor({ state: 'hidden' });
+  assert.deepEqual(state.writes, []);
+});
+
+test('當天補開場次須明確啟用當日訂餐，修改一般截止時間仍不能送出', { timeout: 20000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  Object.assign(state.events[0], { status: 'cancelled', can_edit: false, booking_policy: 'special' });
+  await page.clock.setSystemTime(new Date('2026-09-17T01:00:00Z'));
+  await page.goto(`${base}/admin/meals?tab=events&date=2026-09-17&rebuild=scheduled-lunch`);
+  const form = page.getByRole('form', { name: '建立補開草稿', exact: true });
+  const cutoff = form.getByLabel('預訂截止（台灣時間）', { exact: true });
+  const save = form.getByRole('button', { name: '建立補開草稿', exact: true });
+  await cutoff.fill('2026-09-17T10:30');
+  await form.getByRole('alert').filter({ hasText: '預訂截止已過' }).waitFor();
+  assert.equal(await save.isDisabled(), true);
+  await form.getByRole('checkbox', { name: '開放當日訂餐（僅線上付款）', exact: true }).check();
+  await form.getByLabel('最短備餐時間（分鐘）', { exact: true }).fill('30');
+  assert.equal(await save.isEnabled(), true);
+  assert.deepEqual(state.writes, []);
 });
 
 test('手機尺寸便當建立付款失敗，原訂單保留原因並可重新付款', { timeout: 20000 }, async t => {

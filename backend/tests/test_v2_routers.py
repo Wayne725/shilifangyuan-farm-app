@@ -2025,6 +2025,7 @@ async def test_meal_event_quote_order_cancel_capacity_and_qr_redeem(
         json={
             "title": "校園週三午餐預購",
             "location": "大學校門口十里方圓攤位",
+            "booking_policy": "special",
             **{key: value.isoformat() for key, value in tomorrow_meal_timeline(now).items()},
             "offerings": [
                 {
@@ -2365,6 +2366,7 @@ async def test_meal_refunds_enqueue_email_for_buyer_and_event_cancel(
             json={
                 "title": f"{label}場次",
                 "location": "校門口攤位",
+                "booking_policy": "special",
                 **{key: value.isoformat() for key, value in tomorrow_meal_timeline(now).items()},
                 "offerings": [
                     {
@@ -2729,6 +2731,7 @@ async def test_meal_options_validate_price_and_persist_snapshots(
         json={
             "title": "每日客製餐盒",
             "location": "清華大學",
+            "booking_policy": "special",
             **{key: value.isoformat() for key, value in tomorrow_meal_timeline(now).items()},
             "offerings": [
                 {

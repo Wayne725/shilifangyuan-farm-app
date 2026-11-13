@@ -553,6 +553,13 @@ export interface MealCalendarEvent extends MealEventTiming {
   has_available_offerings: boolean;
 }
 
+export interface MealDisasterAnnouncement {
+  service_date: string;
+  periods: Array<"lunch" | "dinner">;
+  message: string;
+  cancelled_event_ids?: string[];
+}
+
 export interface MealEvent extends MealEventTiming {
   archived_at?: string | null;
   can_edit?: boolean;
