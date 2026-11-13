@@ -48,8 +48,9 @@ export function AdminToday({ adminId }: { adminId: string }) {
     return <DataState kind="error" title="今日待辦無法讀取" detail={counts.error.message} onAction={() => counts.refetch()} />;
   }
 
+  const visibleItems = workItems.filter(({ key }) => key !== "pending_order_cancellations" || counts.data.pending_order_cancellations > 0);
   return <ul className="admin-today-grid" aria-label="今日待辦清單">
-    {workItems.map(({ key, label, unit, link }) => <li key={key}>
+    {visibleItems.map(({ key, label, unit, link }) => <li key={key}>
       <Link {...link} className="admin-today-card">
         <span>{label}</span>
         <span className="admin-today-count"><strong>{counts.data[key] ?? "—"}</strong> {unit}</span>

@@ -226,7 +226,10 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
         <label className="field"><span>開始日期</span><input type="date" value={periodInput.start} max={periodInput.end || undefined} onChange={event => setPeriodInput({ ...periodInput, start: event.target.value })} /></label>
         <label className="field"><span>結束日期</span><input type="date" value={periodInput.end} min={periodInput.start || undefined} onChange={event => setPeriodInput({ ...periodInput, end: event.target.value })} /></label>
       </fieldset>
-      <label className="check-field"><input type="checkbox" checked={cancellationPending} onChange={(event) => { setCancellationPending(event.target.checked); setOrderOffset(0); }} />只看退單待審</label>
+      {cancellationPending && <button className="button button-quiet" type="button" onClick={() => {
+        setCancellationPending(false);
+        setOrderOffset(0);
+      }}>清除退單待審篩選</button>}
       <label className="check-field"><input type="checkbox" checked={businessUnpaid} onChange={event => { setBusinessUnpaid(event.target.checked); setOrderOffset(0); if (event.target.checked) { setOrderCategory("meal"); setOrderPayment(""); setInvoiceFollowup(false); } }} />會餐未付款</label>
       {invoiceFollowup && <label className="check-field"><input type="checkbox" checked onChange={() => { setInvoiceFollowup(false); setOrderOffset(0); }} />發票待合作社處理</label>}
       <button className="button button-quiet" type="submit">搜尋</button>
