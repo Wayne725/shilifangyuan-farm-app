@@ -30,6 +30,7 @@ import {
   invoiceProviderNames,
   shipmentStatusLabel,
 } from "../lib/labels";
+import { formatMealDate, formatMealDateTime } from "../lib/meal-time";
 import type { Order } from "../lib/types";
 
 type InvoiceFollowupReason = "business_date" | "issuance" | "void";
@@ -199,9 +200,12 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
       {!orderQuery.isError && orderQuery.data?.items.map((order) => (
         <article key={order.id}>
           <div className="operation-title">
-            <span>{orderCategoryLabels[order.sales_channel === "meal_preorder" ? "meal" : "general"]} · {formatDate(order.created_at)}</span>
+            <span>{order.sales_channel === "meal_preorder"
+              ? `${orderCategoryLabels.meal} · 下單日 ${formatMealDate(order.created_at)}`
+              : `${orderCategoryLabels.general} · ${formatDate(order.created_at)}`}</span>
             <strong>{order.order_number}</strong>
             <small>{formatMoney(order.amount_total)}</small>
+            {order.sales_channel === "meal_preorder" && <MealPickupInfo order={order} />}
           </div>
           <dl className="admin-order-contact" aria-label="訂購者資訊">
             <div><dt>訂購者</dt><dd>{order.customer_name || "未提供"}</dd></div>
@@ -268,6 +272,13 @@ function InvoiceFollowupAction({ reason, invoice }: { reason: InvoiceFollowupRea
   const reference = invoice?.invoice_number ? `發票號碼 ${invoice.invoice_number}`
     : invoice?.relate_number ? `銷貨單號 ${invoice.relate_number}` : null;
   return <small className="no-action">{action}{reference && <> {reference}</>}</small>;
+}
+
+function MealPickupInfo({ order }: { order: Order }) {
+  const selected = order.fulfillment?.pickup_at;
+  if (selected) return <span>取餐日 <time dateTime={selected}>{formatMealDateTime(selected)}</time></span>;
+  const start = order.fulfillment?.pickup_starts_at ?? order.meal_event?.pickup_starts_at;
+  return <span>取餐日 {start ? <><time dateTime={start}>{formatMealDate(start)}</time> · 未指定取餐時段</> : "未提供"}</span>;
 }
 
 function mealServiceEnded(order: Order) {

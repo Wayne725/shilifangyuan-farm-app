@@ -17,10 +17,10 @@ const order = {
   items: [{ id: 'item', product_name: '隔離白米', quantity: 1, unit_label: '袋', unit_price: 120, subtotal: 120, tax_type: 'taxable' }],
 };
 
-async function fixture(t, { width = 1280, channel = 'regular', bookingType = 'standard', lateResponse = false, contactEmail = order.contact_email, orderUpdates = {} } = {}) {
+async function fixture(t, { width = 1280, channel = 'regular', bookingType = 'standard', lateResponse = false, contactEmail = order.contact_email, orderUpdates = {}, timezoneId = 'Asia/Taipei' } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId, serviceWorkers: 'block' });
   const state = { status: 200, reads: [], unknown: [], errors: [], consoleErrors: [], apiRequests: [], release: null, deferNextRead: false, logisticsWrites: [] };
   const payload = { items: [{ ...order, sales_channel: channel, meal_booking_type: bookingType, contact_email: contactEmail, ...orderUpdates }], total: 1, limit: 12, offset: 0 };
   if (lateResponse) await context.addInitScript(() => {
@@ -132,6 +132,38 @@ for (const [channel, bookingType, width] of [['regular', 'standard', 1280], ['me
     assert.deepEqual(state.unknown, []);
   });
 }
+
+test('手機便當訂單分開顯示台灣下單日與選定的取餐日時', async t => {
+  const selected = '2030-01-04T04:30:00Z';
+  const { page, state } = await fixture(t, {
+    channel: 'meal_preorder', width: 390, timezoneId: 'America/Los_Angeles',
+    orderUpdates: {
+      created_at: '2030-01-01T17:00:00Z',
+      fulfillment: { pickup_at: selected, pickup_starts_at: '2030-01-04T03:00:00Z' },
+    },
+  });
+  const title = page.locator('.operation-title');
+  await title.getByText('便當訂單 · 下單日 2030/01/02', { exact: true }).waitFor();
+  const pickup = title.locator('time');
+  assert.equal(await pickup.getAttribute('datetime'), selected);
+  assert.match(await pickup.innerText(), /1\/4.*12:30/);
+  assert.match(await title.innerText(), /取餐日\s+1\/4/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.unknown, []);
+});
+
+test('舊便當訂單沿用場次日期，缺少取餐時段時顯示未指定', async t => {
+  const start = '2030-01-04T03:00:00Z';
+  const { page, state } = await fixture(t, {
+    channel: 'meal_preorder',
+    orderUpdates: { fulfillment: { pickup_at: null }, meal_event: { pickup_starts_at: start } },
+  });
+  const title = page.locator('.operation-title');
+  await title.getByText('取餐日 2030/01/04 · 未指定取餐時段', { exact: true }).waitFor();
+  assert.equal(await title.locator('time').getAttribute('datetime'), start);
+  assert.deepEqual(state.unknown, []);
+});
 
 for (const status of [401, 403]) {
   test(`後台訂單 200 → ${status} 清除已顯示的個資`, async t => {
