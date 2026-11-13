@@ -90,6 +90,7 @@ export interface OrderFulfillment {
   needs_utensils?: boolean;
   pickup_starts_at?: string | null;
   pickup_ends_at?: string | null;
+  pickup_at?: string | null;
   pickup_code?: string | null;
   fulfilled_at?: string | null;
 }
@@ -214,6 +215,7 @@ export interface Order {
     tax_type: string;
   }>;
   fulfillment?: OrderFulfillment | null;
+  meal_event?: Pick<MealEventTiming, "id" | "title" | "location" | "pickup_starts_at" | "pickup_ends_at"> | null;
   shipment?: Shipment | null;
   invoice?: InvoiceRecord | null;
 }
