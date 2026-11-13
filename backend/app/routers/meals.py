@@ -1935,7 +1935,7 @@ def _configured_event_values(
     if business_only and same_day:
         raise HTTPException(422, "僅限會餐的場次須於取餐前預訂")
     if business_only and body.allow_cash_payment:
-        raise HTTPException(422, "僅限會餐的場次只支援線上付款")
+        raise HTTPException(422, "會餐現金付款不需另外啟用")
     if policy == "legacy":
         if business_only:
             raise HTTPException(422, "請選擇工作日或特殊日期規則以開放僅限會餐的場次")
@@ -2198,7 +2198,7 @@ async def update_meal_payment_options(
         raise HTTPException(status_code=409, detail="場次已結束或取消")
     if body.allow_cash_payment:
         if event.business_only:
-            raise HTTPException(422, "僅限會餐的場次只支援線上付款")
+            raise HTTPException(422, "會餐現金付款不需另外啟用")
         if event.same_day_preparation_minutes is not None:
             raise HTTPException(422, "開放當日訂餐的場次僅支援線上付款")
     event.allow_cash_payment = body.allow_cash_payment

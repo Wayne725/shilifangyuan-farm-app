@@ -406,8 +406,10 @@ async def test_saturday_business_only_requires_company_and_preserves_cutoff_and_
         assert standard.json()["detail"] == "此場次僅開放會餐"
         personal = await client.post(f"{root}/{action}", json={**body, "meal_booking_type": "business"}, headers=headers)
         assert personal.status_code == 422
-        cash = await client.post(f"{root}/{action}", json=business_body(body, payment_method="cash_on_pickup"), headers=headers)
-        assert cash.status_code == 422
+        external = await client.post(
+            f"{root}/{action}", json=business_body(body, payment_method="cash_on_pickup", invoice_handling="external"), headers=headers,
+        )
+        assert external.status_code == 422
     assert await session.scalar(select(func.count(Order.id))) == 0
 
     cutoff = datetime(2026, 11, 6, 20, tzinfo=TAIPEI)
@@ -416,6 +418,13 @@ async def test_saturday_business_only_requires_company_and_preserves_cutoff_and_
         headers = auth_headers(buyer)
         quote = await client.post(f"{root}/quote", json=company, headers=headers)
         assert quote.status_code == 200, quote.text
+        cash = business_body(body, payment_method="cash_on_pickup", client_request_id=str(uuid4()))
+        cash_quote = await client.post(f"{root}/quote", json=cash, headers=headers)
+        assert cash_quote.status_code == 200, cash_quote.text
+        cash_created = await client.post(f"{root}/orders", json=cash, headers=headers)
+        assert cash_created.status_code == 201, cash_created.text
+        assert cash_created.json()["payment_method"] == "cash_on_pickup"
+        assert cash_created.json()["invoice_handling"] == "pickup_day"
         created = await client.post(f"{root}/orders", json=company, headers=headers)
         assert created.status_code == 201, created.text
         order = created.json()
@@ -434,13 +443,13 @@ async def test_saturday_business_only_requires_company_and_preserves_cutoff_and_
             assert late.status_code == 409, late.text
         replay = await client.post(f"{root}/orders", json=company, headers=headers)
         assert replay.status_code == 201 and replay.json()["id"] == order["id"]
-    assert await session.scalar(select(func.count(Order.id))) == 1
+    assert await session.scalar(select(func.count(Order.id))) == 2
 
 
 @pytest.mark.parametrize("overrides,reason", [
     ({"booking_policy": "legacy"}, "工作日或特殊日期"),
     ({"same_day_preparation_minutes": 90}, "須於取餐前預訂"),
-    ({"allow_cash_payment": True}, "只支援線上付款"),
+    ({"allow_cash_payment": True}, "會餐現金付款不需另外啟用"),
     ({"ordering_starts_at": "2026-11-06T20:00:00+08:00"}, "有效訂購截止必須晚於開賣時間"),
     ({"pickup_starts_at": "2026-11-07T13:01:00+08:00"}, "沒有可預訂的取餐時段"),
 ])
