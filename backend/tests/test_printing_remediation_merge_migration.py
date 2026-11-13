@@ -26,7 +26,7 @@ def test_both_migration_histories_reach_one_merged_head_with_metadata_parity_and
         command.upgrade(config, "head")
         command.check(config)
         with engine.connect() as connection:
-            assert list(connection.scalars(text("SELECT version_num FROM alembic_version"))) == ["0067_meal_event_archive"]
+            assert list(connection.scalars(text("SELECT version_num FROM alembic_version"))) == ["0069_business_meal_cash"]
             before = list(connection.connection.driver_connection.iterdump())
         command.upgrade(config, "head")
         command.check(config)

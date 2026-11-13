@@ -10,6 +10,7 @@ interface TodayCounts {
   pending_admissions: number;
   pending_order_cancellations: number;
   unpaid_business_orders: number;
+  today_business_cash_uncollected: number;
   pending_activity_refunds: number;
   active_activities: number;
   active_activity_registrations: number;
@@ -24,6 +25,7 @@ const workItems = [
   { key: "pending_admissions", label: "待審入社申請", unit: "件", link: linkOptions({ to: "/admin/social", search: { tab: "reviews" } }) },
   { key: "pending_order_cancellations", label: "待審退單", unit: "筆", link: linkOptions({ to: "/admin", search: { section: "orders", queue: "refunds" } }) },
   { key: "unpaid_business_orders", label: "會餐未付款", unit: "筆", link: linkOptions({ to: "/admin", search: { section: "orders", queue: "business-unpaid" } }) },
+  { key: "today_business_cash_uncollected", label: "今日會餐現金未收", unit: "筆", link: linkOptions({ to: "/admin/meals", search: { tab: "orders", queue: "today_business_cash_uncollected" } }) },
   { key: "pending_activity_refunds", label: "待審活動退款", unit: "筆", link: linkOptions({ to: "/admin/social", search: { tab: "activities", view: "refunds" } }) },
   { key: "invoice_followups", label: "發票待合作社處理", unit: "筆", link: linkOptions({ to: "/admin", search: { section: "orders", queue: "invoice" } }) },
   { key: "pending_campaign_decisions", label: "待確認成團", unit: "團", link: linkOptions({ to: "/admin/groups", search: { tab: "campaigns", view: "decision" } }) },
@@ -50,7 +52,7 @@ export function AdminToday({ adminId }: { adminId: string }) {
     {workItems.map(({ key, label, unit, link }) => <li key={key}>
       <Link {...link} className="admin-today-card">
         <span>{label}</span>
-        <span className="admin-today-count"><strong>{counts.data[key]}</strong> {unit}</span>
+        <span className="admin-today-count"><strong>{counts.data[key] ?? "—"}</strong> {unit}</span>
         {key === "active_activities" && <small>共 {counts.data.active_activity_registrations} 人次報名</small>}
         <span className="admin-today-arrow" aria-hidden="true"><ArrowRight size={20} /></span>
       </Link>

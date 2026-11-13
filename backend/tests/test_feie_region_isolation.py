@@ -196,7 +196,7 @@ async def test_new_order_records_region_without_blocking_order_on_bad_endpoint(c
 @pytest.mark.parametrize("source_region,current_region,source_has_region", [
     ("jp", "cn", False), ("jp", "cn", True), ("cn", "jp", True),
 ])
-async def test_amendment_and_cancellation_keep_source_region_after_configuration_switch(
+async def test_amendment_keeps_source_region_after_configuration_switch(
     print_context, source_region, current_region, source_has_region,
 ):
     c = print_context
@@ -217,8 +217,7 @@ async def test_amendment_and_cancellation_keep_source_region_after_configuration
         order = await session.get(Order, c.order_id)
         order.cancelled_at = datetime.now(timezone.utc)
         order.cancellation_reason = "管理員核准取消"
-        await printing.enqueue_cancellation_print(session, order, c.settings)
+        await printing.stop_cancelled_order_prints(session, order)
         await session.commit()
-        notice = await session.scalar(select(PrintJob).where(PrintJob.order_id == c.order_id, PrintJob.kind == "cancellation"))
-        assert notice.printer_fingerprint == original_fingerprint
-        assert printing.job_region(notice) == source_region
+        stopped = await session.get(PrintJob, revised.id)
+        assert stopped.status == "failed" and stopped.last_error == "order_cancelled_before_send"

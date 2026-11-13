@@ -30,9 +30,10 @@ def business_body(body, **overrides):
 @pytest.mark.parametrize('overrides', [
     {'invoice_buyer_type': 'personal', 'invoice_buyer_tax_id': None, 'invoice_buyer_name': None},
     {'invoice_buyer_tax_id': '12345678'}, {'invoice_buyer_name': ''},
-    {'payment_method': 'cash_on_pickup'},
+    {'payment_method': 'cash_on_delivery'},
+    {'payment_method': 'cash_on_pickup', 'invoice_handling': 'external'},
 ])
-async def test_business_requires_company_and_online(booking_context, overrides):
+async def test_business_requires_company_and_supported_payment(booking_context, overrides):
     client, session, buyer, _admin, event, body = booking_context
     result = await client.post(f'/v1/meal-events/{event.id}/orders', json=business_body(body, **overrides), headers=auth_headers(buyer))
     assert result.status_code == 422, result.text

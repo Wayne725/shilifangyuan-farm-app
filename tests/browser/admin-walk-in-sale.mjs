@@ -17,7 +17,7 @@ const customerBarcode = '/AB12+-.';
 async function fixture(t, { width = 1280, firstResponse = 'success', section = 'manual-invoice', role = 'admin' } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
-  const state = { posts: [], recoveries: [], adminRequests: [], sales: new Map(), activeNames: ['合成餐盒'], recoveryVisible: true,
+  const state = { posts: [], recoveries: [], adminRequests: [], sales: new Map(), recoveryVisible: true,
     unknown: [], errors: [], consoleErrors: [] };
   const firstPostResponse = firstResponse === 'hold' ? new Promise(resolve => { state.releasePost = resolve; }) : null;
   t.after(async () => { state.releasePost?.(); await browser.close(); });
@@ -36,9 +36,7 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
     } } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '暫停接受新訂單' } });
     if (path === '/v1/notifications') return route.fulfill({ json: [] });
-    if (path === '/v1/products') return route.fulfill({ json: [{ id: 'isolated-product', name: '合成商品', is_active: true }] });
     if (path.startsWith('/v1/admin/')) state.adminRequests.push(`${request.method()} ${path}`);
-    if (path === '/v1/admin/meals') return route.fulfill({ json: state.activeNames.map((name, index) => ({ id: `isolated-meal-${index}`, name, is_active: true })) });
     if (path === '/v1/admin/order-search') return route.fulfill({ json: { items: [], total: 0, limit: 12, offset: 0 } });
     if (request.method() === 'GET' && path === '/v1/admin/manual-invoice-records') {
       const items = Array.from(state.sales.values(), ({ sale }) => ({
@@ -108,14 +106,12 @@ async function fixture(t, { width = 1280, firstResponse = 'success', section = '
 }
 
 async function fillSale(region, { barcode = false } = {}) {
-  const product = region.getByRole('combobox', { name: '品名', exact: true });
+  const product = region.getByRole('textbox', { name: '品名', exact: true });
   assert.equal(await product.inputValue(), '');
-  assert.equal(await product.evaluate(select => select.required), true);
-  await product.getByRole('option', { name: '合成餐盒', exact: true }).waitFor({ state: 'attached' });
-  await product.selectOption({ label: '合成餐盒' });
+  assert.equal(await product.evaluate(input => input.required), true);
+  await product.fill('合成餐盒');
   await region.getByLabel('含稅單價', { exact: true }).fill('120');
   await region.getByLabel('數量', { exact: true }).fill('2');
-  await region.getByLabel('顧客姓名', { exact: true }).fill('合成顧客');
   await region.getByLabel('發票通知 Email', { exact: true }).fill('customer@example.test');
   if (!barcode) await region.getByRole('radio', { name: 'Email 會員載具', exact: true }).check();
   if (barcode) {
@@ -164,16 +160,14 @@ async function capture(page, name) {
   await page.screenshot({ path: join(process.env.UI_ARTIFACT_DIR, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 
-async function refocusWithStaleCatalog(page, at) {
+async function refocus(page, at) {
   await page.clock.setFixedTime(new Date(at));
-  const refresh = page.waitForResponse(response => new URL(response.url()).pathname === '/v1/admin/meals');
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     window.dispatchEvent(new Event('visibilitychange'));
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     window.dispatchEvent(new Event('visibilitychange'));
   });
-  await refresh;
 }
 
 test('手機手動開票直接填表後確認，固定即時開票且不帶入店員載具與 Email', async t => {
@@ -195,7 +189,7 @@ test('手機手動開票直接填表後確認，固定即時開票且不帶入�
   assertImmediateSale(body);
   assert.deepEqual(body, {
     client_request_id: body.client_request_id, product_name: '合成餐盒', sale_category: 'meal', unit_price: 120, quantity: 2,
-    tax_type: 'taxable', customer_name: '合成顧客', contact_email: 'customer@example.test',
+    tax_type: 'taxable', contact_email: 'customer@example.test',
     invoice_handling: 'on_payment',
     preferences: { invoice_buyer_type: 'personal', invoice_buyer_email: 'customer@example.test', invoice_carrier_type: 'mobile_barcode', invoice_carrier_value: customerBarcode },
     reason: '現場客人收款', confirm_received: true, confirm_not_invoiced_elsewhere: true,
@@ -234,7 +228,7 @@ for (const width of [390, 1280]) {
       if (buyerType === 'company') {
         await region.getByRole('radio', { name: '公司統編發票', exact: true }).click();
         await region.getByLabel('統一編號', { exact: true }).fill('15989995');
-        await region.getByLabel('公司名稱', { exact: true }).fill('合成公司');
+        assert.equal(await region.getByLabel('公司名稱', { exact: true }).evaluate(input => input.required), false);
       }
       assert.equal(await region.getByLabel('發票通知 Email', { exact: true }).evaluate(input => input.required), false);
       await assertClean(page, state);
@@ -394,7 +388,7 @@ for (const action of ['查核', '重送']) {
         await region.getByRole('button', { name: '記錄中…', exact: true }).waitFor();
         assert.equal(await check.isDisabled(), true);
         await check.evaluate(button => button.click());
-        await refocusWithStaleCatalog(page, '2030-01-02T10:01:01+08:00');
+        await refocus(page, '2030-01-02T10:01:01+08:00');
         assert.equal(state.recoveries.length, recoveryCount);
         assert.equal(state.posts.length, 2);
         assert.equal(state.posts[0].raw, state.posts[1].raw);
@@ -405,9 +399,9 @@ for (const action of ['查核', '重送']) {
     }
     await assertRecorded(region);
     await region.getByRole('button', { name: '下一筆現場交易', exact: true }).click();
-    const name = region.getByLabel('顧客姓名', { exact: true });
-    await name.fill('新一筆的顧客');
-    assert.equal(await name.inputValue(), '新一筆的顧客');
+    const name = region.getByLabel('品名', { exact: true });
+    await name.fill('新一筆的餐點');
+    assert.equal(await name.inputValue(), '新一筆的餐點');
     assert.equal(await region.locator('.admin-walk-in-result').count(), 0);
     assert.notEqual(await page.evaluate(key => sessionStorage.getItem(key), requestKey), firstId);
     assert.equal(state.sales.size, 1);
@@ -454,7 +448,7 @@ test('確認處理中停用送出，重複點擊及表單提交只建立一筆�
   const pending = region.getByRole('button', { name: '記錄中…', exact: true });
   await pending.waitFor();
   assert.equal(await pending.isDisabled(), true);
-  assert.equal(await region.getByRole('combobox', { name: '品名', exact: true }).isDisabled(), true);
+  assert.equal(await region.getByRole('textbox', { name: '品名', exact: true }).isDisabled(), true);
   assert.equal(await region.getByLabel('含稅單價', { exact: true }).isDisabled(), true);
   await pending.evaluate(button => { button.click(); button.form.requestSubmit(); });
   assert.equal(state.posts.length, 1);
@@ -480,34 +474,22 @@ for (const role of ['guest', 'customer']) {
   });
 }
 
-test('品名目錄背景更新保留畫面選項與送出名稱，已鎖定交易重試仍使用完整原文', async t => {
+test('切換分類不會清掉手填品名，重試保留原交易', async t => {
   const { page, region, state } = await fixture(t, { firstResponse: '503' });
   await fillSale(region);
-  const product = region.getByRole('combobox', { name: '品名', exact: true });
-  state.activeNames = ['合成新餐盒'];
-  await refocusWithStaleCatalog(page, '2030-01-02T10:00:31+08:00');
-  await product.getByRole('option', { name: '合成新餐盒', exact: true }).waitFor({ state: 'attached' });
-  const displayed = await product.evaluate(select => ({ value: select.value, text: select.selectedOptions[0]?.textContent }));
-  assert.deepEqual(displayed, { value: 'retained', text: '合成餐盒（原選品名）' }, '目錄更名後必須保留使用者所選品名');
+  const product = region.getByRole('textbox', { name: '品名', exact: true });
+  await region.getByRole('button', { name: '一般商品', exact: true }).click();
+  assert.equal(await product.inputValue(), '合成餐盒');
   assert.equal(state.posts.length, 0);
   await region.getByRole('button', { name: '確認', exact: true }).click();
   const retry = region.getByRole('button', { name: '重試同一筆交易', exact: true });
   await retry.waitFor();
-  assert.equal(state.posts.length, 1);
-  assert.equal(state.posts[0].body.product_name, '合成餐盒');
-  const original = state.posts[0].raw;
-  state.recoveryVisible = false;
-  state.activeNames = ['另一餐盒'];
-  await refocusWithStaleCatalog(page, '2030-01-02T10:01:02+08:00');
-  await product.getByRole('option', { name: '另一餐盒', exact: true }).waitFor({ state: 'attached' });
   assert.equal(await product.isDisabled(), true);
-  assert.deepEqual(await product.evaluate(select => ({ value: select.value, text: select.selectedOptions[0]?.textContent })), displayed);
-  assert.equal(state.posts.length, 1);
   await retry.click();
   await assertRecorded(region);
   assert.equal(state.posts.length, 2);
-  assert.equal(state.posts[1].raw, original);
+  assert.equal(state.posts[1].raw, state.posts[0].raw);
   assert.equal(state.posts[1].body.product_name, '合成餐盒');
-  assertImmediateSale(state.posts[1].body);
+  assert.equal(state.posts[1].body.sale_category, 'product');
   await assertClean(page, state);
 });

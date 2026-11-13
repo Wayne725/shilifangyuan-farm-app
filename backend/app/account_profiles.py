@@ -11,6 +11,7 @@ from .contact_phone import decrypt_contact_phone, normalize_contact_phone
 from .integrations.common import IntegrationError
 from .integrations.pii_crypto import VersionedPIICipher, pii_cipher_from_settings
 from .models import MemberProfile, RefreshSession, User, utcnow
+from .phone_lookup import phone_lookup_digest
 
 
 Phone = Annotated[str, StringConstraints(max_length=40), AfterValidator(normalize_contact_phone)]
@@ -62,11 +63,20 @@ async def account_phone(session: AsyncSession, user: User, settings: Settings) -
 
 def set_account_phone(user: User, phone: str, settings: Settings) -> None:
     try:
-        user.meal_contact_phone_encrypted = pii_cipher_from_settings(settings).encrypt_text(
+        cipher = pii_cipher_from_settings(settings)
+        user.meal_contact_phone_encrypted = cipher.encrypt_text(
             phone, associated_data=f"meal-contact:{user.id}",
         )
+        user.meal_contact_phone_lookup = phone_lookup_digest(phone, cipher)
     except IntegrationError as exc:
         raise HTTPException(503, "聯絡電話目前無法安全儲存，請稍後再試") from exc
+
+
+async def save_verified_phone_if_missing(session: AsyncSession, user: User, phone: str, settings: Settings) -> None:
+    if user.meal_contact_phone_encrypted is None and not await session.scalar(
+        select(MemberProfile.id).where(MemberProfile.user_id == user.id)
+    ):
+        set_account_phone(user, phone, settings)
 
 
 async def read_account_profile(session: AsyncSession, user: User, settings: Settings) -> AccountProfileRead:

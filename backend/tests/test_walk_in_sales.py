@@ -126,8 +126,7 @@ async def test_no_email_requires_fanyu_mobile_and_does_not_relax_website_checkou
     assert (await post(c, payload(contact_email=None, preferences=mobile))).status_code == 422
     c.settings.invoice_provider = "fanyu"
     for preference in [{}, {**mobile, "invoice_carrier_value": "invalid"}, {**mobile, "invoice_buyer_email": "invalid"},
-        {**mobile, "invoice_buyer_type": "company", "invoice_buyer_tax_id": "11111111", "invoice_buyer_name": "合成公司"},
-        {**mobile, "invoice_buyer_type": "company", "invoice_buyer_tax_id": "15989995"}]:
+        {**mobile, "invoice_buyer_type": "company", "invoice_buyer_tax_id": "11111111", "invoice_buyer_name": "合成公司"}]:
         invalid = await post(c, payload(contact_email=None, preferences=preference))
         assert invalid.status_code == 422, invalid.text
     from app.schemas import InvoicePreferenceInput, OrderCreate
@@ -202,8 +201,14 @@ async def test_pickup_day_prevents_early_issue_and_fulfillment_does_not_notify_o
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("buyer_type,with_email,tax_id", [("personal", True, ""), ("personal", False, ""), ("company", False, "15989995"), ("company", False, " 15989995 ")])
-async def test_guest_invoice_worker_issues_once_with_real_adapter_fake_transport(walk_in_context, monkeypatch, buyer_type, with_email, tax_id):
+@pytest.mark.parametrize("buyer_type,with_email,tax_id,buyer_name", [
+    ("personal", True, "", None),
+    ("personal", False, "", None),
+    ("company", False, "15989995", "合成公司"),
+    ("company", False, " 15989995 ", "合成公司"),
+    ("company", False, "15989995", None),
+])
+async def test_guest_invoice_worker_issues_once_with_real_adapter_fake_transport(walk_in_context, monkeypatch, buyer_type, with_email, tax_id, buyer_name):
     c = walk_in_context
     calls = []
     async def transport(url, envelope, *_args):
@@ -216,12 +221,16 @@ async def test_guest_invoice_worker_issues_once_with_real_adapter_fake_transport
         assert envelope["reqData"]["notifyEmail"] == ("walk-in@example.com" if with_email else "")
         assert envelope["reqData"]["process_type"] == ("B" if buyer_type == "company" else "C")
         assert envelope["reqData"]["buyerID"] == ("15989995" if buyer_type == "company" else "0000000000")
+        if buyer_type == "company":
+            assert envelope["reqData"]["buyerName"] == (buyer_name or "")
         return HTTPResponse(200, json.dumps({"statusCode": "0", "respData": {"invNo": "AB12345678", "invDate": "20261106", "randomNumber": "1234"}}), {})
     adapter = FanyuInvoiceAdapter(fanyu_settings(), transport)
     c.settings.invoice_provider = "fanyu"
     preferences = {"invoice_carrier_type": "mobile_barcode", "invoice_carrier_value": "/ab12+-.", "invoice_buyer_type": buyer_type}
     if buyer_type == "company":
-        preferences.update(invoice_buyer_tax_id=tax_id, invoice_buyer_name="合成公司")
+        preferences.update(invoice_buyer_tax_id=tax_id)
+        if buyer_name is not None:
+            preferences["invoice_buyer_name"] = buyer_name
     created = await post(c, payload(contact_email="walk-in@example.com" if with_email else None, sale_category="meal", preferences=preferences))
     assert created.status_code == 201, created.text
     order = await c.session.get(Order, created.json()["order_id"])

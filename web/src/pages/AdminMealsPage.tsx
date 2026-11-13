@@ -21,6 +21,7 @@ import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, formatMoney } from "../lib/api";
+import { mealPaymentMethodLabel } from "../lib/business-meals";
 import { mealEventStatusLabel } from "../lib/labels";
 import { formatMealDateTime, mealCanChangeOrderingPause, mealServiceDate, shiftMealDate, taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import type { Meal, MealEvent, MealOrder } from "../lib/types";
@@ -100,7 +101,7 @@ export function AdminMealsPage() {
         void navigate({ search: { tab } });
       }}>
         <Tabs.List className="tab-list" aria-label="便當營運分類"><Tabs.Trigger value="orders">訂單查詢與待辦</Tabs.Trigger><Tabs.Trigger value="cancellations">退單審核</Tabs.Trigger><Tabs.Trigger value="events">場次</Tabs.Trigger><Tabs.Trigger value="schedules">每日午晚餐排程</Tabs.Trigger><Tabs.Trigger value="disaster">颱風／天災停餐</Tabs.Trigger><Tabs.Trigger value="meals">餐點主檔</Tabs.Trigger></Tabs.List>
-        <Tabs.Content className="tab-content" value="orders"><AdminMealOrderSearch key={routeSearch.q || "all"} initialSearch={routeSearch.q} /></Tabs.Content>
+        <Tabs.Content className="tab-content" value="orders"><AdminMealOrderSearch key={JSON.stringify([routeSearch.q, routeSearch.queue])} initialSearch={routeSearch.q} initialQueue={routeSearch.queue} /></Tabs.Content>
         <Tabs.Content className="tab-content" value="cancellations">
           <AdminMealCancellations key={JSON.stringify([routeSearch.order_id, routeSearch.q])} initialSearch={routeSearch.q} initialOrderId={routeSearch.order_id} />
         </Tabs.Content>
@@ -571,30 +572,44 @@ function MealEventCard({ event, onDone, onEdit, onArchive, archiving }: {
       {event.status === "cancelled" && <Link className="button button-quiet" to="/admin/meals"
         search={{ tab: "events", date: mealServiceDate(event), rebuild: event.id }}>建立補開草稿</Link>}
     </div>
-    {event.business_only && <p className="meal-payment-options">取餐當日線上付款</p>}
-    {event.same_day_preparation_minutes != null && <p className="meal-payment-options">當日訂餐 · 線上付款</p>}
+    {event.business_only && <p className="meal-payment-options">取餐當日線上付款或付現</p>}
+    {event.same_day_preparation_minutes != null && <p className="meal-payment-options">當日訂餐 · 一般便當線上付款</p>}
     <EventPickupOrders eventId={event.id} />
   </article>;
 }
 
 function EventPickupOrders({ eventId }: { eventId: string }) {
   const [open, setOpen] = useState(false);
+  const [cashUncollected, setCashUncollected] = useState(false);
   const orders = useQuery({
     queryKey: ["admin-meal-event-orders", eventId],
     queryFn: () => apiFetch<MealOrder[]>(`/v1/admin/meal-events/${eventId}/orders`),
     enabled: open,
     refetchInterval: open ? 30000 : false,
   });
+  const visibleOrders = orders.data?.filter(order => !cashUncollected || (
+    order.meal_booking_type === "business" && order.payment_method === "cash_on_pickup"
+    && !order.cancelled_at && ["pending", "expired", "failed"].includes(order.payment_status)
+  ));
+  const preparationQuantity = orders.data?.reduce((total, order) => {
+    const cancelled = order.cancelled_at || order.fulfillment_status === "cancelled";
+    const eligible = order.payment_status === "paid"
+      || (order.meal_booking_type === "business" && order.payment_status === "pending");
+    return !cancelled && eligible ? total + order.items.reduce((count, item) => count + item.quantity, 0) : total;
+  }, 0);
   return <div className="meal-event-pickup-orders">
     <button className="button button-quiet" type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "收起本場訂單" : "查看本場訂單與取餐時間"}</button>
     {open && <section aria-label="本場訂單與取餐時間">
       {orders.isPending && <LoadingLines count={2} />}
       {orders.isError && <DataState kind="error" title="本場訂單無法讀取" detail={orders.error.message} onAction={() => orders.refetch()} />}
-      {orders.data?.length === 0 && <p>本場目前沒有訂單。</p>}
-      <div className="admin-review-list">{orders.data?.map((order) => <article className="admin-record-card" key={order.id}>
+      {preparationQuantity !== undefined && <p><strong>備餐 {preparationQuantity} 份</strong></p>}
+      {Boolean(orders.data?.length) && <label className="check-field"><input type="checkbox" checked={cashUncollected}
+        onChange={event => setCashUncollected(event.target.checked)} />現金未收</label>}
+      {visibleOrders?.length === 0 && <p>{cashUncollected ? "本場沒有待收現金的會餐。" : "本場目前沒有訂單。"}</p>}
+      <div className="admin-review-list">{visibleOrders?.map((order) => <article className="admin-record-card" key={order.id}>
         <h4 className="order-number">{order.order_number}</h4>
         <p>{order.customer_name || "—"} · {order.customer_email || "—"} · {order.contact_phone || "未提供電話"}</p>
-        <p>付款方式：{order.payment_method === "cash_on_pickup" ? "合作社現場付款" : "線上付款"}</p>
+        <p>付款方式：{mealPaymentMethodLabel(order)}</p>
         <OrderQuantityAmendment order={order} />
         <AdminCancelOrder order={order} />
         <AdminCashPayment order={order} onDone={() => { void orders.refetch(); }} />

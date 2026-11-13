@@ -1800,8 +1800,10 @@ class MealOrderCreate(InvoicePreferenceInput):
         if self.meal_booking_type == "business":
             if self.invoice_buyer_type != InvoiceBuyerType.COMPANY:
                 raise ValueError("會餐必須填寫公司統編與抬頭")
-            if self.payment_method != PaymentMethod.ONLINE:
-                raise ValueError("會餐僅支援線上付款")
+            if self.payment_method not in {PaymentMethod.ONLINE, PaymentMethod.CASH_ON_PICKUP}:
+                raise ValueError("會餐僅支援線上付款或取餐時付現")
+            if self.invoice_handling == "external":
+                raise ValueError("會餐發票由系統於取餐日開立")
             if sum(item.quantity for item in self.items) < 2:
                 raise ValueError("會餐至少需訂 2 份")
             self.invoice_handling = "pickup_day"
@@ -1993,6 +1995,7 @@ class MealCancellationQueueRead(ApiModel):
 
 class MealOrderSearchFilters(BaseModel):
     business_unpaid: bool = False
+    cash_uncollected: bool = False
     search: str = Field(default="", max_length=100)
     date_from: Optional[date] = Field(default=None, ge=date(2, 1, 1), le=date(9998, 12, 31))
     date_to: Optional[date] = Field(default=None, ge=date(2, 1, 1), le=date(9998, 12, 31))
@@ -2002,7 +2005,10 @@ class MealOrderSearchFilters(BaseModel):
     fulfillment_status: Optional[FulfillmentState] = None
     invoice_status: Optional[InvoiceStatus] = None
     review_status: Literal["all", "none", "pending", "approved", "rejected"] = "all"
-    work_queue: Literal["all", "pending_cancellation", "refund_attention", "invoice_attention", "today_pickup"] = "all"
+    work_queue: Literal[
+        "all", "pending_cancellation", "refund_attention", "invoice_attention",
+        "today_pickup", "today_business_cash_uncollected",
+    ] = "all"
     limit: int = Field(default=30, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -2033,6 +2039,7 @@ class MealOperationsSummary(ApiModel):
     refund_attention: int
     invoice_attention: int
     today_pickup: int
+    today_business_cash_uncollected: int
 
 
 class MealPickupCredentialRead(ApiModel):
@@ -2086,6 +2093,8 @@ class MealDisasterEvent(ApiModel):
     order_count: int
     paid_count: int
     paid_total: int
+    cash_paid_count: int = 0
+    cash_paid_total: int = 0
     blocked: bool
     ordering_paused: bool
     ordering_pause_version: int
@@ -2102,6 +2111,8 @@ class MealDisasterResult(ApiModel):
     order_count: int
     paid_count: int
     paid_total: int
+    cash_paid_count: int = 0
+    cash_paid_total: int = 0
 
 
 class MealDisasterAnnouncement(ApiModel):

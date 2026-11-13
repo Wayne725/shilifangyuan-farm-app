@@ -135,6 +135,7 @@ def invoice_request_from_order(
         buyer_type=order.invoice_buyer_type.value,
         buyer_tax_id=order.invoice_buyer_tax_id or "",
         buyer_name=order.invoice_buyer_name or "",
+        allow_company_without_name=getattr(order, "customer_kind", None) == "walk_in",
         carrier_type=carrier_type,
         carrier_number=order.invoice_carrier_value or "",
         customer_id=(order.user_id or order.id).replace("-", "")[:20],

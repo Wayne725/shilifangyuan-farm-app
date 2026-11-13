@@ -161,7 +161,7 @@ async def test_disaster_batch_cancels_lunch_and_dinner_and_notifies_every_order(
     body = {**payload, "preview_token": refreshed["preview_token"], "announcement": "颱風期間暫停供餐"}
     result = await client.post(cancel_path, headers=admin_headers, json=body)
     assert result.status_code == 200, result.text
-    assert result.json() == {"cancelled_event_count": 2, "order_count": 6, "paid_count": 2, "paid_total": 200}
+    assert result.json() == {"cancelled_event_count": 2, "order_count": 6, "paid_count": 2, "paid_total": 200, "cash_paid_count": 0, "cash_paid_total": 0}
     assert (await client.post(cancel_path, headers=admin_headers, json=body)).status_code == 409
     assert all(event.status == MealEventStatus.CANCELLED for event in events)
     assert len(list(await session.scalars(select(Refund)))) == 2

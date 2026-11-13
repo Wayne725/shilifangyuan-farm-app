@@ -430,15 +430,21 @@ def order_available_actions(
             actions.append("refund_walk_in")
         if admin_order_cancellation_allowed(order, current):
             actions.append("cancel")
+        from .business_meals import is_business_meal
         event = order.__dict__.get("meal_event")
+        business = is_business_meal(order)
+        cash_collection_open = meal_payment_window_open(order, current) if business else (
+            event is not None and event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED, MealEventStatus.DRAFT}
+            and current < aware(event.pickup_ends_at)
+        )
         if (order.payment_method == PaymentMethod.CASH_ON_PICKUP
             and order.payment_status == PaymentStatus.PENDING and not meal_fulfillment_closed
-            and event is not None and event.status not in {MealEventStatus.CANCELLED, MealEventStatus.COMPLETED, MealEventStatus.DRAFT}
-            and current < aware(event.pickup_ends_at)):
+            and cash_collection_open):
             actions.append("confirm_cash_payment")
         if (order.payment_method == PaymentMethod.CASH_ON_PICKUP
             and order.payment_status == PaymentStatus.PAID and not meal_fulfillment_closed
             and getattr(order, "customer_kind", "account") != "walk_in"
+            and (not business or (cash_collection_open and order.__dict__.get("invoice") is None))
             and not order_fulfillment_is_irreversible(order)):
             actions.append("mark_cash_unpaid")
         if order.payment_method == PaymentMethod.CASH_ON_PICKUP and order.payment_status == PaymentStatus.REFUND_PENDING:

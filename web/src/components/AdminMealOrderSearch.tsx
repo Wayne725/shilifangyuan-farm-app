@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
+import { mealPaymentMethodLabel } from "../lib/business-meals";
 import { invoiceStatusLabel, paymentStatusLabel } from "../lib/labels";
 import { formatMealDateTime, shiftMealDate, taipeiDate } from "../lib/meal-time";
 import type { MealAdminOrderItem, MealAdminOrderPage, MealOperationsSummary } from "../lib/types";
@@ -15,7 +16,7 @@ import { DataState, LoadingLines } from "./Shared";
 import "./AdminMealFilters.css";
 
 const pageSize = 20;
-const emptyFilters = { search: "", date_from: "", date_to: "", meal_period: "all", pickup_time: "", payment_status: "", fulfillment_status: "", invoice_status: "", review_status: "all", work_queue: "all" };
+const emptyFilters = { search: "", date_from: "", date_to: "", meal_period: "all", pickup_time: "", payment_status: "", fulfillment_status: "", invoice_status: "", review_status: "all", work_queue: "all", cash_uncollected: "" };
 const fulfillmentLabels: Record<string, string> = { pending: "待確認", preparing: "製作中", ready: "待取餐", ready_for_pickup: "待取餐", picked_up: "已取餐", no_show: "取餐時段已結束", cancelled: "已取消" };
 const reviewLabels = { pending: "退單待審", approved: "退單已核准", rejected: "退單未核准" };
 const workQueues = [
@@ -23,11 +24,12 @@ const workQueues = [
   { key: "refund_attention", title: "退款待處理", detail: "退款中、晚付款或退款失敗" },
   { key: "invoice_attention", title: "發票待處理", detail: "開票／作廢錯誤或失敗工作" },
   { key: "today_pickup", title: "今日待取餐", detail: "已付款且仍可取餐" },
+  { key: "today_business_cash_uncollected", title: "今日現金未收", detail: "今日取餐的現金會餐" },
 ] as const;
 
-export function AdminMealOrderSearch({ initialSearch = "" }: { initialSearch?: string }) {
-  const [draft, setDraft] = useState({ ...emptyFilters, search: initialSearch });
-  const [filters, setFilters] = useState({ ...emptyFilters, search: initialSearch });
+export function AdminMealOrderSearch({ initialSearch = "", initialQueue = "all" }: { initialSearch?: string; initialQueue?: string }) {
+  const [draft, setDraft] = useState({ ...emptyFilters, search: initialSearch, work_queue: initialQueue });
+  const [filters, setFilters] = useState({ ...emptyFilters, search: initialSearch, work_queue: initialQueue });
   const [offset, setOffset] = useState(0);
   const dateError = Boolean(draft.date_from && draft.date_to && draft.date_to < draft.date_from);
   const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset) });
@@ -54,7 +56,7 @@ export function AdminMealOrderSearch({ initialSearch = "" }: { initialSearch?: s
     <header className="meal-order-search-heading"><div><h2 id="meal-order-search-heading">全部便當訂單</h2></div><button className="button button-quiet" type="button" disabled={orders.isFetching || summary.isFetching} onClick={() => { void orders.refetch(); void summary.refetch(); }}>重新整理</button></header>
     <div className="meal-operation-tasks" aria-label="全部便當營運待辦">
       {workQueues.map((queue) => <button key={queue.key} type="button" aria-pressed={filters.work_queue === queue.key} onClick={() => apply({ ...emptyFilters, work_queue: queue.key })}>
-        <span>{queue.title}</span><strong>{summary.data ? summary.data[queue.key] : "—"}</strong>
+        <span>{queue.title}</span><strong>{summary.data?.[queue.key] ?? "—"}</strong>
       </button>)}
     </div>
     <div className="admin-quick-buttons" role="group" aria-label="快速取餐日期">{[{ label: "全部日期", date: "" }, { label: "今天", date: taipeiDate() }, { label: "明天", date: shiftMealDate(taipeiDate(), 1) }].map(({ label, date }) => <button className="button button-quiet" key={label} type="button" aria-pressed={filters.date_from === date && filters.date_to === date && filters.work_queue === "all"} onClick={() => apply({ ...filters, date_from: date, date_to: date, work_queue: "all" })}>{label}</button>)}</div>
@@ -70,6 +72,7 @@ export function AdminMealOrderSearch({ initialSearch = "" }: { initialSearch?: s
       <label className="field"><span>午餐／晚餐</span><select value={draft.meal_period} onChange={(event) => update("meal_period", event.target.value)}><option value="all">全部餐別</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="unspecified">特殊場次</option></select></label>
       <label className="field"><span>預計取餐時間</span><input type="time" step={60} value={draft.pickup_time} onChange={(event) => update("pickup_time", event.target.value)} /></label>
       <label className="field"><span>付款狀態</span><select value={draft.payment_status} onChange={(event) => update("payment_status", event.target.value)}><option value="">全部付款狀態</option>{["pending", "paid", "refund_pending", "late_paid_refund_required", "refunded", "expired", "failed"].map((status) => <option value={status} key={status}>{paymentStatusLabel(status)}</option>)}</select></label>
+      <label className="check-field"><input type="checkbox" checked={draft.cash_uncollected === "true"} onChange={event => update("cash_uncollected", event.target.checked ? "true" : "")} />現金未收</label>
       <label className="field"><span>發票狀態</span><select value={draft.invoice_status} onChange={(event) => update("invoice_status", event.target.value)}><option value="">全部發票狀態</option>{["not_eligible", "pending", "issued", "failed", "void_pending", "voided"].map((status) => <option value={status} key={status}>{invoiceStatusLabel(status)}</option>)}</select></label>
       <label className="field"><span>退單審核</span><select value={draft.review_status} onChange={(event) => update("review_status", event.target.value)}><option value="all">全部審核狀態</option><option value="none">沒有退單申請</option><option value="pending">待審核</option><option value="approved">已核准</option><option value="rejected">未核准</option></select></label>
       </div></details>
@@ -108,7 +111,7 @@ function MealOperationOrder({ item }: { item: MealAdminOrderItem }) {
     <p>{order.items.map((meal) => `${meal.meal_name} × ${meal.quantity}`).join("、")}</p>
     <div className="operation-state"><OrderStatusBadge kind="payment" status={order.payment_status} label={order.payment_status === "expired" && !order.cancelled_at ? "付款逾期" : undefined} /><OrderStatusBadge kind="fulfillment" status={order.cancelled_at ? "cancelled" : order.fulfillment_status} label={order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "取餐時段已結束" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"} /><OrderStatusBadge kind="invoice" status={order.invoice_status} /></div>
     {cancellation && <p className="meal-order-review-status">{reviewLabels[cancellation.status]}{cancellation.status === "pending" && "，訂單尚未取消"}</p>}
-    <p>付款方式：{order.payment_method === "cash_on_pickup" ? "合作社現場付款" : "線上付款"}</p>
+    <p>付款方式：{mealPaymentMethodLabel(order)}</p>
     <OrderQuantityAmendment order={order} disabled={update.isPending} />
     <AdminCancelOrder order={order} /><AdminCashPayment order={order} />
     <details><summary>{cancellation ? "查看餐點、發票與退單明細" : "查看餐點與發票明細"}</summary>

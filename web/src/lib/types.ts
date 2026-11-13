@@ -657,6 +657,7 @@ export interface MealOperationsSummary {
   refund_attention: number;
   invoice_attention: number;
   today_pickup: number;
+  today_business_cash_uncollected: number;
 }
 
 export interface MealAdminOrderItem {

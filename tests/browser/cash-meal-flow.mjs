@@ -50,7 +50,10 @@ async function fixture(t, width, admin = false, allowCash = true) {
     }
     if (path === '/v1/admin/meals') return route.fulfill({ json: [] });
     if (path === '/v1/admin/meal-events') return route.fulfill({ json: [event] });
-    if (path === '/v1/admin/meal-orders') return route.fulfill({ json: { items: [{ order: state.order, customer_name: '買家', customer_email: 'buyer@example.test', meal_period: 'lunch' }], total: 1, offset: 0, limit: 20 } });
+    if (path === '/v1/admin/meal-orders') {
+      state.lastMealOrderQuery = Object.fromEntries(url.searchParams);
+      return route.fulfill({ json: { items: [{ order: state.order, customer_name: '買家', customer_email: 'buyer@example.test', meal_period: 'lunch' }], total: 1, offset: 0, limit: 20 } });
+    }
     if (path === '/v1/admin/meal-operations-summary') return route.fulfill({ json: { pending_cancellation: 0, refund_attention: 0, invoice_attention: 0, today_pickup: 0 } });
     if (path === '/v1/meal-events/onsite-event/quote') {
       const body = request.postDataJSON();
@@ -249,4 +252,30 @@ test('390px 後台場次卡隱藏現場付款設定，既有場次仍可檢視',
   assert.equal(await page.getByRole('checkbox', { name: '開放合作社現場付款', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '查看本場訂單與取餐時間' }).count(), 1);
   if (process.env.BROWSER_ARTIFACT_DIR) await page.screenshot({ path: `${process.env.BROWSER_ARTIFACT_DIR}/admin-online-meal-390.png`, fullPage: true });
+});
+
+test('390px 後台以現金未收篩選並為會餐確認付現', async t => {
+  const { page, state } = await fixture(t, 390, true);
+  state.order = { ...state.order, meal_booking_type: 'business', invoice_handling: 'pickup_day', invoice_status: 'not_eligible' };
+  await page.goto(`${base}/admin/meals?tab=orders&queue=today_business_cash_uncollected`);
+  await page.getByText('付款方式：現金・未收', { exact: true }).waitFor();
+  assert.equal(state.lastMealOrderQuery.work_queue, 'today_business_cash_uncollected');
+  await page.getByText('更多篩選', { exact: true }).click();
+  await page.getByRole('checkbox', { name: '現金未收', exact: true }).check();
+  const filtered = page.waitForResponse(response => new URL(response.url()).searchParams.get('cash_uncollected') === 'true');
+  await page.getByRole('button', { name: '查詢訂單', exact: true }).click();
+  await filtered;
+  await page.getByRole('button', { name: '標記已付款', exact: true }).click();
+  assert.equal(await page.getByLabel('開票方式', { exact: true }).count(), 0);
+  await page.getByText('收款後系統會自動開立統編發票。', { exact: true }).waitFor();
+  await page.getByLabel('實收金額', { exact: true }).fill('120');
+  await page.getByRole('checkbox', { name: '已核對上述款項確實收到', exact: true }).check();
+  await page.getByRole('button', { name: '確認已付款', exact: true }).click();
+  await page.getByText('付款方式：現金・已收', { exact: true }).waitFor();
+  assert.equal(state.writes.length, 1);
+  assert.equal(state.writes[0].body.collection_method, 'cash');
+  assert.equal(state.writes[0].body.invoice_handling, 'pickup_day');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.deepEqual(state.unknown, []);
+  assert.deepEqual(state.errors, []);
 });

@@ -357,9 +357,10 @@ const adminGroupsRoute = createRoute({
 const adminMealsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/meals",
-  validateSearch: (search: Record<string, unknown>): { tab?: string; q?: string; order_id?: string; date?: string; rebuild?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { tab?: string; q?: string; order_id?: string; date?: string; rebuild?: string; queue?: "today_business_cash_uncollected" } => ({
     tab: typeof search.tab === "string" && ["orders", "cancellations", "events", "schedules", "disaster", "meals"].includes(search.tab) ? search.tab : undefined,
     q: typeof search.q === "string" ? search.q.slice(0, 100) : undefined,
+    queue: search.tab === "orders" && search.queue === "today_business_cash_uncollected" ? search.queue : undefined,
     order_id: search.tab === "cancellations" && typeof search.order_id === "string" && search.order_id.length > 0 && search.order_id.length <= 36
       ? search.order_id : undefined,
     date: search.tab === "events" && typeof search.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(search.date) ? search.date : undefined,
@@ -385,8 +386,8 @@ const adminKitchenRoute = createRoute({
 const adminRecordsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/records",
-  validateSearch: (search: Record<string, unknown>): { tab?: "payments" | "points"; member?: string } => ({
-    tab: search.tab === "payments" || search.tab === "points" ? search.tab : undefined,
+  validateSearch: (search: Record<string, unknown>): { tab?: "payments" | "points" | "spending"; member?: string } => ({
+    tab: search.tab === "payments" || search.tab === "points" || search.tab === "spending" ? search.tab : undefined,
     member: typeof search.member === "string" ? search.member.trim().slice(0, 100) || undefined : undefined,
   }),
   beforeLoad: ({ search }) => {
@@ -406,7 +407,7 @@ const adminUsersRoute = createRoute({
   path: "/admin/users",
   validateSearch: (search: Record<string, unknown>): {
     tab?: "members" | "roster" | "records";
-    ledger?: "payments" | "points";
+    ledger?: "payments" | "points" | "spending";
     q?: string;
     membership?: string;
     member?: string;
@@ -414,7 +415,7 @@ const adminUsersRoute = createRoute({
     const tab = search.tab === "members" || search.tab === "roster" || search.tab === "records" ? search.tab : undefined;
     return {
       tab,
-      ledger: tab === "records" && (search.ledger === "payments" || search.ledger === "points") ? search.ledger : undefined,
+      ledger: tab === "records" && (search.ledger === "payments" || search.ledger === "points" || search.ledger === "spending") ? search.ledger : undefined,
       q: tab === "members" && typeof search.q === "string" ? search.q.trim().slice(0, 100) || undefined : undefined,
       membership: tab && typeof search.membership === "string" ? search.membership.trim().slice(0, 100) || undefined : undefined,
       member: tab && typeof search.member === "string" ? search.member.trim().slice(0, 100) || undefined : undefined,

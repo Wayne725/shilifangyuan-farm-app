@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -9,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .config import Settings
+from .business_meals import is_business_meal
+from .domain import aware
 from .integrations.common import IntegrationError
 from .integrations.feie import FeieError, configured_region, validate_live_config
 from .integrations.pii_crypto import pii_cipher_from_settings
-from .models import FulfillmentState, FulfillmentStatus, MemberProfile, Order, OrderItem, PaymentStatus, PrintJob, SalesChannel
+from .models import FulfillmentState, FulfillmentStatus, MemberProfile, Order, OrderItem, PaymentMethod, PaymentStatus, PrintJob, SalesChannel
 from .contact_phone import decrypt_contact_phone
 from .printing import (confirmed_print_payment, order_print_snapshot,
                        payment_snapshot_from_session, printer_fingerprint, render_receipt_snapshot)
@@ -40,6 +43,9 @@ def current_fulfillment_status(order: Order) -> str:
 def manual_print_kind(order: Order) -> str:
     finished = (current_fulfillment_status(order) in {"cancelled", "picked_up", "delivered", "no_show"}
                 or order.fulfillment_status in {FulfillmentStatus.CANCELLED, FulfillmentStatus.PICKED_UP})
+    if (is_business_meal(order) and order.payment_method == PaymentMethod.CASH_ON_PICKUP and order.fulfillment
+        and order.fulfillment.pickup_ends_at and datetime.now(timezone.utc) >= aware(order.fulfillment.pickup_ends_at)):
+        finished = True
     return "order" if confirmed_print_payment(order) and not finished else "reference"
 
 

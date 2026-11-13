@@ -16,13 +16,15 @@ type EventPreview = {
   order_count: number;
   paid_count: number;
   paid_total: number;
+  cash_paid_count?: number;
+  cash_paid_total?: number;
   blocked: boolean;
   ordering_paused: boolean;
   ordering_pause_version: number;
   ordering_pause_blocked_reason: string | null;
 };
 type Preview = { events: EventPreview[]; preview_token: string };
-type Result = { cancelled_event_count: number; order_count: number; paid_count: number; paid_total: number };
+type Result = { cancelled_event_count: number; order_count: number; paid_count: number; paid_total: number; cash_paid_count?: number; cash_paid_total?: number };
 
 export function MealDisasterCancellation({ mealEvents, mealEventsError, onDone }: {
   mealEvents?: MealEvent[];
@@ -79,6 +81,8 @@ export function MealDisasterCancellation({ mealEvents, mealEventsError, onDone }
   ).sort((left, right) => Date.parse(left.pickup_starts_at) - Date.parse(right.pickup_starts_at));
   const paid = events.reduce((sum, event) => sum + event.paid_count, 0);
   const amount = events.reduce((sum, event) => sum + event.paid_total, 0);
+  const cashPaid = events.reduce((sum, event) => sum + (event.cash_paid_count ?? 0), 0);
+  const cashAmount = events.reduce((sum, event) => sum + (event.cash_paid_total ?? 0), 0);
   const canConfirm = events.length > 0 && !events.some(event => event.blocked);
   return <section className="admin-master-form social-form">
     <h2>颱風／天災停餐</h2>
@@ -118,6 +122,7 @@ export function MealDisasterCancellation({ mealEvents, mealEventsError, onDone }
       {events.map(event => <li key={event.id}>
         <div>
           <p id={`disaster-event-${event.id}`}>{event.title} · {event.period === "lunch" ? "午餐" : "晚餐"} · {event.order_count} 筆訂單 · 已付款 {formatMoney(event.paid_total)}{event.blocked && " · 已有取餐紀錄"}</p>
+          {Boolean(event.cash_paid_count) && <p>現金待退 {event.cash_paid_count} 筆 · {formatMoney(event.cash_paid_total ?? 0)}</p>}
           {event.ordering_paused && !event.ordering_pause_blocked_reason && <small>已暫停新預訂</small>}
           {event.ordering_pause_blocked_reason && <small>{event.ordering_pause_blocked_reason}</small>}
         </div>
@@ -136,14 +141,14 @@ export function MealDisasterCancellation({ mealEvents, mealEventsError, onDone }
       <p>已取消的場次保留原訂單及退款紀錄。</p>
       <Link to="/admin/meals" search={{ tab: "events", date }} className="text-link">查看當日場次</Link>
     </>}
-    {cancel.data && <p className="form-success" role="status">已取消 {cancel.data.cancelled_event_count} 個場次、{cancel.data.order_count} 筆訂單，已安排 {cancel.data.paid_count} 筆退款，共 {formatMoney(cancel.data.paid_total)}。</p>}
+    {cancel.data && <p className="form-success" role="status">已取消 {cancel.data.cancelled_event_count} 個場次、{cancel.data.order_count} 筆訂單，已安排 {cancel.data.paid_count} 筆退款，共 {formatMoney(cancel.data.paid_total)}。{Boolean(cancel.data.cash_paid_count) && `其中 ${cancel.data.cash_paid_count} 筆待現場退還現金，共 ${formatMoney(cancel.data.cash_paid_total ?? 0)}。`}</p>}
     {canConfirm && <Dialog.Root open={confirm} onOpenChange={open => { if (!cancel.isPending) setConfirm(open); }}>
       <Dialog.Trigger asChild><button className="button button-quiet" type="button" disabled={busy}>取消供餐與退款</button></Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="admin-cancel-overlay" />
         <Dialog.Content className="admin-cancel-dialog">
           <Dialog.Title>取消 {date} 的 {events.length} 個場次</Dialog.Title>
-          <Dialog.Description>將退款 {paid} 筆、共 {formatMoney(amount)}，無法復原。所有受影響的買家會收到取消通知。</Dialog.Description>
+          <Dialog.Description>將退款 {paid} 筆、共 {formatMoney(amount)}，無法復原。{cashPaid > 0 && `其中 ${cashPaid} 筆待現場退還現金，共 ${formatMoney(cashAmount)}。`}所有受影響的買家會收到取消通知。</Dialog.Description>
           {cancel.isError && <p className="form-error" role="alert">{cancel.error.message}</p>}
           <div className="form-actions">
             <Dialog.Close asChild><button type="button" className="button button-quiet" disabled={cancel.isPending}>返回</button></Dialog.Close>

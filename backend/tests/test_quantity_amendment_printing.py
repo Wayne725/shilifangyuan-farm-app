@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.models import Order, OrderItem, PrintJob
-from app.printing import enqueue_amendment_print, enqueue_cancellation_print, format_receipt
+from app.printing import enqueue_amendment_print, format_receipt, stop_cancelled_order_prints
 from app.printer_worker import process_print_job
 from app.routers.printers import printers_router
 from tests.support import api_test_context, auth_headers
@@ -47,7 +47,7 @@ async def test_amendment_replaces_unsent_and_distinguishes_sent_receipts(print_c
         assert '數量修訂單' in format_receipt(current.snapshot)
         assert '請依最新版調整原單' in format_receipt(current.snapshot)
 
-async def test_second_amendment_compares_with_last_sent_and_cancellation_uses_latest(print_context):
+async def test_second_amendment_compares_with_last_sent_and_cancellation_stops_latest(print_context):
     c = print_context
     await set_job(c, status='printed')
     await amend(c, revision=2, quantity=3)
@@ -61,12 +61,12 @@ async def test_second_amendment_compares_with_last_sent_and_cancellation_uses_la
         order = await session.get(Order, c.order_id)
         order.cancelled_at = datetime.now(timezone.utc)
         order.cancellation_reason = '核准退單'
-        await enqueue_cancellation_print(session, order, c.settings)
+        await stop_cancelled_order_prints(session, order)
         await session.commit()
-        notice = await session.scalar(select(PrintJob).where(PrintJob.order_id == order.id, PrintJob.kind == 'cancellation'))
-        assert notice.snapshot['revision'] == 3
-        assert notice.snapshot['items'][0]['quantity'] == 4
-        assert '取消通知' in format_receipt(notice.snapshot)
+        stopped = await session.get(PrintJob, latest.id)
+        assert stopped.status == 'failed'
+        assert stopped.last_error == 'order_cancelled_before_send'
+        assert await session.scalar(select(PrintJob).where(PrintJob.order_id == order.id, PrintJob.kind == 'cancellation')) is None
 
 async def test_worker_prints_only_current_revision(print_context):
     c = print_context

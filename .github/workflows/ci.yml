@@ -260,6 +260,7 @@ jobs:
           kill -0 "$commerce_preview_pid"
           node --test --test-concurrency=1 --test-timeout=60000 \
             tests/browser/admin-order-contact.mjs \
+            tests/browser/order-summary.mjs \
             tests/browser/business-meals.mjs \
             tests/browser/cart-account-isolation.mjs \
             tests/browser/public-audit-followups.mjs \
@@ -277,6 +278,7 @@ jobs:
           if [[ "$BROWSER_ENGINE" == chromium ]]; then
             node --test --test-concurrency=1 --test-timeout=45000 \
               tests/browser/admin-style-roster-csv.mjs \
+              tests/browser/admin-member-spending.mjs \
               tests/browser/admin-editing.mjs \
               tests/browser/catalog-sale-controls.mjs 2>&1 | tee -a browser-evidence/commerce.log
           fi

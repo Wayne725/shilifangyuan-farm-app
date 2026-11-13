@@ -16,6 +16,7 @@ from .models import (
     InvoiceBuyerType, Meal, MemberProfile, MemberRosterEntry, Membership, MembershipStatus,
     MembershipType, Product, TaxType, User,
 )
+from .phone_lookup import mask_phone, phone_lookup_digests
 
 
 class CounterMemberIdentity(BaseModel):
@@ -56,6 +57,132 @@ class CounterMemberQuote(BaseModel):
     membership_type: MembershipType
 
 
+class CounterPhoneLookupInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phone: SecretStr = Field(min_length=8, max_length=40)
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_number(cls, value: SecretStr) -> SecretStr:
+        return normalize_counter_phone(value)
+
+
+def normalize_counter_phone(value: SecretStr) -> SecretStr:
+    phone = normalize_phone(value.get_secret_value())
+    if not 8 <= len(phone) <= 15 or not phone.isascii():
+        raise ValueError("請填寫有效的電話號碼")
+    return SecretStr(phone)
+
+
+class CounterPhoneMatch(BaseModel):
+    id: str
+    name: str
+    member_number: str
+    membership_type: MembershipType
+    personal_tax_type: TaxType
+    company_tax_type: TaxType
+
+
+class CounterPhoneLookup(BaseModel):
+    status: Literal["matched", "inactive", "no_match"]
+    phone_masked: str
+    matches: list[CounterPhoneMatch]
+
+
+def counter_member_tax_type(membership_type: MembershipType, buyer_type: InvoiceBuyerType) -> TaxType:
+    return sale_tax_type(TaxType.TAXABLE, membership_type, buyer_type)
+
+
+async def counter_phone_matches(
+    session: AsyncSession, settings: Settings, phone: str, *, lock: bool = False,
+) -> tuple[list[tuple[CounterPhoneMatch, str]], bool]:
+    try:
+        cipher = pii_cipher_from_settings(settings)
+        digests = list(phone_lookup_digests(phone, cipher).values())
+        profile_candidates = (
+            select(MemberProfile.user_id).join(User, User.id == MemberProfile.user_id)
+            .where(User.meal_contact_phone_encrypted.is_(None), MemberProfile.phone_lookup.in_(digests))
+        )
+        linked_ids = select(User.id).where(User.meal_contact_phone_lookup.in_(digests)).union(profile_candidates)
+        linked_query = (
+            select(Membership, User, MemberProfile)
+            .join(User, User.id == Membership.user_id)
+            .outerjoin(MemberProfile, MemberProfile.user_id == User.id)
+            .where(User.id.in_(linked_ids))
+            .order_by(User.id)
+        )
+        roster_query = (
+            select(MemberRosterEntry).where(
+                MemberRosterEntry.claimed_user_id.is_(None), MemberRosterEntry.phone_lookup.in_(digests),
+            ).order_by(MemberRosterEntry.id)
+        )
+        linked = (await session.execute(linked_query)).all()
+        if lock and linked:
+            user_ids = [user.id for _, user, _ in linked]
+            for model, column in ((User, User.id), (Membership, Membership.user_id), (MemberProfile, MemberProfile.user_id)):
+                await session.execute(select(model.id).where(column.in_(user_ids)).order_by(model.id).with_for_update(read=True))
+            linked = (await session.execute(linked_query.where(User.id.in_(user_ids)).execution_options(populate_existing=True))).all()
+        roster = (await session.scalars(
+            roster_query.with_for_update(read=True).execution_options(populate_existing=True) if lock else roster_query,
+        )).all()
+
+        def matches_phone(ciphertext: str, aad: str) -> bool:
+            stored = normalize_phone(cipher.decrypt_text(ciphertext, associated_data=aad))
+            return compare_digest(stored.encode(), phone.encode())
+
+        matches = []
+        inactive = False
+        for membership, user, profile in linked:
+            profile_aad = f"member-profile:{user.id}"
+            if user.meal_contact_phone_encrypted:
+                matched = matches_phone(user.meal_contact_phone_encrypted, f"meal-contact:{user.id}")
+            else:
+                matched = profile is not None and matches_phone(profile.phone_encrypted, profile_aad)
+            if not matched:
+                continue
+            if not user.is_active or membership.status not in {MembershipStatus.ACTIVE, MembershipStatus.TRAINEE}:
+                inactive = inactive or not user.is_active or membership.status in {
+                    MembershipStatus.SUSPENDED, MembershipStatus.RESIGNED, MembershipStatus.TERMINATED,
+                }
+                continue
+            is_active_member = membership.status == MembershipStatus.ACTIVE
+            number = membership.member_number if is_active_member else membership.trainee_number
+            if not number:
+                continue
+            name = cipher.decrypt_text(profile.legal_name_encrypted, associated_data=profile_aad) if profile else user.display_name
+            membership_type = MembershipType.MEMBER if is_active_member else MembershipType.TRAINEE
+            matches.append((_counter_phone_match(f"membership:{membership.id}", name or user.display_name, number, membership_type), name or user.display_name))
+        for entry in roster:
+            aad = roster_aad(entry.id)
+            if not matches_phone(entry.phone_encrypted, aad):
+                continue
+            if not entry.is_active:
+                inactive = True
+                continue
+            name = cipher.decrypt_text(entry.legal_name_encrypted, associated_data=aad)
+            matches.append((_counter_phone_match(f"roster:{entry.id}", name, entry.member_number, MembershipType.MEMBER), name))
+    except IntegrationError as exc:
+        raise HTTPException(503, "社員資料暫時無法核對，請稍後再試") from exc
+    return sorted(matches, key=lambda match: match[0].member_number), inactive
+
+
+def _counter_phone_match(id: str, name: str, member_number: str, membership_type: MembershipType) -> CounterPhoneMatch:
+    return CounterPhoneMatch(
+        id=id, name=f"{name[:1]}{'○' * max(1, len(name) - 1)}", member_number=member_number,
+        membership_type=membership_type,
+        personal_tax_type=counter_member_tax_type(membership_type, InvoiceBuyerType.PERSONAL),
+        company_tax_type=counter_member_tax_type(membership_type, InvoiceBuyerType.COMPANY),
+    )
+
+
+async def counter_phone_lookup(session: AsyncSession, settings: Settings, phone: str) -> CounterPhoneLookup:
+    matches, inactive = await counter_phone_matches(session, settings, phone)
+    return CounterPhoneLookup(
+        status="matched" if matches else "inactive" if inactive else "no_match",
+        phone_masked=mask_phone(phone), matches=[match for match, _ in matches],
+    )
+
+
 async def counter_member_quote(
     session: AsyncSession, settings: Settings, body: CounterMemberQuoteInput, *, lock: bool = False,
 ) -> tuple[Membership, CounterMemberQuote]:
@@ -82,9 +209,12 @@ async def counter_member_quote(
     }:
         raise HTTPException(409, mismatch)
 
-    phone_query = select(MemberProfile.phone_encrypted).where(MemberProfile.user_id == user.id)
-    encrypted_phone = await session.scalar(phone_query.with_for_update(read=True) if lock else phone_query)
-    aad = f"member-profile:{user.id}"
+    encrypted_phone = user.meal_contact_phone_encrypted
+    aad = f"meal-contact:{user.id}"
+    if encrypted_phone is None:
+        phone_query = select(MemberProfile.phone_encrypted).where(MemberProfile.user_id == user.id)
+        encrypted_phone = await session.scalar(phone_query.with_for_update(read=True) if lock else phone_query)
+        aad = f"member-profile:{user.id}"
     if encrypted_phone is None and membership.member_number:
         roster_query = select(MemberRosterEntry.id, MemberRosterEntry.phone_encrypted).where(
             MemberRosterEntry.claimed_user_id == user.id,

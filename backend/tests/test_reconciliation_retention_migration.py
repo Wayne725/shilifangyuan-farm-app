@@ -73,5 +73,5 @@ def test_retention_index_preserves_all_rows_across_up_down_up(proposal_migration
     assert table_names() == tables_before_policy | {policies.name, "walk_in_request_guards"}
     database.assert_schema_matches()
     assert snapshot() == {**expected, "users": [
-        {**row, "meal_contact_phone_encrypted": None} for row in expected["users"]
+        {**row, "meal_contact_phone_encrypted": None, "meal_contact_phone_lookup": None} for row in expected["users"]
     ]}

@@ -38,7 +38,8 @@ async def test_both_heads_and_live_graph_preserve_orders_at_merged_head(migrated
     assert after_order["invoice_handling"] == before_order.get("invoice_handling", "on_payment")
     assert invoice_handling(SimpleNamespace(**after_order)) == "on_payment"
     expected_users = [
-        {**row, "data_consent_version": None, "data_consented_at": None, "meal_contact_phone_encrypted": None}
+        {**row, "data_consent_version": None, "data_consented_at": None, "meal_contact_phone_encrypted": None,
+         "meal_contact_phone_lookup": None}
         for row in before_users
     ]
     assert await table_rows(database, "users") == expected_users

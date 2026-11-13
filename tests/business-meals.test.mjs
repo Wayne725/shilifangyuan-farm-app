@@ -21,23 +21,30 @@ test('會餐付款同時核對台北日界與 API 權限，缺時段不得付款
   assert.equal(helper.businessMealPaymentState({ ...order, meal_booking_type: 'standard' }, Date.parse(order.payment_opens_at)), null);
 });
 
-test('會餐建單強制當日開票與線上付款，不立即建立金流', async () => {
+test('會餐建單保留付款方式且固定取餐日開票，預訂當下只建立訂單', async () => {
   const source = await readFile(new URL('../web/src/lib/commerce.ts', import.meta.url), 'utf8');
-  for (const storedType of ['business', undefined]) {
+  for (const [requestedMethod, storedMethod, storedType, kind] of [
+    [undefined, undefined, 'business', 'reserved'],
+    ['online', 'online', 'business', 'reserved'],
+    ['cash_on_pickup', 'cash_on_pickup', 'business', 'reserved'],
+    ['cash_on_pickup', 'online', 'business', 'resume'],
+    ['online', 'online', undefined, 'resume'],
+  ]) {
     const calls = [], module = {};
     const apiFetch = async (path, options) => {
       calls.push({ path, body: options?.body && JSON.parse(options.body) });
-      return { id: 'synthetic-business-order', meal_booking_type: storedType };
+      return { id: 'synthetic-business-order', meal_booking_type: storedType, payment_method: storedMethod };
     };
     vm.runInNewContext(compile(source), { exports: module, require: () => ({ apiFetch }) });
-    const outcome = await module.beginMealCheckout({ eventId: 'event', mealBookingType: 'business', paymentMethod: 'cash_on_pickup', invoiceHandling: 'on_payment',
+    const outcome = await module.beginMealCheckout({ eventId: 'event', mealBookingType: 'business', paymentMethod: requestedMethod, invoiceHandling: 'on_payment',
       pickupAt: '2030-01-02T03:00:00Z', items: [{ offering_id: 'meal', quantity: 2, option_ids: [] }], contactEmail: 'buyer@example.test',
       invoicePreference: { buyerType: 'company', buyerTaxId: '15989995', buyerName: '隔離單位', buyerEmail: 'buyer@example.test', carrierType: 'cloud' } });
     assert.equal(calls.length, 1);
     assert.equal(calls[0].body.meal_booking_type, 'business');
-    assert.equal(calls[0].body.payment_method, 'online');
+    assert.equal(calls[0].body.payment_method, requestedMethod ?? 'online');
     assert.equal(calls[0].body.invoice_handling, 'pickup_day');
-    assert.equal(outcome.kind, storedType === 'business' ? 'reserved' : 'resume');
+    assert.equal(calls[0].body.invoice_buyer_tax_id, '15989995');
+    assert.equal(outcome.kind, kind);
   }
 });
 

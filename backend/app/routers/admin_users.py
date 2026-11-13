@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..admin_explanations import AdminExplanation
-from ..account_profiles import AccountProfileRead, AdminAccountUpdate, read_account_profile, update_account_profile
+from ..account_profiles import AccountProfileRead, AdminAccountUpdate, read_account_profile, save_verified_phone_if_missing, update_account_profile
 from ..admin_membership_phone import MembershipPhoneCheck, verify_offline_roster_phone
 from ..auth import membership_type_for_user, require_admin
 from ..config import Settings, get_settings
@@ -196,6 +196,7 @@ async def confirm_offline_membership(
     user.membership = membership
     user.membership_type = MembershipType.MEMBER
     user.pending_member_claim = False
+    await save_verified_phone_if_missing(session, user, body.phone, settings)
     try:
         await session.flush()
         session.add(AdminAudit(actor_id=admin.id, action="membership.offline_confirmed", aggregate_type="membership", aggregate_id=membership.id, reason=body.reason, data={"user_id": user_id, "member_number": number, "roster_entry_id": entry.id, "phone_verified": True, "previous_status": previous_status, "confirmed_on": body.confirmed_on.isoformat(), "source": "offline", "closed_pending_charge_ids": [charge.id for charge in charges if charge.status == MembershipChargeStatus.WAIVED]}))

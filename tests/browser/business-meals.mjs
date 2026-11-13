@@ -144,6 +144,40 @@ test('重整保留會餐訂餐方式，清空草稿後回復一般餐點', async
   assert.deepEqual(state.unknown, []);
 });
 
+test('390px會餐可選取餐時付現，重整後保留且不開啟線上付款', async t => {
+  const storedOrder = order({ payment_method: 'cash_on_pickup', available_actions: [] });
+  const { page, state } = await fixture(t, { storedOrder, mealEvent: { ...event, allow_cash_payment: false } });
+  await page.goto(`${base}/meals/${event.id}?pickup_at=2030-01-02T11%3A00`);
+  const cash = page.getByRole('radio', { name: '現金付款（取餐時付現）', exact: true });
+  assert.equal(await cash.count(), 0);
+  await page.getByRole('radio', { name: '會餐（統編報帳）', exact: true }).check();
+  assert.equal(await page.getByRole('radio', { name: '線上付款（取餐當日）', exact: true }).isChecked(), true);
+  await cash.check();
+  await page.reload();
+  assert.equal(await cash.isChecked(), true);
+  await page.getByRole('button', { name: '增加合成便當', exact: true }).click({ clickCount: 2 });
+  await page.getByRole('combobox', { name: '合成便當 主食', exact: true }).selectOption('rice-0');
+  await page.getByLabel('統一編號', { exact: true }).fill('15989995');
+  const quoted = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/quote'));
+  await page.getByLabel('公司名稱', { exact: true }).fill('隔離單位');
+  assert.equal((await quoted).request().postDataJSON().payment_method, 'cash_on_pickup');
+  if (process.env.BROWSER_SCREENSHOT_DIR) {
+    await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/business-cash-390.png`, fullPage: true });
+  }
+  await page.getByRole('button', { name: '送出會餐訂單（取餐時付現）', exact: true }).click();
+  await page.getByRole('heading', { name: '現金付款・待取餐時付款', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: /前往付款/ }).count(), 0);
+  assert.equal(state.posts.length, 1);
+  assert.equal(state.posts[0].body.payment_method, 'cash_on_pickup');
+  assert.equal(state.posts[0].body.invoice_handling, 'pickup_day');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  state.order = { ...storedOrder, payment_status: 'paid', invoice_status: 'issued' };
+  await page.reload();
+  await page.getByText('現金付款・已付款', { exact: true }).waitFor();
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.unknown, []);
+});
+
 test('390px 從日期摘要進入會餐，建單送公司統編與兩份且不提前付款', async t => {
   const { page, state } = await fixture(t);
   await page.goto(`${base}/shop`);

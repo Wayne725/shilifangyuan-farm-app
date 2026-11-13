@@ -148,9 +148,9 @@ async def test_order_to_real_client_mock_cloud_admin_query_reprint_and_cancel(ca
 
         await approve_cancellation(c, order_id)
         await process_print_job(c.settings, factory=factory, now=now + timedelta(seconds=100))
-        assert len(cloud["contents"]) == 3 and "取消通知" in cloud["contents"][2]
+        assert len(cloud["contents"]) == 2
         listing = await client.get(f"{root}/jobs", params={"order_id": order_id}, headers=headers)
-        assert listing.json()["total"] == 3
-        assert len([job for job in listing.json()["items"] if job["kind"] == "cancellation"]) == 1
+        assert listing.json()["total"] == 2
+        assert all(job["kind"] != "cancellation" for job in listing.json()["items"])
         rejected = await client.post(f"{job_url}/reprint", headers=headers, json={"request_id": str(uuid4()), "reason": "已取消訂單不能補印製作單"})
         assert rejected.status_code == 409

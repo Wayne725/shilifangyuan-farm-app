@@ -135,7 +135,7 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
       if (path === '/v1/admin/printers/jobs') return route.fulfill({ json: { items: [], total: 0, limit: 30, offset: 0 } });
       if (path === '/v1/admin/platform') return route.fulfill({ json: { kitchen_sound: false } });
       if (path === '/v1/admin/today') return route.fulfill({ json: {
-        pending_admissions: 2, pending_order_cancellations: 3, unpaid_business_orders: 4,
+        pending_admissions: 2, pending_order_cancellations: 3, unpaid_business_orders: 4, today_business_cash_uncollected: 1,
         pending_activity_refunds: 1, active_activities: 2, active_activity_registrations: 7,
         active_campaigns: 3, pending_campaign_decisions: 1, voting_group_proposals: 2,
         voting_member_proposals: 2, invoice_followups: invoiceQueue.length,
@@ -143,7 +143,7 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
       if (path === '/v1/admin/order-search') {
         state.orderFilters = Object.fromEntries(url.searchParams);
         const items = state.orderFilters.invoice_followup === 'true'
-          ? invoiceQueue.filter(row => state.orderFilters.order_category !== 'general' || row.sales_channel !== 'meal_preorder')
+          ? invoiceQueue.filter(row => state.orderFilters.order_category !== 'daily' || row.sales_channel === 'regular')
           : [];
         return route.fulfill({ json: { items, total: items.length, limit: 12, offset: 0 } });
       }
@@ -597,7 +597,7 @@ for (const width of [1440, 390]) {
     await page.getByRole('heading', { name: '今日待辦', exact: true }).waitFor();
     const list = page.getByRole('list', { name: '今日待辦清單' });
     await list.getByRole('link', { name: /進行中的活動.*共 7 人次報名/ }).waitFor();
-    assert.equal(await list.getByRole('link').count(), 10);
+    assert.equal(await list.getByRole('link').count(), 11);
     assert.equal(state.reads.filter(path => path.startsWith('/v1/admin/')).join(','), '/v1/admin/today');
     await noOverflow(page);
     await list.getByRole('link', { name: /待審退單.*3 筆/ }).click();
@@ -611,10 +611,10 @@ for (const width of [1440, 390]) {
     assert.equal(state.orderFilters.order_category, 'all');
     const generalInvoices = page.waitForRequest(request => {
       const url = new URL(request.url());
-      return url.pathname === '/v1/admin/order-search' && url.searchParams.get('order_category') === 'general';
+      return url.pathname === '/v1/admin/order-search' && url.searchParams.get('order_category') === 'daily';
     });
     const category = page.getByRole('combobox', { name: '訂單分類', exact: true });
-    assert.deepEqual(await category.selectOption('general'), ['general']);
+    assert.deepEqual(await category.selectOption('daily'), ['daily']);
     assert.equal(new URL((await generalInvoices).url()).searchParams.get('invoice_followup'), 'true');
     await page.getByText('會餐發票日期待核對', { exact: true }).waitFor({ state: 'hidden' });
     await page.getByText('開票待核對', { exact: true }).waitFor();

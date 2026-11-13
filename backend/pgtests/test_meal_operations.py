@@ -31,7 +31,7 @@ async def test_postgres_clock_json_failure_filters_and_summary_agree(postgres_se
             assert ids(result.json()) == {c.order.id, c.orders["legacy"].id}
             summary = await client.get("/v1/admin/meal-operations-summary", headers=auth_headers(c.admin))
             assert summary.status_code == 200, summary.text
-            assert summary.json() == {"today": "2030-01-02", "pending_cancellation": 1, "refund_attention": 2, "invoice_attention": 2, "today_pickup": 2}
+            assert summary.json() == {"today": "2030-01-02", "pending_cancellation": 1, "refund_attention": 2, "invoice_attention": 2, "today_pickup": 2, "today_business_cash_uncollected": 0}
             # Querying the work queues does not mutate order or refund state.
             stored = await session.scalar(select(Order).where(Order.id == c.order.id))
             assert stored.cancelled_at is None

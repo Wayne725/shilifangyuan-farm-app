@@ -49,8 +49,17 @@ interface AdminOrderPage {
   offset: number;
 }
 
-import { OrderCategoryFilter } from "../components/OrderCategoryFilter";
-import { orderCategoryLabels, type OrderCategory } from "../lib/order-category";
+import { orderCategoryLabels } from "../lib/order-category";
+
+const orderSearchCategories = {
+  all: orderCategoryLabels.all,
+  daily: "日常選品",
+  group: "共同購買",
+  meal: orderCategoryLabels.meal,
+} as const;
+type OrderSearchCategory = keyof typeof orderSearchCategories;
+type OrderSearchPeriod = { basis: "ordered" | "pickup"; start: string; end: string };
+const emptyOrderPeriod: OrderSearchPeriod = { basis: "ordered", start: "", end: "" };
 
 const operationTitles = {
   today: "今日待辦",
@@ -118,8 +127,10 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
   const [orderSearch, setOrderSearch] = useState(q || "");
   const [orderId, setOrderId] = useState(initialOrderId);
   const [orderOffset, setOrderOffset] = useState(0);
-  const [orderCategory, setOrderCategory] = useState<OrderCategory>(queue === "business-unpaid" ? "meal" : "all");
+  const [orderCategory, setOrderCategory] = useState<OrderSearchCategory>(queue === "business-unpaid" ? "meal" : "all");
   const [orderPayment, setOrderPayment] = useState("");
+  const [periodInput, setPeriodInput] = useState(emptyOrderPeriod);
+  const [period, setPeriod] = useState(emptyOrderPeriod);
   const [cancellationPending, setCancellationPending] = useState(queue === "refunds");
   const [businessUnpaid, setBusinessUnpaid] = useState(queue === "business-unpaid");
   const [invoiceFollowup, setInvoiceFollowup] = useState(queue === "invoice");
@@ -128,7 +139,13 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
     cancellation_pending: String(cancellationPending), order_category: orderCategory,
   });
   if (orderId) params.set("order_id", orderId);
-  if (orderPayment) params.set("payment_status", orderPayment);
+  if (orderPayment === "refunds") params.set("refunds_only", "true");
+  else if (orderPayment) params.set("payment_status", orderPayment);
+  if (period.start || period.end) {
+    params.set("date_basis", period.basis);
+    if (period.start) params.set("starts_on", period.start);
+    if (period.end) params.set("ends_on", period.end);
+  }
   if (businessUnpaid) params.set("business_unpaid", "true");
   if (invoiceFollowup) params.set("invoice_followup", "true");
   const orderQuery = useQuery({
@@ -174,11 +191,20 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
   return orderAccess.denied
     ? <DataState kind="error" title="管理權限待重新驗證" detail="請重新整理頁面並確認管理者登入狀態。" />
     : <section className="admin-orders-panel">
-    <OrderCategoryFilter value={orderCategory} onChange={(value) => {
-      setOrderCategory(value);
-      setOrderOffset(0);
-      if (value === "general") setBusinessUnpaid(false);
-    }} />
+    <label className="field order-category-filter"><span>訂單分類</span>
+      <select value={orderCategory} onChange={(event) => {
+        const category = event.target.value as OrderSearchCategory;
+        setOrderCategory(category);
+        setOrderOffset(0);
+        if (category === "daily" || category === "group") {
+          setBusinessUnpaid(false);
+          setPeriodInput(current => ({ ...current, basis: "ordered" }));
+          setPeriod(current => ({ ...current, basis: "ordered" }));
+        }
+      }}>
+        {Object.entries(orderSearchCategories).map(([category, label]) => <option key={category} value={category}>{label}</option>)}
+      </select>
+    </label>
     {orderQuery.isPending && <LoadingLines count={4} />}
     {orderQuery.isError && <DataState kind="error" title="訂單資料無法讀取" detail={orderQuery.error.message} />}
     <form className="admin-order-search" onSubmit={(event) => {
@@ -186,15 +212,25 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
       const term = orderSearchInput.trim();
       if (term !== orderSearch) setOrderId(undefined);
       setOrderSearch(term);
+      setPeriod(periodInput);
       setOrderOffset(0);
     }}>
       <label>搜尋訂單<input value={orderSearchInput} onChange={(event) => setOrderSearchInput(event.target.value)} type="search" placeholder="訂單編號、姓名、Email、商品或統編" maxLength={120} /></label>
-      <label className="field"><span>付款狀態</span><select value={orderPayment} onChange={(event) => { setOrderPayment(event.target.value); setOrderOffset(0); }}><option value="">全部狀態</option><option value="pending">待付款</option><option value="paid">已付款</option><option value="refund_pending">退款中</option><option value="refunded">已退款</option><option value="failed">付款失敗</option><option value="expired">已逾期</option><option value="late_paid_refund_required">付款晚到待退款</option></select></label>
+      <label className="field"><span>付款狀態</span><select aria-label="付款狀態" value={orderPayment} onChange={(event) => { setOrderPayment(event.target.value); setOrderOffset(0); }}><option value="">全部狀態</option><option value="paid">已付款</option><option value="refunds">退款</option><option value="pending">待付款</option></select></label>
+      <fieldset className="admin-order-period">
+        <legend>日期篩選</legend>
+        <label className="field"><span>日期類型</span><select aria-label="日期類型" value={periodInput.basis} onChange={event => setPeriodInput({ ...periodInput, basis: event.target.value === "pickup" ? "pickup" : "ordered" })}>
+          <option value="ordered">下單日期</option>
+          <option value="pickup" disabled={orderCategory === "daily" || orderCategory === "group"}>取餐日期（便當）</option>
+        </select></label>
+        <label className="field"><span>開始日期</span><input type="date" value={periodInput.start} max={periodInput.end || undefined} onChange={event => setPeriodInput({ ...periodInput, start: event.target.value })} /></label>
+        <label className="field"><span>結束日期</span><input type="date" value={periodInput.end} min={periodInput.start || undefined} onChange={event => setPeriodInput({ ...periodInput, end: event.target.value })} /></label>
+      </fieldset>
       <label className="check-field"><input type="checkbox" checked={cancellationPending} onChange={(event) => { setCancellationPending(event.target.checked); setOrderOffset(0); }} />只看退單待審</label>
       <label className="check-field"><input type="checkbox" checked={businessUnpaid} onChange={event => { setBusinessUnpaid(event.target.checked); setOrderOffset(0); if (event.target.checked) { setOrderCategory("meal"); setOrderPayment(""); setInvoiceFollowup(false); } }} />會餐未付款</label>
       {invoiceFollowup && <label className="check-field"><input type="checkbox" checked onChange={() => { setInvoiceFollowup(false); setOrderOffset(0); }} />發票待合作社處理</label>}
       <button className="button button-quiet" type="submit">搜尋</button>
-      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderId(undefined); setOrderPayment(""); setCancellationPending(false); setBusinessUnpaid(false); setInvoiceFollowup(false); setOrderOffset(0); }}>清除查詢</button>
+      <button className="button button-quiet" type="button" onClick={() => { setOrderSearchInput(""); setOrderSearch(""); setOrderId(undefined); setOrderPayment(""); setPeriodInput(emptyOrderPeriod); setPeriod(emptyOrderPeriod); setCancellationPending(false); setBusinessUnpaid(false); setInvoiceFollowup(false); setOrderOffset(0); }}>清除查詢</button>
     </form>
     <div className="operations-list">
       {!orderQuery.isError && orderQuery.data?.items.map((order) => (
@@ -202,7 +238,7 @@ function AdminOrdersPanel({ adminId, q, queue, initialOrderId, orderAccess }: {
           <div className="operation-title">
             <span>{order.sales_channel === "meal_preorder"
               ? `${orderCategoryLabels.meal} · 下單日 ${formatMealDate(order.created_at)}`
-              : `${orderCategoryLabels.general} · ${formatDate(order.created_at)}`}</span>
+              : `${orderSearchCategories[order.sales_channel === "group" ? "group" : "daily"]} · ${formatDate(order.created_at)}`}</span>
             <strong>{order.order_number}</strong>
             <small>{formatMoney(order.amount_total)}</small>
             {order.sales_channel === "meal_preorder" && <MealPickupInfo order={order} />}

@@ -399,7 +399,11 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
     }
     if (method === 'GET' && path === '/v1/admin/meal-events/scheduled-lunch/orders') {
       state.adminPickupOrderReads++;
-      return route.fulfill({ json: [paidOrder({ pickup_at: '2026-09-17T04:05:00Z', customer_name: '隔離買家', customer_email: 'buyer@example.test', contact_phone: '0912345678' })] });
+      return route.fulfill({ json: [
+        paidOrder({ pickup_at: '2026-09-17T04:05:00Z', customer_name: '隔離買家', customer_email: 'buyer@example.test', contact_phone: '0912345678' }),
+        paidOrder({ id: 'cancelled-roster-row', order_number: 'M-CANCELLED-ROSTER', payment_status: 'refund_pending',
+          fulfillment_status: 'cancelled', cancelled_at: '2026-09-16T06:00:00Z' }),
+      ] });
     }
     const event = state.events.find((candidate) => path === `/v1/meal-events/${candidate.id}` || path.startsWith(`/v1/meal-events/${candidate.id}/`));
     if (event && method === 'GET' && path === `/v1/meal-events/${event.id}`) {
@@ -706,6 +710,9 @@ test('便當管理者可依場次查看所選取餐時間，僅展開時查詢�
   await event.getByRole('button', { name: '查看本場訂單與取餐時間', exact: true }).click();
   const orders = event.getByRole('region', { name: '本場訂單與取餐時間', exact: true });
   await orders.getByRole('heading', { name: orderNumber, exact: true }).waitFor();
+  const cancelled = orders.getByRole('article').filter({ has: page.getByRole('heading', { name: 'M-CANCELLED-ROSTER' }) });
+  await cancelled.getByText(/已取消/).waitFor();
+  await orders.getByText('備餐 1 份', { exact: true }).waitFor();
   assert.match(await orders.innerText(), /預計取餐：.*9\/17.*12:05/);
   assert.match(await orders.innerText(), /隔離買家.*buyer@example.test.*0912345678/);
   assert.equal(state.adminPickupOrderReads, 1);

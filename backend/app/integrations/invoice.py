@@ -109,6 +109,7 @@ class InvoiceIssueRequest:
     customer_id: str = ""
     customer_phone: str = ""
     remark: str = ""
+    allow_company_without_name: bool = False
 
     def validate(self, *, allow_mobile_delivery_without_contact: bool = False) -> None:
         if not re.fullmatch(r"[A-Za-z0-9]{1,30}", self.relate_number):
@@ -123,7 +124,7 @@ class InvoiceIssueRequest:
         if self.buyer_type == "company":
             if not re.fullmatch(r"[0-9]{8}", self.buyer_tax_id):
                 raise ValueError("Company invoice requires an 8-digit tax ID")
-            if not self.buyer_name.strip():
+            if not self.buyer_name.strip() and not self.allow_company_without_name:
                 raise ValueError("Company invoice requires a buyer name")
         if self.carrier_type not in {"cloud", "mobile_barcode"}:
             raise ValueError("Invoice carrier must be cloud or mobile barcode")
