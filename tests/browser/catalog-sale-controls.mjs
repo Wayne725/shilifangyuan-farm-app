@@ -20,7 +20,7 @@ async function fixture(t, width, { role = 'admin', patchError = '', deferPatch =
   const context = await browser.newContext({ viewport: { width, height: 950 }, serviceWorkers: 'block' });
   const state = {
     items: [product('new', '最新測試果醬', { supplier_name: '山城農場', supplier_id: 'supplier-1' }), product('old', '停售測試醬油', { is_active: false }), product('group', '共同購買專用商品', { daily_sales_enabled: false })],
-    patches: [], reads: 0, unknown: [], errors: [], releasePatch: null,
+    patches: [], reads: 0, unknown: [], errors: [], releasePatch: null, locations: [], locationWrites: [],
   };
   let patchStarted;
   state.patchStarted = new Promise(resolve => { patchStarted = resolve; });
@@ -44,7 +44,22 @@ async function fixture(t, width, { role = 'admin', patchError = '', deferPatch =
       return route.fulfill({ json: item });
     }
     if (path === '/v1/admin/suppliers') return route.fulfill({ json: [{ id: 'supplier-1', business_name: '山城農場', is_active: activeSupplier }] });
-    if (path === '/v1/admin/pickup-locations') return route.fulfill({ json: [] });
+    if (path === '/v1/admin/pickup-locations') {
+      if (request.method() === 'POST') {
+        const body = request.postDataJSON();
+        const location = { ...body, id: 'location-1' };
+        state.locationWrites.push(body);
+        state.locations.push(location);
+        return route.fulfill({ json: location });
+      }
+      return route.fulfill({ json: state.locations });
+    }
+    if (path === '/v1/admin/pickup-locations/location-1' && request.method() === 'PATCH') {
+      const body = request.postDataJSON();
+      state.locationWrites.push(body);
+      Object.assign(state.locations[0], body);
+      return route.fulfill({ json: state.locations[0] });
+    }
     if (path.startsWith('/v1/products/') && request.method() === 'PATCH') {
       const id = path.split('/').at(-1), body = request.postDataJSON();
       state.patches.push({ id, body });
@@ -73,6 +88,37 @@ async function verify(page, state) {
   assert.deepEqual(state.unknown, []);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 }
+
+test('取餐點可設定會餐專用和必填位置，解除專用會清除必填', async t => {
+  const { page, state } = await fixture(t, 390);
+  await page.getByRole('tab', { name: '取貨點', exact: true }).click();
+  await page.getByRole('button', { name: '新增取貨點', exact: true }).click();
+  const editor = page.locator('form.admin-master-form');
+  const scope = editor.getByLabel('僅供會餐使用', { exact: true });
+  const note = editor.getByLabel('須填寫校內取餐位置', { exact: true });
+  await editor.getByLabel('代碼', { exact: true }).fill('other-campus');
+  await editor.getByLabel('名稱', { exact: true }).fill('校內其他地點');
+  await editor.getByLabel('啟用取貨點', { exact: true }).uncheck();
+  assert.equal(await note.count(), 0);
+  await scope.check();
+  await note.check();
+  await editor.getByRole('button', { name: '儲存取貨點', exact: true }).click();
+  const locationCard = card(page, '校內其他地點');
+  await locationCard.getByText('會餐專用', { exact: true }).waitFor();
+  assert.equal(state.locationWrites[0].is_active, false);
+  assert.equal(state.locationWrites[0].business_meal_only, true);
+  assert.equal(state.locationWrites[0].requires_pickup_note, true);
+
+  await locationCard.getByRole('button', { name: '編輯取貨點', exact: true }).click();
+  assert.equal(await note.isChecked(), true);
+  await scope.uncheck();
+  assert.equal(await note.count(), 0);
+  await editor.getByRole('button', { name: '儲存取貨點', exact: true }).click();
+  await locationCard.getByRole('button', { name: '編輯取貨點', exact: true }).waitFor();
+  assert.equal(state.locationWrites[1].business_meal_only, false);
+  assert.equal(state.locationWrites[1].requires_pickup_note, false);
+  await verify(page, state);
+});
 
 test('390px 商品封存從預設清單消失，解除封存後維持未開放', async t => {
   const { page, state } = await fixture(t, 390);

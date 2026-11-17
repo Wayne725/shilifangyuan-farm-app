@@ -20,6 +20,7 @@ from ..invoice_tax_summary import invoice_tax_summary
 from ..database import get_session
 from ..group_review import order_accepts_group_payment, order_has_uncertain_group_payment, order_matches_group_contract
 from ..platform_settings import require_accepting_orders
+from ..pickup_locations import checkout_pickup_location
 from ..order_numbers import allocate_order_number, insert_order_with_unique_number, is_order_submission_collision, make_order_number
 from ..order_history import OrderHistoryQuery, read_order_history
 from ..config import Settings, get_settings
@@ -66,7 +67,6 @@ from ..models import (
     OutboxEvent,
     PaymentStatus,
     PaymentMethod,
-    PickupLocation,
     Product,
     ReservationStatus,
     SalesChannel,
@@ -384,12 +384,7 @@ async def create_order(
                 status_code=422,
                 detail="只有合作社取貨可選擇領取地點",
             )
-        pickup_location = await session.scalar(
-            select(PickupLocation).where(
-                PickupLocation.id == body.pickup_location_id,
-                PickupLocation.is_active.is_(True),
-            )
-        )
+        pickup_location = await checkout_pickup_location(session, body.pickup_location_id)
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(

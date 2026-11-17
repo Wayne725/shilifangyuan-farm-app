@@ -34,6 +34,7 @@ from ..order_history import OrderHistoryQuery, read_order_history
 from ..printing import enqueue_order_print, stop_cancelled_order_prints
 from ..printer_worker import wake_printer
 from ..platform_settings import require_accepting_orders
+from ..pickup_locations import checkout_pickup_location
 from ..domain import (
     DomainError,
     invoice_estimated_tax_amount,
@@ -103,7 +104,6 @@ from ..models import (
     PaymentStatus,
     PaymentAttempt,
     PaymentMethod,
-    PickupLocation,
     ReservationStatus,
     SalesChannel,
     TaxType,
@@ -831,14 +831,11 @@ async def quote_meal_order(
         raise HTTPException(status_code=422, detail="此場次未開放現場付款")
     pickup_location = None
     if body.pickup_location_id is not None:
-        pickup_location = await session.scalar(
-            select(PickupLocation).where(
-                PickupLocation.id == body.pickup_location_id,
-                PickupLocation.is_active.is_(True),
-            ).with_for_update(read=True)
-        )
+        pickup_location = await checkout_pickup_location(session, body.pickup_location_id, business_meal=business)
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的取餐點，請重新選擇")
+        if pickup_location.requires_pickup_note and not (body.kitchen_note or "").strip():
+            raise HTTPException(422, "請填寫實際取餐位置")
     by_id = {offering.id: offering for offering in event.offerings}
     now = datetime.now(timezone.utc)
     membership_type = (

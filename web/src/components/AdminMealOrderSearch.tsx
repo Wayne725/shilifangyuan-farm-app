@@ -107,6 +107,7 @@ function MealOperationOrder({ item }: { item: MealAdminOrderItem }) {
     <p><strong>預計取餐：{formatMealDateTime(order.pickup_at || order.pickup_start)}</strong>{!order.pickup_at && "（舊訂單未指定，顯示場次開始時間）"}</p>
     <p>{order.meal_event_title} · {item.meal_period === "lunch" ? "午餐" : item.meal_period === "dinner" ? "晚餐" : "特殊場次"} · {order.venue_name}</p>
     {order.pickup_address && <p>取餐地址：{order.pickup_address}</p>}
+    {order.kitchen_note && <p>餐點備註：{order.kitchen_note}</p>}
     <p>餐具：{order.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
     <p>{order.items.map((meal) => `${meal.meal_name} × ${meal.quantity}`).join("、")}</p>
     <div className="operation-state"><OrderStatusBadge kind="payment" status={order.payment_status} label={order.payment_status === "expired" && !order.cancelled_at ? "付款逾期" : undefined} /><OrderStatusBadge kind="fulfillment" status={order.cancelled_at ? "cancelled" : order.fulfillment_status} label={order.cancelled_at ? "已取消" : Date.parse(order.pickup_end) <= Date.now() ? "取餐時段已結束" : fulfillmentLabels[order.fulfillment_status] || "狀態待確認"} /><OrderStatusBadge kind="invoice" status={order.invoice_status} /></div>

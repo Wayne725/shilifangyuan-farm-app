@@ -2218,6 +2218,14 @@ class PickupLocationCreate(BaseModel):
     instructions: str = Field(default="", max_length=2000)
     sort_order: int = Field(default=0, ge=0, le=100000)
     is_active: bool = True
+    business_meal_only: bool = False
+    requires_pickup_note: bool = False
+
+    @model_validator(mode="after")
+    def pickup_note_requires_business_meal(self) -> "PickupLocationCreate":
+        if self.requires_pickup_note and not self.business_meal_only:
+            raise ValueError("需填取餐備註的地點須設為會餐專用")
+        return self
 
 
 class PickupLocationUpdate(BaseModel):
@@ -2232,6 +2240,15 @@ class PickupLocationUpdate(BaseModel):
     instructions: Optional[str] = Field(default=None, max_length=2000)
     sort_order: Optional[int] = Field(default=None, ge=0, le=100000)
     is_active: Optional[bool] = None
+    business_meal_only: Optional[bool] = None
+    requires_pickup_note: Optional[bool] = None
+
+    @field_validator("business_meal_only", "requires_pickup_note")
+    @classmethod
+    def pickup_flag_is_boolean(cls, value: Optional[bool]) -> bool:
+        if value is None:
+            raise ValueError("請提供取餐點設定值")
+        return value
 
 
 class PickupLocationRead(ApiModel):
@@ -2242,6 +2259,8 @@ class PickupLocationRead(ApiModel):
     instructions: str
     sort_order: int
     is_active: bool
+    business_meal_only: bool
+    requires_pickup_note: bool
 
 
 class SupplierCreate(BaseModel):

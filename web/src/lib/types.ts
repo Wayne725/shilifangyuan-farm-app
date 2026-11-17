@@ -256,6 +256,8 @@ export interface PickupLocation {
   instructions: string;
   sort_order: number;
   is_active: boolean;
+  business_meal_only: boolean;
+  requires_pickup_note: boolean;
 }
 
 export interface Activity {

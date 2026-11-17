@@ -406,7 +406,8 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
     if (method === 'GET' && path === '/v1/admin/meal-events/scheduled-lunch/orders') {
       state.adminPickupOrderReads++;
       return route.fulfill({ json: [
-        paidOrder({ pickup_at: '2026-09-17T04:05:00Z', customer_name: '隔離買家', customer_email: 'buyer@example.test', contact_phone: '0912345678' }),
+        paidOrder({ pickup_at: '2026-09-17T04:05:00Z', customer_name: '隔離買家', customer_email: 'buyer@example.test', contact_phone: '0912345678',
+          venue_name: '校內其他地點', kitchen_note: '測試館 2 樓 203 教室' }),
         paidOrder({ id: 'cancelled-roster-row', order_number: 'M-CANCELLED-ROSTER', payment_status: 'refund_pending',
           fulfillment_status: 'cancelled', cancelled_at: '2026-09-16T06:00:00Z' }),
       ] });
@@ -725,6 +726,7 @@ test('便當管理者可依場次查看所選取餐時間，僅展開時查詢�
   await orders.getByText('備餐 1 份', { exact: true }).waitFor();
   assert.match(await orders.innerText(), /預計取餐：.*9\/17.*12:05/);
   assert.match(await orders.innerText(), /隔離買家.*buyer@example.test.*0912345678/);
+  await orders.getByText('餐點備註：測試館 2 樓 203 教室', { exact: true }).waitFor();
   assert.equal(state.adminPickupOrderReads, 1);
   await captureMealScreenshot(page, 'meal-roster-contacts-mobile.png');
   assert.deepEqual(state.writes, []);
@@ -1180,6 +1182,7 @@ test('手機後台便當查詢顯示聯絡方式、特殊場次與單一退單�
   state.adminOrders = [{
     customer_name: '隔離買家', customer_email: 'buyer@example.test', meal_period: null,
     order: mealOrder({ contact_phone: '0912345678', cancelled_at: '2026-09-14T01:00:00Z', available_actions: [],
+      venue_name: '校內其他地點', kitchen_note: '測試館 2 樓 203 教室',
       cancellation_request: { id: 'cancelled-order', initiated_by_admin: true, status: 'approved',
         reason: '現場無法供餐', review_reason: '現場無法供餐', requested_at: '2026-09-14T01:00:00Z' },
     }),
@@ -1188,6 +1191,7 @@ test('手機後台便當查詢顯示聯絡方式、特殊場次與單一退單�
   const card = page.locator('.meal-operation-order');
   await card.getByText('隔離買家 · buyer@example.test · 0912345678', { exact: true }).waitFor();
   await card.getByText(/特殊場次/).waitFor();
+  await card.getByText('餐點備註：測試館 2 樓 203 教室', { exact: true }).waitFor();
   await card.getByText('查看餐點、發票與退單明細', { exact: true }).click();
   await card.getByText('退單原因：現場無法供餐', { exact: true }).waitFor();
   assert.equal(await card.getByText(/現場無法供餐/).count(), 1);

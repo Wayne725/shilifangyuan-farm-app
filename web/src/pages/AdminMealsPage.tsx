@@ -617,6 +617,7 @@ function EventPickupOrders({ eventId }: { eventId: string }) {
         {order.cancellation_request && <p className="meal-cancellation-reason"><strong>{order.cancellation_request.status === "pending" ? "退單待審，訂單尚未取消" : order.cancellation_request.status === "approved" ? "退單已核准" : "退單未核准"}</strong>{order.cancellation_request.reason && `：${order.cancellation_request.reason}`}</p>}
         <p>預計取餐：{order.pickup_at ? formatMealDateTime(order.pickup_at) : "未指定，依場次供餐時段"}</p>
         <p>取餐點：{order.venue_name}{order.pickup_address && ` · ${order.pickup_address}`}</p>
+        {order.kitchen_note && <p>餐點備註：{order.kitchen_note}</p>}
         <p>餐具：{order.needs_utensils ? "需要餐具" : "不需要餐具"}</p>
         <p>{order.items.map((item) => `${item.meal_name} × ${item.quantity}`).join("、")}</p>
         <InvoiceTaxSummary variant="card" items={order.items} memberTaxExempt={order.member_tax_exempt_snapshot} taxAmount={order.tax_amount} invoiceTax={order.invoice_tax} invoiceStatus={order.invoice_status} />

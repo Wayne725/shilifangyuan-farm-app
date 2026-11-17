@@ -20,6 +20,7 @@ from ..auth import (
 from ..database import get_session
 from ..product_creation import create_product_record
 from ..platform_settings import require_accepting_orders
+from ..pickup_locations import checkout_pickup_location
 from ..config import Settings, get_settings
 from ..sales_scope import require_sales_scope_allows
 from ..supplier_order_demand import product_procurement_snapshot
@@ -54,7 +55,6 @@ from ..models import (
     OrderKind,
     OutboxEvent,
     PaymentStatus,
-    PickupLocation,
     Product,
     ReservationStatus,
     SalesChannel,
@@ -637,12 +637,7 @@ async def join_campaign(
                 status_code=422,
                 detail="只有合作社取貨可選擇領取地點",
             )
-        pickup_location = await session.scalar(
-            select(PickupLocation).where(
-                PickupLocation.id == body.pickup_location_id,
-                PickupLocation.is_active.is_(True),
-            )
-        )
+        pickup_location = await checkout_pickup_location(session, body.pickup_location_id)
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(

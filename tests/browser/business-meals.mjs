@@ -21,11 +21,11 @@ function order(overrides = {}) {
     items: [{ offering_id: meal.id, meal_id: meal.meal_id, meal_name: meal.meal_name, product_name: meal.meal_name, quantity: 2, unit_price: 100, unit_label: '份', subtotal: 200, tax_type: 'taxable', selections: [] }], ...overrides };
 }
 
-async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = order(), role = 'customer', mealEvent = event } = {}) {
+async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = order(), role = 'customer', mealEvent = event, locations = [] } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
-  const state = { posts: [], reads: [], unknown: [], errors: [], order: storedOrder };
+  const state = { posts: [], quotes: [], reads: [], unknown: [], errors: [], order: storedOrder };
   await context.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
@@ -35,7 +35,10 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
     if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
     if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, support_phone: '071234567', closed_message: '' } });
-    if (path === '/v1/notifications' || path === '/v1/pickup-locations') return route.fulfill({ json: [] });
+    if (path === '/v1/notifications') return route.fulfill({ json: [] });
+    if (path === '/v1/pickup-locations') {
+      return route.fulfill({ json: locations.filter(location => url.searchParams.get('business_meal') === 'true' || !location.business_meal_only) });
+    }
     if (path === '/v1/products' || path === '/v1/group-campaigns') return route.fulfill({ json: [] });
     if (path === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture([mealEvent]) });
     if (path === `/v1/meal-events/${event.id}`) return route.fulfill({ json: mealEvent });
@@ -54,6 +57,7 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
       products: [{ name: meal.meal_name, unit: '份', quantity: 2, meal_booking_type: 'business', payment_status: 'pending' }], items: [{ ...state.order, customer_name: '隔離買家', event_title: event.title, location: event.location, fulfillment_status: 'pending_confirmation', pickup_time_confirmed: true, invoice_buyer_tax_id: '15989995', invoice_buyer_name: '隔離單位', items: [{ name: meal.meal_name, unit: '份', quantity: 2, options: [] }] }] } });
     if (path === `/v1/meal-events/${event.id}/quote`) {
       const body = request.postDataJSON();
+      state.quotes.push(body);
       const quantity = body.items.reduce((sum, item) => sum + item.quantity, 0);
       const amount = quantity * 100;
       const tax = body.invoice_buyer_type === 'company' ? amount - Math.round(amount / 1.05) : Math.floor(amount * 5 / 105);
@@ -128,6 +132,71 @@ test('僅開放會餐的場次自動使用統編報帳，普通買家可送出�
   assert.equal(state.posts[0].body.invoice_handling, 'pickup_day');
   assert.equal(state.posts[0].body.invoice_buyer_tax_id, '15989995');
   assert.equal(state.posts[0].body.payment_method, 'online');
+  assert.deepEqual(state.errors, []);
+  assert.deepEqual(state.unknown, []);
+});
+
+test('會餐才顯示專用取餐點，自填地點有填寫位置才可送出', async t => {
+  const location = { address: '', instructions: '', sort_order: 0, is_active: true, business_meal_only: true, requires_pickup_note: false };
+  const { page, state } = await fixture(t, { locations: [
+    { ...location, id: 'general', code: 'general', name: '一般取餐點', business_meal_only: false },
+    { ...location, id: 'meeting', code: 'meeting', name: '會餐取餐點' },
+    { ...location, id: 'custom', code: 'custom', name: '校內其他地點', requires_pickup_note: true },
+  ] });
+  await page.goto(`${base}/meals/${event.id}?pickup_at=2030-01-02T11%3A00`);
+  const pickup = page.getByRole('combobox', { name: '取餐點', exact: true });
+  const generalOption = pickup.locator('option[value="general"]');
+  const customOption = pickup.locator('option[value="custom"]');
+  const ordinary = page.getByRole('radio', { name: '一般餐點', exact: true });
+  const business = page.getByRole('radio', { name: '會餐（統編報帳）', exact: true });
+  const pickupNote = page.getByRole('textbox', { name: '校內取餐位置', exact: true });
+  const mealNote = page.getByLabel('餐點備註', { exact: true });
+  await generalOption.waitFor({ state: 'attached' });
+  assert.equal(await customOption.count(), 0);
+  assert.equal(state.reads.includes('GET /v1/pickup-locations?business_meal=true'), false);
+  await mealNote.fill('普通餐點備註');
+
+  await business.check();
+  await pickup.selectOption('meeting');
+  assert.equal(await pickupNote.count(), 0);
+  await pickup.selectOption('custom');
+  await pickupNote.fill('前次取餐位置');
+  assert.equal(await mealNote.inputValue(), '普通餐點備註');
+  await ordinary.check();
+  assert.equal(await customOption.count(), 0);
+  assert.equal(await pickup.inputValue(), 'general');
+  assert.equal(await mealNote.inputValue(), '普通餐點備註');
+
+  await business.check();
+  await pickup.selectOption('custom');
+  await pickupNote.fill('  ');
+  await page.getByRole('button', { name: '增加合成便當', exact: true }).click({ clickCount: 2 });
+  await page.getByRole('combobox', { name: '合成便當 主食', exact: true }).selectOption('rice-0');
+  await page.getByLabel('統一編號', { exact: true }).fill('15989995');
+  await page.getByLabel('公司名稱', { exact: true }).fill('隔離單位');
+  const submit = page.getByRole('button', { name: '送出會餐訂單（取餐當日付款）', exact: true });
+  await submit.click();
+  await page.getByText('請填寫校內取餐位置', { exact: true }).waitFor();
+  assert.equal(await pickupNote.getAttribute('required'), '');
+  assert.deepEqual(state.quotes, []);
+  assert.deepEqual(state.posts, []);
+
+  const quote = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/quote'));
+  await pickupNote.fill('  綜合一館二樓 201 室  ');
+  await quote;
+  assert.equal(state.quotes.at(-1).kitchen_note, '綜合一館二樓 201 室');
+  await mealNote.fill('菜'.repeat(500));
+  await page.getByText(/請再縮短 \d+ 字/).waitFor();
+  await submit.click();
+  assert.deepEqual(state.posts, []);
+  await mealNote.fill('普通餐點備註');
+  await pickupNote.fill('  綜合一館二樓 202 室  ');
+  await submit.click();
+  await page.getByRole('heading', { name: '會餐預訂成功', exact: true }).waitFor();
+  assert.equal(state.quotes.length, 1);
+  assert.equal(state.posts.length, 1);
+  assert.equal(state.posts[0].body.pickup_location_id, 'custom');
+  assert.equal(state.posts[0].body.kitchen_note, '校內取餐位置：綜合一館二樓 202 室\n普通餐點備註');
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
 });

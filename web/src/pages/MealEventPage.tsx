@@ -37,6 +37,8 @@ import type {
   PickupLocation,
 } from "../lib/types";
 
+const MEAL_NOTE_MAX_LENGTH = 500;
+
 interface MealQuote {
   promotion?: {name: string; discount: number};
   original_amount?: number;
@@ -79,6 +81,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const { user, openLogin, saveMobileBarcode } = useAuth();
   const notificationEmail = user?.notification_email || user?.email || "";
   const [kitchenNote, setKitchenNote] = useState("");
+  const [pickupNote, setPickupNote] = useState("");
   const [emailInput, setEmailInput] = useState<{ userId: string; value: string }>();
   const [phoneInput, setPhoneInput] = useState<{ userId: string; value: string }>();
   const savedPhone = useQuery({
@@ -122,11 +125,11 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const invoiceReady = invoicePreferenceIsValid(invoicePreference);
   const [editingInvoice, setEditingInvoice] = useState(false);
   const locations = useQuery({
-    queryKey: ["pickup-locations"],
-    queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
+    queryKey: business ? ["pickup-locations", "business-meal"] : ["pickup-locations"],
+    queryFn: ({ signal }) => apiFetch<PickupLocation[]>(business ? "/v1/pickup-locations?business_meal=true" : "/v1/pickup-locations", { signal }),
     refetchInterval: 30000,
   });
-  const activeLocations = useMemo(() => locations.data?.filter((location) => location.is_active), [locations.data]);
+  const activeLocations = useMemo(() => locations.data?.filter((location) => location.is_active && (business || !location.business_meal_only)), [locations.data, business]);
   const currentDraft = useMemo(
     () => event.data ? reconcileMealDraft(draft, event.data, now, activeLocations) : draft,
     [draft, event.data, now, activeLocations],
@@ -134,6 +137,18 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const { quantities, selections, pickupAt, pickupLocationId, needsUtensils } = currentDraft;
   const selectedPickupLocation = activeLocations?.find((location) => location.id === pickupLocationId);
   const pickupLocationReady = !locations.isError && Boolean(activeLocations && (!activeLocations.length || selectedPickupLocation));
+  const pickupNoteRequired = selectedPickupLocation?.requires_pickup_note === true;
+  const requiredPickupNote = pickupNoteRequired ? pickupNote.trim() : "";
+  const pickupNoteReady = !pickupNoteRequired || Boolean(requiredPickupNote);
+  const pickupNoteError = !pickupNoteReady && Boolean(submitted || touched.pickupNote);
+  const trimmedKitchenNote = kitchenNote.trim();
+  const orderNote = requiredPickupNote
+    ? [`校內取餐位置：${requiredPickupNote}`, trimmedKitchenNote].filter(Boolean).join("\n")
+    : trimmedKitchenNote;
+  const excessNoteLength = orderNote.length - MEAL_NOTE_MAX_LENGTH;
+  const noteLengthError = excessNoteLength > 0
+    ? `取餐位置與餐點備註超過長度上限，請再縮短 ${excessNoteLength} 字。`
+    : "";
   const orderingPaused = event.data?.ordering_paused === true;
   const pickupOptions = event.data
     ? (orderingPaused ? mealPickupSchedule : pickupTimeOptions)(event.data, now, mealBookingType)
@@ -172,7 +187,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
   const quantityReady = !business || totalQuantity >= 2;
   const quote = useQuery({
-    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, contactEmail.trim(), mealBookingType, paymentMethod],
+    queryKey: ["meal-quote", eventId, itemKey, pickupAt, pickupLocationId, needsUtensils, invoicePreference, user?.id, couponCode, contactEmail.trim(), mealBookingType, paymentMethod, Boolean(requiredPickupNote)],
     queryFn: () => apiFetch<MealQuote>(`/v1/meal-events/${eventId}/quote`, {
       method: "POST",
       body: JSON.stringify({
@@ -180,6 +195,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         coupon_code: couponCode,
         pickup_at: taipeiInputToIso(pickupAt),
         pickup_location_id: pickupLocationId || null,
+        ...(requiredPickupNote ? { kitchen_note: requiredPickupNote } : {}),
         needs_utensils: needsUtensils,
         contact_email: contactEmail.trim(),
         payment_method: paymentMethod,
@@ -193,6 +209,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       orderingOpen &&
       pickupReady &&
       pickupLocationReady &&
+      pickupNoteReady &&
       selectionsReady && !lineLimitExceeded &&
       invoiceReady && contactEmailReady,
   });
@@ -211,6 +228,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       }
       if (!validPickupTime(pickupAt, event.data, submittedAt, mealBookingType)) throw new Error("請重新選擇可預訂的半小時取餐時段");
       if (!pickupLocationReady) throw new Error("請選擇可用的取餐點");
+      if (!pickupNoteReady) throw new Error("請填寫校內取餐位置");
+      if (noteLengthError) throw new Error(noteLengthError);
       const input = {
         ...(business ? { mealBookingType: "business" as const, invoiceHandling: "pickup_day" as const } : {}),
         eventId,
@@ -223,7 +242,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         contactEmail: contactEmail.trim(),
         invoicePreference,
         paymentMethod,
-        kitchenNote: kitchenNote.trim(),
+        kitchenNote: orderNote,
         contactPhone: contactPhone.replace(/\s/g, ""),
       };
       const [storageKey, ...legacyKeys] = await Promise.all([
@@ -357,6 +376,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     orderingOpen &&
     pickupReady &&
     pickupLocationReady &&
+    pickupNoteReady && !noteLengthError &&
     items.length > 0 &&
     quantityReady &&
     selectionsReady && !lineLimitExceeded &&
@@ -585,6 +605,13 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               </select>
             </label>
             {pickupAddress && <p className="meal-pickup-address">{pickupAddress}</p>}
+            {pickupNoteRequired && <label className="field"><span id="meal-pickup-note-label">校內取餐位置</span>
+              <textarea aria-labelledby="meal-pickup-note-label" required maxLength={MEAL_NOTE_MAX_LENGTH} placeholder="例如：館別、樓層、教室" value={pickupNote} disabled={checkout.isPending}
+                aria-invalid={pickupNoteError} aria-describedby={pickupNoteError ? "meal-pickup-note-error" : undefined}
+                onBlur={() => setTouched(current => ({ ...current, pickupNote: true }))}
+                onChange={event => setPickupNote(event.target.value)} />
+            </label>}
+            {pickupNoteError && <p id="meal-pickup-note-error" className="form-error" role="alert">請填寫校內取餐位置</p>}
             {locations.isError && <DataState kind="error" title="取餐點暫時無法使用" detail={locations.error.message} onAction={() => locations.refetch()} />}
             <label className="field"><span id="meal-utensils-label">是否需要餐具</span>
               <select aria-labelledby="meal-utensils-label" value={needsUtensils ? "yes" : "no"} disabled={checkout.isPending} onChange={(event) => setDraft((current) => ({ ...current, needsUtensils: event.target.value === "yes" }))}>
@@ -622,7 +649,12 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
               {!editingInvoice && invoicePreferenceIsValid(invoicePreference) && <dl className="meal-invoice-summary"><InvoicePreferenceSummary value={invoicePreference} typeLabel="發票形式" /></dl>}
             </section>
           </div>
-          <label className="field"><span>餐點備註（選填）</span><textarea maxLength={500} value={kitchenNote} onChange={event => setKitchenNote(event.target.value)} /></label>
+          <label className="field"><span id="meal-kitchen-note-label">餐點備註</span>
+            <textarea aria-labelledby="meal-kitchen-note-label" maxLength={MEAL_NOTE_MAX_LENGTH} value={kitchenNote}
+              aria-invalid={Boolean(noteLengthError)} aria-describedby={noteLengthError ? "meal-note-length-error" : undefined}
+              onChange={event => setKitchenNote(event.target.value)} />
+          </label>
+          {noteLengthError && <p id="meal-note-length-error" className="form-error" role="alert">{noteLengthError}</p>}
           <div className="meal-payment-action">
           <dl className="meal-payment-total"><div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div></dl>
           {!user ? (

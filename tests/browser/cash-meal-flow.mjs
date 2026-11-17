@@ -164,13 +164,13 @@ test('送單回應中斷後重試與重新整理沿用同一識別碼及備註',
   const url = `${base}/meals/onsite-event?pickup_at=2030-01-03T11%3A30`;
   await page.goto(url);
   await page.getByRole('button', {name: '增加蔬食便當', exact: true}).click();
-  await page.getByLabel('餐點備註（選填）', {exact: true}).fill('飯少，不要辣');
+  await page.getByLabel('餐點備註', {exact: true}).fill('飯少，不要辣');
   await page.getByRole('button', {name: '預訂並前往線上付款', exact: true}).click();
   await page.getByText('測試連線中斷', {exact: true}).waitFor();
   await page.getByRole('button', {name: '預訂並前往線上付款', exact: true}).click();
   await page.waitForFunction(() => document.querySelector('.form-error')?.textContent === '測試連線中斷');
   await page.reload();
-  await page.getByLabel('餐點備註（選填）', {exact: true}).fill('飯少，不要辣');
+  await page.getByLabel('餐點備註', {exact: true}).fill('飯少，不要辣');
   await page.getByRole('button', {name: '預訂並前往線上付款', exact: true}).click();
   await page.waitForURL('**/meal-orders?order_id=onsite-order');
   assert.equal(attempts.length, 3);

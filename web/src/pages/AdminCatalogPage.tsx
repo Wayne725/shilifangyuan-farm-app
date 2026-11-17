@@ -153,7 +153,10 @@ export function AdminCatalogPage() {
   });
   const hasProductFilters = searchTerms.length > 0 || saleFilter !== "all";
   const refreshSuppliers = () => queryClient.invalidateQueries({ queryKey: ["admin-suppliers"] });
-  const refreshLocations = () => queryClient.invalidateQueries({ queryKey: ["admin-pickup-locations"] });
+  const refreshLocations = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["admin-pickup-locations"] }),
+    queryClient.invalidateQueries({ queryKey: ["pickup-locations"] }),
+  ]);
 
   return (
     <section className="admin-module-page">
@@ -422,23 +425,55 @@ function AccreditationForm({ supplier, onDone }: { supplier: Supplier; onDone: (
   return <form className="embedded-admin-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}><h4>供應者審認紀錄</h4><div className="field-grid three-columns"><label className="field"><span>審認日期</span><input type="date" value={reviewedOn} onChange={(event) => setReviewedOn(event.target.value)} /></label><label className="field"><span>結果</span><select value={status} onChange={(event) => setStatus(event.target.value as SupplierAccreditationStatus)}><option value="approved">通過</option><option value="rejected">不通過</option><option value="pending">待確認</option></select></label><label className="field wide"><span>審認過程<OptionalMark /></span><textarea rows={3} value={processNotes} onChange={(event) => setProcessNotes(event.target.value)} /></label><label className="field wide"><span>結果說明<OptionalMark /></span><textarea rows={3} value={resultNotes} onChange={(event) => setResultNotes(event.target.value)} /></label></div>{save.isError && <p className="form-error">{save.error.message}</p>}<button className="button button-primary" disabled={save.isPending}>儲存審認</button></form>;
 }
 
+type LocationDraft = Omit<PickupLocation, "id">;
+
+const emptyLocation: LocationDraft = {
+  code: "", name: "", address: "", instructions: "", sort_order: 0, is_active: true,
+  business_meal_only: false, requires_pickup_note: false,
+};
+
 function LocationCreateForm({ onDone }: { onDone: () => void }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState({ code: "", name: "", address: "", instructions: "", sort_order: 0, is_active: true });
-  const create = useMutation({ mutationFn: () => apiFetch<PickupLocation>("/v1/admin/pickup-locations", { method: "POST", body: JSON.stringify(draft) }), onSuccess: () => { setDraft({ code: "", name: "", address: "", instructions: "", sort_order: 0, is_active: true }); setOpen(false); onDone(); } });
+  const [draft, setDraft] = useState(emptyLocation);
+  const create = useMutation({ mutationFn: () => apiFetch<PickupLocation>("/v1/admin/pickup-locations", { method: "POST", body: JSON.stringify(draft) }), onSuccess: () => { setDraft(emptyLocation); setOpen(false); onDone(); } });
   return <section className="admin-create-block"><button className="button button-system" type="button" onClick={() => setOpen((value) => !value)}><Plus size={17} />新增取貨點</button>{open && <LocationForm title="建立取貨點" draft={draft} busy={create.isPending} error={create.error?.message} onChange={setDraft} onCancel={() => setOpen(false)} onSubmit={() => create.mutate()} />}</section>;
 }
 
 function LocationEditor({ location, onDone }: { location: PickupLocation; onDone: () => void }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ code: location.code, name: location.name, address: location.address, instructions: location.instructions, sort_order: location.sort_order, is_active: location.is_active });
-  const update = useMutation({ mutationFn: () => apiFetch<PickupLocation>(`/v1/admin/pickup-locations/${location.id}`, { method: "PATCH", body: JSON.stringify(draft) }), onSuccess: () => { setEditing(false); onDone(); } });
-  if (editing) return <LocationForm title={location.name} draft={draft} busy={update.isPending} error={update.error?.message} onChange={setDraft} onCancel={() => setEditing(false)} onSubmit={() => update.mutate()} />;
-  return <article className="admin-record-card"><MapPin size={22} weight="light" /><span className={`status-chip ${location.is_active ? "passed" : ""}`}>{location.is_active ? "啟用" : "停用"}</span><h3>{location.name}</h3><p>{location.address || "詳細位置待合作社確認"}</p><small>{location.code} · 排序 {location.sort_order}</small><button type="button" onClick={() => setEditing(true)}>編輯取貨點</button></article>;
+  const [draft, setDraft] = useState<LocationDraft>();
+  const update = useMutation({ mutationFn: (values: LocationDraft) => apiFetch<PickupLocation>(`/v1/admin/pickup-locations/${location.id}`, { method: "PATCH", body: JSON.stringify(values) }), onSuccess: () => { setDraft(undefined); onDone(); } });
+  if (draft) return <LocationForm title={location.name} draft={draft} busy={update.isPending} error={update.error?.message} onChange={setDraft} onCancel={() => setDraft(undefined)} onSubmit={() => update.mutate(draft)} />;
+  return <article className="admin-record-card">
+    <MapPin size={22} weight="light" />
+    <span className={`status-chip ${location.is_active ? "passed" : ""}`}>{location.is_active ? "啟用" : "停用"}</span>
+    {location.business_meal_only && <span className="status-chip">會餐專用</span>}
+    <h3>{location.name}</h3><p>{location.address || "詳細位置待合作社確認"}</p>
+    <small>{location.code} · 排序 {location.sort_order}</small>
+    <button type="button" onClick={() => {
+      const { code, name, address, instructions, sort_order, is_active } = location;
+      update.reset();
+      setDraft({ code, name, address, instructions, sort_order, is_active,
+        business_meal_only: Boolean(location.business_meal_only), requires_pickup_note: Boolean(location.requires_pickup_note) });
+    }}>編輯取貨點</button>
+  </article>;
 }
 
-function LocationForm({ title, draft, busy, error, onChange, onCancel, onSubmit }: { title: string; draft: { code: string; name: string; address: string; instructions: string; sort_order: number; is_active: boolean }; busy: boolean; error?: string; onChange: (draft: { code: string; name: string; address: string; instructions: string; sort_order: number; is_active: boolean }) => void; onCancel: () => void; onSubmit: () => void }) {
-  return <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}><div className="form-heading"><div><p className="eyebrow">PICKUP LOCATION / 取貨點</p><h2>{title}</h2></div></div><div className="field-grid two-columns"><label className="field"><span>代碼</span><input required pattern="[a-z0-9-]+" value={draft.code} onChange={(event) => onChange({ ...draft, code: event.target.value })} /></label><label className="field"><span>名稱</span><input required value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label><label className="field wide"><span>地址</span><input value={draft.address} onChange={(event) => onChange({ ...draft, address: event.target.value })} /></label><label className="field wide"><span>取貨說明</span><textarea rows={3} value={draft.instructions} onChange={(event) => onChange({ ...draft, instructions: event.target.value })} /></label><label className="field"><span>排序</span><input min={0} type="number" value={draft.sort_order} onChange={(event) => onChange({ ...draft, sort_order: Number(event.target.value) })} /></label></div><label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />啟用取貨點</label>{error && <p className="form-error">{error}</p>}<div className="form-actions"><button className="button button-quiet" type="button" onClick={onCancel}>取消</button><button className="button button-primary" disabled={busy}>儲存取貨點</button></div></form>;
+function LocationForm({ title, draft, busy, error, onChange, onCancel, onSubmit }: { title: string; draft: LocationDraft; busy: boolean; error?: string; onChange: (draft: LocationDraft) => void; onCancel: () => void; onSubmit: () => void }) {
+  return <form className="social-form admin-master-form" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+    <div className="form-heading"><div><p className="eyebrow">PICKUP LOCATION / 取貨點</p><h2>{title}</h2></div></div>
+    <div className="field-grid two-columns">
+      <label className="field"><span>代碼</span><input required pattern="[a-z0-9-]+" value={draft.code} onChange={(event) => onChange({ ...draft, code: event.target.value })} /></label>
+      <label className="field"><span>名稱</span><input required value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label>
+      <label className="field wide"><span>地址</span><input value={draft.address} onChange={(event) => onChange({ ...draft, address: event.target.value })} /></label>
+      <label className="field wide"><span>取貨說明</span><textarea rows={3} value={draft.instructions} onChange={(event) => onChange({ ...draft, instructions: event.target.value })} /></label>
+      <label className="field"><span>排序</span><input min={0} type="number" value={draft.sort_order} onChange={(event) => onChange({ ...draft, sort_order: Number(event.target.value) })} /></label>
+    </div>
+    <label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />啟用取貨點</label>
+    <label className="switch-field"><input type="checkbox" checked={draft.business_meal_only} onChange={(event) => onChange({ ...draft, business_meal_only: event.target.checked, requires_pickup_note: event.target.checked && draft.requires_pickup_note })} />僅供會餐使用</label>
+    {draft.business_meal_only && <label className="switch-field"><input type="checkbox" checked={draft.requires_pickup_note} onChange={(event) => onChange({ ...draft, requires_pickup_note: event.target.checked })} />須填寫校內取餐位置</label>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <div className="form-actions"><button className="button button-quiet" type="button" onClick={onCancel}>取消</button><button className="button button-primary" disabled={busy}>儲存取貨點</button></div>
+  </form>;
 }
 
 function accreditationLabel(status: SupplierAccreditationStatus) {
