@@ -40,11 +40,15 @@ def member_contact_from_profile(
     aad = f"member-profile:{user.id}"
     name = cipher.decrypt_text(profile.legal_name_encrypted, associated_data=aad) if profile else ""
     email = user.email or user.notification_email or ""
+    return name or user.display_name, email, member_phone_from_profile(user, profile, cipher)
+
+
+def member_phone_from_profile(
+    user: User, profile: MemberProfile | None, cipher: VersionedPIICipher,
+) -> str:
     if user.meal_contact_phone_encrypted:
-        phone = cipher.decrypt_text(user.meal_contact_phone_encrypted, associated_data=f"meal-contact:{user.id}")
-    else:
-        phone = cipher.decrypt_text(profile.phone_encrypted, associated_data=aad) if profile else ""
-    return name or user.display_name, email, phone
+        return cipher.decrypt_text(user.meal_contact_phone_encrypted, associated_data=f"meal-contact:{user.id}")
+    return cipher.decrypt_text(profile.phone_encrypted, associated_data=f"member-profile:{user.id}") if profile else ""
 
 
 async def account_phone(session: AsyncSession, user: User, settings: Settings) -> str | None:

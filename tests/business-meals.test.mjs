@@ -48,11 +48,13 @@ test('會餐建單保留付款方式且固定取餐日開票，預訂當下只�
   }
 });
 
-test('未付款會餐只在明確勾選時帶入列印條件，一般訂單不受影響', async () => {
+test('彙總查詢保留通路篩選，由列印 API 決定便當是否含未付款會餐', async () => {
   const module = {};
   vm.runInNewContext(compile(await readFile(new URL('../web/src/lib/order-summary.ts', import.meta.url), 'utf8')), { exports: module });
-  const filters = { startsOn: '2030-01-01', endsOn: '2030-01-02', dateBasis: 'pickup', salesChannel: 'all', orderCategory: 'meal', status: 'active', category: '', search: '' };
-  assert.equal(Object.hasOwn(module.orderSummaryParameters(filters), 'include_unpaid_business'), false);
-  assert.equal(module.orderSummaryParameters({ ...filters, includeUnpaidBusiness: true }).include_unpaid_business, 'true');
-  assert.equal(Object.hasOwn(module.orderSummaryParameters({ ...filters, orderCategory: 'general', includeUnpaidBusiness: true }), 'include_unpaid_business'), false);
+  const filters = { startsOn: '2030-01-01', endsOn: '2030-01-02', dateBasis: 'pickup', salesChannel: 'all', status: 'active', category: '', search: '' };
+  for (const orderCategory of ['meal', 'general', 'all']) {
+    const parameters = module.orderSummaryParameters({ ...filters, orderCategory });
+    assert.equal(parameters.order_category, orderCategory);
+    assert.equal(Object.hasOwn(parameters, 'include_unpaid_business'), false);
+  }
 });

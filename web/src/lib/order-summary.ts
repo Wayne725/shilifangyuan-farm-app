@@ -19,7 +19,6 @@ export const orderSummaryStatusLabels = {
 } as const;
 
 export interface OrderSummaryFilters {
-  includeUnpaidBusiness?: boolean;
   startsOn: string;
   endsOn: string;
   dateBasis: "order" | "pickup";
@@ -81,6 +80,5 @@ export function orderSummaryParameters(filters: OrderSummaryFilters) {
     status: filters.status,
     category: filters.category,
     search: filters.search,
-    ...(filters.includeUnpaidBusiness && filters.orderCategory !== "general" ? { include_unpaid_business: "true" } : {}),
   };
 }

@@ -72,6 +72,7 @@ export function AdminMealsPage() {
 
   const refreshMeals = () => {
     void queryClient.invalidateQueries({ queryKey: ["admin-meals"] });
+    void queryClient.invalidateQueries({ queryKey: ["admin-meal-schedules"] });
     void queryClient.invalidateQueries({ queryKey: ["admin-meal-events"] });
     void queryClient.invalidateQueries({ queryKey: ["meal-events"] });
     void queryClient.invalidateQueries({ queryKey: ["meal-event"] });

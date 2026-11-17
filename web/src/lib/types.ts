@@ -610,6 +610,7 @@ export interface MealSchedule {
   advance_days: number;
   weekdays: number[];
   saturday_business_only?: boolean;
+  sunday_business_only?: boolean;
   enabled: boolean;
   auto_publish: boolean;
   offerings: Array<{

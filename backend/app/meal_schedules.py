@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order
 from .meal_booking import MEAL_ORDER_CUTOFF, TAIPEI, _aware, meal_schedule_has_pickup_slots, workday_booking_window
-from .workday_calendar import CalendarUnavailable, is_saturday_catering_day, is_workday
+from .workday_calendar import CalendarUnavailable, is_weekend_catering_day, is_workday
+
+
+def advance_meal_schedule_version(template: MealScheduleTemplate, now: datetime) -> None:
+    template.updated_at = max(now, _aware(template.updated_at) + timedelta(microseconds=1))
 
 
 async def _convert_unordered_legacy_events(session, template, today, report):
@@ -57,8 +61,10 @@ async def generate_scheduled_meal_events(
     now: datetime,
     *,
     template_id: str | None = None,
+    template_ids: list[str] | None = None,
     limit: int = 100,
     report: dict | None = None,
+    convert_legacy: bool = True,
 ) -> list[str]:
     current = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now
     today = current.astimezone(TAIPEI).date()
@@ -69,9 +75,11 @@ async def generate_scheduled_meal_events(
     query = select(MealScheduleTemplate).where(MealScheduleTemplate.enabled.is_(True))
     if template_id is not None:
         query = query.where(MealScheduleTemplate.id == template_id)
+    elif template_ids is not None:
+        query = query.where(MealScheduleTemplate.id.in_(template_ids))
     templates = list(await session.scalars(
         query.order_by(MealScheduleTemplate.id).limit(limit)
-        .with_for_update(skip_locked=template_id is None)
+        .with_for_update(skip_locked=template_id is None and template_ids is None)
     ))
     created_ids: list[str] = []
     for template in templates:
@@ -79,12 +87,16 @@ async def generate_scheduled_meal_events(
         pickup_end_time = time.fromisoformat(template.pickup_end_time)
         if not meal_schedule_has_pickup_slots(template.meal_period, pickup_start_time, pickup_end_time):
             continue
-        await _convert_unordered_legacy_events(session, template, today, report)
+        if convert_legacy:
+            await _convert_unordered_legacy_events(session, template, today, report)
         meal_ids = {item["meal_id"] for item in template.offerings}
-        active_ids = set(await session.scalars(
-            select(Meal.id).where(Meal.id.in_(meal_ids), Meal.is_active.is_(True))
-        ))
-        active_offerings = [item for item in template.offerings if item["meal_id"] in active_ids]
+        prices = dict((await session.execute(
+            select(Meal.id, Meal.price).where(Meal.id.in_(meal_ids), Meal.is_active.is_(True))
+        )).all())
+        active_offerings = [
+            {**item, "price": prices[item["meal_id"]]} if template.fixed_booking_window else item
+            for item in template.offerings if item["meal_id"] in prices
+        ]
         if not active_offerings:
             continue
         existing_dates = set(await session.scalars(
@@ -93,13 +105,14 @@ async def generate_scheduled_meal_events(
                 MealEvent.service_date >= today,
             )
         ))
+        weekend_enabled = {5: template.saturday_business_only, 6: template.sunday_business_only}
         eligible_in_horizon = False
         for offset in range(1, 367):
-            if offset > template.advance_days and eligible_in_horizon:
+            if offset > template.advance_days and (eligible_in_horizon or template.fixed_booking_window):
                 break
             service_date = today + timedelta(days=offset)
             try:
-                business_only = template.saturday_business_only and is_saturday_catering_day(service_date)
+                business_only = weekend_enabled.get(service_date.weekday(), False) and is_weekend_catering_day(service_date)
                 workday = is_workday(service_date)
             except CalendarUnavailable:
                 report["calendar_unavailable"] += 1
@@ -110,18 +123,17 @@ async def generate_scheduled_meal_events(
             pickup_end = datetime.combine(service_date, pickup_end_time, TAIPEI)
             if pickup_end < pickup_start:
                 pickup_end += timedelta(days=1)
-            cutoff = datetime.combine(
-                service_date - timedelta(days=template.cutoff_days_before),
-                time.fromisoformat(template.cutoff_time),
-                TAIPEI,
-            )
             try:
                 if business_only:
-                    friday = service_date - timedelta(days=1)
+                    friday = service_date - timedelta(days=service_date.weekday() - 4)
                     ordering_start = datetime.combine(friday, time.min, TAIPEI)
                     cutoff = datetime.combine(friday, MEAL_ORDER_CUTOFF, TAIPEI)
                 else:
-                    ordering_start, cutoff = workday_booking_window(service_date, cutoff)
+                    configured_cutoff = None if template.fixed_booking_window else datetime.combine(
+                        service_date - timedelta(days=template.cutoff_days_before),
+                        time.fromisoformat(template.cutoff_time), TAIPEI,
+                    )
+                    ordering_start, cutoff = workday_booking_window(service_date, configured_cutoff)
             except CalendarUnavailable:
                 report["calendar_unavailable"] += 1
                 continue

@@ -380,18 +380,24 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
     if (method === 'GET' && path === '/v1/admin/meal-calendar') return route.fulfill({ json: { service_date: '2026-09-17', is_workday: true, previous_workday: '2026-09-16', next_workday: '2026-09-18', ordering_starts_at: '2026-09-15T16:00:00Z', ordering_ends_at: '2026-09-16T12:00:00Z' } });
     if (method === 'GET' && path === '/v1/admin/meal-schedules/calendar-status') return route.fulfill({ json: { available: true, from_date: '2025-01-01', to_date: '2027-12-31', message: '', source_url: 'https://data.gov.tw/dataset/14718', update_year: state.calendarUpdateYear } });
     if (method === 'GET' && path === '/v1/admin/meal-schedules') return route.fulfill({ json: state.schedules });
-    if (method === 'POST' && path === '/v1/admin/meal-schedules') {
-      const payload = request.postDataJSON();
-      state.writes.push({ method, path, payload });
-      const result = { ...payload, id: 'schedule-template', timezone: 'Asia/Taipei', created_at: '2026-09-17T01:00:00Z' };
-      state.schedules.push(result);
-      return route.fulfill({ json: result });
+    if (method === 'POST' && path === '/v1/admin/meal-schedules/wizard/preview') {
+      const { schedules } = request.postDataJSON();
+      return route.fulfill({ json: { preview_version: 'a'.repeat(64), updated_events: [], protected_events: [],
+        canonical_offerings: schedules[0].offerings.map(item => ({ ...item, price: meal.price })) } });
     }
-    if (method === 'PUT' && path === '/v1/admin/meal-schedules/schedule-template') {
+    if (method === 'POST' && path === '/v1/admin/meal-schedules/wizard') {
       const payload = request.postDataJSON();
       state.writes.push({ method, path, payload });
-      state.schedules[0] = { ...state.schedules[0], ...payload };
-      return route.fulfill({ json: state.schedules[0] });
+      const results = payload.schedules.map(schedule => {
+        const result = { ...schedule, id: schedule.id ?? 'schedule-template', timezone: 'Asia/Taipei', weekdays: schedule.weekdays, advance_days: 7,
+          cutoff_time: '20:00', cutoff_days_before: 1, updated_at: '2026-09-17T01:00:00Z', created_at: '2026-09-17T01:00:00Z',
+          offerings: schedule.offerings.map((item, position) => ({ ...item, price: meal.price, position })) };
+        const index = state.schedules.findIndex(existing => existing.id === result.id);
+        if (index === -1) state.schedules.push(result);
+        else state.schedules[index] = result;
+        return result;
+      });
+      return route.fulfill({ json: { schedules: results, updated_event_count: 0 } });
     }
     if (method === 'POST' && path === '/v1/admin/meal-schedules/schedule-template/generate') {
       state.writes.push({ method, path });
@@ -657,44 +663,48 @@ test('每日午晚餐排程預設週一至五且停用，須明確啟用及自�
   const { page, state } = await scheduleFixture(t, { admin: true });
   await page.goto(`${base}/admin/meals`);
   await page.getByRole('tab', { name: '每日午晚餐排程', exact: true }).click();
-  await page.getByRole('heading', { name: '建立每日午晚餐排程', exact: true }).waitFor();
-  const enable = page.getByLabel('啟用每日自動產生場次', { exact: true });
-  const publish = page.getByLabel('新產生場次自動發布並開放預訂（未勾選僅建立草稿）', { exact: true });
+  await page.getByRole('button', { name: '建立排程', exact: true }).click();
+  const next = page.getByRole('button', { name: '下一步', exact: true });
+  assert.equal(await page.getByLabel('平日（週一到週五）', { exact: true }).isChecked(), true);
+  assert.equal(await page.getByLabel('週六・只接受會餐', { exact: true }).isChecked(), false);
+  assert.equal(await page.getByLabel('週日・會議餐（只接受會餐）', { exact: true }).isChecked(), false);
+  await page.getByLabel('午餐', { exact: true }).uncheck();
+  await page.getByLabel('晚餐', { exact: true }).check();
+  await next.click();
+  await page.getByRole('checkbox', { name: '隔離每日便當 $120', exact: true }).check();
+  await next.click();
+  await next.click();
+  await page.getByLabel('排程名稱', { exact: true }).fill('隔離每日晚餐排程');
+  await page.getByLabel('供餐地區', { exact: true }).fill('隔離取餐區');
+  await next.click();
+  const enable = page.getByLabel('啟用自動排程', { exact: true });
+  const publish = page.getByLabel('新場次自動發布', { exact: true });
   assert.equal(await enable.isChecked(), false);
   assert.equal(await publish.isChecked(), false);
-  for (const day of ['週一', '週二', '週三', '週四', '週五']) assert.equal(await page.getByLabel(day, { exact: true }).isChecked(), true);
-  assert.equal(await page.getByLabel('週六', { exact: true }).count(), 0);
-  assert.equal(await page.getByLabel('週日', { exact: true }).count(), 0);
-  await page.getByLabel('排程／場次名稱', { exact: true }).fill('隔離每日晚餐排程');
-  await page.getByLabel('取餐地點', { exact: true }).fill('隔離取餐區');
-  await page.getByLabel('排程餐別', { exact: true }).selectOption('dinner');
-  await page.getByLabel('每日取餐開始', { exact: true }).fill('16:30');
-  await page.getByLabel('每日取餐結束', { exact: true }).fill('18:00');
-  await page.getByLabel('每日截單時間', { exact: true }).fill('20:00');
-  assert.equal(await page.getByLabel('取餐前幾天截單', { exact: true }).inputValue(), '1');
-  await page.getByRole('checkbox', { name: '隔離每日便當 $120', exact: true }).check();
   await captureMealScreenshot(page, 'meal-weekday-schedule-mobile.png');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
-  await page.getByRole('button', { name: '儲存每日排程', exact: true }).click();
+  await page.getByRole('button', { name: '確認建立', exact: true }).click();
   await page.getByRole('heading', { name: '隔離每日晚餐排程', exact: true }).waitFor();
   assert.equal(state.writes.length, 1);
-  assert.equal(state.writes[0].payload.enabled, false);
-  assert.equal(state.writes[0].payload.auto_publish, false);
-  assert.deepEqual(state.writes[0].payload.weekdays, [0, 1, 2, 3, 4]);
+  const draft = state.writes[0].payload.schedules[0];
+  assert.equal(draft.enabled, false);
+  assert.equal(draft.auto_publish, false);
+  assert.deepEqual(draft.weekdays, [0, 1, 2, 3, 4]);
   assert.equal(await page.getByRole('button', { name: '立即補齊未來場次', exact: true }).isDisabled(), true);
   await page.getByRole('button', { name: '編輯排程', exact: true }).click();
   await enable.check();
   await publish.check();
-  await page.getByRole('button', { name: '儲存每日排程', exact: true }).click();
+  await page.getByRole('button', { name: '確認修改', exact: true }).click();
   await page.getByRole('button', { name: '立即補齊未來場次', exact: true }).click();
   await page.getByText('已完成排程補齊，既有日期不會重複建立。', { exact: true }).waitFor();
-  assert.equal(state.writes[1].method, 'PUT');
-  assert.equal(state.writes[1].payload.enabled, true);
-  assert.equal(state.writes[1].payload.auto_publish, true);
-  assert.equal(state.writes[1].payload.pickup_start_time, '16:30');
-  assert.equal(state.writes[1].payload.pickup_end_time, '18:00');
-  assert.equal(state.writes[1].payload.cutoff_days_before, 1);
-  assert.equal(state.writes[1].payload.cutoff_time, '20:00');
+  const saved = state.writes[1].payload.schedules[0];
+  assert.equal(saved.id, 'schedule-template');
+  assert.equal(saved.enabled, true);
+  assert.equal(saved.auto_publish, true);
+  assert.equal(saved.pickup_start_time, '16:30');
+  assert.equal(saved.pickup_end_time, '18:00');
+  assert.equal(Object.hasOwn(saved, 'cutoff_days_before'), false);
+  assert.equal(Object.hasOwn(saved, 'cutoff_time'), false);
   assert.match(state.writes[2].path, /\/generate$/);
   assert.deepEqual(state.unknownApi, []);
   assert.ok(state.blockedExternal.every((origin) => origin === 'https://fonts.googleapis.com'));
@@ -908,52 +918,30 @@ test('明日便當在台灣20點準時截單，已選合法時段仍不得再送
   assert.deepEqual(state.unknownApi, []);
 });
 
-test('循環排程預設固定午晚餐與前一天20點截單，不覆寫自訂或既有模板時段', { timeout: 30000 }, async (t) => {
+test('循環排程保留自訂取餐時段並擋下相同開始結束時間', { timeout: 30000 }, async (t) => {
   const { page, state } = await scheduleFixture(t, { admin: true });
-  await page.goto(`${base}/admin/meals`);
-  await page.getByRole('tab', { name: '每日午晚餐排程', exact: true }).click();
-  const start = page.getByLabel('每日取餐開始', { exact: true });
-  const end = page.getByLabel('每日取餐結束', { exact: true });
-  const cutoff = page.getByLabel('每日截單時間', { exact: true });
-  const period = page.getByLabel('排程餐別', { exact: true });
-  const times = async () => Promise.all([start.inputValue(), end.inputValue(), cutoff.inputValue()]);
-  assert.deepEqual(await times(), ['11:00', '13:00', '20:00']);
-  assert.equal(await page.getByLabel('取餐前幾天截單', { exact: true }).inputValue(), '1');
-  await period.selectOption('dinner');
-  assert.deepEqual(await times(), ['16:30', '18:00', '20:00']);
-  await start.fill('17:00');
-  await period.selectOption('lunch');
-  assert.deepEqual(await times(), ['17:00', '18:00', '20:00']);
-  await page.getByRole('button', { name: '套用午餐預設時段', exact: true }).click();
-  assert.deepEqual(await times(), ['11:00', '13:00', '20:00']);
-  await page.getByLabel('排程／場次名稱', { exact: true }).fill('隔離確認午餐排程');
-  await page.getByLabel('取餐地點', { exact: true }).fill('隔離取餐區');
-  await page.getByRole('checkbox', { name: '隔離每日便當 $120', exact: true }).check();
-  const save = page.getByRole('button', { name: '儲存每日排程', exact: true });
-  assert.equal(await save.isDisabled(), false);
-  await end.fill('11:00');
-  await page.getByText('開始與結束時間不可相同；預訂最晚於取餐前一天 20:00 截止。', { exact: true }).waitFor();
-  assert.equal(await save.isDisabled(), true);
-  await end.fill('13:00');
-  await captureMealScreenshot(page, 'meal-confirmed-lunch-schedule-mobile.png');
-  await save.click();
-  await page.getByRole('heading', { name: '隔離確認午餐排程', exact: true }).waitFor();
-  assert.equal(state.writes[0].payload.pickup_start_time, '11:00');
-  assert.equal(state.writes[0].payload.pickup_end_time, '13:00');
-  assert.equal(state.writes[0].payload.cutoff_time, '20:00');
-  assert.equal(state.writes[0].payload.cutoff_days_before, 1);
+  state.schedules.push({ id: 'schedule-template', title: '隔離自訂午餐', meal_period: 'lunch',
+    location: '隔離取餐區', weekdays: [0, 1, 2, 3, 4], enabled: true, auto_publish: true,
+    pickup_start_time: '11:30', pickup_end_time: '12:30', cutoff_time: '20:00', cutoff_days_before: 1, advance_days: 7,
+    updated_at: '2026-09-17T01:00:00Z', offerings: [{ meal_id: state.events[0].offerings[0].meal_id, capacity: 20, price: 120, position: 0 }] });
+  await page.goto(`${base}/admin/meals?tab=schedules`);
   await page.getByRole('button', { name: '編輯排程', exact: true }).click();
-  await period.selectOption('dinner');
-  assert.deepEqual(await times(), ['11:00', '13:00', '20:00']);
-  await page.getByRole('button', { name: '套用晚餐預設時段', exact: true }).click();
-  assert.deepEqual(await times(), ['16:30', '18:00', '20:00']);
-  await save.click();
-  await page.getByRole('heading', { name: '隔離確認午餐排程', exact: true }).waitFor();
-  assert.equal(state.writes[1].payload.meal_period, 'dinner');
-  assert.equal(state.writes[1].payload.pickup_start_time, '16:30');
-  assert.equal(state.writes[1].payload.pickup_end_time, '18:00');
-  assert.equal(state.writes[1].payload.cutoff_time, '20:00');
-  assert.equal(state.writes[1].payload.cutoff_days_before, 1);
+  await page.getByRole('button', { name: '修改取餐時間與地區', exact: true }).click();
+  const start = page.getByLabel('取餐開始', { exact: true });
+  const end = page.getByLabel('取餐結束', { exact: true });
+  const review = page.getByRole('button', { name: '返回確認', exact: true });
+  assert.equal(await start.inputValue(), '11:30');
+  assert.equal(await end.inputValue(), '12:30');
+  await end.fill('11:30');
+  assert.equal(await review.isDisabled(), true);
+  await end.fill('12:30');
+  await review.click();
+  await page.getByText('平日：前一個工作日 00:00–20:00', { exact: true }).waitFor();
+  await captureMealScreenshot(page, 'meal-confirmed-lunch-schedule-mobile.png');
+  await page.getByRole('button', { name: '確認修改', exact: true }).click();
+  await page.getByText('已更新 1 個排程。', { exact: true }).waitFor();
+  assert.equal(state.writes[0].payload.schedules[0].pickup_start_time, '11:30');
+  assert.equal(state.writes[0].payload.schedules[0].pickup_end_time, '12:30');
   assert.deepEqual(state.unknownApi, []);
 });
 
@@ -1161,7 +1149,7 @@ test('手機尺寸便當建立付款失敗，原訂單保留原因並可重新�
   assert.deepEqual(state.unknownApi, []);
 });
 
-test('排程手機畫面顯示週六會餐並可停用單週', { timeout: 20000 }, async t => {
+test('排程手機畫面顯示週六和週日會餐並可停用單場', { timeout: 20000 }, async t => {
   const { page, state } = await scheduleFixture(t, { admin: true });
   state.calendarUpdateYear = 2028;
   state.events.push(scheduledEvent({
@@ -1169,15 +1157,21 @@ test('排程手機畫面顯示週六會餐並可停用單週', { timeout: 20000 
     service_date: '2026-09-19', ordering_starts_at: '2026-09-17T16:00:00Z', ordering_ends_at: '2026-09-18T12:00:00Z',
     pickup_starts_at: '2026-09-19T03:00:00Z', pickup_ends_at: '2026-09-19T05:30:00Z',
   }));
+  state.events.push(scheduledEvent({
+    id: 'sunday-business', title: '隔離週日會議餐', business_only: true, schedule_template_id: 'sat-template',
+    service_date: '2026-09-20', ordering_starts_at: '2026-09-17T16:00:00Z', ordering_ends_at: '2026-09-18T12:00:00Z',
+    pickup_starts_at: '2026-09-20T03:00:00Z', pickup_ends_at: '2026-09-20T05:30:00Z',
+  }));
   await page.goto(`${base}/admin/meals?tab=schedules`);
-  await page.getByRole('checkbox', { name: '週六・只接受會餐' }).waitFor();
   assert.equal(await page.getByRole('link', { name: '請更新 2028 年官方日曆' }).getAttribute('href'), 'https://data.gov.tw/dataset/14718');
-  const list = page.getByRole('region', { name: '接下來的週六會餐' });
+  const list = page.getByRole('region', { name: '接下來的週末會餐' });
   await list.getByText('隔離週六會餐').waitFor();
-  await captureMealScreenshot(page, 'meal-saturday-schedule-mobile.png');
-  await list.getByRole('button', { name: '停用這週預訂' }).click();
-  await list.getByRole('button', { name: '恢復這週預訂' }).waitFor();
-  assert.equal(state.writes[0].path, '/v1/admin/meal-events/saturday-business/ordering-pause');
+  await list.getByText('隔離週日會議餐').waitFor();
+  await captureMealScreenshot(page, 'meal-weekend-schedule-mobile.png');
+  const sunday = list.getByRole('listitem').filter({ hasText: '隔離週日會議餐' });
+  await sunday.getByRole('button', { name: '停用這場預訂' }).click();
+  await sunday.getByRole('button', { name: '恢復這場預訂' }).waitFor();
+  assert.equal(state.writes[0].path, '/v1/admin/meal-events/sunday-business/ordering-pause');
   assert.deepEqual(state.unknownApi, []);
 });
 

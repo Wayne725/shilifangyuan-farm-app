@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { formatMoney, type apiFetch, type downloadApiFile } from "../lib/api";
 import { taipeiDate } from "../lib/meal-time";
 import { DataState, LoadingLines } from "./Shared";
+import { AdminMemberPhone } from "./AdminMemberPhone";
 
 const categories = [
   ["regular", "一般商品"],
@@ -19,7 +20,7 @@ const firstYear = 2020;
 type Category = typeof categories[number][0];
 type Filters = { period: string; start: string; end: string; q: string; status: string; sort: string };
 type Page<T> = { items: T[]; total: number };
-type Member = { id: string; member_number: string; name: string; status_label: string };
+type Member = { id: string; source?: "membership" | "roster"; member_number: string; name: string; status_label: string };
 type Summary = Member & { net_amount: number; order_count: number; latest_paid_date: string | null; categories: Record<Category, number> };
 type Detail = {
   id: string; date: string; order_id: string; order_number: string; category_label: string;
@@ -106,12 +107,13 @@ export function AdminMemberSpending({ adminId, request, downloadFile, member }: 
         {page.data.total > 0 && <div className="admin-records-table" tabIndex={0} role="region" aria-label="社員消費彙總">
           <table role="table">
             <thead role="rowgroup"><tr role="row">
-              {["社員編號", "姓名", "會籍狀態", "消費金額合計", "筆數", "最近消費日", ...categories.map(([, label]) => label)].map(label => <th key={label} scope="col" role="columnheader">{label}</th>)}
+              {["社員編號", "姓名", "聯絡電話", "會籍狀態", "消費金額合計", "筆數", "最近消費日", ...categories.map(([, label]) => label)].map(label => <th key={label} scope="col" role="columnheader">{label}</th>)}
             </tr></thead>
             <tbody role="rowgroup">{page.data.items.map(row => <tr key={row.id} role="row">
               <SpendCell label="社員編號">{row.member_number || "—"}</SpendCell>
               <SpendCell label="姓名"><button type="button" className="text-link admin-spending-member-link" aria-label={`查看 ${row.name || row.member_number || "社員"} 消費明細`}
                 aria-expanded={selection?.id === row.id} onClick={() => setSelection(selection?.id === row.id ? null : row)}>{row.name || "—"}</button></SpendCell>
+              <SpendCell label="聯絡電話">{row.source ? <AdminMemberPhone adminId={adminId} request={request} source={row.source} memberId={row.id} /> : "—"}</SpendCell>
               <SpendCell label="會籍狀態">{row.status_label}</SpendCell>
               <SpendCell label="消費金額合計">{formatMoney(row.net_amount)}</SpendCell>
               <SpendCell label="筆數">{row.order_count}</SpendCell>

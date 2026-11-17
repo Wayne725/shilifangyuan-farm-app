@@ -42,7 +42,9 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
     if (path === '/v1/admin/order-summary' || path === '/v1/admin/order-summary/print-preview') {
       const filters = Object.fromEntries(url.searchParams);
       const summary = { order_count: 1, quantity: 2, product_count: 1, paid_order_count: 0, pending_order_count: 1, inactive_order_count: 0, pending_business_order_count: 1 };
-      if (path.endsWith('/print-preview')) return route.fulfill({ json: { fingerprint: 'synthetic-summary', summary, filters: { ...filters, include_unpaid_business: filters.include_unpaid_business === 'true' }, pages: ['會餐 · 未付款 · 合成便當 2份'], page_count: 1, mode: 'dry_run' } });
+      if (path.endsWith('/print-preview')) return route.fulfill({ json: { fingerprint: 'synthetic-summary',
+        summary: { ...summary, pending_business_quantity: 2 }, filters: { ...filters, include_unpaid_business: filters.order_category === 'meal' },
+        pages: ['已付款＋會餐未付款\n會餐 · 未付款 · 合成便當 2份'], page_count: 1, mode: 'dry_run' } });
       return route.fulfill({ json: { ...filters, summary, categories: [{ category: '便當', order_count: 1, quantity: 2 }], channels: [{ sales_channel: 'meal_preorder', order_count: 1, quantity: 2 }], category_options: ['便當'], products: { items: [{ key: 'business-pending', name: meal.meal_name, unit: '份', quantity: 2, order_count: 1, sales_channel: 'meal_preorder', category: '便當', meal_booking_type: 'business', payment_status: 'pending' }], total: 1, offset: 0, limit: 25 } } });
     }
     if (path === '/v1/admin/platform') return route.fulfill({ json: { kitchen_sound: false } });
@@ -273,17 +275,21 @@ test('後台會餐未付款篩選帶入專用條件，顯示逾期追蹤標記',
   assert.deepEqual(state.unknown, []);
 });
 
-test('彙整分辨未付款會餐，列印開關明確帶入預覽範圍', async t => {
+test('便當彙總直接預覽未付款會餐及份數小計', async t => {
   const { page, state } = await fixture(t, { role: 'admin' });
   await page.goto(`${base}/admin?section=summary`);
   await page.getByText('會餐 · 未付款', { exact: true }).waitFor();
-  await page.getByRole('checkbox', { name: '列印時含未付款會餐', exact: true }).check();
-  const changed = page.waitForResponse(response => new URL(response.url()).pathname === '/v1/admin/order-summary' && new URL(response.url()).searchParams.get('include_unpaid_business') === 'true');
-  await page.getByRole('button', { name: '查詢', exact: true }).click();
-  await changed;
+  assert.equal(await page.getByRole('checkbox', { name: '列印時含未付款會餐', exact: true }).count(), 0);
   await page.getByRole('button', { name: '列印彙總單', exact: true }).click();
   await page.getByText('已付款訂單及未付款會餐，均須未取消', { exact: true }).waitFor();
-  assert.ok(state.reads.some(path => path.includes('/print-preview?') && path.includes('include_unpaid_business=true')));
+  await page.getByText('未付款會餐小計 2 份', { exact: true }).waitFor();
+  if (process.env.BROWSER_SCREENSHOT_DIR) {
+    await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/meal-summary-unpaid-390.png` });
+  }
+  const previewRequest = state.reads.find(path => path.includes('/print-preview?'));
+  const parameters = new URLSearchParams(previewRequest?.split('?')[1]);
+  assert.equal(parameters.get('order_category'), 'meal');
+  assert.equal(parameters.has('include_unpaid_business'), false);
   assert.equal(state.posts.length, 0);
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);

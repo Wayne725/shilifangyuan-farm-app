@@ -138,7 +138,7 @@ async def test_member_spending_matches_payment_and_refund_dates_and_verified_cou
         data = reply.json()
         assert data["total"] == 2
         first = data["items"][0]
-        assert first["id"] == membership.id
+        assert (first["id"], first["source"]) == (membership.id, "membership")
         assert first["categories"] == {"regular": 220, "group": 90, "meal": 120, "business": 410, "walk_in": 120}
         assert (first["net_amount"], first["order_count"], first["latest_paid_date"]) == (960, 6, "2026-10-01")
         second = await client.get(base, headers=headers, params={**october, "limit": 1, "offset": 1})
@@ -147,7 +147,7 @@ async def test_member_spending_matches_payment_and_refund_dates_and_verified_cou
             result = await client.get(base, headers=headers, params={**october, "q": query})
             assert [row["id"] for row in result.json()["items"]] == [membership.id]
         result = await client.get(base, headers=headers, params={**october, "q": "roster@example.test"})
-        assert result.json()["items"][0]["id"] == unlinked.id
+        assert (result.json()["items"][0]["id"], result.json()["items"][0]["source"]) == (unlinked.id, "roster")
         result = await client.get(base, headers=headers, params={**october, "status": "all", "sort": "amount_asc"})
         assert [row["net_amount"] for row in result.json()["items"]] == [55, 95, 960]
         result = await client.get(base, headers=headers, params={**october, "status": "all", "sort": "name_asc"})

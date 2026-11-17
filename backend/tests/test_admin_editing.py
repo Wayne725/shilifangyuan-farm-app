@@ -228,13 +228,19 @@ async def test_linked_roster_and_csv_follow_member_contact(editing_context):
     created = await client.post("/v1/admin/member-roster", headers=headers, json=original)
     assert created.status_code == 201, created.text
     entry = await session.get(MemberRosterEntry, created.json()["id"])
+    roster_phone_path = f"/v1/admin/member-phone/roster/{entry.id}"
+    phone = await client.get(roster_phone_path, headers=headers)
+    assert phone.json() == {"phone": original["phone"]}
+    assert phone.headers["cache-control"] == "private, no-store"
+    assert (await client.get(roster_phone_path, headers=auth_headers(buyer))).status_code == 403
+    assert (await client.get(roster_phone_path)).status_code == 401
     cipher = pii_cipher_from_settings(settings)
     entry.address_encrypted = cipher.encrypt_text("匯入地址", associated_data=roster_aad(entry.id))
     profile = {"legal_name": "本人姓名", "phone": "0922222222", "birth_date": "", "address": "本人地址", "emergency_contact": ""}
     session.add(MemberProfile(user_id=buyer.id, consent_version="test", consented_at=datetime.now(timezone.utc), **{
         f"{key}_encrypted": cipher.encrypt_text(value, associated_data=f"member-profile:{buyer.id}") for key, value in profile.items()
     }))
-    await attach_roster_membership(session, entry, buyer)
+    membership = await attach_roster_membership(session, entry, buyer)
     await session.commit()
     path = f"/v1/admin/member-roster/{entry.id}/contact"
     assert (await client.get(path, headers=headers)).status_code == 409
@@ -245,6 +251,10 @@ async def test_linked_roster_and_csv_follow_member_contact(editing_context):
     assert blocked.status_code == 409 and "社員本人資料" in blocked.json()["detail"]
     report = await client.get("/v1/admin/member-register", headers=headers)
     assert report.json()["items"][0]["phone"] == "0922222222"
+    member_phone_path = f"/v1/admin/member-phone/membership/{membership.id}"
+    for phone_path in (roster_phone_path, member_phone_path):
+        assert (await client.get(phone_path, headers=headers)).json() == {"phone": "0922222222"}
+    assert (await client.get(f"/v1/admin/member-phone/membership/{entry.id}", headers=headers)).status_code == 404
     updated = await client.patch("/v1/auth/profile", headers=auth_headers(buyer), json={"phone": "0944444444"})
     assert updated.status_code == 200, updated.text
     report = (await client.get("/v1/admin/member-register", headers=headers)).json()["items"][0]
@@ -254,6 +264,14 @@ async def test_linked_roster_and_csv_follow_member_contact(editing_context):
     exported = await client.get("/v1/admin/member-register.csv", headers=headers)
     assert exported.status_code == 200, exported.text
     assert next(csv.DictReader(StringIO(exported.content.decode("utf-8-sig"))))["手機"] == "0944444444"
+    for phone_path in (roster_phone_path, member_phone_path):
+        assert (await client.get(phone_path, headers=headers)).json() == {"phone": "0944444444"}
+    buyer.meal_contact_phone_encrypted = None
+    linked_profile = await session.scalar(select(MemberProfile).where(MemberProfile.user_id == buyer.id))
+    linked_profile.phone_encrypted = cipher.encrypt_text("", associated_data=f"member-profile:{buyer.id}")
+    await session.commit()
+    for phone_path in (roster_phone_path, member_phone_path):
+        assert (await client.get(phone_path, headers=headers)).json() == {"phone": None}
 
 
 async def test_product_archive_is_recoverable_without_republishing(editing_context):

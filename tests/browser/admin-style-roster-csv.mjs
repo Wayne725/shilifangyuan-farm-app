@@ -104,6 +104,10 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
         { id: 'membership-trainee', user_id: 'trainee-user', trainee_number: 'T-001', display_name: '測試實習社員', status: 'trainee', share_capital_amount: 0, share_count: 0, updated_at: '2030-01-01T00:00:00Z' },
       ] });
       if (path === '/v1/admin/member-roster' && state.denyRoster) return route.fulfill({ status: 403, json: { detail: '需要管理員權限' } });
+      if (path === '/v1/admin/member-phone/roster/roster-one' || path === '/v1/admin/member-phone/membership/membership-one') {
+        return route.fulfill({ json: { phone: state.memberPhone ?? '0912345678' } });
+      }
+      if (path === '/v1/admin/member-phone/roster/roster-two') return route.fulfill({ json: { phone: null } });
       if (path === '/v1/admin/member-roster') return route.fulfill({ json: [
         { id: 'roster-one', member_number: 'CSV-001', legal_name: '測試社員', email_masked: 'm***@example.com', phone_masked: '******5678', claimed: true, is_active: true, share_capital_amount: 1000, share_count: 1, updated_at: '2030-01-01T00:00:00Z' },
         { id: 'roster-two', member_number: 'CSV-001A', legal_name: '相似編號社員', email_masked: 'o***@example.com', claimed: false, is_active: true, share_capital_amount: 1000, share_count: 1, updated_at: '2030-01-01T00:00:00Z' },
@@ -304,6 +308,42 @@ test('願望管理舊連結轉到商品，會員管理開啟指定社員的會�
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.unknown, []);
 });
+
+for (const width of [390, 1440]) {
+  test(`社員名冊與帳冊按需查看電話，重新開啟時取最新資料 ${width}px`, async t => {
+    const { page, state } = await fixture(t, width);
+    await page.goto(`${base}/admin/users?tab=roster`);
+    const roster = page.locator('.roster-entry-card').filter({ has: page.getByRole('heading', { name: 'CSV-001 · 測試社員', exact: true }) });
+    await roster.getByRole('button', { name: '查看電話', exact: true }).waitFor();
+    assert.equal(await page.getByText('0912345678', { exact: true }).count(), 0);
+    assert.equal(state.reads.some(path => path.startsWith('/v1/admin/member-phone/')), false);
+    await roster.getByRole('button', { name: '查看電話', exact: true }).click();
+    await roster.getByText('0912345678', { exact: true }).waitFor();
+    await roster.getByRole('button', { name: '隱藏電話', exact: true }).click();
+    await roster.getByText('0912345678', { exact: true }).waitFor({ state: 'hidden' });
+    state.memberPhone = '0922334455';
+    await roster.getByRole('button', { name: '查看電話', exact: true }).click();
+    await roster.getByText('0922334455', { exact: true }).waitFor();
+    const unlinked = page.locator('.roster-entry-card').filter({ has: page.getByRole('heading', { name: 'CSV-001A · 相似編號社員', exact: true }) });
+    await unlinked.getByRole('button', { name: '查看電話', exact: true }).click();
+    await unlinked.getByRole('status').filter({ hasText: '未提供電話' }).waitFor();
+    await noOverflow(page);
+
+    await page.getByRole('navigation', { name: '會員管理分類' }).getByRole('link', { name: '社員帳冊', exact: true }).click();
+    const ledger = page.getByRole('region', { name: '帳冊明細' });
+    await ledger.getByRole('button', { name: '查看電話', exact: true }).waitFor();
+    assert.equal(await page.getByText('0922334455', { exact: true }).count(), 0);
+    await ledger.getByRole('button', { name: '查看電話', exact: true }).click();
+    await ledger.getByText('0922334455', { exact: true }).waitFor();
+    assert.deepEqual(new Set(state.reads.filter(path => path.startsWith('/v1/admin/member-phone/'))), new Set([
+      '/v1/admin/member-phone/roster/roster-one', '/v1/admin/member-phone/roster/roster-two',
+      '/v1/admin/member-phone/membership/membership-one',
+    ]));
+    assert.deepEqual(state.writes, []);
+    assert.deepEqual(state.unknown, []);
+    await noOverflow(page);
+  });
+}
 
 test('供應者叫貨CSV採明確期間與供應者，歷史資料另行核對', async t => {
   const { page, state } = await fixture(t, 390);

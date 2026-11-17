@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.invoice_timing import pickup_invoice_due
-from app.models import FulfillmentState, InventoryReservation, InvoiceBuyerType, MealEventOffering, Order, OrderItem, PaymentMethod, PaymentStatus, PrintJob, ReservationStatus, SalesChannel
+from app.models import FulfillmentState, FulfillmentStatus, InventoryReservation, InvoiceBuyerType, MealEventOffering, Order, OrderItem, PaymentMethod, PaymentStatus, PrintJob, ReservationStatus, SalesChannel
 from app.order_summary import OrderSummaryFilters, build_print_summary
 from app.printer_worker import process_print_job
 from app.printing import stop_cancelled_order_prints, format_receipt, open_receipt_content, order_print_snapshot, printer_fingerprint
@@ -153,27 +153,49 @@ async def test_pending_business_is_visible_and_preparable_in_kitchen_without_gen
     assert (await change(c, 'preparing')).status_code == 200
 
 
-async def test_summary_explicitly_includes_unpaid_business_and_keeps_default_paid_only(summary_context):
+async def test_meal_print_summary_includes_only_active_eligible_business_and_separates_quantity(summary_context):
     c = summary_context
-    paid = add_order(c, 'PAID', [line(2, offering=c.offerings[0])], channel=SalesChannel.MEAL_PREORDER)
+    paid = add_order(c, 'PAID', [line(2, offering=c.offerings[0], unit='份')], channel=SalesChannel.MEAL_PREORDER)
     paid.paid_at = NOW
-    general = add_order(c, 'UNPAID', [line(20, offering=c.offerings[0])], channel=SalesChannel.MEAL_PREORDER, payment=PaymentStatus.PENDING)
-    business = add_order(c, 'BUSINESS', [line(3, offering=c.offerings[0])], channel=SalesChannel.MEAL_PREORDER, payment=PaymentStatus.PENDING)
-    business.meal_booking_type = 'business'
-    business.payment_method = PaymentMethod.ONLINE
-    business.invoice_buyer_type = InvoiceBuyerType.COMPANY
-    business.invoice_buyer_tax_id, business.invoice_buyer_name = '15989995', '合成單位'
-    business.invoice_handling, business.invoice_issue_after = 'pickup_day', NOW
+    add_order(c, 'STANDARD-UNPAID', [line(20, offering=c.offerings[0])], channel=SalesChannel.MEAL_PREORDER, payment=PaymentStatus.PENDING)
+
+    def business(label, quantities, *, method=PaymentMethod.ONLINE, **kwargs):
+        order = add_order(c, label, [line(quantity, offering=c.offerings[0], unit='份') for quantity in quantities],
+                          channel=SalesChannel.MEAL_PREORDER, **kwargs)
+        order.meal_booking_type = 'business'
+        order.payment_method = method
+        order.invoice_buyer_type = InvoiceBuyerType.COMPANY
+        order.invoice_buyer_tax_id, order.invoice_buyer_name = '15989995', '合成單位'
+        order.invoice_handling, order.invoice_issue_after = 'pickup_day', NOW
+        return order
+
+    online = business('BUSINESS-ONLINE', [2, 3], payment=PaymentStatus.PENDING)
+    cash = business('BUSINESS-CASH', [4], method=PaymentMethod.CASH_ON_PICKUP, payment=PaymentStatus.PENDING)
+    confirmed = business('BUSINESS-PAID', [5])
+    confirmed.paid_at = NOW
+    business('ADMIN-CANCELLED', [30], payment=PaymentStatus.PENDING, cancelled_at=NOW)
+    business('EVENT-CANCELLED', [40], payment=PaymentStatus.REFUND_PENDING, fulfillment=FulfillmentState.CANCELLED)
+    business('DISASTER-CANCELLED', [50], payment=PaymentStatus.EXPIRED, legacy=FulfillmentStatus.CANCELLED)
+    business('CANCELLED-BUT-PAID', [60], fulfillment=FulfillmentState.CANCELLED).paid_at = NOW
+    for status in (PaymentStatus.EXPIRED, PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.LATE_PAID_REFUND_REQUIRED):
+        business(f'TERMINAL-{status.value}', [70], payment=status)
     await c.session.commit()
-    filters = OrderSummaryFilters(**PARAMS, order_category='meal')
-    default = await build_print_summary(c.session, filters)
-    assert default['summary']['quantity'] == 2
-    report = await build_print_summary(c.session, filters.model_copy(update={'include_unpaid_business': True}))
-    assert report['summary']['quantity'] == 5
-    assert report['summary']['paid_order_count'] == 1 and report['summary']['pending_business_order_count'] == 1
-    assert len(report['products']) == 2
+    filters = OrderSummaryFilters(**PARAMS, order_category='meal', include_unpaid_business=False, status='all')
+    report = await build_print_summary(c.session, filters)
+    assert report['filters']['include_unpaid_business'] is True
+    assert report['summary'] == {
+        'order_count': 4, 'quantity': 16, 'product_count': 3, 'paid_order_count': 2,
+        'pending_business_order_count': 2, 'pending_business_quantity': 9,
+    }
+    assert {row['id'] for row in report['source_versions']} == {paid.id, online.id, cash.id, confirmed.id}
+    assert [(item['payment_status'], item['quantity']) for item in report['products']] == [
+        ('pending', 9), ('paid', 5), ('all', 2),
+    ]
     pages = ''.join(format_summary_pages(report, '2030-01-02 10:00:00', 'synthetic'))
-    assert '會餐' in pages and '未付款' in pages
+    assert '已付款＋會餐未付款' in pages and '未付款會餐小計 9 份' in pages
+    paid_only_legacy = await build_print_summary(c.session, filters, format_version=3)
+    assert paid_only_legacy['summary']['quantity'] == 7
+    assert 'pending_business_quantity' not in paid_only_legacy['summary']
 
 
 async def test_standard_summary_v2_fingerprint_survives_business_fields(summary_context):

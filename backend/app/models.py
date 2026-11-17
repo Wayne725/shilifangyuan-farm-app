@@ -1863,6 +1863,8 @@ class MealScheduleTemplate(Base):
     advance_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     weekdays: Mapped[list[int]] = mapped_column(JSON)
     saturday_business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    sunday_business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    fixed_booking_window: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
     auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     offerings: Mapped[list[dict[str, Any]]] = mapped_column(JSON)

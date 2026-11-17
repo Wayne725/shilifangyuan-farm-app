@@ -1608,6 +1608,7 @@ class MealScheduleInput(BaseModel):
     advance_days: int = Field(default=7, ge=1, le=30)
     weekdays: List[int] = Field(default_factory=lambda: list(range(5)), max_length=7)
     saturday_business_only: bool = False
+    sunday_business_only: bool = False
     enabled: bool = False
     auto_publish: bool = False
     offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
@@ -1634,7 +1635,7 @@ class MealScheduleInput(BaseModel):
             raise ValueError("訂購截止必須早於取餐結束")
         if self.advance_days <= self.cutoff_days_before:
             raise ValueError("預開天數必須大於提前截單天數")
-        if not self.weekdays and not self.saturday_business_only:
+        if not self.weekdays and not self.saturday_business_only and not self.sunday_business_only:
             raise ValueError("請至少選擇一個供餐日")
         if len(set(self.weekdays)) != len(self.weekdays) or any(day < 0 or day > 6 for day in self.weekdays):
             raise ValueError("供餐星期必須為不重複的 0 至 6")

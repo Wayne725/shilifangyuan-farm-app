@@ -63,6 +63,7 @@ from ..integrations.payment_service import (
 from ..meal_pricing import price_meal_line
 from ..meal_photos import router as meal_photos_router
 from ..meal_options_admin import router as meal_options_router
+from ..meal_schedule_wizard import router as meal_schedule_wizard_router
 from ..meal_booking import (
     configured_booking_window,
     meal_booking_window,
@@ -75,7 +76,7 @@ from ..meal_booking import (
     meal_service_date,
     validate_meal_booking_day,
 )
-from ..meal_schedules import TAIPEI, generate_scheduled_meal_events
+from ..meal_schedules import TAIPEI, advance_meal_schedule_version, generate_scheduled_meal_events
 from ..workday_calendar import CalendarUnavailable, calendar_status, is_workday, next_workday, previous_workday
 from ..meal_operations import meal_operations_summary, search_meal_orders
 from ..sales_scope import DEMO_MEAL_EVENT_IDS
@@ -166,6 +167,7 @@ from ..v2_domain import (
 meals_router = APIRouter(tags=["meals"])
 meals_router.include_router(meal_photos_router)
 meals_router.include_router(meal_options_router)
+meals_router.include_router(meal_schedule_wizard_router)
 
 
 def _require_live_meal_event(event_id: str, settings: Settings) -> None:
@@ -1466,10 +1468,6 @@ def _schedule_values(body: MealScheduleInput) -> dict[str, Any]:
     return values
 
 
-def _advance_meal_schedule_version(template: MealScheduleTemplate, now: datetime) -> None:
-    template.updated_at = max(now, _aware(template.updated_at) + timedelta(microseconds=1))
-
-
 @meals_router.get("/v1/admin/meal-schedules/calendar-status")
 async def admin_meal_calendar_status(_admin: User = Depends(require_admin)) -> dict:
     return calendar_status()
@@ -1538,9 +1536,14 @@ async def admin_update_meal_schedule(
     _validate_schedule_pickup_slots(body, template)
     await _validate_schedule_meals(session, body)
     before = MealScheduleRead.model_validate(template).model_dump(mode="json")
-    for name, value in _schedule_values(body).items():
+    values = _schedule_values(body)
+    if "sunday_business_only" not in body.model_fields_set:
+        values.pop("sunday_business_only")
+    if template.fixed_booking_window:
+        values.update(cutoff_days_before=1, cutoff_time="20:00", advance_days=7)
+    for name, value in values.items():
         setattr(template, name, value)
-    _advance_meal_schedule_version(template, datetime.now(timezone.utc))
+    advance_meal_schedule_version(template, datetime.now(timezone.utc))
     await session.flush()
     session.add(AdminAudit(
         actor_id=admin.id, action="meal_schedule.update", aggregate_type="meal_schedule",
@@ -1676,7 +1679,7 @@ async def admin_disable_meal_schedule(
             ), admin, now)
 
     template.enabled = False
-    _advance_meal_schedule_version(template, now)
+    advance_meal_schedule_version(template, now)
     session.add(AdminAudit(
         actor_id=admin.id, action="meal_schedule.disable", aggregate_type="meal_schedule", aggregate_id=template.id,
         data={"scope": body.scope, "paused_event_ids": [event.id for event in paused_events]},

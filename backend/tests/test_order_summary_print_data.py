@@ -39,7 +39,8 @@ async def test_pickup_date_uses_taiwan_boundaries_and_stored_start_fallback(summ
     assert report["summary"]["quantity"] == 22
     assert report["summary"]["order_count"] == 3
     result = await build_print_summary(c.session, OrderSummaryFilters(**PARAMS, order_category="meal", date_basis="pickup"))
-    assert result["summary"] == {"order_count": 3, "quantity": 22, "product_count": 1}
+    assert result["summary"] == {"order_count": 3, "quantity": 22, "product_count": 1,
+                                 "paid_order_count": 3, "pending_business_order_count": 0, "pending_business_quantity": 0}
     legacy_report = await read(c, order_category="meal")
     assert legacy_report["date_basis"] == "order"
     assert legacy_report["summary"]["quantity"] == 127
@@ -109,7 +110,8 @@ async def test_print_summary_groups_complete_options_without_multiplication_and_
     await c.session.commit()
     filters = OrderSummaryFilters(**PARAMS, order_category="meal", search="主餐", limit=1, offset=999)
     result = await build_print_summary(c.session, filters)
-    assert result["summary"] == {"order_count": 5, "quantity": 18, "product_count": 2}
+    assert result["summary"] == {"order_count": 5, "quantity": 18, "product_count": 2,
+                                 "paid_order_count": 5, "pending_business_order_count": 0, "pending_business_quantity": 0}
     assert [row["quantity"] for row in result["products"]] == [11, 7]
     assert len({row["key"] for row in result["products"]}) == 2
     assert result["products"][0]["variants"] == [

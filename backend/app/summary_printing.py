@@ -13,16 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import Settings
 from .integrations.feie import FeieError, configured_region
 from .models import PrintJob
-from .order_summary import OrderSummaryFilters, build_print_summary, print_summary_filters
+from .order_summary import SUMMARY_FORMAT_VERSION, OrderSummaryFilters, build_print_summary
 from .printing import printer_fingerprint, receipt_time, wrap_text
 
 
 MAX_SUMMARY_PAGES = 50
-SUMMARY_FORMAT_VERSION = 3
-
-
-def normalized_print_filters(filters: OrderSummaryFilters) -> dict:
-    return print_summary_filters(filters)
 
 
 def summary_fingerprint(report: dict, settings: Settings, *, format_version: int = SUMMARY_FORMAT_VERSION) -> str:
@@ -82,6 +77,8 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
                    *_lines(f"{totals['product_count']} 種品項・總數量 {totals['quantity']}", width), "-" * width]
         if filters.get("include_unpaid_business"):
             result += _lines(f"已付款 {totals.get('paid_order_count', 0)} 筆／會餐未付款 {totals.get('pending_business_order_count', 0)} 筆", width)
+            if "pending_business_quantity" in totals:
+                result += _lines(f"未付款會餐小計 {totals['pending_business_quantity']} 份", width)
         return result
 
     footer_label = "備餐彙總含會餐未付款" if filters.get("include_unpaid_business") else "依統計時間之已付款訂單彙總"
@@ -147,14 +144,14 @@ def format_summary_pages(report: dict, generated_at: str, request_id: str, *, wi
 
 async def summary_job_is_current(session: AsyncSession, job: PrintJob, settings: Settings) -> bool:
     format_version = job.snapshot.get("format_version", 1)
-    if format_version not in (1, 2, SUMMARY_FORMAT_VERSION):
+    if format_version not in (1, 2, 3, SUMMARY_FORMAT_VERSION):
         return False
     try:
         filters = OrderSummaryFilters.model_validate(job.snapshot.get("filters"))
     except ValidationError:
         return False
     try:
-        report = await build_print_summary(session, filters)
+        report = await build_print_summary(session, filters, format_version=format_version)
     except HTTPException as exc:
         if exc.status_code != 422:
             raise
@@ -185,6 +182,7 @@ def summary_batch_read(jobs: list[PrintJob]) -> dict:
         for value in (
             summary.get("order_count"), summary.get("quantity"), summary.get("product_count"),
             summary.get("paid_order_count", 0), summary.get("pending_business_order_count", 0),
+            summary.get("pending_business_quantity", 0),
         )
     ):
         summary = None

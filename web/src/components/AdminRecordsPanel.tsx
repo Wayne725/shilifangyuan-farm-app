@@ -7,6 +7,7 @@ import { financeDateTime } from "../lib/meal-finance";
 import "../pages/AdminRecordsPage.css";
 import { OptionalMark } from "./OptionalMark";
 import { AdminMemberSpending } from "./AdminMemberSpending";
+import { AdminMemberPhone } from "./AdminMemberPhone";
 import { MemberPointAdjustment, signedPoints } from "./MemberPointAdjustment";
 
 type Person = { id: string; source: "membership" | "roster"; member_number: string; legal_name: string; email: string; phone: string; status: string; share_certificate_number?: string; share_count?: number; share_capital_amount?: number; share_paid_on?: string };
@@ -84,7 +85,17 @@ export function AdminRecordsPanel({ adminId, request, downloadFile, tab, member,
     {current.isPending ? <LoadingLines count={5}/> : current.isError ? <DataState title="帳冊無法讀取" detail={current.error.message}/> : <>
       {tab === "payments" && payments.data && <dl className="admin-records-totals">{([["實收", payments.data.summary.received], ["已退款", payments.data.summary.refunded], ["淨收款", payments.data.summary.net]] as const).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{formatMoney(value)}</dd></div>)}</dl>}
       <p role="status">共 {tab === "points" ? visiblePointRows.length : total} 筆紀錄</p><div className="admin-records-table" tabIndex={0} role="region" aria-label="帳冊明細">
-      {tab === "members" && <table><thead><tr>{["社員編號", "姓名／Email", "會籍", "股號", "股數", "股金", "繳股日期", "操作"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{members.data?.items.map(row => <tr key={`${row.source}-${row.id}`}><td>{row.member_number}</td><td>{row.legal_name}<br/>{row.email}</td><td>{statuses[row.status] || row.status}</td><td>{row.share_certificate_number || "—"}</td><td>{row.share_count ?? "—"}</td><td>{formatMoney(row.share_capital_amount || 0)}</td><td>{row.share_paid_on || "—"}</td><td><button className="button button-quiet" onClick={() => setTarget(row)}>登錄線下收款</button></td></tr>)}</tbody></table>}
+      {tab === "members" && <table>
+        <thead><tr>{["社員編號", "姓名／Email", "聯絡電話", "會籍", "股號", "股數", "股金", "繳股日期", "操作"].map(label => <th key={label}>{label}</th>)}</tr></thead>
+        <tbody>{members.data?.items.map(row => <tr key={`${row.source}-${row.id}`}>
+          <td>{row.member_number}</td><td>{row.legal_name}<br/>{row.email}</td>
+          <td><AdminMemberPhone adminId={adminId} request={request} source={row.source} memberId={row.id} /></td>
+          <td>{statuses[row.status] || row.status}</td><td>{row.share_certificate_number || "—"}</td>
+          <td>{row.share_count ?? "—"}</td><td>{formatMoney(row.share_capital_amount || 0)}</td>
+          <td>{row.share_paid_on || "—"}</td>
+          <td><button className="button button-quiet" onClick={() => setTarget(row)}>登錄線下收款</button></td>
+        </tr>)}</tbody>
+      </table>}
       {tab === "payments" && <table><thead><tr>{["收款日期／收據", "社員", "款項", "實收", "退款", "狀態", "方式／收款資訊", "操作"].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{payments.data?.items.map(row => <tr key={`${row.source}-${row.id}`}><td>{row.paid_at ? financeDateTime(row.paid_at) : "未收款"}<br/>{row.receipt_number || "—"}</td><td>{row.member_number}<br/>{row.name}</td><td>{row.kind === "admission_fee" ? "入社費" : "股金"}</td><td>{formatMoney(row.received)}</td><td>{formatMoney(row.refunded)}</td><td>{statuses[row.status] || row.status}</td><td>{methods[row.payment_method] || row.payment_method}<br/>{row.reference || "—"}</td><td>{row.source === "offline" && row.status !== "voided" ? <button className="button button-quiet" onClick={() => {setVoidTarget(row); voidReceipt.reset();}}>作廢紀錄</button> : row.source === "online" ? "線上金流" : "已作廢"}</td></tr>)}</tbody></table>}
       {tab === "points" && <table><thead><tr><th>社員編號</th><th>姓名</th><th>Email</th><th>累積點數</th><th>操作</th></tr></thead><tbody>{visiblePointRows.map(row => <tr key={row.user_id}><td>{row.member_number}</td><td>{row.name}</td><td>{row.email}</td><td>{row.balance}</td><td>{row.can_adjust && <button type="button" className="button button-quiet" onClick={() => { setPointNotice(""); setPointTargetId(row.user_id); }}>調整點數</button>}</td></tr>)}</tbody></table>}
       </div>{tab !== "points" && total > 30 && <nav className="admin-pagination" aria-label="帳冊分頁"><button className="button button-quiet" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 30))}>上一頁</button><span>{Math.floor(offset / 30) + 1}／{Math.ceil(total / 30)}</span><button className="button button-quiet" disabled={offset + 30 >= total} onClick={() => setOffset(offset + 30)}>下一頁</button></nav>}

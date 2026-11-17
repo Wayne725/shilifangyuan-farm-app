@@ -26,3 +26,5 @@
 .admin-user-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }
 @media(max-width: 700px) { .admin-user-search { grid-template-columns: 1fr; } }
 @media(max-width: 420px) { .admin-membership-phone-check { grid-template-columns: 1fr; } }
+.admin-member-phone { display: grid; justify-items: start; gap: 8px; }
+.admin-member-phone p { margin: 0; }
