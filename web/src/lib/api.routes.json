@@ -211,6 +211,7 @@
   "POST /v1/admin/meal-events/{event_id}/cancel",
   "POST /v1/admin/meal-events/{event_id}/complete",
   "POST /v1/admin/meal-events/{event_id}/duplicate",
+  "POST /v1/admin/meal-events/{event_id}/offerings",
   "POST /v1/admin/meal-events/{event_id}/open-pickup",
   "POST /v1/admin/meal-events/{event_id}/publish",
   "POST /v1/admin/meal-events/{event_id}/redeem",

@@ -1706,6 +1706,22 @@ class MealOfferingCapacityUpdate(AdminActionReason):
     capacity: int = Field(ge=1, le=100000, strict=True)
 
 
+class MealOfferingAddition(BaseModel):
+    meal_id: str = Field(min_length=1, max_length=36)
+    capacity: int = Field(ge=1, le=100000, strict=True)
+
+
+class MealOfferingsAdd(AdminActionReason):
+    offerings: list[MealOfferingAddition] = Field(min_length=1, max_length=100)
+
+    @field_validator("offerings")
+    @classmethod
+    def unique_meal_ids(cls, offerings: list[MealOfferingAddition]) -> list[MealOfferingAddition]:
+        if len({item.meal_id for item in offerings}) != len(offerings):
+            raise ValueError("同一場次不可重複餐點")
+        return offerings
+
+
 class MealOfferingRead(ApiModel):
     id: str
     meal_id: str
@@ -1762,6 +1778,7 @@ class MealEventRead(MealEventBookingRead):
 
 class AdminMealEventRead(MealEventRead):
     archived_at: Optional[datetime] = None
+    can_add_offerings: bool = False
 
 
 class MealEventArchiveUpdate(BaseModel):

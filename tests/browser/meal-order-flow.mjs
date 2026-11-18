@@ -368,7 +368,23 @@ async function scheduleFixture(t, { admin = false, width = 390 } = {}) {
       event.archived_at = payload.archived ? '2026-09-16T01:00:00Z' : null;
       return route.fulfill({ json: event });
     }
-    if (method === 'GET' && path === '/v1/admin/meals') { state.adminMealReads++; return route.fulfill({ json: [meal] }); }
+    if (method === 'GET' && path === '/v1/admin/meals') {
+      state.adminMealReads++;
+      return route.fulfill({ json: [meal, ...(state.extraMeals || [])] });
+    }
+    if (method === 'POST' && path === '/v1/admin/meal-events/scheduled-lunch/offerings') {
+      const payload = request.postDataJSON();
+      state.writes.push({ method, path, payload });
+      const event = state.events[0];
+      const added = payload.offerings.map((item, index) => {
+        const meal = state.extraMeals.find(({ id }) => id === item.meal_id);
+        return { ...item, id: `new-offering-${meal.id}`, meal_name: meal.name, price: meal.price, description: '',
+          position: event.offerings.length + index, available_quantity: item.capacity, reserved_quantity: 0, paid_quantity: 0,
+          is_active: true, option_groups: [] };
+      });
+      event.offerings.push(...added);
+      return route.fulfill({ json: event });
+    }
     if (method === 'PUT' && path === '/v1/admin/meal-events/scheduled-lunch') {
       const payload = request.postDataJSON();
       state.writes.push({ method, path, payload });
@@ -709,6 +725,50 @@ test('每日午晚餐排程預設週一至五且停用，須明確啟用及自�
   assert.match(state.writes[2].path, /\/generate$/);
   assert.deepEqual(state.unknownApi, []);
   assert.ok(state.blockedExternal.every((origin) => origin === 'https://fonts.googleapis.com'));
+});
+
+test('390px 進行中的場次可加入多道餐點，已有訂單的餐點與份數保留', { timeout: 25000 }, async t => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  state.events[0].can_edit = false;
+  state.events[0].can_add_offerings = true;
+  state.events[0].offerings[0].reserved_quantity = 2;
+  state.events[0].offerings[0].paid_quantity = 3;
+  state.events[0].offerings[0].available_quantity = 45;
+  const original = structuredClone(state.events[0].offerings[0]);
+  state.extraMeals = [
+    { id: 'add-chicken', name: '隔離雞腿餐', price: 139, is_active: true, option_groups: [] },
+    { id: 'add-veggie', name: '隔離蔬食餐', price: 120, is_active: true, option_groups: [] },
+    { id: 'disabled', name: '隔離停售餐', price: 149, is_active: false, option_groups: [] },
+  ];
+  await page.goto(`${base}/admin/meals?tab=events`);
+  const event = page.getByRole('article').filter({ has: page.getByRole('heading', { name: '隔離每日午餐', exact: true }) });
+  const dinner = page.getByRole('article').filter({ has: page.getByRole('heading', { name: '隔離每日晚餐', exact: true }) });
+  await dinner.getByRole('heading', { name: '隔離每日晚餐', exact: true }).waitFor();
+  assert.equal(await dinner.getByRole('button', { name: '新增場次餐點', exact: true }).count(), 0);
+  await event.getByRole('button', { name: '新增場次餐點', exact: true }).click();
+  const form = event.getByRole('form', { name: '新增場次餐點', exact: true });
+  assert.equal(await form.getByRole('checkbox', { name: /隔離每日便當|隔離停售餐/ }).count(), 0);
+  await form.getByRole('checkbox', { name: /隔離雞腿餐.*139/ }).check();
+  await form.getByRole('checkbox', { name: /隔離蔬食餐.*120/ }).check();
+  const submit = form.getByRole('button', { name: '加入場次', exact: true });
+  await form.getByLabel('隔離雞腿餐份數', { exact: true }).fill('15');
+  assert.equal(await submit.isDisabled(), true);
+  await form.getByLabel('隔離蔬食餐份數', { exact: true }).fill('8');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  await captureMealScreenshot(page, 'meal-add-offerings-mobile.png');
+  await submit.click();
+  await event.getByText('已新增場次餐點', { exact: true }).waitFor();
+  await event.getByText('隔離雞腿餐 0/15', { exact: true }).waitFor();
+  await event.getByText('隔離蔬食餐 0/8', { exact: true }).waitFor();
+  assert.deepEqual(state.writes, [{ method: 'POST', path: '/v1/admin/meal-events/scheduled-lunch/offerings', payload: {
+    offerings: [{ meal_id: 'add-chicken', capacity: 15 }, { meal_id: 'add-veggie', capacity: 8 }],
+  } }]);
+  assert.deepEqual(state.events[0].offerings[0], original);
+  assert.deepEqual(state.unknownApi, []);
+  await page.goto(`${base}/meals/scheduled-lunch?pickup_at=2026-09-17T11%3A00`);
+  await page.getByRole('button', { name: '增加隔離每日便當', exact: true }).waitFor();
+  await page.getByRole('button', { name: '增加隔離雞腿餐', exact: true }).waitFor();
+  await page.getByRole('button', { name: '增加隔離蔬食餐', exact: true }).waitFor();
 });
 
 test('便當管理者可依場次查看所選取餐時間，僅展開時查詢訂單', { timeout: 20000 }, async (t) => {

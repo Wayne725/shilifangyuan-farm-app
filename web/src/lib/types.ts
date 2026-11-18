@@ -567,6 +567,7 @@ export interface MealDisasterAnnouncement {
 export interface MealEvent extends MealEventTiming {
   archived_at?: string | null;
   can_edit?: boolean;
+  can_add_offerings?: boolean;
   schedule_template_id?: string | null;
   allow_cash_payment?: boolean;
   offerings: Array<{
