@@ -1863,6 +1863,8 @@ class MealScheduleTemplate(Base):
     advance_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
     weekdays: Mapped[list[int]] = mapped_column(JSON)
     saturday_business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    sunday_business_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    fixed_booking_window: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
     auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     offerings: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
@@ -2362,6 +2364,13 @@ class PickupLocation(Base):
     instructions: Mapped[str] = mapped_column(Text, default="")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    business_meal_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    requires_pickup_note: Mapped[bool] = mapped_column(
+        Boolean,
+        CheckConstraint("NOT requires_pickup_note OR business_meal_only", name="note_requires_business_meal"),
+        default=False,
+        server_default=false(),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )

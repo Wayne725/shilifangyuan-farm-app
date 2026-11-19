@@ -170,6 +170,7 @@ def _profile(row, cipher: VersionedPIICipher):
     email = cipher.decrypt_text(row.email_encrypted, associated_data=aad) if row.email_encrypted else row.email or row.notification_email
     return {
         "id": row.id, "member_number": row.member_number, "status": row.status,
+        "source": "membership" if row.user_id else "roster",
         "name": name or row.name or "", "_emails": (email or "", row.notification_email or ""),
         "status_label": STATUS_LABELS[row.status],
     }

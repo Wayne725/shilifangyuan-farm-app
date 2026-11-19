@@ -34,6 +34,7 @@ from ..order_history import OrderHistoryQuery, read_order_history
 from ..printing import enqueue_order_print, stop_cancelled_order_prints
 from ..printer_worker import wake_printer
 from ..platform_settings import require_accepting_orders
+from ..pickup_locations import checkout_pickup_location
 from ..domain import (
     DomainError,
     invoice_estimated_tax_amount,
@@ -63,6 +64,7 @@ from ..integrations.payment_service import (
 from ..meal_pricing import price_meal_line
 from ..meal_photos import router as meal_photos_router
 from ..meal_options_admin import router as meal_options_router
+from ..meal_schedule_wizard import router as meal_schedule_wizard_router
 from ..meal_booking import (
     configured_booking_window,
     meal_booking_window,
@@ -75,7 +77,7 @@ from ..meal_booking import (
     meal_service_date,
     validate_meal_booking_day,
 )
-from ..meal_schedules import TAIPEI, generate_scheduled_meal_events
+from ..meal_schedules import TAIPEI, advance_meal_schedule_version, generate_scheduled_meal_events
 from ..workday_calendar import CalendarUnavailable, calendar_status, is_workday, next_workday, previous_workday
 from ..meal_operations import meal_operations_summary, search_meal_orders
 from ..sales_scope import DEMO_MEAL_EVENT_IDS
@@ -102,7 +104,6 @@ from ..models import (
     PaymentStatus,
     PaymentAttempt,
     PaymentMethod,
-    PickupLocation,
     ReservationStatus,
     SalesChannel,
     TaxType,
@@ -134,6 +135,7 @@ from ..schemas import (
     MealOptionGroupRead,
     MealOptionRead,
     MealOfferingCapacityUpdate,
+    MealOfferingsAdd,
     MealOfferingRead,
     MealOrderCreate,
     MealOrderingPauseUpdate,
@@ -166,6 +168,7 @@ from ..v2_domain import (
 meals_router = APIRouter(tags=["meals"])
 meals_router.include_router(meal_photos_router)
 meals_router.include_router(meal_options_router)
+meals_router.include_router(meal_schedule_wizard_router)
 
 
 def _require_live_meal_event(event_id: str, settings: Settings) -> None:
@@ -237,6 +240,18 @@ def _require_meal_ordering_adjustable(event: MealEvent, now: datetime) -> None:
         raise HTTPException(409, reason)
 
 
+def _meal_offering_addition_blocked_reason(event: MealEvent, now: datetime) -> str | None:
+    if event.archived_at is not None:
+        return "已封存的場次無法追加餐點"
+    if reason := _meal_ordering_adjustment_blocked_reason(event, now):
+        return reason
+    try:
+        validate_meal_booking_day(event, now, business=event.business_only)
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
     booking_start, booking_end = meal_booking_window(event)
     return {
@@ -302,6 +317,7 @@ def _admin_meal_event_read(event: MealEvent, *, can_edit: bool = False) -> Admin
     return AdminMealEventRead(
         **_meal_event_fields(event, can_edit=can_edit),
         archived_at=_aware(event.archived_at) if event.archived_at is not None else None,
+        can_add_offerings=_meal_offering_addition_blocked_reason(event, datetime.now(timezone.utc)) is None,
     )
 
 
@@ -829,14 +845,11 @@ async def quote_meal_order(
         raise HTTPException(status_code=422, detail="此場次未開放現場付款")
     pickup_location = None
     if body.pickup_location_id is not None:
-        pickup_location = await session.scalar(
-            select(PickupLocation).where(
-                PickupLocation.id == body.pickup_location_id,
-                PickupLocation.is_active.is_(True),
-            ).with_for_update(read=True)
-        )
+        pickup_location = await checkout_pickup_location(session, body.pickup_location_id, business_meal=business)
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的取餐點，請重新選擇")
+        if pickup_location.requires_pickup_note and not (body.kitchen_note or "").strip():
+            raise HTTPException(422, "請填寫實際取餐位置")
     by_id = {offering.id: offering for offering in event.offerings}
     now = datetime.now(timezone.utc)
     membership_type = (
@@ -1466,10 +1479,6 @@ def _schedule_values(body: MealScheduleInput) -> dict[str, Any]:
     return values
 
 
-def _advance_meal_schedule_version(template: MealScheduleTemplate, now: datetime) -> None:
-    template.updated_at = max(now, _aware(template.updated_at) + timedelta(microseconds=1))
-
-
 @meals_router.get("/v1/admin/meal-schedules/calendar-status")
 async def admin_meal_calendar_status(_admin: User = Depends(require_admin)) -> dict:
     return calendar_status()
@@ -1538,9 +1547,14 @@ async def admin_update_meal_schedule(
     _validate_schedule_pickup_slots(body, template)
     await _validate_schedule_meals(session, body)
     before = MealScheduleRead.model_validate(template).model_dump(mode="json")
-    for name, value in _schedule_values(body).items():
+    values = _schedule_values(body)
+    if "sunday_business_only" not in body.model_fields_set:
+        values.pop("sunday_business_only")
+    if template.fixed_booking_window:
+        values.update(cutoff_days_before=1, cutoff_time="20:00", advance_days=7)
+    for name, value in values.items():
         setattr(template, name, value)
-    _advance_meal_schedule_version(template, datetime.now(timezone.utc))
+    advance_meal_schedule_version(template, datetime.now(timezone.utc))
     await session.flush()
     session.add(AdminAudit(
         actor_id=admin.id, action="meal_schedule.update", aggregate_type="meal_schedule",
@@ -1676,7 +1690,7 @@ async def admin_disable_meal_schedule(
             ), admin, now)
 
     template.enabled = False
-    _advance_meal_schedule_version(template, now)
+    advance_meal_schedule_version(template, now)
     session.add(AdminAudit(
         actor_id=admin.id, action="meal_schedule.disable", aggregate_type="meal_schedule", aggregate_id=template.id,
         data={"scope": body.scope, "paused_event_ids": [event.id for event in paused_events]},
@@ -1812,6 +1826,10 @@ async def edit_meal(
         raise HTTPException(404, "找不到餐點")
     if _aware(meal.updated_at) != body.expected_updated_at:
         raise HTTPException(409, "餐點資料已更新，請重新讀取後再修改")
+    if requires_impact and {event.id for event in events} != {
+        event.id for event in await meal_edit_events(session, meal_id)
+    }:
+        raise HTTPException(409, "餐點的供應場次已更新，請重新確認受影響場次")
     updates = body.model_dump(exclude={"expected_updated_at", "confirmed_event_ids"})
     updates["name"] = body.name.strip()
     if not updates["name"]:
@@ -2256,6 +2274,67 @@ async def _apply_meal_ordering_pause(
             "after": {"paused": body.paused, "version": next_version},
         },
     ))
+
+
+@meals_router.post("/v1/admin/meal-events/{event_id}/offerings", response_model=AdminMealEventRead)
+async def add_meal_event_offerings(
+    event_id: str,
+    body: MealOfferingsAdd,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> AdminMealEventRead:
+    event = await _load_event(session, event_id, for_update=True, refresh_existing=True)
+    if event is None:
+        raise HTTPException(404, "找不到便當場次")
+    if reason := _meal_offering_addition_blocked_reason(event, datetime.now(timezone.utc)):
+        raise HTTPException(409, reason)
+
+    existing = {offering.meal_id: offering for offering in event.offerings}
+    additions = []
+    for request in body.offerings:
+        offering = existing.get(request.meal_id)
+        if offering is None:
+            additions.append(request)
+        elif not offering.is_active or offering.capacity != request.capacity:
+            raise HTTPException(409, "有餐點已在本場次，請重新確認菜單與份數")
+    if len(existing) + len(additions) > 100:
+        raise HTTPException(422, "每場次最多供應 100 種餐點")
+
+    meal_ids = [item.meal_id for item in body.offerings]
+    meals = {meal.id: meal for meal in await session.scalars(
+        select(Meal).where(Meal.id.in_(meal_ids), Meal.is_active.is_(True))
+        .options(selectinload(Meal.option_groups).selectinload(MealOptionGroup.options))
+        .order_by(Meal.id).with_for_update(read=True).execution_options(populate_existing=True),
+    )}
+    if len(meals) != len(meal_ids):
+        raise HTTPException(422, "追加的餐點不存在或已停售")
+
+    has_orders = await session.scalar(select(Order.id).where(Order.meal_event_id == event.id).limit(1)) is not None
+    now = datetime.now(timezone.utc)
+    if reason := _meal_offering_addition_blocked_reason(event, now):
+        raise HTTPException(409, reason)
+
+    can_edit = _meal_event_allows_edit(event, now) and not has_orders
+    if additions:
+        first_position = max((offering.position for offering in event.offerings), default=-1) + 1
+        added = [
+            MealEventOffering(
+                meal=meals[item.meal_id], price=meals[item.meal_id].price,
+                capacity=item.capacity, position=first_position + index,
+            )
+            for index, item in enumerate(additions)
+        ]
+        event.offerings.extend(added)
+        await session.flush()
+        session.add(AdminAudit(
+            actor_id=admin.id, action="meal_event.offerings_added", aggregate_type="meal_event", aggregate_id=event.id,
+            reason=body.reason, data={"added": [
+                {"offering_id": offering.id, "meal_id": offering.meal_id, "price": offering.price,
+                 "capacity": offering.capacity, "position": offering.position} for offering in added
+            ]},
+        ))
+        await session.commit()
+    return _admin_meal_event_read(event, can_edit=can_edit)
 
 
 @meals_router.patch(

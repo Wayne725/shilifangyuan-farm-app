@@ -10,11 +10,11 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.integrations.feie import FeieError
-from app.models import AdminAudit, FulfillmentState, OrderItemOption, PaymentStatus, PrintJob
-from app.order_summary import OrderSummaryFilters, build_print_summary
+from app.integrations.feie import FeieError, configured_region
+from app.models import AdminAudit, FulfillmentState, OrderItemOption, PaymentStatus, PrintJob, SalesChannel
+from app.order_summary import SUMMARY_FORMAT_VERSION, OrderSummaryFilters, build_print_summary
 from app.printer_worker import process_print_job
-from app.printing import open_receipt_content, receipt_preview, seal_receipt_content
+from app.printing import open_receipt_content, printer_fingerprint, receipt_preview, seal_receipt_content
 from app.routers.order_summary import order_summary_router
 from app.routers.printers import printers_router
 from app.summary_printing import format_summary_pages, summary_fingerprint
@@ -201,7 +201,7 @@ async def test_summary_old_layout_preview_requires_refresh(summary_print_context
     assert response.status_code == 409
     assert await c.session.scalar(select(func.count()).select_from(PrintJob)) == 0
     await create_batch(c)
-    assert all(job.snapshot["format_version"] == 3 for job in await jobs(c))
+    assert all(job.snapshot["format_version"] == SUMMARY_FORMAT_VERSION for job in await jobs(c))
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
@@ -231,6 +231,32 @@ async def test_summary_existing_pending_batch_preserves_frozen_layout(summary_pr
         assert all(job.last_error == "summary_changed_before_send" for job in printed)
     assert [job.content for job in printed] == original_receipts
     assert fake.submissions == 0
+
+
+async def test_meal_summary_legacy_paid_only_batch_can_be_retried_across_upgrade(summary_print_context):
+    c = summary_print_context
+    order = add_order(c, "SUMMARY-LEGACY-MEAL", [line(3, offering=c.offerings[0], unit="份")],
+                      channel=SalesChannel.MEAL_PREORDER)
+    order.paid_at = NOW
+    await c.session.commit()
+    report = await build_print_summary(c.session, OrderSummaryFilters(**PARAMS, order_category="meal"), format_version=3)
+    fingerprint = summary_fingerprint(report, c.settings, format_version=3)
+    request_id, job_id = str(uuid4()), str(uuid4())
+    content = seal_receipt_content("訂單彙總<BR>已付款", {}, f"summary:{job_id}", c.settings, force=True)
+    c.session.add(PrintJob(
+        id=job_id, kind="summary", event_key=f"summary:{request_id}:01", mode="dry_run",
+        content=content, printer_fingerprint=printer_fingerprint(c.settings),
+        snapshot={"request_id": request_id, "page": 1, "page_count": 1, "format_version": 3,
+                  "filters": report["filters"], "summary": report["summary"], "fingerprint": fingerprint,
+                  "source_versions": report["source_versions"], "printer_region": configured_region(c.settings)},
+    ))
+    await c.session.commit()
+    result = await create_batch(c, {"fingerprint": fingerprint}, request_id=request_id, order_category="meal")
+    assert result["pages"][0]["id"] == job_id
+    assert "pending_business_quantity" not in result["summary"]
+    assert await process_print_job(c.settings, factory=c.factory, client=FakeFeie())
+    [job] = await jobs(c)
+    assert job.status == "simulated" and job.content == content
 
 
 async def test_summary_request_replay_is_frozen_and_searchable_after_reopening(summary_print_context):
@@ -308,7 +334,7 @@ async def test_summary_that_grows_beyond_source_limit_fails_instead_of_blocking_
     await paid_order(c)
     await create_batch(c)
 
-    async def over_limit(*args):
+    async def over_limit(*args, **kwargs):
         raise HTTPException(422, "訂單明細超過上限")
 
     monkeypatch.setattr("app.summary_printing.build_print_summary", over_limit)

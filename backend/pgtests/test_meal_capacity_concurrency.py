@@ -7,7 +7,8 @@ import time_machine
 from sqlalchemy import func, select, text
 
 from app.integrations.payment_service import SQLAlchemyPaymentCallbackRepository, create_payment_attempt
-from app.models import AdminAudit, MealEventOffering, Order, PaymentStatus
+from app.models import AdminAudit, Meal, MealEventOffering, Order, PaymentStatus
+from app.routers import meals
 from app.routers.meals import meals_router
 from pgtests.test_business_meal_concurrency import together
 from pgtests.test_meal_ordering_pause_concurrency import BOOKING, ordering_pause_context
@@ -62,6 +63,96 @@ async def test_only_one_simultaneous_capacity_increase_wins(postgres_sessions, o
             AdminAudit.aggregate_id == event_id,
             AdminAudit.action == "meal_event.offering_capacity_increased",
         )) == 1
+
+
+async def test_meal_addition_replay_and_checkout_share_the_event_lock(postgres_sessions, ordering_pause_context):
+    admin, buyer, event_id, offering_id = ordering_pause_context
+    with time_machine.travel(BOOKING, tick=False):
+        async with postgres_sessions() as session:
+            new_meal = Meal(name="追加餐點", slug="addition-race", price=125)
+            session.add(new_meal)
+            await session.commit()
+            new_meal_id = new_meal.id
+
+        async def add():
+            async with postgres_sessions() as session:
+                async with api_test_context(session, [meals_router], settings=payment_settings()) as client:
+                    return await client.post(f"/v1/admin/meal-events/{event_id}/offerings", headers=auth_headers(admin),
+                                             json={"offerings": [{"meal_id": new_meal_id, "capacity": 8}]})
+
+        async def order_original_meal():
+            async with postgres_sessions() as session:
+                return await place_order(session, buyer, event_id, offering_id)
+
+        first, repeat, order_id = await together(add(), add(), order_original_meal())
+    assert first.status_code == repeat.status_code == 200, (first.text, repeat.text)
+    assert first.json()["offerings"][1]["id"] == repeat.json()["offerings"][1]["id"]
+    async with postgres_sessions() as session:
+        old = await session.get(MealEventOffering, offering_id)
+        order = await session.get(Order, order_id)
+        assert (old.price, old.capacity, order.amount_total) == (100, 4, 200)
+        assert await session.scalar(select(func.count(AdminAudit.id)).where(
+            AdminAudit.aggregate_id == event_id, AdminAudit.action == "meal_event.offerings_added",
+        )) == 1
+
+
+async def test_price_edit_rechecks_events_added_after_its_impact_scan(
+    postgres_sessions, ordering_pause_context, monkeypatch,
+):
+    admin, _buyer, event_id, _offering_id = ordering_pause_context
+    with time_machine.travel(BOOKING, tick=False):
+        async with postgres_sessions() as session:
+            meal = Meal(name="同時改價的餐點", slug="addition-price-race", price=125)
+            session.add(meal)
+            await session.commit()
+            meal_id = meal.id
+            edit_body = {
+                "name": meal.name, "description": meal.description, "price": 135,
+                "tax_type": meal.tax_type.value, "is_active": True,
+                "expected_updated_at": meal.updated_at.isoformat(),
+            }
+
+        scanned, continue_edit = asyncio.Event(), asyncio.Event()
+        original = meals.meal_edit_events
+
+        async def stop_after_scan(session, requested_id, *, lock=False):
+            events = await original(session, requested_id, lock=lock)
+            if requested_id == meal_id and lock:
+                scanned.set()
+                await continue_edit.wait()
+            return events
+
+        monkeypatch.setattr(meals, "meal_edit_events", stop_after_scan)
+
+        async def change_price():
+            async with postgres_sessions() as session:
+                async with api_test_context(session, [meals_router], settings=payment_settings()) as client:
+                    return await client.patch(f"/v1/admin/meals/{meal_id}", headers=auth_headers(admin), json=edit_body)
+
+        task = asyncio.create_task(change_price())
+        try:
+            await asyncio.wait_for(scanned.wait(), timeout=10)
+            async with postgres_sessions() as session:
+                async with api_test_context(session, [meals_router], settings=payment_settings()) as client:
+                    added = await client.post(f"/v1/admin/meal-events/{event_id}/offerings", headers=auth_headers(admin),
+                                             json={"offerings": [{"meal_id": meal_id, "capacity": 8}]})
+                    assert added.status_code == 200, added.text
+        finally:
+            continue_edit.set()
+            response = await asyncio.wait_for(task, timeout=10)
+        assert response.status_code == 409 and "供應場次已更新" in response.json()["detail"], response.text
+        async with postgres_sessions() as session:
+            meal = await session.get(Meal, meal_id)
+            offering = await session.scalar(select(MealEventOffering).where(
+                MealEventOffering.meal_event_id == event_id, MealEventOffering.meal_id == meal_id,
+            ))
+            assert meal.price == offering.price == 125
+            edit_body["confirmed_event_ids"] = [event_id]
+            async with api_test_context(session, [meals_router], settings=payment_settings()) as client:
+                retried = await client.patch(f"/v1/admin/meals/{meal_id}", headers=auth_headers(admin), json=edit_body)
+                assert retried.status_code == 200, retried.text
+            await session.refresh(offering)
+            assert offering.price == 135
 
 
 async def test_capacity_increase_and_payment_keep_original_order_and_counters(

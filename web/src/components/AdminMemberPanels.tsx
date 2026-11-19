@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { RosterContactEditor } from "./RosterContactEditor";
 
 import { AdminReviewSection } from "./AdminReviewSection";
+import { AdminMemberPhone } from "./AdminMemberPhone";
 import { OptionalMark } from "./OptionalMark";
 import { RosterCsvImport } from "./RosterCsvImport";
 import { SocialActionButton } from "./SocialActionButton";
@@ -111,6 +112,7 @@ function RosterEntryCard({ entry, adminId, request }: PanelProps & { entry: Memb
         <span className="status-chip">{entry.claimed ? "已認領" : entry.is_active ? "可認領" : "已停用"}</span>
         <h3>{entry.member_number} · {entry.legal_name}</h3>
         <p>{entry.email_masked} · {entry.phone_masked || "未提供電話"}</p>
+        <AdminMemberPhone adminId={adminId} request={request} source="roster" memberId={entry.id} />
         <small>股金 {entry.share_capital_amount} 元 · {entry.share_count} 股</small>
       </div>
       <div className="review-card-actions">

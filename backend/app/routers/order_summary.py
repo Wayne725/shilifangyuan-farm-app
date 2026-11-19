@@ -14,13 +14,13 @@ from ..config import Settings, get_settings
 from ..database import get_session
 from ..integrations.feie import FeieError, configured_region, validate_live_config
 from ..models import AdminAudit, PrintJob, User
-from ..order_summary import OrderSummaryFilters, build_print_summary, read_order_summary
+from ..order_summary import SUMMARY_FORMAT_VERSION, OrderSummaryFilters, build_print_summary, print_summary_filters, read_order_summary
 from ..printer_worker import wake_printer
 from ..printing import printer_fingerprint, receipt_preview, seal_receipt_content
 from ..recovery_quarantine import require_unheld
 from ..recovery_work import SUMMARY_ALL_TARGET, print_job_targets, summary_print_targets
-from ..summary_printing import (SUMMARY_FORMAT_VERSION, format_summary_pages, normalized_print_filters, read_summary_jobs,
-                               summary_batch_read, summary_fingerprint, summary_generated_at)
+from ..summary_printing import (format_summary_pages, read_summary_jobs, summary_batch_read, summary_fingerprint,
+                               summary_generated_at)
 
 
 order_summary_router = APIRouter(prefix="/v1/admin", tags=["order-summary"])
@@ -65,8 +65,10 @@ class SummaryPrintRequest(BaseModel):
     fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-def _existing_batch(jobs: list[PrintJob], filters: dict) -> dict:
+def _existing_batch(jobs: list[PrintJob], requested: OrderSummaryFilters) -> dict:
     batch = summary_batch_read(jobs)
+    format_version = jobs[0].snapshot.get("format_version", 1)
+    filters = print_summary_filters(requested, format_version=format_version if type(format_version) is int else 1)
     if batch["filters"] is not None and batch["filters"] != filters:
         raise HTTPException(409, "列印識別碼已用於其他查詢條件，請重新預覽")
     return batch
@@ -77,10 +79,10 @@ async def create_summary_print_jobs(
     body: SummaryPrintRequest, admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings),
 ):
-    request_id, filters = str(body.request_id), normalized_print_filters(body.filters)
+    request_id = str(body.request_id)
     existing = await read_summary_jobs(session, request_id)
     if existing:
-        return _existing_batch(existing, filters)
+        return _existing_batch(existing, body.filters)
     if not settings.printer_enabled:
         raise HTTPException(409, "出單功能尚未啟用")
     if not settings.printer_dry_run:
@@ -89,6 +91,7 @@ async def create_summary_print_jobs(
         except FeieError as exc:
             raise HTTPException(409, exc.code) from None
     report = await build_print_summary(session, body.filters)
+    filters = report["filters"]
     fingerprint = summary_fingerprint(report, settings)
     if fingerprint != body.fingerprint:
         raise HTTPException(409, "訂單資料或出單設備已變更，請重新預覽後列印")
@@ -121,7 +124,7 @@ async def create_summary_print_jobs(
         existing = await read_summary_jobs(session, request_id)
         if not existing:
             raise
-        return _existing_batch(existing, filters)
+        return _existing_batch(existing, body.filters)
     wake_printer()
     return summary_batch_read(jobs)
 

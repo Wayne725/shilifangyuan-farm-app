@@ -256,6 +256,8 @@ export interface PickupLocation {
   instructions: string;
   sort_order: number;
   is_active: boolean;
+  business_meal_only: boolean;
+  requires_pickup_note: boolean;
 }
 
 export interface Activity {
@@ -565,6 +567,7 @@ export interface MealDisasterAnnouncement {
 export interface MealEvent extends MealEventTiming {
   archived_at?: string | null;
   can_edit?: boolean;
+  can_add_offerings?: boolean;
   schedule_template_id?: string | null;
   allow_cash_payment?: boolean;
   offerings: Array<{
@@ -610,6 +613,7 @@ export interface MealSchedule {
   advance_days: number;
   weekdays: number[];
   saturday_business_only?: boolean;
+  sunday_business_only?: boolean;
   enabled: boolean;
   auto_publish: boolean;
   offerings: Array<{

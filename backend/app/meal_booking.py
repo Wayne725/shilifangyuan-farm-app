@@ -47,13 +47,18 @@ def meal_booking_window(event: MealEvent, *, business: bool = False) -> tuple[da
     )
 
 
-def workday_booking_window(service_date: date, ends_at: datetime) -> tuple[datetime, datetime]:
+def workday_booking_window(
+    service_date: date, ends_at: datetime | None = None,
+) -> tuple[datetime, datetime]:
     from .workday_calendar import is_workday, previous_workday
 
     if not is_workday(service_date):
         raise ValueError("此日期不是供餐工作日；如需加開，請選擇特殊日期")
-    end = min(_aware(ends_at), datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
     start = datetime.combine(previous_workday(service_date), time.min, TAIPEI)
+    if ends_at is None:
+        end = datetime.combine(start.date(), MEAL_ORDER_CUTOFF, TAIPEI)
+        return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    end = min(_aware(ends_at), datetime.combine(service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI))
     if end <= start:
         local_end = end.astimezone(TAIPEI)
         opening_date = local_end.date()

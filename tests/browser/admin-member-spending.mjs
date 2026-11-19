@@ -13,6 +13,7 @@ const base = testUrl.origin;
 const reportPath = '/v1/admin/member-spending';
 const person = {
   id: '01234567-abcd-1234-9876-000000000001', member_number: 'SPEND-001', name: '合成社員',
+  source: 'membership',
   status_label: '正式社員', net_amount: 160, order_count: 2, latest_paid_date: '2026-10-31',
   categories: { regular: 60, group: 0, meal: 0, business: 100, walk_in: 0 },
 };
@@ -43,6 +44,9 @@ for (const width of [390, 1440]) {
       if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, sales_scope: 'all', closed_message: '' } });
       if (path === '/v1/admin/member-register') return route.fulfill({ json: { items: [], total: 0 } });
       if (path === '/v1/notifications') return route.fulfill({ json: [] });
+      if (path === `/v1/admin/member-phone/${person.source}/${person.id}`) {
+        return route.fulfill({ json: { phone: '0912345678' } });
+      }
       if (!path.startsWith(reportPath)) {
         unexpected.push(path);
         return route.fulfill({ status: 404, json: {} });
@@ -58,6 +62,11 @@ for (const width of [390, 1440]) {
     await page.goto(`${base}/admin/users?tab=records`);
     await page.getByRole('button', { name: '社員消費紀錄', exact: true }).click();
     await page.getByRole('button', { name: '查看 合成社員 消費明細' }).waitFor();
+    assert.equal(await page.getByText('0912345678', { exact: true }).count(), 0);
+    await page.getByRole('button', { name: '查看電話', exact: true }).click();
+    await page.getByText('0912345678', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '隱藏電話', exact: true }).click();
+    await page.getByText('0912345678', { exact: true }).waitFor({ state: 'hidden' });
     const currentYear = await page.locator('select').filter({ has: page.getByRole('option', { name: '自訂日期' }) }).inputValue();
     assert.equal(seen[0].starts_on, `${currentYear}-01-01`);
     assert.equal(seen[0].status, 'active');

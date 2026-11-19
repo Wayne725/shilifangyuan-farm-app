@@ -38,9 +38,13 @@ def is_workday(day: date) -> bool:
     return working and day.weekday() < 5
 
 
-def is_saturday_catering_day(day: date) -> bool:
+def is_weekend_catering_day(day: date) -> bool:
     working, note = _official_day(day)
-    return day.weekday() == 5 and (working or not note or note in {"星期六", "例假", "例假日", "週休二日"})
+    return day.weekday() >= 5 and (working or not note or note in {"星期六", "星期日", "例假", "例假日", "週休二日"})
+
+
+def is_saturday_catering_day(day: date) -> bool:
+    return day.weekday() == 5 and is_weekend_catering_day(day)
 
 
 def _adjacent_workday(day: date, direction: int) -> date:

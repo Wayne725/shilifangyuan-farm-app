@@ -22,6 +22,7 @@ from ..failed_jobs import JOB_KINDS, email_delivery_unknown, job_details, job_er
 from ..integrations.common import IntegrationError
 from ..integrations.pii_crypto import pii_cipher_from_settings
 from ..phone_lookup import mask_phone
+from ..pickup_locations import available_pickup_locations
 from ..models import (
     AdminAudit,
     MealEvent,
@@ -415,11 +416,11 @@ def _supplier_query():
 )
 async def list_pickup_locations(
     session: AsyncSession = Depends(get_session),
+    business_meal: bool = False,
 ) -> list[PickupLocation]:
     return list(
         await session.scalars(
-            select(PickupLocation)
-            .where(PickupLocation.is_active.is_(True))
+            available_pickup_locations(business_meal=business_meal)
             .order_by(PickupLocation.sort_order, PickupLocation.name)
         )
     )
@@ -455,17 +456,22 @@ async def create_pickup_location(
 ) -> PickupLocation:
     location = PickupLocation(**body.model_dump())
     session.add(location)
-    await session.flush()
-    session.add(
-        AdminAudit(
-            actor_id=admin.id,
-            action="pickup_location.created",
-            aggregate_type="pickup_location",
-            aggregate_id=location.id,
-            data={"code": location.code, "name": location.name},
-        )
-    )
     try:
+        await session.flush()
+        session.add(
+            AdminAudit(
+                actor_id=admin.id,
+                action="pickup_location.created",
+                aggregate_type="pickup_location",
+                aggregate_id=location.id,
+                data={
+                    "code": location.code,
+                    "name": location.name,
+                    "business_meal_only": location.business_meal_only,
+                    "requires_pickup_note": location.requires_pickup_note,
+                },
+            )
+        )
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -494,6 +500,17 @@ async def update_pickup_location(
     if location is None:
         raise HTTPException(status_code=404, detail="找不到領取地點")
     updates = body.model_dump(exclude_unset=True)
+    if updates.get("requires_pickup_note", location.requires_pickup_note) and not updates.get(
+        "business_meal_only", location.business_meal_only
+    ):
+        raise HTTPException(422, "需填取餐備註的地點須設為會餐專用")
+    policy_fields = updates.keys() & {"business_meal_only", "requires_pickup_note"}
+    audit_data = {"updated_fields": sorted(updates)}
+    if policy_fields:
+        audit_data.update(
+            before={field: getattr(location, field) for field in sorted(policy_fields)},
+            after={field: updates[field] for field in sorted(policy_fields)},
+        )
     for field, value in updates.items():
         setattr(location, field, value)
     session.add(
@@ -502,7 +519,7 @@ async def update_pickup_location(
             action="pickup_location.updated",
             aggregate_type="pickup_location",
             aggregate_id=location.id,
-            data={"updated_fields": sorted(updates)},
+            data=audit_data,
         )
     )
     try:

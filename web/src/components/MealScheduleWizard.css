@@ -1,0 +1,73 @@
+.meal-schedule-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+}
+
+.meal-schedule-steps [aria-current="step"] {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: .2em;
+}
+
+.meal-schedule-step-fields {
+  display: grid;
+  gap: 1rem;
+  min-inline-size: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.meal-schedule-step-fields fieldset {
+  min-inline-size: 0;
+}
+
+.meal-schedule-review dl {
+  margin: 0;
+}
+
+.meal-schedule-review dl > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, 3fr) auto;
+  gap: .6rem 1rem;
+  padding: .8rem 0;
+  border-bottom: 1px solid var(--line, #d4d0c6);
+}
+
+.meal-schedule-review dt {
+  font-weight: 700;
+}
+
+.meal-schedule-review dd,
+.meal-schedule-review ul {
+  margin: 0;
+}
+
+.meal-schedule-review dd {
+  overflow-wrap: anywhere;
+}
+
+.meal-schedule-bulk,
+.meal-schedule-edit-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .75rem;
+}
+
+.meal-schedule-portion,
+.meal-schedule-bulk input {
+  max-width: 17rem;
+}
+
+@media (max-width: 540px) {
+  .meal-schedule-review dl > div {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .meal-schedule-review dd {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

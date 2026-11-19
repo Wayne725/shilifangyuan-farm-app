@@ -1608,6 +1608,7 @@ class MealScheduleInput(BaseModel):
     advance_days: int = Field(default=7, ge=1, le=30)
     weekdays: List[int] = Field(default_factory=lambda: list(range(5)), max_length=7)
     saturday_business_only: bool = False
+    sunday_business_only: bool = False
     enabled: bool = False
     auto_publish: bool = False
     offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
@@ -1634,7 +1635,7 @@ class MealScheduleInput(BaseModel):
             raise ValueError("訂購截止必須早於取餐結束")
         if self.advance_days <= self.cutoff_days_before:
             raise ValueError("預開天數必須大於提前截單天數")
-        if not self.weekdays and not self.saturday_business_only:
+        if not self.weekdays and not self.saturday_business_only and not self.sunday_business_only:
             raise ValueError("請至少選擇一個供餐日")
         if len(set(self.weekdays)) != len(self.weekdays) or any(day < 0 or day > 6 for day in self.weekdays):
             raise ValueError("供餐星期必須為不重複的 0 至 6")
@@ -1705,6 +1706,22 @@ class MealOfferingCapacityUpdate(AdminActionReason):
     capacity: int = Field(ge=1, le=100000, strict=True)
 
 
+class MealOfferingAddition(BaseModel):
+    meal_id: str = Field(min_length=1, max_length=36)
+    capacity: int = Field(ge=1, le=100000, strict=True)
+
+
+class MealOfferingsAdd(AdminActionReason):
+    offerings: list[MealOfferingAddition] = Field(min_length=1, max_length=100)
+
+    @field_validator("offerings")
+    @classmethod
+    def unique_meal_ids(cls, offerings: list[MealOfferingAddition]) -> list[MealOfferingAddition]:
+        if len({item.meal_id for item in offerings}) != len(offerings):
+            raise ValueError("同一場次不可重複餐點")
+        return offerings
+
+
 class MealOfferingRead(ApiModel):
     id: str
     meal_id: str
@@ -1761,6 +1778,7 @@ class MealEventRead(MealEventBookingRead):
 
 class AdminMealEventRead(MealEventRead):
     archived_at: Optional[datetime] = None
+    can_add_offerings: bool = False
 
 
 class MealEventArchiveUpdate(BaseModel):
@@ -2217,6 +2235,14 @@ class PickupLocationCreate(BaseModel):
     instructions: str = Field(default="", max_length=2000)
     sort_order: int = Field(default=0, ge=0, le=100000)
     is_active: bool = True
+    business_meal_only: bool = False
+    requires_pickup_note: bool = False
+
+    @model_validator(mode="after")
+    def pickup_note_requires_business_meal(self) -> "PickupLocationCreate":
+        if self.requires_pickup_note and not self.business_meal_only:
+            raise ValueError("需填取餐備註的地點須設為會餐專用")
+        return self
 
 
 class PickupLocationUpdate(BaseModel):
@@ -2231,6 +2257,15 @@ class PickupLocationUpdate(BaseModel):
     instructions: Optional[str] = Field(default=None, max_length=2000)
     sort_order: Optional[int] = Field(default=None, ge=0, le=100000)
     is_active: Optional[bool] = None
+    business_meal_only: Optional[bool] = None
+    requires_pickup_note: Optional[bool] = None
+
+    @field_validator("business_meal_only", "requires_pickup_note")
+    @classmethod
+    def pickup_flag_is_boolean(cls, value: Optional[bool]) -> bool:
+        if value is None:
+            raise ValueError("請提供取餐點設定值")
+        return value
 
 
 class PickupLocationRead(ApiModel):
@@ -2241,6 +2276,8 @@ class PickupLocationRead(ApiModel):
     instructions: str
     sort_order: int
     is_active: bool
+    business_meal_only: bool
+    requires_pickup_note: bool
 
 
 class SupplierCreate(BaseModel):

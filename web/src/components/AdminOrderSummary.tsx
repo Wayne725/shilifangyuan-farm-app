@@ -27,7 +27,7 @@ export function AdminOrderSummary() {
   const isAdmin = user?.user_role === "admin";
   const access = useAdminPanelAccess(privateQueryKeys);
   const [draft, setDraft] = useState<OrderSummaryFilters>(() => ({
-    ...financePeriodPreset("month"), dateBasis: "pickup", salesChannel: "all", orderCategory: "meal", status: "active", category: "", search: "", includeUnpaidBusiness: false,
+    ...financePeriodPreset("month"), dateBasis: "pickup", salesChannel: "all", orderCategory: "meal", status: "active", category: "", search: "",
   }));
   const [filters, setFilters] = useState(draft);
   const [preset, setPreset] = useState<keyof typeof periodLabels | "">("month");
@@ -99,7 +99,6 @@ export function AdminOrderSummary() {
       <label className="field"><span>{draftDateLabel}迄（台灣）</span><input type="date" required value={draft.endsOn} aria-invalid={Boolean(formError)} aria-describedby={dateError} onChange={(event) => { setDraft({ ...draft, endsOn: event.target.value }); setPreset(""); }} /></label>
       {showChannelFilter && <label className="field"><span id="order-summary-channel-label">銷售類型</span><select aria-labelledby="order-summary-channel-label" value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value as OrderSummaryFilters["salesChannel"] })}>{Object.entries(orderSummaryChannelLabels).filter(([value]) => channelMatchesCategory(value, filters.orderCategory)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
       <label className="field"><span id="order-summary-status-label">訂單狀態</span><select aria-labelledby="order-summary-status-label" value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as OrderSummaryFilters["status"] })}>{Object.entries(orderSummaryStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      {draft.orderCategory === "meal" && <label className="check-field"><input type="checkbox" checked={Boolean(draft.includeUnpaidBusiness)} onChange={event => setDraft({ ...draft, includeUnpaidBusiness: event.target.checked })} />列印時含未付款會餐</label>}
       {showCategoryFilter && <label className="field"><span id="order-summary-category-label">品類</span><select aria-labelledby="order-summary-category-label" value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })}><option value="">全部品類</option>{categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>}
       <label className="field admin-order-summary-search"><span>品項名稱</span><input type="search" maxLength={100} value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} /></label>
       <button className="button button-primary" type="submit">查詢</button>

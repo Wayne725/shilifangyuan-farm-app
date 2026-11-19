@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from ..account_profiles import member_contact_from_profile
+from ..account_profiles import member_contact_from_profile, member_phone_from_profile
 from ..admin_explanations import AdminExplanation
 from ..auth import require_admin
 from ..config import Settings, get_settings
@@ -49,6 +49,52 @@ def _range(starts_on, ends_on):
     start = datetime.combine(starts_on, time.min, TAIPEI) if starts_on else None
     end = datetime.combine(ends_on + timedelta(days=1), time.min, TAIPEI) if ends_on else None
     return start, end
+
+
+class MemberPhoneRead(BaseModel):
+    phone: str | None
+
+
+@member_reports_router.get("/member-phone/{source}/{member_id}", response_model=MemberPhoneRead)
+async def read_member_phone(
+    source: Literal["membership", "roster"],
+    member_id: UUID,
+    response: Response,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> MemberPhoneRead:
+    member_key = str(member_id)
+    if source == "membership":
+        row = (await session.execute(
+            select(User, MemberProfile)
+            .select_from(Membership)
+            .join(User, User.id == Membership.user_id)
+            .outerjoin(MemberProfile, MemberProfile.user_id == User.id)
+            .where(Membership.id == member_key)
+        )).one_or_none()
+        if row is None:
+            raise HTTPException(404, "找不到此社員")
+        user, profile = row
+        phone = member_phone_from_profile(user, profile, _cipher(settings))
+    else:
+        row = (await session.execute(
+            select(MemberRosterEntry, User, MemberProfile)
+            .select_from(MemberRosterEntry)
+            .outerjoin(User, User.id == MemberRosterEntry.claimed_user_id)
+            .outerjoin(MemberProfile, MemberProfile.user_id == User.id)
+            .where(MemberRosterEntry.id == member_key)
+        )).one_or_none()
+        if row is None:
+            raise HTTPException(404, "找不到此社員")
+        entry, user, profile = row
+        cipher = _cipher(settings)
+        if user is not None:
+            phone = member_phone_from_profile(user, profile, cipher)
+        else:
+            phone = cipher.decrypt_text(entry.phone_encrypted, associated_data=roster_aad(entry.id))
+    response.headers["Cache-Control"] = "private, no-store"
+    return MemberPhoneRead(phone=phone.strip() or None)
 
 
 @member_reports_router.get("/member-spending")

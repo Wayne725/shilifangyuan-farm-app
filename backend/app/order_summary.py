@@ -15,6 +15,9 @@ from .models import (
 )
 
 
+SUMMARY_FORMAT_VERSION = 4
+
+
 class OrderSummaryFilters(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -39,8 +42,18 @@ class OrderSummaryFilters(BaseModel):
         return self
 
 
-def print_summary_filters(filters: OrderSummaryFilters) -> dict:
-    values = filters.model_copy(update={"status": "paid"}).model_dump(mode="json", exclude={"limit", "offset"})
+def _print_filters(filters: OrderSummaryFilters, format_version: int) -> OrderSummaryFilters:
+    # Replaying an older batch must reproduce its original selection and fingerprint.
+    include_unpaid = filters.include_unpaid_business
+    if format_version >= 4:
+        include_unpaid = filters.order_category == "meal" or (
+            filters.order_category == "all" and filters.sales_channel == "meal_preorder"
+        )
+    return filters.model_copy(update={"status": "paid", "include_unpaid_business": include_unpaid})
+
+
+def print_summary_filters(filters: OrderSummaryFilters, *, format_version: int = SUMMARY_FORMAT_VERSION) -> dict:
+    values = _print_filters(filters, format_version).model_dump(mode="json", exclude={"limit", "offset"})
     if not values["include_unpaid_business"]:
         values.pop("include_unpaid_business")
     return values
@@ -165,8 +178,10 @@ MAX_PRINT_SUMMARY_OPTIONS = 30000
 _PRODUCT_FIELDS = ("sales_channel", "source_kind", "source_id", "name", "unit", "category", "meal_booking_type", "payment_status")
 
 
-async def build_print_summary(session: AsyncSession, filters: OrderSummaryFilters) -> dict:
-    filters = filters.model_copy(update={"status": "paid"})
+async def build_print_summary(
+    session: AsyncSession, filters: OrderSummaryFilters, *, format_version: int = SUMMARY_FORMAT_VERSION,
+) -> dict:
+    filters = _print_filters(filters, format_version)
     available_lines = _summary_lines(filters, confirmed_paid=True)
     lines = (
         select(available_lines).where(available_lines.c.category == filters.category).subquery()
@@ -220,10 +235,17 @@ async def build_print_summary(session: AsyncSession, filters: OrderSummaryFilter
         ]})
     counts = {}
     if filters.include_unpaid_business:
-        counts = {"paid_order_count": len({row['order_id'] for row in rows if row['state'] == 'paid'}),
-                  "pending_business_order_count": len({row['order_id'] for row in rows if row['meal_booking_type'] == 'business' and row['state'] == 'pending'})}
+        unpaid_business = [
+            row for row in rows if row["meal_booking_type"] == "business" and row["state"] == "pending"
+        ]
+        counts = {
+            "paid_order_count": len({row["order_id"] for row in rows if row["state"] == "paid"}),
+            "pending_business_order_count": len({row["order_id"] for row in unpaid_business}),
+        }
+        if format_version >= 4:
+            counts["pending_business_quantity"] = sum(row["quantity"] for row in unpaid_business)
     return {
-        "filters": print_summary_filters(filters),
+        "filters": print_summary_filters(filters, format_version=format_version),
         "summary": {"order_count": len(versions), "quantity": sum(row["quantity"] for row in rows), "product_count": len(products), **counts},
         "products": product_rows,
         "notes": [{**note, "items": [
