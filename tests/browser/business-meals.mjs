@@ -21,12 +21,12 @@ function order(overrides = {}) {
     items: [{ offering_id: meal.id, meal_id: meal.meal_id, meal_name: meal.meal_name, product_name: meal.meal_name, quantity: 2, unit_price: 100, unit_label: '份', subtotal: 200, tax_type: 'taxable', selections: [] }], ...overrides };
 }
 
-async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = order(), role = 'customer', mealEvent = event, locations = [] } = {}) {
+async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = order(), role = 'customer', mealEvent = event, locations = [], pickupResponseDelay = 0 } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Taipei', serviceWorkers: 'block' });
-  const state = { posts: [], quotes: [], reads: [], unknown: [], errors: [], order: storedOrder };
-  await context.route('**/*', route => {
+  const state = { posts: [], quotes: [], reads: [], unknown: [], errors: [], order: storedOrder, generalPickupReadsAtSubmission: undefined };
+  await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return route.continue();
@@ -37,6 +37,7 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, support_phone: '071234567', closed_message: '' } });
     if (path === '/v1/notifications') return route.fulfill({ json: [] });
     if (path === '/v1/pickup-locations') {
+      if (pickupResponseDelay && url.searchParams.get('business_meal') === 'true') await new Promise(resolve => setTimeout(resolve, pickupResponseDelay));
       return route.fulfill({ json: locations.filter(location => url.searchParams.get('business_meal') === 'true' || !location.business_meal_only) });
     }
     if (path === '/v1/products' || path === '/v1/group-campaigns') return route.fulfill({ json: [] });
@@ -65,7 +66,10 @@ async function fixture(t, { time = '2030-01-01T10:00:00+08:00', storedOrder = or
     }
     if (request.method() === 'POST') {
       state.posts.push({ path, body: request.postData() ? request.postDataJSON() : null });
-      if (path === `/v1/meal-events/${event.id}/orders`) return route.fulfill({ status: 201, json: state.order });
+      if (path === `/v1/meal-events/${event.id}/orders`) {
+        state.generalPickupReadsAtSubmission = state.reads.filter(read => read === 'GET /v1/pickup-locations').length;
+        return route.fulfill({ status: 201, json: state.order });
+      }
       if (path === '/v1/orders/business-order/payment-attempts') return route.fulfill({ json: { payment_url: `${base}/synthetic-payment` } });
     }
     if (path === '/v1/meal-orders') return route.fulfill({ json: [state.order] });
@@ -217,13 +221,18 @@ test('重整保留會餐訂餐方式，清空草稿後回復一般餐點', async
 
 test('390px會餐可選取餐時付現，重整後保留且不開啟線上付款', async t => {
   const storedOrder = order({ payment_method: 'cash_on_pickup', available_actions: [] });
-  const { page, state } = await fixture(t, { storedOrder, mealEvent: { ...event, allow_cash_payment: false } });
+  const { page, state } = await fixture(t, { storedOrder, mealEvent: { ...event, allow_cash_payment: false }, pickupResponseDelay: 500 });
   await page.goto(`${base}/meals/${event.id}?pickup_at=2030-01-02T11%3A00`);
   const cash = page.getByRole('radio', { name: '現金付款（取餐時付現）', exact: true });
   assert.equal(await cash.count(), 0);
+  const businessLocations = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/v1/pickup-locations' && url.searchParams.get('business_meal') === 'true';
+  });
   await page.getByRole('radio', { name: '會餐（統編報帳）', exact: true }).check();
   assert.equal(await page.getByRole('radio', { name: '線上付款（取餐當日）', exact: true }).isChecked(), true);
   await cash.check();
+  await (await businessLocations).finished();
   await page.reload();
   assert.equal(await cash.isChecked(), true);
   await page.getByRole('button', { name: '增加合成便當', exact: true }).click({ clickCount: 2 });
@@ -241,6 +250,7 @@ test('390px會餐可選取餐時付現，重整後保留且不開啟線上付款
   assert.equal(state.posts.length, 1);
   assert.equal(state.posts[0].body.payment_method, 'cash_on_pickup');
   assert.equal(state.posts[0].body.invoice_handling, 'pickup_day');
+  assert.equal(state.reads.filter(read => read === 'GET /v1/pickup-locations').length, state.generalPickupReadsAtSubmission);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   state.order = { ...storedOrder, payment_status: 'paid', invoice_status: 'issued' };
   await page.reload();

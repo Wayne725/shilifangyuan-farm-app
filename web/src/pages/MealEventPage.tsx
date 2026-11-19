@@ -93,6 +93,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   const contactEmail = emailInput?.userId === user?.id ? emailInput?.value ?? "" : notificationEmail;
   const contactPhone = phoneInput?.userId === user?.id ? phoneInput?.value ?? "" : savedPhone.data?.phone || "";
   const checkoutInFlight = useRef(false);
+  const [leavingCheckout, setLeavingCheckout] = useState(false);
   const contactEmailReady = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail.trim()) && contactEmail.trim().length <= 320;
   const contactPhoneReady = Boolean(contactPhone.trim()) && contactPhoneIsValid(contactPhone);
   const [draft, setDraft] = useState(() => ({ ...readMealDraft(eventId), ...(initialPickupAt ? { pickupAt: initialPickupAt } : {}) }));
@@ -128,6 +129,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     queryKey: business ? ["pickup-locations", "business-meal"] : ["pickup-locations"],
     queryFn: ({ signal }) => apiFetch<PickupLocation[]>(business ? "/v1/pickup-locations?business_meal=true" : "/v1/pickup-locations", { signal }),
     refetchInterval: 30000,
+    enabled: !leavingCheckout,
   });
   const activeLocations = useMemo(() => locations.data?.filter((location) => location.is_active && (business || !location.business_meal_only)), [locations.data, business]);
   const currentDraft = useMemo(
@@ -322,6 +324,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         return;
       }
       for (const key of outcome.storageKeys) forgetMealSubmission(sessionStore, key, outcome.submissionId);
+      setLeavingCheckout(true);
       clearMealDraft(eventId);
       setDraft(emptyMealDraft());
       setDraftAdjusted(false);
@@ -333,7 +336,10 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
       if (user) sessionStore.setItem(`slf_meal_payment_issue:${user.id}:${outcome.orderId}`, outcome.message.slice(0, 500));
       window.location.assign(`/meal-orders?${new URLSearchParams({ order_id: outcome.orderId })}`);
     },
-    onSettled: () => { checkoutInFlight.current = false; },
+    onSettled: (_outcome, error) => {
+      checkoutInFlight.current = false;
+      if (error) setLeavingCheckout(false);
+    },
   });
   const submissionReview = !business && checkout.data?.kind === "submission_review" && checkout.data.review.userId === user?.id
     ? checkout.data : undefined;
