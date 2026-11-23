@@ -50,7 +50,7 @@ from app.routers.groups import groups_router
 from app.routers.logistics import logistics_router
 from app.routers.meals import meals_router
 from app.routers.orders import orders_router
-from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings, tomorrow_meal_timeline
+from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings, tomorrow_meal_timeline, TEST_PICKUP_SLOTS, with_pickup_slot
 from tests.test_logistics_router import FakeLogisticsAdapter
 
 
@@ -152,12 +152,14 @@ async def checkout_context(
             can_ship=True,
             shipping_temperature=ShippingTemperature.AMBIENT,
             allowed_shipping_channels=["home_delivery", "seven_eleven"],
+            pickup_slots=TEST_PICKUP_SLOTS,
         )
         session.add(campaign)
         await session.flush()
         quote_path = f"/v1/group-campaigns/{campaign.id}/quote"
         create_path = f"/v1/group-campaigns/{campaign.id}/join"
         payload["quantity"] = 1
+        payload = with_pickup_slot(payload)
     else:
         event = MealEvent(
             title="稅別測試便當",
@@ -414,6 +416,7 @@ async def test_shipping_selection_and_changed_channel_recompute_order_tax_from_s
     adapter.selection_result.update(LogisticsType="CVS", LogisticsSubType="UNIMART")
     monkeypatch.setattr(logistics_module, "ecpay_logistics_adapter_from_settings", lambda _settings: adapter)
     context.payload["fulfillment_method"] = "ecpay_logistics"
+    context.payload.pop("pickup_slot_id", None)
     if channel == "group":
         context.payload["shipping_channel"] = "home_delivery"
     headers = auth_headers(context.user)

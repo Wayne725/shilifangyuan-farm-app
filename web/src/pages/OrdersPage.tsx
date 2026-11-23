@@ -250,6 +250,7 @@ function OrderWorkspace() {
                   label={selected.sales_channel === "meal_preorder" ? "取餐點" : "取貨方式"}
                   value={selected.fulfillment_method === "ecpay_logistics" ? "綠界物流" : selected.fulfillment?.pickup_location || "合作社取貨"}
                 />
+                {selected.fulfillment?.pickup_slot_label && <StatusBlock icon={MapPin} label="取貨時段" value={selected.fulfillment.pickup_slot_label} />}
               </div>
 
               {selected.sales_channel === "meal_preorder" && selected.fulfillment && <div className="meal-pickup-info">

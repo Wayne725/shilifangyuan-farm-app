@@ -43,6 +43,7 @@ export function GroupCampaignPage() {
   const [quantity, setQuantity] = useState(1);
   const [method, setMethod] = useState<"pickup" | "shipping">("pickup");
   const [pickupLocationId, setPickupLocationId] = useState("");
+  const [pickupSlotId, setPickupSlotId] = useState("");
   const [shippingChannel, setShippingChannel] = useState<ShippingChannel | null>(null);
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
@@ -97,8 +98,9 @@ export function GroupCampaignPage() {
           if (!groupQuoteIsConfirmed(quote.data) || quote.isFetching || quote.isError) throw new Error("請先確認最新報價");
           if (method === "shipping" && (!shippingChannel || !campaign.data.shipping_temperature)) throw new Error("請選擇配送通路");
           if (method === "pickup" && (!selectedPickupLocation || locations.isError)) throw new Error("請選擇可用的取貨地點");
+          if (method === "pickup" && !campaign.data.pickup_slots?.some((slot) => slot.id === pickupSlotId)) throw new Error("請選擇取貨時段");
           const originalQuote = { ...quote.data };
-          const input = { campaignId, quantity, contactEmail: invoicePreference.buyerEmail.trim(),
+          const input = { campaignId, quantity, ...(method === "pickup" ? { pickupSlotId } : {}), contactEmail: invoicePreference.buyerEmail.trim(),
             invoicePreference: { ...invoicePreference }, fulfillment: method === "shipping"
               ? { kind: "shipping" as const, channel: shippingChannel!, temperature: campaign.data.shipping_temperature!, recipientName, recipientPhone, shippingAddress }
               : { kind: "pickup" as const, pickupLocationId } };
@@ -155,6 +157,11 @@ export function GroupCampaignPage() {
     setQuantity((value) => Math.max(1, Math.min(value, campaign.data.per_user_cap, campaign.data.available_quantity)));
   }, [campaign.data, shippingChannel]);
 
+  useEffect(() => {
+    const slots = campaign.data?.pickup_slots || [];
+    if (slots.length === 1 && slots[0].id) setPickupSlotId(slots[0].id);
+    else if (!slots.some((slot) => slot.id === pickupSlotId)) setPickupSlotId("");
+  }, [campaign.data?.pickup_slots, pickupSlotId]);
   if (pendingSubmission) return <section className="offer-page">
     <Link className="text-link" to="/shop" search={{ tab: "groups" }}><ArrowLeft size={17} />回到共同購買</Link>
     <h1>{pendingSubmission.title}</h1>
@@ -196,7 +203,7 @@ export function GroupCampaignPage() {
   const submitReady = Boolean(
     !orderBlockReason && groupQuoteIsConfirmed(quote.data) && !quote.isFetching && !quote.isError &&
       invoicePreferenceIsValid(invoicePreference) &&
-      (method === "pickup" ? selectedPickupLocation && !locations.isError : shippingReady),
+      (method === "pickup" ? selectedPickupLocation && !locations.isError && item.pickup_slots?.some((slot) => slot.id === pickupSlotId) : shippingReady),
   );
 
   return (
@@ -215,7 +222,8 @@ export function GroupCampaignPage() {
             <div><dt>已付款</dt><dd>{item.paid_quantity} 份</dd></div>
             <div><dt>剩餘供應</dt><dd>{item.available_quantity} 份</dd></div>
             <div><dt>付款截止（台灣）</dt><dd>{campaignDateTime(item.deadline)}</dd></div>
-            <div><dt>取貨時間</dt><dd>{item.final_pickup_at ? campaignDateTime(item.final_pickup_at) : `${campaignDateTime(item.estimated_pickup_start)} 至 ${campaignDateTime(item.estimated_pickup_end)}`}</dd></div>
+            <div><dt>取貨期間</dt><dd>{item.final_pickup_at ? campaignDateTime(item.final_pickup_at) : `${campaignDateTime(item.estimated_pickup_start)} 至 ${campaignDateTime(item.estimated_pickup_end)}`}</dd></div>
+            {Boolean(item.pickup_slots?.length) && <div><dt>取貨時段</dt><dd>{item.pickup_slots!.map((slot) => slot.label).join("、")}</dd></div>}
           </dl>
         </div>
       </div>
@@ -258,6 +266,13 @@ export function GroupCampaignPage() {
               </select>
             </label>}
           </div>
+          {method === "pickup" && <fieldset className="pickup-slot-choice" disabled={checkout.isPending}>
+            <legend>取貨時段</legend>
+            {item.pickup_slots?.length ? item.pickup_slots.map((slot) => <label key={slot.id} className={`fulfillment-method-option${pickupSlotId === slot.id ? " selected" : ""}`}>
+              <input type="radio" name="pickup-slot" required value={slot.id} checked={pickupSlotId === slot.id} onChange={() => setPickupSlotId(slot.id || "")} />
+              <span>{slot.label}</span>
+            </label>) : <p className="form-error">此共同購買尚未設定取貨時段，暫時無法訂購。</p>}
+          </fieldset>}
           {method === "pickup" && locations.isError && <p className="form-error">取貨點暫時無法使用，請稍後再試。</p>}
           {method === "shipping" && (
             <div className="shipping-form">

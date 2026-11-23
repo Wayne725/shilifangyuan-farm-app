@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import re
 from datetime import date, datetime, time, timezone
@@ -420,6 +420,57 @@ class CampaignProductCreate(ProductCreate):
         return value
 
 
+WEEKDAY_LABELS = ("週一", "週二", "週三", "週四", "週五", "週六", "週日")
+
+
+class GroupPickupSlot(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex[:8], pattern=r"^[0-9a-z]{1,16}$")
+    weekday: int = Field(ge=0, le=6)
+    starts_at: str = Field(pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+    ends_at: str = Field(pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "GroupPickupSlot":
+        if self.ends_at <= self.starts_at:
+            raise ValueError("取貨時段的結束時間必須晚於開始時間")
+        return self
+
+
+class GroupPickupSlotRead(GroupPickupSlot):
+    label: str
+
+
+def group_pickup_slots_read(slots: List[dict]) -> List[GroupPickupSlotRead]:
+    return [
+        GroupPickupSlotRead(**slot, label=f"每{WEEKDAY_LABELS[slot['weekday']]} {slot['starts_at']}~{slot['ends_at']}")
+        for slot in slots or []
+    ]
+
+
+def validate_group_pickup_slots(slots: List[GroupPickupSlot]) -> List[GroupPickupSlot]:
+    keys = [(slot.weekday, slot.starts_at, slot.ends_at) for slot in slots]
+    if len(set(keys)) != len(keys):
+        raise ValueError("取貨時段不可重複")
+    if len({slot.id for slot in slots}) != len(slots):
+        raise ValueError("取貨時段識別碼不可重複")
+    return sorted(slots, key=lambda slot: (slot.weekday, slot.starts_at, slot.ends_at))
+
+
+class GroupPickupSlotOrder(ApiModel):
+    order_number: str
+    buyer_name: str
+    contact_email: str
+    quantity: int
+    fulfillment_status: str
+
+
+class GroupPickupSlotSummary(ApiModel):
+    label: str
+    order_count: int
+    quantity: int
+    orders: List[GroupPickupSlotOrder]
+
+
 class CampaignCreate(BaseModel):
     source_proposal_id: Optional[str] = None
     target_type: TargetType
@@ -440,6 +491,12 @@ class CampaignCreate(BaseModel):
     can_ship: bool = False
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
+    pickup_slots: List[GroupPickupSlot] = Field(default_factory=list, max_length=21)
+
+    @field_validator("pickup_slots")
+    @classmethod
+    def validate_pickup_slots(cls, value: List[GroupPickupSlot]) -> List[GroupPickupSlot]:
+        return validate_group_pickup_slots(value)
 
     @model_validator(mode="after")
     def validate_target(self) -> "CampaignCreate":
@@ -500,6 +557,12 @@ class CampaignUpdate(BaseModel):
     can_ship: Optional[bool] = None
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: Optional[List[ShippingChannel]] = None
+    pickup_slots: Optional[List[GroupPickupSlot]] = Field(default=None, min_length=1, max_length=21)
+
+    @field_validator("pickup_slots")
+    @classmethod
+    def validate_pickup_slots(cls, value: Optional[List[GroupPickupSlot]]) -> Optional[List[GroupPickupSlot]]:
+        return validate_group_pickup_slots(value) if value is not None else None
 
     @model_validator(mode="before")
     @classmethod
@@ -600,6 +663,7 @@ class CampaignRead(ApiModel):
     can_ship: bool = False
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
+    pickup_slots: List[GroupPickupSlotRead] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -716,6 +780,7 @@ class GroupJoinRequest(InvoicePreferenceInput):
     contact_email: EmailStr
     fulfillment_method: FulfillmentMethod = FulfillmentMethod.COOPERATIVE_PICKUP
     pickup_location_id: Optional[str] = None
+    pickup_slot_id: Optional[str] = Field(default=None, max_length=16)
     shipping_channel: Optional[ShippingChannel] = None
 
     @model_validator(mode="after")
@@ -2147,6 +2212,7 @@ class OrderFulfillmentRead(ApiModel):
     status: FulfillmentState
     pickup_location_id: Optional[str] = None
     pickup_location: Optional[str]
+    pickup_slot_label: Optional[str] = None
     pickup_address: str = ""
     pickup_instructions: str = ""
     needs_utensils: bool = False

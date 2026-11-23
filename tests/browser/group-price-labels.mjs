@@ -11,11 +11,11 @@ const campaign = {
   target_type: 'product', target_id: 'product', member_price: 90, nonmember_price: 100,
   min_paid_quantity: 10, supply_cap: 30, per_user_cap: 5, paid_quantity: 0,
   reserved_quantity: 0, available_quantity: 30, deadline: '2030-01-03T04:00:00Z',
-  estimated_pickup_start: '2030-01-06T04:00:00Z', estimated_pickup_end: '2030-01-07T04:00:00Z',
+  pickup_slots: [{ id: 'fri', weekday: 4, starts_at: '11:30', ends_at: '13:00', label: '每週五 11:30~13:00' }], estimated_pickup_start: '2030-01-06T04:00:00Z', estimated_pickup_end: '2030-01-07T04:00:00Z',
   preorder_only: true, decision_status: 'confirmed', intake_status: 'open', can_ship: false, allowed_shipping_channels: [],
 };
 
-async function fixture(t, { membership = 'nonmember', width = 1280, deferred = false, fail = false } = {}) {
+async function fixture(t, { membership = 'nonmember', width = 1280, deferred = false, fail = false, slots = null } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 950 }, serviceWorkers: 'block' });
@@ -30,7 +30,7 @@ async function fixture(t, { membership = 'nonmember', width = 1280, deferred = f
       access_token: 'isolated', user: { id: 'buyer', display_name: '隔離買家', email: 'buyer@example.test', user_role: 'customer', membership_type: membership === 'nonmember' ? 'member' : 'nonmember' },
     } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, group_orders_enabled: true, regular_orders_enabled: true, shipping_enabled: false } });
-    if (path === '/v1/group-campaigns/campaign') return route.fulfill({ json: campaign });
+    if (path === '/v1/group-campaigns/campaign') return route.fulfill({ json: slots ? { ...campaign, pickup_slots: slots } : campaign });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'store', name: '隔離取貨點', is_active: true }] });
     if (path === '/v1/group-campaigns/campaign/quote') {
       const body = request.postDataJSON();
@@ -105,6 +105,29 @@ test('共同購買改量後報價失敗不沿用前次單價及總額', async t 
   assert.equal(await priceRow(page).locator('dd').innerText(), '—');
   assert.equal(await page.locator('.offer-total dd').innerText(), '—');
   assert.equal(await page.getByRole('button', { name: '參加並前往付款' }).isDisabled(), true);
+  await verify(page, state);
+});
+
+test('多個取貨時段須由買家點選一個才能付款', async t => {
+  const slots = [
+    { id: 'wed', weekday: 2, starts_at: '11:30', ends_at: '13:00', label: '每週三 11:30~13:00' },
+    { id: 'fri', weekday: 4, starts_at: '11:30', ends_at: '13:00', label: '每週五 11:30~13:00' },
+  ];
+  const { page, state } = await fixture(t, { width: 390, slots });
+  await priceRow(page).getByText('一般單價', { exact: true }).waitFor();
+  const choices = page.getByRole('group', { name: '取貨時段' });
+  assert.equal(await choices.getByRole('radio').count(), 2);
+  assert.equal(await choices.getByRole('radio', { checked: true }).count(), 0);
+  await choices.getByLabel('每週三 11:30~13:00', { exact: true }).check();
+  assert.equal(await choices.getByLabel('每週三 11:30~13:00', { exact: true }).isChecked(), true);
+  assert.equal(await page.getByText('每週三 11:30~13:00、每週五 11:30~13:00', { exact: true }).count(), 1);
+  await verify(page, state);
+});
+
+test('只有一個取貨時段時自動選取', async t => {
+  const { page, state } = await fixture(t, { width: 390 });
+  await priceRow(page).getByText('一般單價', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('group', { name: '取貨時段' }).getByLabel('每週五 11:30~13:00', { exact: true }).isChecked(), true);
   await verify(page, state);
 });
 

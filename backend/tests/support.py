@@ -126,3 +126,13 @@ async def api_test_context(
         follow_redirects=follow_redirects,
     ) as client:
         yield client
+
+
+TEST_PICKUP_SLOT_ID = "fri"
+TEST_PICKUP_SLOTS = [{"id": TEST_PICKUP_SLOT_ID, "weekday": 4, "starts_at": "11:30", "ends_at": "13:00"}]
+
+
+def with_pickup_slot(body: dict) -> dict:
+    if body.get("fulfillment_method", "cooperative_pickup") == "cooperative_pickup":
+        return {"pickup_slot_id": TEST_PICKUP_SLOT_ID, **body}
+    return body

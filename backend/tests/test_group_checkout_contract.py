@@ -10,7 +10,7 @@ from app.models import (GroupCampaign, Order, PaymentAttempt, Product, ShippingC
 from app.routers.groups import groups_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
-from tests.support import api_test_context, auth_headers
+from tests.support import api_test_context, auth_headers, TEST_PICKUP_SLOTS, with_pickup_slot
 from tests.test_integrations import payment_settings
 
 
@@ -31,6 +31,7 @@ async def prepare_group(session):
             "confirmation_deadline": (now + timedelta(days=3)).isoformat(),
             "estimated_pickup_start": (now + timedelta(days=4)).isoformat(),
             "estimated_pickup_end": (now + timedelta(days=5)).isoformat(),
+            "pickup_slots": TEST_PICKUP_SLOTS,
         })
     assert response.status_code == 201, response.text
     return SimpleNamespace(session=session, campaign_id=response.json()["id"],
@@ -47,7 +48,7 @@ async def group_checkout(database_session):
 
 
 def join_body(**changes):
-    return {"quantity": 1, "contact_email": "group-buyer@example.com", **changes}
+    return with_pickup_slot({"quantity": 1, "contact_email": "group-buyer@example.com", **changes})
 
 
 async def join(context, body=None, *, buyer=0, campaign_id=None):
