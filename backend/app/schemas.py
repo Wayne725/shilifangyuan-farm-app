@@ -430,7 +430,7 @@ class CampaignCreate(BaseModel):
     image_url: Optional[str] = None
     member_price: int = Field(ge=0)
     nonmember_price: int = Field(ge=0)
-    min_paid_quantity: int = Field(ge=1)
+    min_paid_quantity: int = Field(default=1, ge=1)
     supply_cap: int = Field(ge=1)
     per_user_cap: int = Field(default=5, ge=1)
     deadline: datetime
@@ -483,6 +483,7 @@ class CampaignCreate(BaseModel):
 
 
 class CampaignUpdate(BaseModel):
+    expected_updated_at: Optional[datetime] = None
     target_type: Optional[TargetType] = None
     target_id: Optional[str] = Field(default=None, min_length=1)
     title: Optional[str] = Field(default=None, min_length=1, max_length=120)
@@ -505,7 +506,7 @@ class CampaignUpdate(BaseModel):
     def reject_null_for_required_columns(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
-        nullable_fields = {"image_url", "shipping_temperature"}
+        nullable_fields = {"image_url", "shipping_temperature", "expected_updated_at"}
         null_fields = sorted(
             field
             for field, value in data.items()
@@ -516,7 +517,7 @@ class CampaignUpdate(BaseModel):
         return data
 
     @field_validator(
-        "deadline", "estimated_pickup_start", "estimated_pickup_end"
+        "deadline", "estimated_pickup_start", "estimated_pickup_end", "expected_updated_at"
     )
     @classmethod
     def ensure_timezone(cls, value: Optional[datetime]) -> Optional[datetime]:
@@ -561,6 +562,7 @@ class CampaignReject(BaseModel):
 
 class CampaignRead(ApiModel):
     is_public: bool = True
+    preorder_only: bool = False
     id: str
     source_proposal_id: Optional[str]
     target_type: TargetType

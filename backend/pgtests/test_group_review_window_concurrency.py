@@ -33,6 +33,53 @@ async def ordered_pair(first, operations, entered, release):
     return await asyncio.wait_for(asyncio.gather(lead, follower), 20)
 
 
+@pytest.mark.parametrize("first", ["callback", "reconcile"])
+async def test_preorder_timely_callback_and_cutoff_preserve_single_payment(postgres_sessions, monkeypatch, first):
+    async with postgres_sessions() as session:
+        _, campaign, _, order, _, attempt = await group_fixture(session)
+        campaign.preorder_only = True
+        campaign.decision_status = GroupDecisionStatus.CONFIRMED
+        campaign.legacy_confirmed_intake = False
+        attempt.settlement_unknown_since = datetime.now(timezone.utc)
+        payload = success_payload(attempt)
+        payload["PaymentDate"] = (attempt.expires_at - timedelta(seconds=1)).isoformat()
+        await session.commit()
+        campaign_id, order_id = campaign.id, order.id
+    entered = {key: asyncio.Event() for key in ("callback", "reconcile")}
+    release = asyncio.Event()
+    original_success = SQLAlchemyPaymentCallbackRepository._apply_success
+    original_reconcile = jobs.reconcile_campaign_state
+    async def gated_success(self, *args, **kwargs):
+        entered["callback"].set()
+        if first == "callback": await release.wait()
+        return await original_success(self, *args, **kwargs)
+    async def gated_reconcile(*args, **kwargs):
+        entered["reconcile"].set()
+        if first == "reconcile": await release.wait()
+        return await original_reconcile(*args, **kwargs)
+    monkeypatch.setattr(SQLAlchemyPaymentCallbackRepository, "_apply_success", gated_success)
+    monkeypatch.setattr(jobs, "reconcile_campaign_state", gated_reconcile)
+    async def callback():
+        async with postgres_sessions() as session:
+            return await SQLAlchemyPaymentCallbackRepository(session).apply_raygate_payment_callback("preorder-current-paid", payload)
+    async def reconcile():
+        async with postgres_sessions() as session:
+            return await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 10)
+    results = await ordered_pair(first, {"callback": callback, "reconcile": reconcile}, entered, release)
+    assert "paid" in results
+    async with postgres_sessions() as session:
+        await jobs._reconcile_campaigns(session, make_test_settings(), datetime.now(timezone.utc), 10)
+        campaign = await session.get(GroupCampaign, campaign_id)
+        assert campaign.preorder_only is True
+        assert campaign.decision_status == GroupDecisionStatus.CONFIRMED
+        assert campaign.intake_status == GroupIntakeStatus.CLOSED
+        assert campaign.paid_quantity == 3 and campaign.reserved_quantity == 0
+        assert (await session.get(Order, order_id)).payment_status == PaymentStatus.PAID
+        assert await session.scalar(select(func.count(Refund.id))) == 0
+        assert await session.scalar(select(func.count(OutboxEvent.id)).where(OutboxEvent.event_type == "invoice.issue_requested")) == 1
+        assert await session.scalar(select(func.sum(PointTransaction.amount))) == 3
+
+
 @pytest.mark.parametrize("first", ["callback", "confirm"])
 async def test_unknown_payment_callback_and_confirmation_are_serialized(postgres_sessions, monkeypatch, first):
     async with postgres_sessions() as session:

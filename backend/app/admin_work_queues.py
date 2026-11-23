@@ -194,7 +194,7 @@ async def admin_today_counts(session: AsyncSession) -> dict[str, int]:
             GroupCampaign, GroupCampaign.is_public.is_(True), GroupCampaign.deadline > now,
             GroupCampaign.decision_status.in_({GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}),
         ).label("active_campaigns"),
-        count(GroupCampaign, GroupCampaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION).label("pending_campaign_decisions"),
+        count(GroupCampaign, GroupCampaign.preorder_only.is_(False), GroupCampaign.decision_status == GroupDecisionStatus.PENDING_CONFIRMATION).label("pending_campaign_decisions"),
         count(VoteProposal, VoteProposal.status == ProposalStatus.VOTING, VoteProposal.deadline > now).label("voting_group_proposals"),
         count(MemberProposal, MemberProposal.status == MemberProposalStatus.VOTING, MemberProposal.voting_ends_at > now).label("voting_member_proposals"),
         count(Order, or_(*invoice_followup_conditions(session, now).values())).label("invoice_followups"),

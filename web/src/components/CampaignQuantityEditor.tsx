@@ -14,8 +14,7 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone, onAcces
   const now = useDeadlineClock(campaign.deadline);
   const blockReason = campaignQuantityBlockReason(campaign, now);
   const closed = Boolean(blockReason);
-  const error = Object.values(draft).some((value) => !Number.isInteger(value) || value < 1) ? "數量必須是大於 0 的整數"
-    : draft.min_paid_quantity > draft.supply_cap ? "成團所需總數量不可高於本團供應上限" : "";
+  const error = Object.values(draft).some((value) => !Number.isInteger(value) || value < 1) ? "數量必須是大於 0 的整數" : "";
   const changes = Object.fromEntries(Object.entries(draft).filter(([key, value]) => value !== original[key as keyof typeof draft]));
   const update = useMutation({
     mutationFn: () => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaign.id}`, { method: "PATCH", body: JSON.stringify(changes) }),
@@ -25,7 +24,6 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone, onAcces
   return <section className="admin-create-block campaign-quantity-settings" aria-label="共同購買數量設定">
     <dl className="campaign-quantity-summary">
       <div><dt>每人限購</dt><dd>{campaign.per_user_cap} {unit}</dd></div>
-      <div><dt>成團所需總數量</dt><dd>{campaign.min_paid_quantity} {unit}</dd></div>
       <div><dt>本團供應上限</dt><dd>{campaign.supply_cap} {unit}</dd></div>
     </dl>
     {closed ? <p role="status"><span className="status-chip">{blockReason}</span></p> :
@@ -36,7 +34,6 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone, onAcces
       <div className="field-grid three-columns">
         {([
           ["per_user_cap", "每人限購數量"],
-          ["min_paid_quantity", "成團所需總數量"],
           ["supply_cap", "本團供應上限"],
         ] as const).map(([key, label]) => <label className="field" key={key}><span>{label}（{unit}）</span><input required min={1} step={1} type="number" disabled={update.isPending} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: Number(event.target.value) })} /></label>)}
       </div>
@@ -48,5 +45,5 @@ export function CampaignQuantityEditor({ campaign, unit = "組", onDone, onAcces
 }
 
 function quantities(campaign: GroupCampaign) {
-  return { per_user_cap: campaign.per_user_cap, min_paid_quantity: campaign.min_paid_quantity, supply_cap: campaign.supply_cap };
+  return { per_user_cap: campaign.per_user_cap, supply_cap: campaign.supply_cap };
 }

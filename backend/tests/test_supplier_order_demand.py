@@ -97,7 +97,7 @@ async def test_regular_order_supplier_changes_amendment_and_missing_product(data
 
 
 @pytest.mark.asyncio
-async def test_confirmed_group_direct_items_review_unknown_and_order_refunds(database_session):
+async def test_preorder_and_legacy_group_direct_items_review_unknown_and_order_refunds(database_session):
     session = database_session
     context = await prepare_group(session)
     first = await session.get(Product, context.product_ids[0])
@@ -115,8 +115,12 @@ async def test_confirmed_group_direct_items_review_unknown_and_order_refunds(dat
         assert group_order.items[0].procurement_snapshot["supplier_id"] == a.id
         group_order.payment_status, group_order.paid_at = PaymentStatus.PAID, MIDNIGHT
         await session.commit()
-        assert (await download(client, context.admin_headers, a)).status_code == 409
         group = await session.get(GroupCampaign, context.campaign_id)
+        assert group.preorder_only is True and group.decision_status == GroupDecisionStatus.CONFIRMED
+        assert (await download(client, context.admin_headers, a)).status_code == 200
+        group.preorder_only, group.decision_status = False, GroupDecisionStatus.RECRUITING
+        await session.commit()
+        assert (await download(client, context.admin_headers, a)).status_code == 409
         group.decision_status = GroupDecisionStatus.CONFIRMED
         await session.commit()
         rows = csv_rows(await download(client, context.admin_headers, a))

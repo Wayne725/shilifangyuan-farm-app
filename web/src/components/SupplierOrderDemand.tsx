@@ -45,7 +45,7 @@ function SupplierOrderDemandForm({ suppliers }: { suppliers: Supplier[] }) {
   }
 
   return <form className="admin-master-form" onSubmit={(event) => { event.preventDefault(); run("supplier"); }}>
-    <p>按台灣付款日與下單時的供應者歸屬匯出。範圍為目前已付款的一般商品及已成團單品。歷史無供應者快照、未指定供應者或有訂單級退款紀錄的品項另供核對。</p>
+    <p>按台灣付款日與下單時的供應者歸屬匯出。範圍為目前已付款的日常選品及共同購買單品。歷史無供應者快照、未指定供應者或有訂單級退款紀錄的品項另供核對。</p>
     <fieldset disabled={download.isPending} className="field-grid two-columns">
       <label className="field"><span>付款日期起</span><input type="date" required value={period.startsOn} onChange={(event) => setPeriod({ ...period, startsOn: event.target.value })} /></label>
       <label className="field"><span>付款日期迄</span><input type="date" required value={period.endsOn} onChange={(event) => setPeriod({ ...period, endsOn: event.target.value })} /></label>

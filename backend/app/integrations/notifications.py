@@ -17,6 +17,7 @@ EMAIL_EVENT_TYPES = {
     "meal_event_cancelled",
     "meal_event_refund_requested",
     "group.settlement_pending",
+    "group.pickup_updated",
     "group.review_ready",
     "group.review_overdue",
     "proposal_approved",

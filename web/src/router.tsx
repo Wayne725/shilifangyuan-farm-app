@@ -351,9 +351,9 @@ const adminGroupsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/groups",
   component: page("./pages/AdminGroupsPage", "AdminGroupsPage"),
-  validateSearch: (search: Record<string, unknown>): { tab?: "proposals" | "campaigns" | "bundles" | "wishes"; view?: "active" | "decision" | "voting" } => ({
-    tab: search.tab === "campaigns" || search.tab === "bundles" || search.tab === "wishes" ? search.tab : "proposals",
-    view: search.tab === "campaigns" && (search.view === "active" || search.view === "decision") ? search.view : search.view === "voting" && (!search.tab || search.tab === "proposals") ? "voting" : undefined,
+  validateSearch: (search: Record<string, unknown>): { tab?: "proposals" | "campaigns" | "bundles" | "wishes"; view?: "active" | "ended" | "voting" } => ({
+    tab: search.tab === "proposals" || search.tab === "bundles" || search.tab === "wishes" ? search.tab : "campaigns",
+    view: (!search.tab || search.tab === "campaigns") && (search.view === "active" || search.view === "ended" || search.view === "decision") ? search.view === "decision" ? "ended" : search.view : search.view === "voting" && search.tab === "proposals" ? "voting" : undefined,
   }),
 });
 

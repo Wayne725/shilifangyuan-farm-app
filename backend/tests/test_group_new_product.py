@@ -51,6 +51,7 @@ async def test_admin_creates_group_product_atomically_and_custom_proposal_is_not
     assert product.is_active is True and product.daily_sales_enabled is False
     assert (product.member_price, product.nonmember_price) == (70, 80)
     assert (campaign["member_price"], campaign["nonmember_price"]) == (60, 75)
+    assert campaign["preorder_only"] is True and campaign["min_paid_quantity"] == 1
     audit = await session.scalar(select(AdminAudit).where(AdminAudit.aggregate_id == product.id, AdminAudit.action == "product.create"))
     assert audit.actor_id == ctx["admin"].id
     if proposal:
@@ -76,7 +77,6 @@ async def test_admin_creates_group_product_atomically_and_custom_proposal_is_not
     {"new_product": new_product_payload(is_active=False)},
     {"new_product": new_product_payload(stock_quantity=-1)},
     {"new_product": new_product_payload(supplier_id="missing")},
-    {"min_paid_quantity": 30, "supply_cap": 20},
     {"deadline": "2000-01-01T00:00:00+00:00"},
     {"source_proposal_id": "must-use-proposal-route"},
 ])

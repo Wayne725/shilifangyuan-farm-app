@@ -212,11 +212,10 @@ export function GroupCampaignPage() {
           <h1>{item.title}</h1>
           <p>{item.description}</p>
           <dl>
-            <div><dt>已付款</dt><dd>{item.paid_quantity}／{item.min_paid_quantity} 份門檻</dd></div>
+            <div><dt>已付款</dt><dd>{item.paid_quantity} 份</dd></div>
             <div><dt>剩餘供應</dt><dd>{item.available_quantity} 份</dd></div>
             <div><dt>付款截止（台灣）</dt><dd>{campaignDateTime(item.deadline)}</dd></div>
-            {item.confirmation_deadline && <div><dt>審核截止（台灣）</dt><dd>{campaignDateTime(item.confirmation_deadline)}</dd></div>}
-            <div><dt>{item.final_pickup_at ? "最終取貨" : "預計取貨"}</dt><dd>{campaignDateTime(item.final_pickup_at || item.estimated_pickup_start)}</dd></div>
+            <div><dt>取貨時間</dt><dd>{item.final_pickup_at ? campaignDateTime(item.final_pickup_at) : `${campaignDateTime(item.estimated_pickup_start)} 至 ${campaignDateTime(item.estimated_pickup_end)}`}</dd></div>
           </dl>
         </div>
       </div>

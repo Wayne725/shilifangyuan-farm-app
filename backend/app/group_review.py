@@ -89,6 +89,11 @@ async def campaign_has_unsettled_payments(session: AsyncSession, campaign: Group
 
 
 async def reconcile_campaign_state(session: AsyncSession, campaign: GroupCampaign, now: datetime) -> None:
+    if campaign.preorder_only and campaign.decision_status == GroupDecisionStatus.CONFIRMED:
+        if now >= aware(campaign.deadline):
+            campaign.intake_status = (GroupIntakeStatus.SETTLING
+                if await campaign_has_unsettled_payments(session, campaign) else GroupIntakeStatus.CLOSED)
+        return
     if campaign.decision_status in TERMINAL_DECISIONS:
         if campaign.decision_status == GroupDecisionStatus.CONFIRMED and now >= aware(campaign.deadline):
             campaign.intake_status = GroupIntakeStatus.CLOSED
@@ -114,6 +119,8 @@ async def reconcile_campaign_state(session: AsyncSession, campaign: GroupCampaig
 
 
 def review_blocked_reason(campaign: GroupCampaign, now: datetime) -> Optional[str]:
+    if campaign.preorder_only:
+        return "預訂檔期不需確認成團"
     if campaign.decision_status in TERMINAL_DECISIONS:
         return "此共同購買已完成決定"
     if now < aware(campaign.deadline):
@@ -149,6 +156,17 @@ async def publish_campaign_notification_once(session: AsyncSession, command: Not
 
 
 async def remind_campaign_review(session: AsyncSession, campaign: GroupCampaign, now: datetime) -> None:
+    if campaign.preorder_only:
+        if campaign.decision_status != GroupDecisionStatus.CONFIRMED or campaign.intake_status != GroupIntakeStatus.SETTLING:
+            return
+        admins = await session.scalars(select(User).where(User.user_role == UserRole.ADMIN))
+        for admin in admins:
+            await publish_campaign_notification_once(session, NotificationCommand(
+                user_id=admin.id, event_type="group.settlement_pending", title="共同購買付款待核對",
+                body=f"「{campaign.title}」預訂已截止，仍有付款交易等待金流核對。",
+                email=valid_notification_email(admin.notification_email, admin.email),
+                data={"campaign_id": campaign.id}, dedupe_key=f"group.settlement_pending:{campaign.id}:ready"))
+        return
     if campaign.decision_status in TERMINAL_DECISIONS:
         return
     overdue = campaign.confirmation_deadline is not None and now >= aware(campaign.confirmation_deadline)

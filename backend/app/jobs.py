@@ -1924,7 +1924,8 @@ async def _process_domain_event(
         orders = list(await session.scalars(select(Order).where(Order.group_campaign_id == campaign.id).order_by(Order.created_at.desc(), Order.id)))
         requested_users = {str(value) for value in event.payload.get("user_ids", [])}
         user_ids = requested_users or {order.user_id for order in orders}
-        titles = {"group.confirmed": "共同購買已確認成團", "group.rejected": "共同購買未確認成團", "group.cancelled": "共同購買已取消"}
+        titles = {"group.confirmed": "共同購買已確認成團", "group.rejected": "共同購買未確認成團", "group.cancelled": "共同購買已取消",
+                  "group.pickup_updated": "共同購買取貨安排已更新"}
         title = titles.get(event.event_type, "共同購買狀態已更新")
         for user_id in sorted(user_ids):
             user = await session.get(User, user_id)
@@ -1936,6 +1937,11 @@ async def _process_domain_event(
                 from zoneinfo import ZoneInfo
                 pickup = datetime.fromisoformat(str(event.payload["final_pickup_at"])).astimezone(ZoneInfo("Asia/Taipei"))
                 body += f"取貨時間（台灣）：{pickup:%Y/%m/%d %H:%M}。"
+            elif event.event_type == "group.pickup_updated":
+                from zoneinfo import ZoneInfo
+                start = datetime.fromisoformat(str(event.payload["estimated_pickup_start"])).astimezone(ZoneInfo("Asia/Taipei"))
+                end = datetime.fromisoformat(str(event.payload["estimated_pickup_end"])).astimezone(ZoneInfo("Asia/Taipei"))
+                body += f"取貨時間（台灣）：{start:%Y/%m/%d %H:%M} 至 {end:%Y/%m/%d %H:%M}。"
             elif event.event_type in {"group.cancelled", "group.rejected"}:
                 body += "已付款訂單已送出退款處理，退款進度請至訂單中心查詢。"
             await publish_campaign_notification_once(session, NotificationCommand(

@@ -1,5 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import { Buildings, CheckCircle, Package, Plus } from "@phosphor-icons/react";
+import { Buildings, Package, Plus } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
@@ -11,7 +11,7 @@ import { CampaignQuantityEditor } from "../components/CampaignQuantityEditor";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { ApiError, apiFetch, captureSessionIdentityGuard, formatDateTime, formatMoney } from "../lib/api";
-import { campaignAccessDenied, campaignDateTime, campaignScheduleError, campaignStatusLabel, campaignTimestamp, defaultReviewDeadline, groupProposalStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
+import { campaignAccessDenied, campaignDateTime, campaignPreorderScheduleError, campaignStatusLabel, campaignTimestamp, groupProposalStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
 import { taipeiDate, taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import type { GroupBundle, GroupCampaign, GroupVoteProposal, Product } from "../lib/types";
@@ -28,7 +28,7 @@ export function AdminGroupsPage() {
 }
 
 function AdminGroupsWorkspace({ userId }: { userId: string }) {
-  const { tab = "proposals", view } = useSearch({ from: "/admin/groups" });
+  const { tab = "campaigns", view } = useSearch({ from: "/admin/groups" });
   const navigate = useNavigate({ from: "/admin/groups" });
   const now = useDeadlineClock();
   const queryClient = useQueryClient();
@@ -49,25 +49,24 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
   const onAccessDenied = () => setRevoked(true);
   if (denied) return <section className="admin-gate"><DataState kind="error" title="共同購買管理權限已失效" detail="請重新登入管理員帳號" /></section>;
 
-  const refreshProposals = () => queryClient.invalidateQueries({ queryKey: ["group-vote-proposals"] });
   const refreshCampaigns = () => queryClient.invalidateQueries({ queryKey: ["group-campaigns"] });
   const refreshBundles = () => queryClient.invalidateQueries({ queryKey: ["group-bundles"] });
   const visibleCampaigns = (campaigns.data || []).filter(campaign => {
     if (view === "active") return campaign.is_public !== false && campaignTimestamp(campaign.deadline) > now
       && ["recruiting", "confirmed"].includes(campaign.decision_status);
-    if (view === "decision") return campaign.decision_status === "pending_confirmation";
+    if (view === "ended") return campaignTimestamp(campaign.deadline) <= now || ["rejected", "failed_unmet", "expired_unconfirmed", "cancelled"].includes(campaign.decision_status);
     return true;
   });
 
   return (
     <section className="admin-module-page">
-      <header className="workspace-heading"><div><p className="eyebrow">GROUP OPERATIONS / 共同購買管理</p><h1>需求投票與正式共同購買</h1></div></header>
+      <header className="workspace-heading"><div><p className="eyebrow">GROUP OPERATIONS / 共同購買管理</p><h1>每月共同購買管理</h1></div></header>
       <AdminNav />
       <Tabs.Root className="admin-social-tabs" value={tab} onValueChange={value => {
-        const nextTab = value === "campaigns" || value === "bundles" || value === "wishes" ? value : "proposals";
+        const nextTab = value === "proposals" || value === "bundles" || value === "wishes" ? value : "campaigns";
         void navigate({ search: { tab: nextTab }, resetScroll: false });
       }}>
-        <Tabs.List className="tab-list" aria-label="共同購買管理分類"><Tabs.Trigger value="proposals">提案審核</Tabs.Trigger><Tabs.Trigger value="campaigns">正式共同購買</Tabs.Trigger><Tabs.Trigger value="bundles">固定套組</Tabs.Trigger><Tabs.Trigger value="wishes">願望管理</Tabs.Trigger></Tabs.List>
+        <Tabs.List className="tab-list" aria-label="共同購買管理分類"><Tabs.Trigger value="campaigns">共同購買</Tabs.Trigger><Tabs.Trigger value="proposals">歷史需求</Tabs.Trigger><Tabs.Trigger value="bundles">固定套組</Tabs.Trigger><Tabs.Trigger value="wishes">願望管理</Tabs.Trigger></Tabs.List>
         <Tabs.Content className="tab-content" value="proposals">
           <GroupProposalList
             proposals={proposals.data ?? []}
@@ -82,18 +81,16 @@ function AdminGroupsWorkspace({ userId }: { userId: string }) {
               campaign={campaigns.data?.find((campaign) => campaign.source_proposal_id === proposal.id)}
               products={products.data ?? []}
               bundles={bundles.data ?? []}
-              onAccessDenied={onAccessDenied}
-              onDone={() => { refreshProposals(); refreshCampaigns(); }}
             />}
           />
         </Tabs.Content>
         <Tabs.Content className="tab-content" value="campaigns">
           <CampaignCreateForm products={products.data || []} bundles={bundles.data || []} onAccessDenied={onAccessDenied} onDone={refreshCampaigns} />
-          <label className="field social-review-scope"><span>共同購買範圍</span><select value={view === "active" || view === "decision" ? view : ""} onChange={event => {
+          <label className="field social-review-scope"><span>共同購買範圍</span><select value={view === "active" || view === "ended" ? view : ""} onChange={event => {
             const value = event.target.value;
-            void navigate({ search: { tab: "campaigns", view: value === "active" || value === "decision" ? value : undefined }, resetScroll: false });
-          }}><option value="">全部</option><option value="active">進行中</option><option value="decision">待確認成團</option></select></label>
-          <AdminGroupSection title="正式共同購買" count={visibleCampaigns.length} pending={campaigns.isPending} error={campaigns.error?.message}>
+            void navigate({ search: { tab: "campaigns", view: value === "active" || value === "ended" ? value : undefined }, resetScroll: false });
+          }}><option value="">全部</option><option value="active">進行中</option><option value="ended">已截止或結束</option></select></label>
+          <AdminGroupSection title="共同購買" count={visibleCampaigns.length} pending={campaigns.isPending} error={campaigns.error?.message}>
             <div className="admin-review-list">{visibleCampaigns.map((campaign) => <CampaignAdminCard key={campaign.id} campaign={campaign} products={products.data || []} onAccessDenied={onAccessDenied} onDone={refreshCampaigns} />)}</div>
           </AdminGroupSection>
         </Tabs.Content>
@@ -182,67 +179,39 @@ function AdminGroupSection({ title, count, pending, error, empty, children }: { 
   return <section className="admin-review-section"><div className="section-title-row"><div><p className="eyebrow">GROUP WORKFLOW / 共同購買流程</p><h2>{title}</h2></div><span>{count}</span></div>{pending && <LoadingLines count={3} />}{error && <DataState kind="error" title={`${title}無法讀取`} detail={error} />}{!pending && !error && count === 0 && (empty || <DataState title={`目前沒有${title}`} detail="新的項目會出現在這裡。" />)}{children}</section>;
 }
 
-function GroupProposalReview({ proposal, campaign, products, bundles, onDone, onAccessDenied }: { proposal: GroupVoteProposal; campaign?: GroupCampaign; products: Product[]; bundles: GroupBundle[]; onDone: () => void; onAccessDenied: () => void }) {
-  const [threshold, setThreshold] = useState(proposal.threshold || 10);
-  const [deadline, setDeadline] = useState(localDateTime(7));
-  const [reason, setReason] = useState("");
+function GroupProposalReview({ proposal, campaign, products, bundles }: { proposal: GroupVoteProposal; campaign?: GroupCampaign; products: Product[]; bundles: GroupBundle[] }) {
   const created = taipeiDate(campaignTimestamp(proposal.created_at));
-  const deadlineLabel = campaign ? `${campaignDateTime(campaign.deadline)} 付款截止` : proposal.status === "converted" ? "" : proposal.deadline ? `${formatDateTime(proposal.deadline)} 投票截止` : "待審核設定期限";
-  const action = useMutation({
-    mutationFn: async (decision: "approve" | "reject") => {
-      if (decision === "approve") return apiFetch(`/v1/vote-proposals/${proposal.id}/admin/approve`, { method: "POST", body: JSON.stringify({ threshold, deadline: taipeiInputToIso(deadline) }) });
-      if (decision === "reject") return apiFetch(`/v1/vote-proposals/${proposal.id}/admin/reject`, { method: "POST", body: JSON.stringify({ reason }) });
-
-    },
-    onSuccess: onDone,
-    onError: error => { if (campaignAccessDenied(error)) onAccessDenied(); },
-  });
-  return (
-    <article className="admin-review-card group-proposal-card">
-      <div className="review-card-copy"><span className="status-chip">{groupProposalStatusLabel(proposal.status)}</span><h3>{proposal.target_name}</h3>{campaign && <p>供應商品：{campaign.target_type === "bundle" ? bundles.find(item => item.id === campaign.target_id)?.name || campaign.title : products.find(item => item.id === campaign.target_id)?.name || campaign.title}</p>}{proposal.request_details && <p className="group-request-details">{proposal.request_details}</p>}<p>{campaign ? `已付款 ${campaign.paid_quantity}/${campaign.min_paid_quantity} ${campaignUnit(campaign, products)}` : proposal.status === "converted" ? "已開團" : `投票 ${proposal.vote_count}/${proposal.threshold} 人 · 預估 ${proposal.estimated_quantity} 組`}</p><small>{[created && `${created.replaceAll("-", "/")} 提案`, deadlineLabel].filter(Boolean).join(" · ")}</small></div>
-      <div className="review-card-actions schedule-fields">
-        {proposal.status === "pending_review" && <><label className="field"><span>投票門檻（人）</span><input min={1} type="number" value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} /></label><label className="field"><span>投票截止（台灣）</span><input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label></>}
-
-        {proposal.status === "pending_review" && <label className="field"><span>處理原因<OptionalMark /></span><input value={reason} onChange={(event) => setReason(event.target.value)} /></label>}
-        <div>{proposal.status === "pending_review" && <button type="button" disabled={!deadline || action.isPending} onClick={() => action.mutate("approve")}><CheckCircle size={16} />通過並開放投票</button>}{proposal.status === "pending_review" && <button type="button" disabled={action.isPending} onClick={() => action.mutate("reject")}>不通過</button>}</div>
-        {action.isError && <p className="form-error">{action.error.message}</p>}
-      </div>
-        {["pending_review", "voting", "conversion_pending"].includes(proposal.status) && <CampaignCreateForm proposal={proposal} products={products} bundles={bundles} onAccessDenied={onAccessDenied} onDone={onDone} />}
-        {campaign && <CampaignReviewPanel campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />}
-        {campaign && <CampaignQuantityEditor campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />}
-    </article>
-  );
+  const deadlineLabel = campaign ? `${campaignDateTime(campaign.deadline)} 付款截止` : proposal.deadline ? `${formatDateTime(proposal.deadline)} 投票截止` : "";
+  return <article className="admin-review-card group-proposal-card">
+    <div className="review-card-copy"><span className="status-chip">{groupProposalStatusLabel(proposal.status)}</span><h3>{proposal.target_name}</h3>{campaign && <p>供應商品：{campaign.target_type === "bundle" ? bundles.find(item => item.id === campaign.target_id)?.name || campaign.title : products.find(item => item.id === campaign.target_id)?.name || campaign.title}</p>}{proposal.request_details && <p className="group-request-details">{proposal.request_details}</p>}<p>{campaign ? `已付款 ${campaign.paid_quantity} ${campaignUnit(campaign, products)}` : `支持 ${proposal.vote_count} 人 · 預估 ${proposal.estimated_quantity} 組`}</p><small>{[created && `${created.replaceAll("-", "/")} 提案`, deadlineLabel].filter(Boolean).join(" · ")}</small></div>
+    {campaign && <Link to="/groups/$campaignId" params={{ campaignId: campaign.id }}>查看共同購買</Link>}
+  </article>;
 }
 
 const newProductTarget = "__new_product__";
 const newProductCategories = ["當季蔬果", "米・雜糧", "蛋品", "加工品", "飲品", "生活用品"];
 
-function CampaignCreateForm({ products, bundles, proposal, onDone, onAccessDenied }: { products: Product[]; bundles: GroupBundle[]; proposal?: GroupVoteProposal; onDone: () => void; onAccessDenied: () => void }) {
+function CampaignCreateForm({ products, bundles, onDone, onAccessDenied }: { products: Product[]; bundles: GroupBundle[]; onDone: () => void; onAccessDenied: () => void }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const targetLocked = Boolean(proposal && proposal.target_type !== "custom");
-  const initialTargetId = proposal?.target_type === "custom" ? newProductTarget : proposal?.target_id || "";
-  const [targetType, setTargetType] = useState<"product" | "bundle">(proposal?.target_type === "bundle" ? "bundle" : "product");
-  const [targetId, setTargetId] = useState(initialTargetId);
-  const [newName, setNewName] = useState(proposal?.target_type === "custom" ? proposal.target_name : "");
-  const [newDescription, setNewDescription] = useState(proposal?.request_details || "");
+  const [targetType, setTargetType] = useState<"product" | "bundle">("product");
+  const [targetId, setTargetId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
   const [newUnit, setNewUnit] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [newTaxType, setNewTaxType] = useState<"" | Product["tax_type"]>("");
-  const [minQuantity, setMinQuantity] = useState(proposal ? 1 : 10);
   const [memberPrice, setMemberPrice] = useState(0);
   const [nonmemberPrice, setNonmemberPrice] = useState(0);
   const [supplyCap, setSupplyCap] = useState(30);
   const [perUserCap, setPerUserCap] = useState(5);
   const [deadline, setDeadline] = useState(localDateTime(7));
-  const [reviewDeadline, setReviewDeadline] = useState(() => defaultReviewDeadline(deadline));
-  const [reviewEdited, setReviewEdited] = useState(false);
   const [pickupStart, setPickupStart] = useState(localDateTime(11));
   const [pickupEnd, setPickupEnd] = useState(localDateTime(12));
-  const scheduleError = campaignScheduleError(deadline, reviewDeadline, pickupStart, pickupEnd);
+  const scheduleError = campaignPreorderScheduleError(deadline, pickupStart, pickupEnd);
   const targets = (targetType === "product" ? products : bundles).filter((item) => item.is_active);
   const target = targets.find((item) => item.id === targetId);
-  const addingProduct = targetType === "product" && targetId === newProductTarget && !targetLocked;
+  const addingProduct = targetType === "product" && targetId === newProductTarget;
   const unit = addingProduct ? newUnit.trim() : targetType === "bundle" ? "組" : (target as Product | undefined)?.unit;
   const targetReady = addingProduct ? Boolean(newName.trim() && newUnit.trim() && newCategory && newTaxType) : Boolean(target);
   const quantityLabel = (label: string) => unit ? `${label}（${unit}）` : label;
@@ -260,15 +229,14 @@ function CampaignCreateForm({ products, bundles, proposal, onDone, onAccessDenie
         stock_quantity: 0, can_ship: false, is_active: true, daily_sales_enabled: false,
       } : undefined;
       const campaignName = addingProduct ? newName.trim() : target!.name;
-      const path = proposal ? `/v1/vote-proposals/${proposal.id}/admin/open-direct` : "/v1/group-campaigns";
-      return apiFetch<GroupCampaign>(path, { method: "POST", body: JSON.stringify({
+      return apiFetch<GroupCampaign>("/v1/group-campaigns", { method: "POST", body: JSON.stringify({
         target_type: targetType, target_id: addingProduct ? undefined : target!.id, new_product: newProduct,
         title: campaignName.length <= 116 ? `${campaignName}共同購買` : campaignName,
         description: addingProduct ? newDescription.trim() : target!.description,
         image_url: addingProduct ? null : target!.image_url || null,
         member_price: memberPrice, nonmember_price: nonmemberPrice,
-        min_paid_quantity: minQuantity, supply_cap: supplyCap, per_user_cap: perUserCap,
-        deadline: taipeiInputToIso(deadline), confirmation_deadline: taipeiInputToIso(reviewDeadline),
+        supply_cap: supplyCap, per_user_cap: perUserCap,
+        deadline: taipeiInputToIso(deadline),
         estimated_pickup_start: taipeiInputToIso(pickupStart), estimated_pickup_end: taipeiInputToIso(pickupEnd),
         can_ship: product?.can_ship || false, shipping_temperature: product?.can_ship ? product.shipping_temperature : null,
         allowed_shipping_channels: product?.can_ship ? product.allowed_shipping_channels : [],
@@ -280,19 +248,19 @@ function CampaignCreateForm({ products, bundles, proposal, onDone, onAccessDenie
         queryClient.invalidateQueries({ queryKey: ["products"] }),
       ]);
       setOpen(false);
-      setTargetId(initialTargetId);
-      if (!proposal) { setNewName(""); setNewDescription(""); setNewUnit(""); setNewCategory(""); setNewTaxType(""); setMemberPrice(0); setNonmemberPrice(0); }
+      setTargetId("");
+      setNewName(""); setNewDescription(""); setNewUnit(""); setNewCategory(""); setNewTaxType(""); setMemberPrice(0); setNonmemberPrice(0);
       onDone();
     },
     onError: error => { if (campaignAccessDenied(error)) onAccessDenied(); },
   });
   return <section className="admin-create-block">
-    <button className="button button-system" type="button" disabled={create.isPending} onClick={() => setOpen(value => !value)}><Plus size={17} />{proposal ? "直接確認並開團" : "直接建立正式共同購買"}</button>
-    {open && <form className="social-form admin-master-form" aria-label={proposal ? `${proposal.target_name}直接開團` : "直接建立共同購買"} onSubmit={event => { event.preventDefault(); if (!create.isPending) create.mutate(); }}>
-      <div className="form-heading"><div><p className="eyebrow">DIRECT CAMPAIGN / 直接開團</p><h2>直接開團</h2></div></div>
+    <button className="button button-system" type="button" disabled={create.isPending} onClick={() => setOpen(value => !value)}><Plus size={17} />建立共同購買</button>
+    {open && <form className="social-form admin-master-form" aria-label="建立共同購買" onSubmit={event => { event.preventDefault(); if (!create.isPending) create.mutate(); }}>
+      <div className="form-heading"><div><p className="eyebrow">MONTHLY PREORDER / 每月預訂</p><h2>建立共同購買</h2></div></div>
       <div className="field-grid two-columns">
-        <label className="field"><span>項目類型</span><select disabled={targetLocked || create.isPending} value={targetType} onChange={event => { setTargetType(event.target.value as "product" | "bundle"); setTargetId(""); }}><option value="product">單一商品</option><option value="bundle">固定套組</option></select></label>
-        <label className="field"><span>共同購買項目</span><select required disabled={targetLocked || create.isPending} value={targetId} onChange={event => { setTargetId(event.target.value); create.reset(); }}><option value="">選擇項目</option>{targetType === "product" && !targetLocked && <option value={newProductTarget}>其他／新增商品</option>}{targets.map(item => <option key={item.id} value={item.id}>{item.name}{targetType === "product" ? `（${(item as Product).unit}）` : "（組）"}</option>)}</select></label>
+        <label className="field"><span>項目類型</span><select disabled={create.isPending} value={targetType} onChange={event => { setTargetType(event.target.value as "product" | "bundle"); setTargetId(""); }}><option value="product">單一商品</option><option value="bundle">固定套組</option></select></label>
+        <label className="field"><span>共同購買項目</span><select required disabled={create.isPending} value={targetId} onChange={event => { setTargetId(event.target.value); create.reset(); }}><option value="">選擇項目</option>{targetType === "product" && <option value={newProductTarget}>其他／新增商品</option>}{targets.map(item => <option key={item.id} value={item.id}>{item.name}{targetType === "product" ? `（${(item as Product).unit}）` : "（組）"}</option>)}</select></label>
       </div>
       {addingProduct && <fieldset className="campaign-new-product" disabled={create.isPending}>
         <legend>新增共同購買商品</legend>
@@ -307,19 +275,16 @@ function CampaignCreateForm({ products, bundles, proposal, onDone, onAccessDenie
       <div className="field-grid three-columns">
         <label className="field"><span>{quantityLabel("社員單價")}</span><input type="number" min={0} required value={memberPrice} onChange={event => setMemberPrice(Number(event.target.value))} /></label>
         <label className="field"><span>{quantityLabel("一般單價")}</span><input type="number" min={0} required value={nonmemberPrice} onChange={event => setNonmemberPrice(Number(event.target.value))} /></label>
-        <label className="field"><span>{quantityLabel("成團所需總數量")}</span><input required min={1} type="number" value={minQuantity} onChange={event => setMinQuantity(Number(event.target.value))} /></label>
         <label className="field"><span>{quantityLabel("供應上限")}</span><input required min={1} type="number" value={supplyCap} onChange={event => setSupplyCap(Number(event.target.value))} /></label>
         <label className="field"><span>{quantityLabel("每人限購數量")}</span><input required min={1} type="number" value={perUserCap} onChange={event => setPerUserCap(Number(event.target.value))} /></label>
-        <label className="field"><span>付款截止（台灣）</span><input type="datetime-local" required value={deadline} onChange={event => { setDeadline(event.target.value); if (!reviewEdited) setReviewDeadline(defaultReviewDeadline(event.target.value)); }} /></label>
+        <label className="field"><span>付款截止（台灣）</span><input type="datetime-local" required value={deadline} onChange={event => setDeadline(event.target.value)} /></label>
         <label className="field"><span>預計取貨開始（台灣）</span><input type="datetime-local" required value={pickupStart} onChange={event => setPickupStart(event.target.value)} /></label>
         <label className="field"><span>預計取貨結束（台灣）</span><input type="datetime-local" required value={pickupEnd} onChange={event => setPickupEnd(event.target.value)} /></label>
       </div>
-      <details className="campaign-reminder-settings"><summary>管理員處理提醒設定</summary><label className="field"><span>管理員處理提醒日（台灣）</span><input type="datetime-local" value={reviewDeadline} onChange={event => { setReviewEdited(true); setReviewDeadline(event.target.value); }} /></label></details>
       {memberPrice > nonmemberPrice && <p className="form-error">社員價不可高於一般價</p>}
-      {supplyCap < minQuantity && <p className="form-error">供應上限不可低於成團所需總數量</p>}
       {scheduleError && <p className="form-error" role="alert">{scheduleError}</p>}
       {create.isError && <p className="form-error" role="alert">{create.error.message}</p>}
-      <div className="form-actions"><button className="button button-quiet" type="button" disabled={create.isPending} onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={Boolean(scheduleError) || !targetReady || memberPrice > nonmemberPrice || supplyCap < minQuantity || create.isPending}>{create.isPending ? "正在建立…" : addingProduct ? "新增商品並開放共同購買" : "確認開放共同購買"}</button></div>
+      <div className="form-actions"><button className="button button-quiet" type="button" disabled={create.isPending} onClick={() => setOpen(false)}>取消</button><button className="button button-primary" disabled={Boolean(scheduleError) || !targetReady || memberPrice > nonmemberPrice || supplyCap < 1 || perUserCap < 1 || create.isPending}>{create.isPending ? "正在建立…" : addingProduct ? "新增商品並開放共同購買" : "確認開放共同購買"}</button></div>
     </form>}
   </section>;
 }
@@ -327,7 +292,7 @@ function CampaignCreateForm({ products, bundles, proposal, onDone, onAccessDenie
 function CampaignAdminCard({ campaign, products, onDone, onAccessDenied }: { campaign: GroupCampaign; products: Product[]; onDone: () => void; onAccessDenied: () => void }) {
   const now = useDeadlineClock(campaign.deadline);
   return <article className="admin-review-card group-proposal-card" aria-label={`共同購買 ${campaign.title}`}>
-    <div className="review-card-copy"><span className="status-chip">{campaignStatusLabel(campaign, now)}</span><h3>{campaign.title}</h3><p>已付款 {campaign.paid_quantity}/{campaign.min_paid_quantity} · 保留 {campaign.reserved_quantity} · 剩餘 {campaign.available_quantity}</p><progress className="admin-progress" max={campaign.min_paid_quantity} value={campaign.paid_quantity} /><small>{campaignDateTime(campaign.deadline)} 付款截止 · {campaign.can_ship ? "可配送" : "合作社取貨"}</small></div>
+    <div className="review-card-copy"><span className="status-chip">{campaignStatusLabel(campaign, now)}</span><h3>{campaign.title}</h3><p>已付款 {campaign.paid_quantity} · 保留 {campaign.reserved_quantity} · 剩餘 {campaign.available_quantity}</p><small>{campaignDateTime(campaign.deadline)} 付款截止 · {campaign.can_ship ? "可配送" : "合作社取貨"}</small></div>
     <Link to="/groups/$campaignId" params={{ campaignId: campaign.id }}>查看前台</Link>
     <CampaignTextEditor campaign={campaign} onDone={onDone} onAccessDenied={onAccessDenied} />
     <CatalogVisibilityControl kind="group" record={campaign} onDone={onDone} onDenied={onAccessDenied}/>
