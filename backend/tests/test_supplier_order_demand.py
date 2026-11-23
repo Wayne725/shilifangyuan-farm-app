@@ -97,7 +97,7 @@ async def test_regular_order_supplier_changes_amendment_and_missing_product(data
 
 
 @pytest.mark.asyncio
-async def test_preorder_and_legacy_group_direct_items_review_unknown_and_order_refunds(database_session):
+async def test_confirmed_group_direct_items_review_unknown_and_order_refunds(database_session):
     session = database_session
     context = await prepare_group(session)
     first = await session.get(Product, context.product_ids[0])
