@@ -210,9 +210,6 @@ class TokenResponse(ApiModel):
 
 class ProductRead(ApiModel):
     id: str
-    product_number: Optional[str] = None
-    sku: Optional[str] = None
-    supplier_id: Optional[str] = None
     supplier_name: Optional[str] = None
     slug: str
     name: str
@@ -230,6 +227,12 @@ class ProductRead(ApiModel):
     is_active: bool
     daily_sales_enabled: bool
     archived_at: Optional[datetime] = None
+
+
+class AdminProductRead(ProductRead):
+    product_number: Optional[str] = None
+    sku: Optional[str] = None
+    supplier_id: Optional[str] = None
 
 
 class ProductCreate(BaseModel):
@@ -391,7 +394,7 @@ class VoteUpsert(BaseModel):
 
 class ProposalRead(ApiModel):
     id: str
-    proposer_id: str
+    is_mine: bool
     target_type: ProposalTargetType
     target_id: Optional[str]
     target_name: str
@@ -1311,7 +1314,7 @@ class ActivityRead(ApiModel):
     payment_window_hours: int = 24
     updated_at: datetime
     id: str
-    created_by_id: str
+    is_mine: bool
     title: str
     description: str
     image_url: Optional[str]
@@ -1333,6 +1336,10 @@ class ActivityRead(ApiModel):
     @classmethod
     def utc_dates(cls, value):
         return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
+
+
+class AdminActivityRead(ActivityRead):
+    created_by_id: str
 
 
 class ProposalOptionInput(BaseModel):

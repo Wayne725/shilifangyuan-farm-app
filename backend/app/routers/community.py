@@ -51,6 +51,7 @@ from ..models import (
     UserRole,
 )
 from ..schemas import (
+    AdminActivityRead,
     AdminActivityRegistrationRead,
     ActivityCreate,
     ActivityRegistrationCreate,
@@ -154,12 +155,15 @@ def _activity_read(
         ),
         None,
     )
-    return ActivityRead(
+    is_mine = user is not None and user.id == activity.created_by_id
+    can_review = is_mine or (user is not None and user.user_role == UserRole.ADMIN)
+    return AdminActivityRead(
         is_public=activity.is_public,
         id=activity.id,
         member_price=activity.member_price, non_member_price=activity.non_member_price,
         payment_window_hours=activity.payment_window_hours, updated_at=activity_service.aware(activity.updated_at),
         created_by_id=activity.created_by_id,
+        is_mine=is_mine,
         title=activity.title,
         description=activity.description,
         image_url=activity.image_url,
@@ -170,13 +174,8 @@ def _activity_read(
         capacity=activity.capacity,
         waitlist_enabled=activity.waitlist_enabled,
         status=activity.status,
-        reviewed_at=activity.reviewed_at,
-        review_reason=(
-            activity.review_reason
-            if user is not None
-            and (user.id == activity.created_by_id or user.user_role == UserRole.ADMIN)
-            else None
-        ),
+        reviewed_at=activity.reviewed_at if can_review else None,
+        review_reason=activity.review_reason if can_review else None,
         registration_count=len(registered),
         available_capacity=max(0, activity.capacity - len(registered)),
         waitlist_count=len(waitlisted),
@@ -294,7 +293,7 @@ async def get_activity(
     return _activity_read(activity, user)
 
 
-@community_router.patch('/v1/admin/activities/{activity_id}/visibility', response_model=ActivityRead)
+@community_router.patch('/v1/admin/activities/{activity_id}/visibility', response_model=AdminActivityRead)
 async def update_activity_visibility(
     activity_id: str, body: CatalogVisibilityUpdate,
     admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
@@ -318,7 +317,7 @@ class ActivityDetailsUpdate(BaseModel):
     expected_updated_at: datetime
 
 
-@community_router.patch("/v1/admin/activities/{activity_id}", response_model=ActivityRead)
+@community_router.patch("/v1/admin/activities/{activity_id}", response_model=AdminActivityRead)
 async def edit_activity(
     activity_id: str, body: ActivityDetailsUpdate, admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
@@ -430,7 +429,7 @@ async def cancel_activity_registration(
 
 @community_router.get(
     "/v1/admin/activities",
-    response_model=list[ActivityRead],
+    response_model=list[AdminActivityRead],
 )
 async def admin_list_activities(
     admin: User = Depends(require_admin),
@@ -503,7 +502,7 @@ async def _review_activity(
 
 @community_router.post(
     "/v1/admin/activities/{activity_id}/approve",
-    response_model=ActivityRead,
+    response_model=AdminActivityRead,
 )
 async def approve_activity(
     activity_id: str,
@@ -522,7 +521,7 @@ async def approve_activity(
 
 @community_router.post(
     "/v1/admin/activities/{activity_id}/reject",
-    response_model=ActivityRead,
+    response_model=AdminActivityRead,
 )
 async def reject_activity(
     activity_id: str,
@@ -541,7 +540,7 @@ async def reject_activity(
 
 @community_router.post(
     "/v1/admin/activities/{activity_id}/cancel",
-    response_model=ActivityRead,
+    response_model=AdminActivityRead,
 )
 async def cancel_activity(
     activity_id: str,
@@ -598,7 +597,7 @@ async def cancel_activity(
 
 @community_router.post(
     "/v1/admin/activities/{activity_id}/complete",
-    response_model=ActivityRead,
+    response_model=AdminActivityRead,
 )
 async def complete_activity(
     activity_id: str,

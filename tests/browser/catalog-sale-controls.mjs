@@ -31,7 +31,7 @@ async function fixture(t, width, { role = 'admin', patchError = '', deferPatch =
     if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated', user: { id: 'admin', display_name: '隔離管理員', user_role: role, membership_type: 'nonmember' } } });
     if (path === '/v1/auth/line/status') return route.fulfill({ json: { ready: true, linked: false } });
     if (path === '/v1/platform' && request.method() === 'GET') return route.fulfill({ json: { orders_open: true } });
-    if (path === '/v1/products' && request.method() === 'GET') {
+    if (path === '/v1/admin/products' && request.method() === 'GET') {
       state.reads++;
       const archived = url.searchParams.get('archive') === 'archived';
       return route.fulfill({ json: state.items.filter(item => Boolean(item.archived_at) === archived) });

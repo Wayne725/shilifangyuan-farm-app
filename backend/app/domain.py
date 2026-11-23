@@ -135,6 +135,25 @@ def live_proposal_status(
     return ProposalStatus.VOTING
 
 
+def proposal_clock_state(
+    proposal: VoteProposal,
+    vote_count: int,
+    now: Optional[datetime] = None,
+) -> tuple[ProposalStatus, Optional[datetime]]:
+    current = now or utcnow()
+    next_status = live_proposal_status(proposal, vote_count, current)
+    conversion_deadline = proposal.conversion_deadline
+    if next_status == ProposalStatus.CONVERSION_PENDING:
+        if conversion_deadline is None:
+            hours = get_settings().proposal_conversion_hours
+            conversion_deadline = aware(
+                proposal.deadline or current
+            ) + timedelta(hours=hours)
+        if current >= aware(conversion_deadline):
+            next_status = ProposalStatus.EXPIRED_UNHANDLED
+    return next_status, conversion_deadline
+
+
 def apply_proposal_clock(
     proposal: VoteProposal,
     vote_count: int,

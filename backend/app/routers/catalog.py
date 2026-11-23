@@ -25,6 +25,7 @@ from ..models import (
     utcnow,
 )
 from ..schemas import (
+    AdminProductRead,
     BundleCreate,
     BundleItemRead,
     BundleRead,
@@ -94,9 +95,18 @@ async def get_product(
     return product
 
 
+@catalog_router.get("/v1/admin/products", response_model=List[AdminProductRead])
+async def admin_list_products(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    archive: Literal["current", "archived"] = "current",
+) -> List[Product]:
+    return await list_products(admin, session, archive)
+
+
 @catalog_router.post(
     "/v1/products",
-    response_model=ProductRead,
+    response_model=AdminProductRead,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_product(
@@ -128,7 +138,7 @@ async def create_product(
     )
 
 
-@catalog_router.patch("/v1/products/{product_id}", response_model=ProductRead)
+@catalog_router.patch("/v1/products/{product_id}", response_model=AdminProductRead)
 async def update_product(
     product_id: str,
     body: ProductUpdate,
@@ -184,7 +194,7 @@ class ProductArchiveUpdate(BaseModel):
     archived: bool
 
 
-@catalog_router.patch("/v1/admin/products/{product_id}/archive", response_model=ProductRead)
+@catalog_router.patch("/v1/admin/products/{product_id}/archive", response_model=AdminProductRead)
 async def archive_product(
     product_id: str, body: ProductArchiveUpdate, admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),

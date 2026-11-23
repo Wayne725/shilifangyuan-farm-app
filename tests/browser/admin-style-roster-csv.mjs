@@ -43,7 +43,7 @@ async function fixture(t, width, { invalid = false, role = 'admin', legacyPoints
   state.pointAdjustments = adjustments;
   const ledgerMember = { id: 'membership-one', source: 'membership', member_number: entry.member_number, legal_name: entry.legal_name, email: entry.email, status: 'active' };
   let receipt;
-  const emptyLists = ['/v1/products', '/v1/group-campaigns', '/v1/meal-events/calendar', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/admin/activity-refund-requests', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/notifications'];
+  const emptyLists = ['/v1/products', '/v1/admin/products', '/v1/group-campaigns', '/v1/meal-events/calendar', '/v1/admin/suppliers', '/v1/admin/pickup-locations', '/v1/admin/activities', '/v1/admin/member-proposals', '/v1/admin/membership-applications', '/v1/admin/activity-refund-requests', '/v1/wishes', '/v1/meetings', '/v1/admin/meetings', '/v1/notifications'];
   await context.route('**/*', (route) => {
     const request = route.request();
     const url = new URL(request.url());
