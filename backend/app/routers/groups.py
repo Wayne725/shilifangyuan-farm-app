@@ -399,8 +399,8 @@ async def update_campaign(
         if campaign.preorder_only:
             start = updates.get("estimated_pickup_start", aware(campaign.estimated_pickup_start))
             end = updates.get("estimated_pickup_end", aware(campaign.estimated_pickup_end))
-            if start < aware(campaign.deadline) or end < start:
-                raise HTTPException(status_code=422, detail="取貨開始不可早於預訂截止，取貨結束不可早於開始")
+            if end < aware(campaign.deadline) or end < start:
+                raise HTTPException(status_code=422, detail="取貨期間結束不可早於預訂截止，取貨結束不可早於開始")
         changes = {}
         for field, value in updates.items():
             previous = getattr(campaign, field)

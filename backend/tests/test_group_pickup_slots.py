@@ -99,3 +99,28 @@ async def test_admin_summary_groups_paid_orders_by_slot(campaign_context):
         ("每週三 11:30~13:00", 0, 0), ("每週五 11:30~13:00", 1, 2),
     ]
     assert summary[1]["orders"][0]["order_number"] == paid.json()["order_number"]
+
+
+@pytest.mark.asyncio
+async def test_monthly_preorder_pickup_can_run_during_ordering_but_not_end_before_deadline(campaign_context):
+    from datetime import datetime, timedelta, timezone
+
+    ctx = campaign_context
+    now = datetime.now(timezone.utc)
+    during = await create_campaign(ctx, pickup_slots=SLOTS, deadline=(now + timedelta(days=30)).isoformat(),
+                                   estimated_pickup_start=(now + timedelta(days=1)).isoformat(),
+                                   estimated_pickup_end=(now + timedelta(days=30)).isoformat())
+    assert during.status_code == 201, during.text
+    ends_early = await create_campaign(ctx, pickup_slots=SLOTS, deadline=(now + timedelta(days=30)).isoformat(),
+                                       estimated_pickup_start=(now + timedelta(days=1)).isoformat(),
+                                       estimated_pickup_end=(now + timedelta(days=29)).isoformat())
+    assert ends_early.status_code == 422
+    assert "取貨期間結束不可早於付款截止" in ends_early.text
+    path = f"/v1/group-campaigns/{during.json()['id']}"
+    admin = auth_headers(ctx["admin"])
+    shortened = await ctx["client"].patch(path, headers=admin, json={
+        "estimated_pickup_end": (now + timedelta(days=29)).isoformat(), "expected_updated_at": during.json()["updated_at"]})
+    assert shortened.status_code == 422
+    moved = await ctx["client"].patch(path, headers=admin, json={
+        "estimated_pickup_start": (now + timedelta(hours=2)).isoformat(), "expected_updated_at": during.json()["updated_at"]})
+    assert moved.status_code == 200, moved.text
