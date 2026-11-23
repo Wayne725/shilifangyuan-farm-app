@@ -107,3 +107,17 @@ test('共同購買改量後報價失敗不沿用前次單價及總額', async t 
   assert.equal(await page.getByRole('button', { name: '參加並前往付款' }).isDisabled(), true);
   await verify(page, state);
 });
+
+test('共同購買平常不顯示每人上限，加到上限才提示', async t => {
+  const { page, state } = await fixture(t, { width: 390 });
+  await priceRow(page).getByText('一般單價', { exact: true }).waitFor();
+  const quantity = page.locator('.offer-quantity');
+  assert.equal(await quantity.getByText(/上限|剩餘供應/).count(), 0);
+  const plus = page.getByRole('button', { name: '增加數量', exact: true });
+  for (let step = 1; step < 5; step++) await plus.click();
+  await quantity.getByText('已達每人上限 5 份', { exact: true }).waitFor();
+  assert.equal(await plus.isDisabled(), true);
+  await page.getByRole('button', { name: '減少數量', exact: true }).click();
+  assert.equal(await quantity.getByText(/上限|剩餘供應/).count(), 0);
+  await verify(page, state);
+});
