@@ -533,6 +533,8 @@ test('晚餐僅准16:30至18:00半小時時段，非法跨午夜時間不報價�
 
 test('手機從日期摘要選時段後才讀完整菜單，原時段帶入一般便當報價、建單與付款', { timeout: 25000 }, async (t) => {
   const { page, state } = await scheduleFixture(t);
+  const dinner = state.events.find(event => event.id === 'scheduled-dinner');
+  dinner.offerings.push({ ...dinner.offerings[0], id: 'sold-out-offering', meal_id: 'sold-out-meal', meal_name: '已售完合成便當', available_quantity: 0 });
   await page.goto(`${base}/shop`);
   const slot = page.getByRole('link', { name: '隔離取餐區 18:00 取餐', exact: true });
   await slot.waitFor();
@@ -540,6 +542,10 @@ test('手機從日期摘要選時段後才讀完整菜單，原時段帶入一�
   await slot.click();
   const meal = page.getByRole('button', { name: '增加隔離每日便當', exact: true });
   await meal.waitFor();
+  await page.getByText('已售完', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '增加已售完合成便當', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByText(/剩餘\s*\d+\s*份/).count(), 0);
+  await captureMealScreenshot(page, 'meal-menu-without-remaining-mobile.png');
   assert.ok(state.reads.includes('/v1/meal-events/scheduled-dinner'));
   assert.equal(await page.getByRole('combobox', { name: '開票時機', exact: true }).count(), 0);
   const quote = page.waitForResponse(response => response.url().endsWith('/quote'));

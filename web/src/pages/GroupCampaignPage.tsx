@@ -26,7 +26,7 @@ import {
   shippingChannelLabels,
   temperatureLabels,
 } from "../lib/commerce";
-import { campaignAccessDenied, campaignDateTime, campaignOrderBlockReason, campaignStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
+import { campaignAccessDenied, campaignDateTime, campaignOrderBlockReason, publicCampaignStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
 import { clearGroupSubmission, groupQuoteIsConfirmed, groupSubmissionWasRejected, prepareGroupSubmission, readGroupSubmission, type GroupQuote, type GroupSubmission } from "../lib/group-submission";
 import type { GroupCampaign, PickupLocation, ShippingChannel } from "../lib/types";
@@ -205,7 +205,7 @@ export function GroupCampaignPage() {
       <div className="offer-hero">
         <div className="offer-image">
           <img src={resolveAsset(item.image_url)} alt={item.title} onError={replaceBrokenAsset} />
-          <span>{campaignStatusLabel(item, now)}</span>
+          <span>{publicCampaignStatusLabel(item, now)}</span>
         </div>
         <div className="offer-copy">
           <p className="eyebrow">BUYING TOGETHER / 共同購買</p>

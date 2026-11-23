@@ -24,7 +24,7 @@ def new_campaign_payload(**overrides):
 
 
 async def custom_proposal(ctx):
-    response = await ctx["client"].post("/v1/vote-proposals", headers=auth_headers(ctx["proposer"]), json={
+    response = await ctx["client"].post("/v1/vote-proposals", headers=auth_headers(ctx["admin"]), json={
         "target_type": "custom", "request_name": "高麗菜", "request_details": "需要一些高麗菜",
     })
     assert response.status_code == 200, response.text

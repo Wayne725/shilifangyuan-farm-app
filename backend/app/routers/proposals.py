@@ -237,7 +237,7 @@ async def get_proposal(
 )
 async def create_proposal(
     body: ProposalCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ProposalRead:
     is_custom = body.target_type == ProposalTargetType.CUSTOM

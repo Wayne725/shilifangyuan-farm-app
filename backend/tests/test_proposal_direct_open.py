@@ -51,7 +51,7 @@ async def test_admin_can_open_pending_proposal_without_votes_once(campaign_conte
     # Retire the fixture's open proposal so the product submission creates a new pending request.
     ctx["proposal"].status = ProposalStatus.REJECTED
     await session.commit()
-    proposal = (await client.post("/v1/vote-proposals", headers=auth_headers(ctx["proposer"]), json=payload)).json()
+    proposal = (await client.post("/v1/vote-proposals", headers=auth_headers(ctx["admin"]), json=payload)).json()
     assert proposal["status"] == "pending_review" and proposal["vote_count"] == 0
     path = f"/v1/vote-proposals/{proposal['id']}/admin/open-direct"
     body = campaign_payload(ctx["product"].id, member_price=450, nonmember_price=500)

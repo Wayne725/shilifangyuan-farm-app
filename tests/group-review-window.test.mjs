@@ -12,7 +12,7 @@ for (const name of ["meal-time", "group-campaigns", "order-quantity-amendments"]
   vm.runInNewContext(ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText, { exports, require: path => modules[path], Date, Intl });
   modules[`./${name}`] = exports;
 }
-const { campaignTimestamp, campaignDateTime, defaultReviewDeadline, campaignOrderBlockReason, campaignStatusLabel, campaignConfirmBlockReason, campaignScheduleError, retryCampaignRead } = modules["./group-campaigns"];
+const { campaignTimestamp, campaignDateTime, defaultReviewDeadline, campaignOrderBlockReason, campaignStatusLabel, publicCampaignStatusLabel, campaignConfirmBlockReason, campaignScheduleError, retryCampaignRead } = modules["./group-campaigns"];
 const now = Date.parse("2030-01-02T02:00:00Z");
 const campaign = {deadline:"2030-01-03T00:00:00Z",decision_status:"recruiting",intake_status:"open",paid_quantity:12,min_paid_quantity:10,available_quantity:8,threshold_version:2,can_confirm:false};
 
@@ -27,6 +27,10 @@ test("達標不提前停收，截止當下拒絕接單；歷史已確認仍保�
   assert.equal(campaignOrderBlockReason({...campaign,decision_status:"confirmed"},now), "");
   assert.ok(campaignOrderBlockReason(campaign,campaignTimestamp(campaign.deadline)));
   assert.ok(campaignOrderBlockReason({...campaign,intake_status:"full"},now));
+  const ended = {...campaign,decision_status:"failed_unmet",intake_status:"closed"};
+  assert.equal(publicCampaignStatusLabel(ended,now), "已結束");
+  assert.equal(campaignStatusLabel(ended,now), "未達門檻");
+  assert.ok(campaignOrderBlockReason(ended,now));
 });
 test("成團必須API授權、已截止、已結算且有有效付款", () => {
   const ready={...campaign,deadline:"2030-01-01T00:00:00Z",decision_status:"pending_confirmation",intake_status:"closed",can_confirm:true};

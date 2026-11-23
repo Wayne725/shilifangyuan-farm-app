@@ -39,6 +39,10 @@ export function campaignStatusLabel(campaign: GroupCampaign, now = Date.now()) {
   return campaign.paid_quantity >= campaign.min_paid_quantity ? "已達門檻，持續集單" : "集單中";
 }
 
+export function publicCampaignStatusLabel(campaign: GroupCampaign, now = Date.now()) {
+  return campaign.decision_status === "failed_unmet" ? "已結束" : campaignStatusLabel(campaign, now);
+}
+
 export function campaignConfirmBlockReason(campaign: GroupCampaign, now = Date.now()) {
   if (!Number.isFinite(campaignTimestamp(campaign.deadline))) return "付款截止時間待確認";
   if (campaignTimestamp(campaign.deadline) > now) return "付款截止後開放審核";

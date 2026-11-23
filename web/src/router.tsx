@@ -323,6 +323,9 @@ const groupVoteDetailRoute = createRoute({
 const newGroupVoteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/group-votes/new",
+  beforeLoad: () => {
+    throw redirect({ to: "/shop", search: { tab: "groups" }, replace: true });
+  },
   component: page("./pages/GroupVotePages", "NewGroupVotePage"),
 });
 

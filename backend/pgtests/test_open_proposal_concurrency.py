@@ -13,11 +13,11 @@ from tests.support import auth_headers
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["product", "bundle", "custom"])
-async def test_two_authors_cannot_create_duplicate_open_target(postgres_sessions, target):
+async def test_two_admins_cannot_create_duplicate_open_target(postgres_sessions, target):
     postgres_sessions.configure(autoflush=False)
     async with postgres_sessions() as session:
         engine = session.bind
-        authors = [User(email=f"target-author-{index}@example.com", display_name=f"買家{index}", password_hash="test") for index in range(2)]
+        authors = [User(email=f"target-author-{index}@example.com", display_name=f"管理員{index}", password_hash="test", user_role=UserRole.ADMIN) for index in range(2)]
         product = Product(slug="open-target", name="共同購買商品", category="測試", unit="份", member_price=100, nonmember_price=100, stock_quantity=10)
         session.add_all([*authors, product])
         await session.flush()
@@ -54,12 +54,8 @@ async def test_two_authors_cannot_create_duplicate_open_target(postgres_sessions
             async with data_api(session) as client:
                 return await client.post("/v1/vote-proposals", headers=auth_headers(authors[slot-1]), json=body)
     replies = await asyncio.wait_for(asyncio.gather(perform(1), perform(2)), 25)
-    if target == "custom":
-        assert [reply.status_code for reply in replies] == [200, 200]
-    else:
-        assert sorted(reply.status_code for reply in replies) == [200, 409], [reply.text for reply in replies]
-        private = next(reply for reply in replies if reply.status_code == 409)
-        assert "proposer_id" not in private.text and "review_reason" not in private.text
+    assert [reply.status_code for reply in replies] == [200, 200], [reply.text for reply in replies]
+    assert (replies[0].json()["id"] == replies[1].json()["id"]) is (target != "custom")
     async with postgres_sessions() as session:
         expected = 2 if target == "custom" else 1
         assert await session.scalar(select(func.count(VoteProposal.id))) == expected
@@ -71,8 +67,8 @@ async def test_expired_target_close_and_recreate_have_no_commit_window(postgres_
     postgres_sessions.configure(autoflush=False)
     async with postgres_sessions() as session:
         engine = session.bind
-        author = User(email="clock-author@example.com", display_name="原作者", password_hash="test")
-        other = User(email="clock-other@example.com", display_name="另一買家", password_hash="test")
+        author = User(email="clock-author@example.com", display_name="原作者", password_hash="test", user_role=UserRole.ADMIN)
+        other = User(email="clock-other@example.com", display_name="另一管理員", password_hash="test", user_role=UserRole.ADMIN)
         product = Product(slug="clock-target", name="截止商品", category="測試", unit="份", member_price=100, nonmember_price=100, stock_quantity=10)
         session.add_all([author, other, product])
         await session.flush()
@@ -112,7 +108,8 @@ async def test_expired_target_close_and_recreate_have_no_commit_window(postgres_
             if slot == 2:
                 second_done.set()
     replies = await asyncio.wait_for(asyncio.gather(perform(1), perform(2)), 25)
-    assert sorted(reply.status_code for reply in replies) == [200, 409]
+    assert [reply.status_code for reply in replies] == [200, 200], [reply.text for reply in replies]
+    assert replies[0].json()["id"] == replies[1].json()["id"]
     assert commits[0] == 1
     async with postgres_sessions() as session:
         assert await session.scalar(select(func.count(VoteProposal.id)).where(VoteProposal.status == ProposalStatus.PENDING_REVIEW)) == 1
@@ -129,25 +126,30 @@ async def test_existing_pending_target_privacy_and_public_reuse_are_consistent(p
         product = Product(slug="private-target", name="待審商品", category="測試", unit="份", member_price=100, nonmember_price=100, stock_quantity=10)
         session.add_all([author, reader, admin, product])
         await session.commit()
+        proposal = VoteProposal(proposer_id=author.id, target_type="product", target_id=product.id,
+                                target_name_snapshot=product.name, status=ProposalStatus.PENDING_REVIEW)
+        session.add(proposal)
+        await session.commit()
         body = {"target_type": "product", "target_id": product.id}
     async def request(user, method="POST", path="/v1/vote-proposals", payload=body):
         async with postgres_sessions() as session:
             async with data_api(session) as client:
                 return await client.request(method, path, headers=auth_headers(user), json=payload)
-    first = await request(author)
+    proposal_id = proposal.id
+    first = await request(author, "GET", f"/v1/vote-proposals/{proposal_id}", None)
     assert first.status_code == 200
-    proposal_id = first.json()["id"]
     hidden = await request(reader, "GET", f"/v1/vote-proposals/{proposal_id}", None)
     assert hidden.status_code == 404
     conflict = await request(reader)
-    assert conflict.status_code == 409
+    assert conflict.status_code == 403
     assert proposal_id not in conflict.text and author.id not in conflict.text
-    for user in (author, admin):
-        recovered = await request(user)
-        assert recovered.status_code == 200 and recovered.json()["id"] == proposal_id
+    assert (await request(author)).status_code == 403
+    recovered = await request(admin)
+    assert recovered.status_code == 200 and recovered.json()["id"] == proposal_id
     approved = await request(admin, path=f"/v1/vote-proposals/{proposal_id}/admin/approve", payload={"threshold": 1})
     assert approved.status_code == 200
-    public = await request(reader)
+    assert (await request(reader)).status_code == 403
+    public = await request(reader, "GET", f"/v1/vote-proposals/{proposal_id}", None)
     assert public.status_code == 200 and public.json()["id"] == proposal_id
     voted = await request(reader, "PUT", f"/v1/vote-proposals/{proposal_id}/vote", {"estimated_quantity": 1})
     assert voted.status_code == 200
@@ -157,18 +159,18 @@ async def test_existing_pending_target_privacy_and_public_reuse_are_consistent(p
         proposal.deadline = datetime.now(timezone.utc)-timedelta(seconds=1)
         proposal.conversion_deadline = datetime.now(timezone.utc)+timedelta(hours=1)
         await session.commit()
-    conversion = await request(reader)
+    conversion = await request(reader, "GET", f"/v1/vote-proposals/{proposal_id}", None)
     assert conversion.status_code == 200 and conversion.json()["id"] == proposal_id
     assert conversion.json()["status"] == "conversion_pending"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("same_author", [False, True])
-async def test_partial_unique_upsert_recovers_unlocked_writer_without_leaking_private_target(postgres_sessions, same_author):
+async def test_partial_unique_upsert_recovers_unlocked_writer_for_admin(postgres_sessions, same_author):
     postgres_sessions.configure(autoflush=False)
     async with postgres_sessions() as session:
         engine = session.bind
-        requester = User(email="upsert-requester@example.com", display_name="買家", password_hash="test")
+        requester = User(email="upsert-requester@example.com", display_name="管理員", password_hash="test", user_role=UserRole.ADMIN)
         other = User(email="upsert-writer@example.com", display_name="另一買家", password_hash="test")
         product = Product(slug="upsert-target", name="競態商品", category="測試", unit="份", member_price=100, nonmember_price=100, stock_quantity=10)
         session.add_all([requester, other, product])
@@ -195,11 +197,8 @@ async def test_partial_unique_upsert_recovers_unlocked_writer_without_leaking_pr
     async with LateWriterSession(engine, expire_on_commit=False, autoflush=False) as session:
         async with data_api(session) as client:
             reply = await client.post("/v1/vote-proposals", headers=auth_headers(requester), json=body)
-    assert reply.status_code == (200 if same_author else 409), reply.text
-    if same_author:
-        assert reply.json()["id"] == winner_id
-    else:
-        assert winner_id not in reply.text and other.id not in reply.text
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["id"] == winner_id
     async with postgres_sessions() as session:
         assert await session.scalar(select(func.count(VoteProposal.id))) == 1
         assert await session.scalar(select(func.count(OutboxEvent.id)).where(OutboxEvent.event_type == "proposal.review_requested")) == 1

@@ -10,15 +10,14 @@ import { groupProposalStatusLabel } from "../lib/group-campaigns";
 import type { GroupBundle, GroupVoteProposal, Product } from "../lib/types";
 
 export function GroupVotesPage() {
-  const { user, openLogin } = useAuth();
   const proposals = useQuery({ queryKey: ["group-vote-proposals"], queryFn: () => apiFetch<GroupVoteProposal[]>("/v1/vote-proposals") });
   return (
     <section className="social-page-shell group-votes-page">
-      <header className="social-page-heading"><div><p className="eyebrow">GROUP VOTING / 共同購買需求投票</p><h1>先確認需求，再一起購買</h1></div>{user ? <Link className="button button-system" to="/group-votes/new">發起投票</Link> : <button className="button button-system" type="button" onClick={openLogin}>登入後發起</button>}</header>
+      <header className="social-page-heading"><div><p className="eyebrow">GROUP VOTING / 共同購買投票紀錄</p><h1>共同購買投票紀錄</h1></div></header>
       <div className="group-vote-note"><UsersThree size={23} weight="light" /><p>投票只代表需求估計，不會產生訂單或扣款。管理端審核與供應確認後才會建立正式共同購買。</p></div>
       {proposals.isPending && <LoadingLines count={4} />}
       {proposals.isError && <DataState kind="error" title="共同購買投票無法讀取" detail={proposals.error.message} />}
-      {proposals.data?.length === 0 && <DataState title="目前沒有投票" detail="可選擇現有商品、套組或提出其他需求。" />}
+      {proposals.data?.length === 0 && <DataState title="目前沒有投票紀錄" detail="" />}
       <div className="group-vote-list">
         {proposals.data?.map((proposal) => {
           return <Link key={proposal.id} to="/group-votes/$proposalId" params={{ proposalId: proposal.id }}><span className="status-chip">{groupProposalStatusLabel(proposal.status)}</span><div><h2>{proposal.target_name}</h2><p>{proposal.vote_count} 人支持 · 預估 {proposal.estimated_quantity} 組</p></div><progress className="group-vote-progress" max={proposal.threshold} value={proposal.vote_count} /><small>{proposal.deadline ? `${formatDateTime(proposal.deadline)} 截止` : "審核後設定截止時間"}</small><ArrowRight size={20} weight="light" /></Link>;

@@ -15,7 +15,7 @@ const base = testUrl.origin;
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const tabs = [
   { name: '便當預購', heading: '選取餐時間', value: 'meals' },
-  { name: '共同購買', heading: '把需求聚在一起', value: 'groups' },
+  { name: '共同購買', heading: '每月共同購買', value: 'groups' },
   { name: '日常選品', heading: '合作社選品', value: 'products' },
 ];
 const event = {
@@ -83,6 +83,15 @@ async function fixture(t, { width = 390, calendarStatus = 200, products = [], an
 }
 
 for (const width of [1440, 390]) {
+  test(`${width}px 舊需求發起網址回到共同購買且不送出提案`, async t => {
+    const { page, mutations, unknownApi } = await fixture(t, { width });
+    await page.goto(`${base}/group-votes/new`);
+    await page.waitForURL(url => url.pathname === '/shop' && url.searchParams.get('tab') === 'groups');
+    await page.getByRole('heading', { name: '每月共同購買', exact: true }).waitFor();
+    assert.equal(await page.locator('.new-group-vote').count(), 0);
+    assert.deepEqual(mutations, []);
+    assert.deepEqual(unknownApi, []);
+  });
   test(`${width}px 便當預設顯示時段並定時更新，其他分頁載入與停留皆不讀取便當`, { timeout: 30000 }, async (t) => {
     const { page, mealReads, mutations, unknownApi } = await fixture(t, { width });
     await page.goto(`${base}/shop?tab=products`);
@@ -120,7 +129,10 @@ for (const width of [1440, 390]) {
       const panel = page.getByRole('tabpanel', { name, exact: true });
       await panel.getByRole('heading', { name: heading, exact: true }).waitFor();
       assert.equal(await page.getByRole('tabpanel').count(), 1);
-      if (name === '共同購買') await page.getByRole('heading', { name: '共同購買', exact: true }).waitFor();
+      if (name === '共同購買') {
+        await page.getByRole('heading', { name: '共同購買', exact: true }).waitFor();
+        assert.equal(await panel.locator('a[href^="/group-votes"]').count(), 0);
+      }
     }
     const readsBeforeLeavingMeals = mealReads.length;
     await page.clock.fastForward(122_000);

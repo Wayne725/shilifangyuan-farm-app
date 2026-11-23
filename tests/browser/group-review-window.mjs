@@ -210,8 +210,23 @@ test('只調整取貨視窗也帶共同版本，409不覆蓋另一位管理員�
 test('審核服務失敗保留例外原因與取貨時間，可明確重試',async t=>{
   const {page,state,visit}=await fixture(t,{campaign:{...pending,paid_quantity:6}});await visit();const form=await openReview(page);await form.getByLabel('未達原門檻，仍確認成團').check();await form.getByLabel('例外成團原因').fill('六份出貨');state.failWrite={status:503,message:'隔離暫時無法儲存'};await form.getByRole('button',{name:'例外確認成團'}).click();await form.getByText('隔離暫時無法儲存',{exact:true}).waitFor();assert.equal(await form.getByLabel('例外成團原因').inputValue(),'六份出貨');assert.equal(state.writes.length,1);assert.equal(state.campaign.decision_status,'pending_confirmation');await form.getByRole('button',{name:'例外確認成團'}).click();await page.getByText('共同購買已確認成團',{exact:true}).waitFor();assert.equal(state.writes.length,2);await clean(page,state);
 });
-for(const width of [1280,390])test(`顧客截止後審核狀態 ${width}px`,async t=>{
-  const {page,state,visit}=await fixture(t,{role:'customer',width,path:'/groups/campaign'});await visit();await page.getByText('已截止，等待管理員審核',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'參加並前往付款'}).isDisabled(),true);assert.equal(await page.locator('.offer-total dd').innerText(),'—');if(process.env.BROWSER_ARTIFACT_DIR){await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:`${process.env.BROWSER_ARTIFACT_DIR}/group-customer-closed-${width}.png`,fullPage:true});}assert.deepEqual(state.writes,[]);await clean(page,state);
+for(const width of [1280,390])for(const ended of [false,true])test(`顧客${ended?'已結束':'截止後審核'}狀態 ${width}px`,async t=>{
+  const {page,state,visit}=await fixture(t,{role:'customer',width,path:ended?'/shop?tab=groups':'/groups/campaign',campaign:ended?{...pending,decision_status:'failed_unmet'}:pending});
+  await visit();
+  if(ended){
+    await page.getByRole('heading',{name:'每月共同購買',exact:true}).waitFor();
+    const listing=page.locator('.editorial-card');
+    await listing.getByText('已結束',{exact:true}).waitFor();
+    assert.equal(await page.locator('a[href^="/group-votes"]').count(),0);
+    if(process.env.BROWSER_ARTIFACT_DIR)await page.screenshot({path:`${process.env.BROWSER_ARTIFACT_DIR}/monthly-buying-${width}.png`,fullPage:true});
+    await listing.getByRole('link').click();
+  }
+  await page.getByText(ended?'此共同購買已停止接單':'已截止，等待管理員審核',{exact:true}).waitFor();
+  if(ended){await page.getByText('已結束',{exact:true}).waitFor();assert.equal(await page.getByText('未達門檻',{exact:true}).count(),0);}
+  assert.equal(await page.getByRole('button',{name:'參加並前往付款'}).isDisabled(),true);
+  assert.equal(await page.locator('.offer-total dd').innerText(),'—');
+  if(process.env.BROWSER_ARTIFACT_DIR){await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:`${process.env.BROWSER_ARTIFACT_DIR}/group-customer-${ended?'ended':'closed'}-${width}.png`,fullPage:true});}
+  assert.deepEqual(state.quotes,[]);assert.deepEqual(state.writes,[]);await clean(page,state);
 });
 
 test('提案投票與正式共同購買的時間輸入都固定台灣時區',async t=>{
