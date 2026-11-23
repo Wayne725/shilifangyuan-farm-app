@@ -49,6 +49,8 @@ from ..models import (
     GroupDecisionStatus,
     GroupIntakeStatus,
     InventoryReservation,
+    InvoiceBuyerType,
+    MembershipType,
     Order,
     OrderFulfillment,
     OrderItem,
@@ -559,6 +561,10 @@ async def _group_join_quote(session, campaign, body, user, *, target_snapshot=No
     except DomainError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     membership_type = membership_type_for_user(user)
+    if membership_type != MembershipType.MEMBER:
+        raise HTTPException(status_code=403, detail="共同購買僅限正式社員參加", headers={"X-Error-Code": "group_members_only"})
+    if body.invoice_buyer_type != InvoiceBuyerType.PERSONAL:
+        raise HTTPException(status_code=422, detail="共同購買一律開立社員免稅個人發票，不提供公司統編發票")
     unit_price = price_for_membership(
         campaign.member_price,
         campaign.nonmember_price,

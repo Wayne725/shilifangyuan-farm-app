@@ -37,7 +37,7 @@ from app.models import (
 )
 from app.routers.groups import groups_router
 from app.routers.proposals import proposals_router
-from tests.support import api_test_context, auth_headers
+from tests.support import api_test_context, auth_headers, active_member
 
 
 def campaign_payload(product_id: str, **overrides) -> dict:
@@ -102,7 +102,7 @@ async def campaign_context(database_session):
             effective_from=date.today() - timedelta(days=1),
             is_active=True,
         )
-        session.add_all([admin, proposer, product, shipping_rate])
+        session.add_all([admin, active_member(proposer), product, shipping_rate])
         await session.flush()
         proposal = VoteProposal(
             proposer_id=proposer.id,
@@ -193,15 +193,15 @@ async def test_group_quote_uses_server_membership_and_shipping_rate(
     actual_quote = quoted.json()
     assert len(actual_quote.pop("confirmation_fingerprint")) == 64
     assert actual_quote == {
-        "membership_type": "nonmember",
-        "member_tax_exempt": False,
+        "membership_type": "member",
+        "member_tax_exempt": True,
         "tax_type": "tax_exempt",
-        "tax_amount": 7,
+        "tax_amount": 0,
         "quantity": 2,
-        "unit_price": 520,
-        "product_subtotal": 1040,
+        "unit_price": 480,
+        "product_subtotal": 960,
         "shipping_fee": 160,
-        "amount_total": 1200,
+        "amount_total": 1120,
     }
 
 
@@ -235,7 +235,7 @@ async def test_group_join_preserves_logistics_intent_before_picker(
     assert joined.status_code == 201, joined.text
     body = joined.json()
     assert body["fulfillment"]["method"] == "ecpay_logistics"
-    assert body["amount_total"] == 1040
+    assert body["amount_total"] == 960
     assert "pay" not in body["available_actions"]
 
 

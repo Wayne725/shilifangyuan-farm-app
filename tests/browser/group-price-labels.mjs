@@ -15,7 +15,7 @@ const campaign = {
   preorder_only: true, decision_status: 'confirmed', intake_status: 'open', can_ship: false, allowed_shipping_channels: [],
 };
 
-async function fixture(t, { membership = 'nonmember', width = 1280, deferred = false, fail = false, slots = null } = {}) {
+async function fixture(t, { membership = 'nonmember', width = 1280, deferred = false, fail = false, slots = null, userMembership = 'member' } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 950 }, serviceWorkers: 'block' });
@@ -27,7 +27,7 @@ async function fixture(t, { membership = 'nonmember', width = 1280, deferred = f
     if (url.origin !== base) return route.abort();
     if (!path.startsWith('/v1/')) return request.method() === 'GET' ? route.continue() : route.abort();
     if (path === '/v1/auth/refresh') return route.fulfill({ json: {
-      access_token: 'isolated', user: { id: 'buyer', display_name: '隔離買家', email: 'buyer@example.test', user_role: 'customer', membership_type: membership === 'nonmember' ? 'member' : 'nonmember' },
+      access_token: 'isolated', user: { id: 'buyer', display_name: '隔離買家', email: 'buyer@example.test', user_role: 'customer', membership_type: userMembership },
     } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, group_orders_enabled: true, regular_orders_enabled: true, shipping_enabled: false } });
     if (path === '/v1/group-campaigns/campaign') return route.fulfill({ json: slots ? { ...campaign, pickup_slots: slots } : campaign });
@@ -142,5 +142,23 @@ test('共同購買平常不顯示每人上限，加到上限才提示', async t 
   assert.equal(await plus.isDisabled(), true);
   await page.getByRole('button', { name: '減少數量', exact: true }).click();
   assert.equal(await quantity.getByText(/上限|剩餘供應/).count(), 0);
+  await verify(page, state);
+});
+
+for (const userMembership of ['nonmember', 'trainee']) test(`共同購買僅限正式社員：${userMembership} 不能報價或付款`, async t => {
+  const { page, state } = await fixture(t, { width: 390, userMembership });
+  await page.getByText('共同購買僅限正式社員參加', { exact: false }).first().waitFor();
+  assert.equal(await page.getByRole('link', { name: '了解如何加入社員' }).getAttribute('href'), '/membership');
+  assert.equal(await page.getByRole('button', { name: '參加並前往付款' }).isDisabled(), true);
+  assert.deepEqual(state.quotes, []);
+  await verify(page, state);
+});
+
+test('共同購買只開社員免稅個人發票，不提供統編', async t => {
+  const { page, state } = await fixture(t, { width: 390 });
+  await priceRow(page).getByText('一般單價', { exact: true }).waitFor();
+  await page.getByText('社員免稅個人電子發票', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('radio', { name: '公司統編發票' }).count(), 0);
+  assert.ok(state.quotes.every(quote => quote.invoice_buyer_type === 'personal'));
   await verify(page, state);
 });

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 import app.routers.logistics as logistics_module
@@ -211,6 +211,20 @@ async def stored_order(session, order_id):
     )
 
 
+def group_members_only(channel, membership_state="active", buyer_type="personal"):
+    return channel == "group" and (membership_state != "active" or buyer_type != "personal")
+
+
+async def assert_group_rejected(database_session, context):
+    headers = auth_headers(context.user)
+    async with api_test_context(database_session, ROUTERS, settings=tax_settings()) as client:
+        quote = await client.post(context.quote_path, json=context.payload, headers=headers)
+        created = await client.post(context.create_path, json=context.payload, headers=headers)
+    assert quote.status_code in {403, 422}, quote.text
+    assert created.status_code in {403, 422}, created.text
+    assert await database_session.scalar(select(func.count(Order.id))) == 0
+
+
 async def quote_and_create(client, context):
     headers = auth_headers(context.user)
     quote = await client.post(context.quote_path, json=context.payload, headers=headers)
@@ -251,6 +265,9 @@ async def test_checkout_quote_order_snapshot_and_fanyu_share_tax_policy(
         buyer_type=buyer_type,
         base_tax_type=base_tax_type,
     )
+    if group_members_only(channel, membership_state, buyer_type):
+        await assert_group_rejected(database_session, context)
+        return
     async with api_test_context(database_session, ROUTERS, settings=tax_settings()) as client:
         quote, created = await quote_and_create(client, context)
     order = await stored_order(database_session, created["id"])
@@ -334,6 +351,9 @@ async def test_paid_order_tax_snapshot_survives_membership_and_catalog_changes(
     database_session, channel, initial_state
 ):
     context = await checkout_context(database_session, channel, membership_state=initial_state)
+    if group_members_only(channel, initial_state):
+        await assert_group_rejected(database_session, context)
+        return
     async with api_test_context(database_session, ROUTERS, settings=tax_settings()) as client:
         _quote, created = await quote_and_create(client, context)
     order = await stored_order(database_session, created["id"])
@@ -406,6 +426,9 @@ async def test_shipping_selection_and_changed_channel_recompute_order_tax_from_s
     database_session, monkeypatch, channel, membership_state, buyer_type, base_tax_type, expected_member_exempt
 ):
     context = await checkout_context(database_session, channel, membership_state=membership_state, buyer_type=buyer_type, base_tax_type=base_tax_type)
+    if group_members_only(channel, membership_state, buyer_type):
+        await assert_group_rejected(database_session, context)
+        return
     product_tax = 0 if expected_member_exempt or base_tax_type == TaxType.TAX_EXEMPT else 5
     database_session.add_all([
         ShippingRate(channel=ShippingChannel.HOME_DELIVERY, temperature=ShippingTemperature.AMBIENT, fee=105, free_shipping_threshold=1000, effective_from=date.today() - timedelta(days=1), is_active=True),

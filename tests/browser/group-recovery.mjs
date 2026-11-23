@@ -34,7 +34,7 @@ async function fixture(t, { loseResponse = false, blockedStorage = false, loseBe
       assert.ok(file.startsWith(`${root}/`));
       return route.fulfill({ contentType: types[extname(file)] || 'application/octet-stream', body: await readFile(file) });
     }
-    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-group', user: { id: state.userId, email: 'buyer@example.com', display_name: state.userId, membership_type: 'nonmember', user_role: 'customer' } } });
+    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-group', user: { id: state.userId, email: 'buyer@example.com', display_name: state.userId, membership_type: 'member', user_role: 'customer' } } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: state.open, closed_message: '暫停接單' } });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'group-pickup', name: '合作社取貨點', is_active: true }] });
     if (path === '/v1/group-campaigns/recovery-group') return state.campaignError ? route.fulfill({ status: 404, json: { detail: '共同購買暫時無法讀取' } }) : route.fulfill({ json: { ...campaign, ...(shipping ? { can_ship: true, shipping_temperature: 'ambient', allowed_shipping_channels: ['home_delivery'] } : {}), available_quantity: state.open ? 20 : 0, intake_status: state.open ? 'open' : 'closed' } });

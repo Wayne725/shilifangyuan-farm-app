@@ -15,7 +15,7 @@ import uvicorn
 
 from app.config import get_settings
 from app.database import get_session
-from app.models import GroupCampaign, InventoryReservation, Membership, Notification, Order, OrderFulfillment, OrderItem, OutboxEvent, Product, TargetType, User
+from app.models import GroupCampaign, InventoryReservation, Membership, MembershipStatus, Notification, Order, OrderFulfillment, OrderItem, OutboxEvent, Product, TargetType, User
 from app.routers import groups, orders
 from pgtests.test_transaction_concurrency import postgres_sessions
 from tests.support import TEST_PICKUP_SLOT_ID, TEST_PICKUP_SLOTS, auth_headers, make_test_settings
@@ -78,7 +78,7 @@ async def checkout_fixture(factory, channel):
                                      deadline=now + timedelta(days=1), estimated_pickup_start=now + timedelta(days=2),
                                      estimated_pickup_end=now + timedelta(days=3), created_by_id=buyer.id,
                                      pickup_slots=TEST_PICKUP_SLOTS)
-            session.add(campaign)
+            session.add_all([campaign, Membership(user_id=buyer.id, status=MembershipStatus.ACTIVE)])
             await session.flush()
             campaign_id = campaign.id
             path = f"/v1/group-campaigns/{campaign.id}/join"
@@ -107,7 +107,7 @@ async def assert_checkout_state(factory, buyer_id, product_id, campaign_id, *, c
         buyer = await session.get(User, buyer_id)
         assert buyer.notification_email == email
         assert buyer.membership_type.value == "nonmember"
-        assert await session.scalar(select(func.count(Membership.id))) == 0
+        assert await session.scalar(select(func.count(Membership.id))) == (1 if campaign_id else 0)
         assert await session.scalar(select(func.count(InventoryReservation.id))) == 0
         assert await session.scalar(select(func.count(OutboxEvent.id))) == 0
         assert await session.scalar(select(func.count(Notification.id))) == 0

@@ -8,7 +8,7 @@ if (!['127.0.0.1', 'localhost'].includes(target.hostname) || target.pathname !==
 const base = target.origin;
 const product = { id: 'barcode-product', name: '載具測試白米', unit: '包', member_price: 300, nonmember_price: 300, stock_quantity: 20, is_active: true, daily_sales_enabled: true, can_ship: false, allowed_shipping_channels: [], tax_type: 'tax_exempt' };
 const campaign = { id: 'barcode-group', title: '載具測試共同購買', description: '', member_price: 300, nonmember_price: 300, target_type: 'product', target_id: product.id, status: 'open', intake_status: 'open', decision_status: 'recruiting', deadline: '2030-01-04T00:00:00Z', pickup_slots: [{ id: 'fri', weekday: 4, starts_at: '11:30', ends_at: '13:00', label: '每週五 11:30~13:00' }], estimated_pickup_start: '2030-01-05T00:00:00Z', estimated_pickup_end: '2030-01-06T00:00:00Z', paid_quantity: 0, min_paid_quantity: 1, supply_cap: 50, per_user_cap: 10, available_quantity: 50, allowed_shipping_channels: [], can_ship: false };
-const buyer = (id, saved_mobile_barcode = null) => ({ id, email: `${id}@example.test`, display_name: id, user_role: 'customer', membership_type: 'nonmember', saved_mobile_barcode });
+const buyer = (id, saved_mobile_barcode = null) => ({ id, email: `${id}@example.test`, display_name: id, user_role: 'customer', membership_type: 'member', saved_mobile_barcode });
 
 async function fixture(t, { saved = null, failCount = 0, failStatus = 503, holdFirst = false, width = 390 } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });

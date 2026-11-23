@@ -136,3 +136,10 @@ def with_pickup_slot(body: dict) -> dict:
     if body.get("fulfillment_method", "cooperative_pickup") == "cooperative_pickup":
         return {"pickup_slot_id": TEST_PICKUP_SLOT_ID, **body}
     return body
+
+
+def active_member(user):
+    from app.models import Membership, MembershipStatus
+
+    user.membership = Membership(status=MembershipStatus.ACTIVE)
+    return user
