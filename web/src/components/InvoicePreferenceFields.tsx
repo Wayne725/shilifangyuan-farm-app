@@ -194,6 +194,7 @@ export function InvoicePreferenceFields({
   showHeading = true,
   allowSavedCarrier = true,
   lockBuyerType = false,
+  personalOnly = false,
   deferErrors = false,
   submitted = false,
 }: {
@@ -203,11 +204,18 @@ export function InvoicePreferenceFields({
   showHeading?: boolean;
   allowSavedCarrier?: boolean;
   lockBuyerType?: boolean;
+  personalOnly?: boolean;
   deferErrors?: boolean;
   submitted?: boolean;
 }) {
   const { user } = useAuth();
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (personalOnly && value.buyerType === "company") onChange({
+      buyerType: "personal", buyerEmail: value.buyerEmail, carrierType: value.carrierType,
+      carrierValue: value.carrierValue, saveCarrier: value.saveCarrier,
+    });
+  }, [personalOnly, value, onChange]);
   const emailLimit = invoiceEmailLimit(value);
   const emailErrorId = `invoice-email-error-${sectionNumber}`;
   const emailError = !value.buyerEmail.trim()
@@ -227,7 +235,7 @@ export function InvoicePreferenceFields({
         <span>{sectionNumber}</span>
         <div><p className="eyebrow">CLOUD INVOICE / 電子發票</p><h2>電子發票</h2></div>
       </div>}
-      {lockBuyerType ? <strong>公司統編發票</strong> : <div className="invoice-type-switch" role="radiogroup" aria-label="發票身分">
+      {lockBuyerType ? <strong>公司統編發票</strong> : personalOnly ? <p className="field-help"><strong>社員免稅個人電子發票</strong>（共同購買不提供公司統編發票）</p> : <div className="invoice-type-switch" role="radiogroup" aria-label="發票身分">
         <button
           aria-checked={value.buyerType === "personal"}
           className={value.buyerType === "personal" ? "selected" : ""}

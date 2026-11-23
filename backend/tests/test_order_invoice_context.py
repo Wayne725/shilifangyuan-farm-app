@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models import GroupCampaign, Meal, MealEvent, MealEventOffering, MealEventStatus, Order, TargetType
+from app.models import GroupCampaign, Membership, MembershipStatus, Meal, MealEvent, MealEventOffering, MealEventStatus, Order, TargetType
 from app.routers.groups import groups_router
 from app.routers.meals import meals_router
 from app.routers.orders import orders_router
@@ -29,7 +29,7 @@ async def test_each_checkout_persists_server_invoice_context_before_payment(data
             estimated_pickup_end=now + timedelta(days=3), created_by_id=user.id,
             pickup_slots=TEST_PICKUP_SLOTS,
         )
-        database_session.add(campaign)
+        database_session.add_all([campaign, Membership(user_id=user.id, status=MembershipStatus.ACTIVE)])
         await database_session.flush()
         path = f"/v1/group-campaigns/{campaign.id}/join"
         payload["quantity"] = 1

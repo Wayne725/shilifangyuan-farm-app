@@ -20,7 +20,7 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
     const request=route.request(),url=new URL(request.url()),endpoint=url.pathname,method=request.method();
     if(url.origin!==base)return route.abort();
     if(!endpoint.startsWith('/v1/'))return method==='GET'?route.continue():route.abort();
-    if(endpoint==='/v1/auth/refresh')return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'訪客'}:{access_token:'isolated',user:{id:'review-user',email:'review@example.test',display_name:'隔離管理者',user_role:role,membership_type:'nonmember'}}});
+    if(endpoint==='/v1/auth/refresh')return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'訪客'}:{access_token:'isolated',user:{id:'review-user',email:'review@example.test',display_name:'隔離管理者',user_role:role,membership_type:'member'}}});
     if(method==='GET') {
       const readPath=endpoint+url.search;
       state.reads.push(endpoint);state.readUrls.push(url.href);
@@ -166,9 +166,15 @@ for (const width of [1280, 390]) for (const ended of [false, true]) test(`買家
   await visit();
   await page.getByRole('heading', { name: '每月共同購買', exact: true }).waitFor();
   const listing = page.locator('.editorial-card');
-  await listing.getByText(ended ? '已結束' : '開放預訂', { exact: true }).waitFor();
   assert.equal(await page.locator('a[href^="/group-votes"]').count(), 0);
-  await listing.getByRole('link').click();
+  if (ended) {
+    await page.getByText('本月共同購買尚未開放', { exact: true }).waitFor();
+    assert.equal(await listing.count(), 0);
+    await page.goto(`${base}/groups/${campaign.id}`);
+  } else {
+    await listing.getByText('開放預訂', { exact: true }).waitFor();
+    await listing.getByRole('link').click();
+  }
   await page.getByRole('heading', { name: campaign.title, exact: true }).waitFor();
   assert.equal(await page.getByText(/份門檻|審核截止/).count(), 0);
   if (ended) {

@@ -66,6 +66,7 @@ export function GroupCampaignPage() {
   const now = useDeadlineClock(campaign.data?.deadline);
   const orderBlockReason = storefrontOrderBlockReason(platform.data, "group")
     || (campaign.data ? campaignOrderBlockReason(campaign.data, now) : "")
+    || (user && user.membership_type !== "member" ? "共同購買僅限正式社員參加" : "")
     || (method === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
   const locations = useQuery({
     queryKey: ["pickup-locations"],
@@ -228,7 +229,7 @@ export function GroupCampaignPage() {
         </div>
       </div>
 
-      {orderBlockReason && <p className="form-error" role="status">{orderBlockReason}</p>}
+      {orderBlockReason && <p className="form-error" role="status">{orderBlockReason}{orderBlockReason === "共同購買僅限正式社員參加" && <> · <Link to="/membership">了解如何加入社員</Link></>}</p>}
       <div className="offer-checkout">
         <div>
           <div className="checkout-step-title"><span>01</span><div><small>QUANTITY</small><h2>選擇數量</h2></div></div>
@@ -292,6 +293,7 @@ export function GroupCampaignPage() {
 
           <InvoicePreferenceFields
             onChange={setInvoicePreference}
+            personalOnly
             value={invoicePreference}
           />
         </div>

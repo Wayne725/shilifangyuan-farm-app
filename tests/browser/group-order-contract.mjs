@@ -30,7 +30,7 @@ async function fixture(t,{width=390,changed=true,paid=false,uncertain=false}={})
       assert.ok(file.startsWith(`${root}/`));
       return route.fulfill({contentType:contentTypes[extname(file)]||'application/octet-stream',body:await readFile(file)});
     }
-    if(path==='/v1/auth/refresh')return route.fulfill({json:{access_token:'isolated-group-contract',user:{id:'group-buyer',email:'buyer@example.test',display_name:'買家',membership_type:'nonmember',user_role:'customer'}}});
+    if(path==='/v1/auth/refresh')return route.fulfill({json:{access_token:'isolated-group-contract',user:{id:'group-buyer',email:'buyer@example.test',display_name:'買家',membership_type:'member',user_role:'customer'}}});
     if(request.method()!=='GET')state.writes.push(path);
     if(path==='/v1/platform')return route.fulfill({json:{orders_open:true}});
     if(path==='/v1/orders')return route.fulfill({json:[order]});

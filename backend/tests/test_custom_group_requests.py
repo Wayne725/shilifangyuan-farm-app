@@ -67,9 +67,12 @@ async def test_different_custom_requests_are_not_deduplicated(campaign_context):
 async def test_nonadmin_cannot_create_proposal_or_change_existing_proposal(campaign_context, membership_status, target):
     ctx = campaign_context
     client, session, buyer = ctx["client"], ctx["session"], ctx["proposer"]
-    if membership_status is not None:
-        session.add(Membership(user_id=buyer.id, status=membership_status))
-        await session.commit()
+    membership = await session.scalar(select(Membership).where(Membership.user_id == buyer.id))
+    if membership_status is None:
+        await session.delete(membership)
+    else:
+        membership.status = membership_status
+    await session.commit()
     payload = ({"target_type": "custom", "request_name": "茶葉", "request_details": "其他供應需求"}
                if target == "custom" else {"target_type": "product", "target_id": ctx["product"].id})
     models = (VoteProposal, OutboxEvent, Vote)
