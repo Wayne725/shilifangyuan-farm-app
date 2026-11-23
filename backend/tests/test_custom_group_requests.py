@@ -19,7 +19,7 @@ async def test_custom_request_review_vote_and_conversion_keeps_request(campaign_
     assert proposal["target_id"] is None
     assert proposal["target_name"] == "想團購無糖茶"
     assert proposal["request_details"] == payload["request_details"]
-    assert proposal["proposer_id"] == context["admin"].id
+    assert proposal["is_mine"] is True and "proposer_id" not in proposal
     path = f"/v1/vote-proposals/{proposal['id']}"
     assert (await client.get(path)).status_code == 404
     assert (await client.post(path + "/admin/approve", headers=proposer, json={"threshold": 1})).status_code == 403
@@ -95,5 +95,5 @@ async def test_historical_buyer_proposal_remains_readable_and_votable(campaign_c
     assert ctx["proposal"].id in [proposal["id"] for proposal in (await client.get("/v1/vote-proposals")).json()]
     voted = await client.put(path + "/vote", headers=buyer, json={"estimated_quantity": 2})
     assert voted.status_code == 200, voted.text
-    assert voted.json()["proposer_id"] == ctx["proposer"].id
+    assert voted.json()["is_mine"] is True and "proposer_id" not in voted.json()
     assert voted.json()["my_vote_quantity"] == 2
