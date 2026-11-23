@@ -218,7 +218,7 @@ export function GroupCampaignPage() {
         <div className="offer-copy">
           <p className="eyebrow">BUYING TOGETHER / 共同購買</p>
           <h1>{item.title}</h1>
-          <p>{item.description}</p>
+          <p className="campaign-description">{item.description}</p>
           <dl>
             <div><dt>已付款</dt><dd>{item.paid_quantity} 份</dd></div>
             <div><dt>剩餘供應</dt><dd>{item.available_quantity} 份</dd></div>

@@ -104,3 +104,6 @@
 
 .meal-calendar-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 20px; }
 .optional-mark::after { content: "（選填）"; margin-left: 0.25em; color: var(--ink-soft); font-weight: 400; }
+
+.campaign-description { white-space: pre-line; }
+.campaign-description-clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; }

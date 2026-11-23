@@ -231,7 +231,7 @@ export function ShopPage() {
                 <div>
                   <span>{publicCampaignStatusLabel(campaign, now)}</span>
                   <h3>{campaign.title || "共同採購"}</h3>
-                  {campaign.description && <p>{campaign.description}</p>}
+                  {campaign.description && <p className="campaign-description campaign-description-clamped">{campaign.description}</p>}
                 </div>
                 <Link className="editorial-end" to="/groups/$campaignId" params={{ campaignId: campaign.id }}>
                   <small>截止 {formatDate(campaign.deadline)}</small>

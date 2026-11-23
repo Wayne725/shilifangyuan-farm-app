@@ -15,7 +15,7 @@ const campaign = {
   preorder_only: true, decision_status: 'confirmed', intake_status: 'open', can_ship: false, allowed_shipping_channels: [],
 };
 
-async function fixture(t, { membership = 'nonmember', width = 1280, deferred = false, fail = false, slots = null, userMembership = 'member' } = {}) {
+async function fixture(t, { membership = 'nonmember', width = 1280, deferred = false, fail = false, slots = null, userMembership = 'member', description = null } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width, height: 950 }, serviceWorkers: 'block' });
@@ -30,7 +30,7 @@ async function fixture(t, { membership = 'nonmember', width = 1280, deferred = f
       access_token: 'isolated', user: { id: 'buyer', display_name: '隔離買家', email: 'buyer@example.test', user_role: 'customer', membership_type: userMembership },
     } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: true, group_orders_enabled: true, regular_orders_enabled: true, shipping_enabled: false } });
-    if (path === '/v1/group-campaigns/campaign') return route.fulfill({ json: slots ? { ...campaign, pickup_slots: slots } : campaign });
+    if (path === '/v1/group-campaigns/campaign') return route.fulfill({ json: { ...campaign, ...(slots ? { pickup_slots: slots } : {}), ...(description ? { description } : {}) } });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'store', name: '隔離取貨點', is_active: true }] });
     if (path === '/v1/group-campaigns/campaign/quote') {
       const body = request.postDataJSON();
@@ -160,5 +160,15 @@ test('共同購買只開社員免稅個人發票，不提供統編', async t => 
   await page.getByText('社員免稅個人電子發票', { exact: true }).waitFor();
   assert.equal(await page.getByRole('radio', { name: '公司統編發票' }).count(), 0);
   assert.ok(state.quotes.every(quote => quote.invoice_buyer_type === 'personal'));
+  await verify(page, state);
+});
+
+test('共同購買說明保留換行分段', async t => {
+  const description = '第一段說明\n\n🌱 商品特色\n・水耕栽培';
+  const { page, state } = await fixture(t, { width: 390, description });
+  const copy = page.locator('.offer-copy .campaign-description');
+  await copy.waitFor();
+  assert.equal(await copy.evaluate(node => getComputedStyle(node).whiteSpace), 'pre-line');
+  assert.match(await copy.innerText(), /第一段說明\n\n🌱 商品特色\n・水耕栽培/);
   await verify(page, state);
 });
