@@ -236,7 +236,7 @@ export function GroupCampaignPage() {
             <button aria-label="減少數量" disabled={Boolean(orderBlockReason) || checkout.isPending || quantity <= 1} type="button" onClick={() => setQuantity((value) => Math.max(1, value - 1))}><Minus size={16} /></button>
             <strong>{quantity}</strong>
             <button aria-label="增加數量" disabled={Boolean(orderBlockReason) || checkout.isPending || quantity >= Math.min(item.per_user_cap, item.available_quantity)} type="button" onClick={() => setQuantity((value) => Math.min(item.per_user_cap, item.available_quantity, value + 1))}><Plus size={16} /></button>
-            <span>每人上限 {item.per_user_cap} 份</span>
+            {!orderBlockReason && quantity >= Math.min(item.per_user_cap, item.available_quantity) && <span role="status">{item.per_user_cap <= item.available_quantity ? `已達每人上限 ${item.per_user_cap} 份` : `已達剩餘供應 ${item.available_quantity} 份`}</span>}
           </div>
 
           <div className="checkout-step-title pickup-title"><span>02</span><div><small>FULFILLMENT</small><h2>取貨方式</h2></div></div>
