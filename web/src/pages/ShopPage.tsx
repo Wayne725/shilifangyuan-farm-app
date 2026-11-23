@@ -9,7 +9,7 @@ import { DataState, LoadingLines, ProductCard, SectionHeading } from "../compone
 import { MealDateNavigation } from "../components/MealDateNavigation";
 import { useCommerce } from "../context/CommerceContext";
 import { ApiError, apiFetch, formatDate } from "../lib/api";
-import { campaignOrderBlockReason, campaignStatusLabel } from "../lib/group-campaigns";
+import { campaignOrderBlockReason, publicCampaignStatusLabel } from "../lib/group-campaigns";
 import { mealMenuAvailability, taipeiDate } from "../lib/meal-time";
 import type { GroupCampaign, MealCalendarEvent, MealDisasterAnnouncement, MealEvent, Product } from "../lib/types";
 import "./ShopPage.css";
@@ -210,9 +210,8 @@ export function ShopPage() {
         <Tabs.Content value="groups" className="tab-content">
           <SectionHeading
             eyebrow="BUYING TOGETHER / 共同購買"
-            title="把需求聚在一起"
+            title="每月共同購買"
           />
-          <div className="market-subnav"><Link className="button button-quiet" to="/group-votes"><UsersThree size={17} />查看需求投票</Link><Link className="text-link" to="/group-votes/new">發起新的共同購買需求 <ArrowRight size={17} /></Link></div>
           {campaigns.isPending && <LoadingLines count={3} />}
           {campaigns.isError && (
             <DataState
@@ -227,9 +226,9 @@ export function ShopPage() {
               <article key={campaign.id} className="editorial-card">
                 <div className="editorial-number">{String(index + 1).padStart(2, "0")}</div>
                 <div>
-                  <span>{campaignStatusLabel(campaign, now)}</span>
+                  <span>{publicCampaignStatusLabel(campaign, now)}</span>
                   <h3>{campaign.title || "共同採購"}</h3>
-                  <p>{campaign.description || "供應與達標資訊以系統紀錄為準。"}</p>
+                  {campaign.description && <p>{campaign.description}</p>}
                 </div>
                 <Link className="editorial-end" to="/groups/$campaignId" params={{ campaignId: campaign.id }}>
                   <small>截止 {formatDate(campaign.deadline)}</small>

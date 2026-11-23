@@ -1645,7 +1645,8 @@ class SQLAlchemyPaymentCallbackRepository:
             from ..group_review import order_accepts_group_payment, order_matches_group_contract
             decision_accepts_payment = order_accepts_group_payment(order) and order_matches_group_contract(order, campaign) and (
                 campaign.decision_status in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.PENDING_CONFIRMATION}
-                or (campaign.decision_status == GroupDecisionStatus.CONFIRMED and campaign.legacy_confirmed_intake))
+                or (campaign.decision_status == GroupDecisionStatus.CONFIRMED
+                    and (campaign.preorder_only or campaign.legacy_confirmed_intake)))
             can_reacquire = (
                 decision_accepts_payment
                 and reservation is not None

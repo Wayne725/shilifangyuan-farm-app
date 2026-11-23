@@ -20,6 +20,7 @@ from ..models import (
     AdminAudit,
     GroupBundle,
     GroupCampaign,
+    GroupDecisionStatus,
     Notification,
     OutboxEvent,
     OPEN_PROPOSAL_TARGET_PREDICATE,
@@ -237,7 +238,7 @@ async def get_proposal(
 )
 async def create_proposal(
     body: ProposalCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ) -> ProposalRead:
     is_custom = body.target_type == ProposalTargetType.CUSTOM
@@ -488,8 +489,10 @@ async def open_proposal_campaign(proposal_id: str, body: CampaignCreate, admin: 
         and body.source_proposal_id != proposal.id
     ):
         raise HTTPException(status_code=422, detail="來源提案編號不一致")
+    body.min_paid_quantity = 1
+    body.confirmation_deadline = None
     try:
-        validate_campaign_schedule(body, datetime.now(timezone.utc))
+        validate_campaign_schedule(body, datetime.now(timezone.utc), preorder_only=True)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.new_product is None:
@@ -504,6 +507,9 @@ async def open_proposal_campaign(proposal_id: str, body: CampaignCreate, admin: 
             target_id=target_id,
             source_proposal_id=proposal.id,
             created_by_id=admin.id,
+            preorder_only=True,
+            legacy_confirmed_intake=True,
+            decision_status=GroupDecisionStatus.CONFIRMED,
         )
         proposal.status = ProposalStatus.CONVERTED
         session.add(campaign)

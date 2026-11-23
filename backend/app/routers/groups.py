@@ -99,6 +99,7 @@ def campaign_read(campaign: GroupCampaign) -> CampaignRead:
     blocked_reason = review_blocked_reason(campaign, now)
     return CampaignRead(
         is_public=campaign.is_public,
+        preorder_only=campaign.preorder_only,
         id=campaign.id,
         source_proposal_id=campaign.source_proposal_id,
         target_type=campaign.target_type,
@@ -123,9 +124,9 @@ def campaign_read(campaign: GroupCampaign) -> CampaignRead:
         confirmation_deadline=aware(campaign.confirmation_deadline) if campaign.confirmation_deadline else None,
         threshold_version=campaign.threshold_version or 0,
         updated_at=aware(campaign.updated_at),
-        review_overdue=bool(campaign.decision_status not in TERMINAL_DECISIONS and campaign.confirmation_deadline and now >= aware(campaign.confirmation_deadline)),
+        review_overdue=bool(not campaign.preorder_only and campaign.decision_status not in TERMINAL_DECISIONS and campaign.confirmation_deadline and now >= aware(campaign.confirmation_deadline)),
         can_confirm=blocked_reason is None,
-        can_edit_review_deadline=campaign.decision_status not in TERMINAL_DECISIONS,
+        can_edit_review_deadline=not campaign.preorder_only and campaign.decision_status not in TERMINAL_DECISIONS,
         confirmation_blocked_reason=blocked_reason,
         confirmed_paid_quantity=campaign.confirmed_paid_quantity,
         confirmed_min_paid_quantity=campaign.confirmed_min_paid_quantity,
@@ -300,8 +301,10 @@ async def create_campaign(
             status_code=422,
             detail="由投票轉團請使用提案的 convert API",
         )
+    body.min_paid_quantity = 1
+    body.confirmation_deadline = None
     try:
-        validate_campaign_schedule(body, datetime.now(timezone.utc))
+        validate_campaign_schedule(body, datetime.now(timezone.utc), preorder_only=True)
     except DomainError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.new_product is None:
@@ -315,6 +318,9 @@ async def create_campaign(
             **body.model_dump(exclude={"target_id", "new_product"}),
             target_id=target_id,
             created_by_id=admin.id,
+            preorder_only=True,
+            legacy_confirmed_intake=True,
+            decision_status=GroupDecisionStatus.CONFIRMED,
         )
         session.add(campaign)
         await session.flush()
@@ -365,12 +371,37 @@ async def update_campaign(
         raise HTTPException(status_code=404, detail="找不到共同購買")
 
     updates = body.model_dump(exclude_unset=True)
+    expected_updated_at = updates.pop("expected_updated_at", None)
     if not updates:
         return campaign_read(campaign)
-    if updates.keys() <= {"title", "description"}:
+    if (campaign.preorder_only and {"estimated_pickup_start", "estimated_pickup_end"} & updates.keys()
+        and campaign.decision_status not in {GroupDecisionStatus.CONFIRMED, GroupDecisionStatus.RECRUITING, GroupDecisionStatus.PENDING_CONFIRMATION}):
+        raise HTTPException(status_code=409, detail="已關閉的預訂檔期不可修改取貨安排")
+    if (campaign.preorder_only and {"estimated_pickup_start", "estimated_pickup_end"} & updates.keys()
+        and (expected_updated_at is None or expected_updated_at != aware(campaign.updated_at))):
+        raise HTTPException(status_code=409, detail="取貨安排已更新，請重新核對後儲存")
+    if campaign.preorder_only and "min_paid_quantity" in updates:
+        raise HTTPException(status_code=422, detail="預訂檔期不使用成團門檻")
+    editable_details = {"title", "description"}
+    if campaign.preorder_only:
+        editable_details.update({"image_url", "estimated_pickup_start", "estimated_pickup_end"})
+    if updates.keys() <= editable_details:
         if "title" in updates and not updates["title"].strip():
             raise HTTPException(status_code=422, detail="請填寫共同購買名稱")
-        changes = {field: value for field, value in updates.items() if getattr(campaign, field) != value}
+        if campaign.preorder_only:
+            start = updates.get("estimated_pickup_start", aware(campaign.estimated_pickup_start))
+            end = updates.get("estimated_pickup_end", aware(campaign.estimated_pickup_end))
+            if start < aware(campaign.deadline) or end < start:
+                raise HTTPException(status_code=422, detail="取貨開始不可早於預訂截止，取貨結束不可早於開始")
+        changes = {}
+        for field, value in updates.items():
+            previous = getattr(campaign, field)
+            if isinstance(previous, datetime):
+                previous = aware(previous)
+            if previous != value:
+                changes[field] = value
+        if campaign.preorder_only and campaign.final_pickup_at is not None:
+            changes.update({field: updates[field] for field in {"estimated_pickup_start", "estimated_pickup_end"} & updates.keys()})
         if not changes:
             return campaign_read(campaign)
         return await _save_campaign_changes(session, campaign, admin, changes)
@@ -398,7 +429,7 @@ async def update_campaign(
     }
     try:
         candidate = CampaignCreate(**candidate_values)
-        validate_campaign_schedule(candidate, datetime.now(timezone.utc))
+        validate_campaign_schedule(candidate, datetime.now(timezone.utc), preorder_only=campaign.preorder_only)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -411,8 +442,11 @@ async def update_campaign(
     changed_fields = {
         field
         for field in fields_to_consider
-        if getattr(campaign, field) != candidate_dump[field]
+        if (aware(getattr(campaign, field)) if isinstance(getattr(campaign, field), datetime)
+            else getattr(campaign, field)) != candidate_dump[field]
     }
+    if campaign.preorder_only and campaign.final_pickup_at is not None:
+        changed_fields.update({"estimated_pickup_start", "estimated_pickup_end"} & updates.keys())
     changed_core_fields = changed_fields & CAMPAIGN_CORE_FIELDS
     if changed_core_fields and campaign.core_locked_at is not None:
         raise HTTPException(
@@ -451,6 +485,13 @@ async def update_campaign(
 async def _save_campaign_changes(
     session: AsyncSession, campaign: GroupCampaign, admin: User, changes: dict[str, Any],
 ) -> CampaignRead:
+    if not changes:
+        return campaign_read(campaign)
+    pickup_fields = {"estimated_pickup_start", "estimated_pickup_end"} & changes.keys()
+    pickup_before = {field: aware(getattr(campaign, field)).isoformat() for field in pickup_fields}
+    if campaign.preorder_only and pickup_fields and campaign.final_pickup_at is not None:
+        pickup_before["final_pickup_at"] = aware(campaign.final_pickup_at).isoformat()
+        changes = {**changes, "final_pickup_at": None}
     for field, value in changes.items():
         setattr(campaign, field, value)
     session.add(
@@ -459,9 +500,21 @@ async def _save_campaign_changes(
             action="campaign.update",
             aggregate_type="group_campaign",
             aggregate_id=campaign.id,
-            data={"changed_fields": sorted(changes)},
+            data={"changed_fields": sorted(changes), **({"before": pickup_before,
+                "after": {field: aware(getattr(campaign, field)).isoformat() if getattr(campaign, field) is not None else None
+                    for field in pickup_before}}
+                if pickup_fields else {})},
         )
     )
+    if campaign.preorder_only and pickup_fields:
+        user_ids = list(await session.scalars(select(Order.user_id).where(
+            Order.group_campaign_id == campaign.id, Order.payment_status == PaymentStatus.PAID,
+            Order.fulfillment_status.notin_({FulfillmentStatus.CANCELLED, FulfillmentStatus.PICKED_UP}),
+        ).distinct()))
+        if user_ids:
+            session.add(OutboxEvent(event_type="group.pickup_updated", aggregate_type="group_campaign", aggregate_id=campaign.id,
+                payload={"user_ids": user_ids, "estimated_pickup_start": aware(campaign.estimated_pickup_start).isoformat(),
+                         "estimated_pickup_end": aware(campaign.estimated_pickup_end).isoformat()}))
     await session.commit()
     await session.refresh(campaign)
     return campaign_read(campaign)
@@ -739,6 +792,8 @@ async def update_review_deadline(
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
+    if campaign.preorder_only:
+        raise HTTPException(status_code=409, detail="預訂檔期不需設定成團審核提醒日")
     if campaign.decision_status in TERMINAL_DECISIONS:
         raise HTTPException(status_code=409, detail="已完成決定的共同購買不可修改管理員處理提醒日")
     previous_deadline = aware(campaign.confirmation_deadline) if campaign.confirmation_deadline else None
@@ -771,6 +826,8 @@ async def confirm_group(
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
+    if campaign.preorder_only:
+        raise HTTPException(status_code=409, detail="預訂檔期不需確認成團")
     now = datetime.now(timezone.utc)
     await reconcile_campaign_state(session, campaign, now)
     try:
@@ -905,6 +962,8 @@ async def reject_group(
     campaign = await load_campaign(session, campaign_id, lock=True)
     if campaign is None:
         raise HTTPException(status_code=404, detail="找不到共同購買")
+    if campaign.preorder_only:
+        raise HTTPException(status_code=409, detail="預訂檔期請使用取消檔期")
     if campaign.decision_status != GroupDecisionStatus.PENDING_CONFIRMATION:
         raise HTTPException(status_code=409, detail="此團目前無法拒絕成團")
     await close_campaign_with_refunds(

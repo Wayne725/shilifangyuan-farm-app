@@ -12,7 +12,7 @@ const campaign = {
   min_paid_quantity: 10, supply_cap: 30, per_user_cap: 5, paid_quantity: 0,
   reserved_quantity: 0, available_quantity: 30, deadline: '2030-01-03T04:00:00Z',
   estimated_pickup_start: '2030-01-06T04:00:00Z', estimated_pickup_end: '2030-01-07T04:00:00Z',
-  decision_status: 'recruiting', intake_status: 'open', can_ship: false, allowed_shipping_channels: [],
+  preorder_only: true, decision_status: 'confirmed', intake_status: 'open', can_ship: false, allowed_shipping_channels: [],
 };
 
 async function fixture(t, { membership = 'nonmember', width = 1280, deferred = false, fail = false } = {}) {

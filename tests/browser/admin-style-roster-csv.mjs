@@ -637,7 +637,8 @@ for (const width of [1440, 390]) {
     await page.getByRole('heading', { name: '今日待辦', exact: true }).waitFor();
     const list = page.getByRole('list', { name: '今日待辦清單' });
     await list.getByRole('link', { name: /進行中的活動.*共 7 人次報名/ }).waitFor();
-    assert.equal(await list.getByRole('link').count(), 11);
+    assert.equal(await list.getByRole('link').count(), 9);
+    assert.equal(await list.getByRole('link', { name: /待確認成團|投票中的團購提案/ }).count(), 0);
     assert.equal(state.reads.filter(path => path.startsWith('/v1/admin/')).join(','), '/v1/admin/today');
     await noOverflow(page);
     await list.getByRole('link', { name: /待審退單.*3 筆/ }).click();

@@ -1280,12 +1280,13 @@ class GroupCampaign(Base):
         CheckConstraint("supply_cap > 0", name="supply_cap_positive"),
         CheckConstraint("per_user_cap > 0", name="per_user_cap_positive"),
         CheckConstraint(
-            "min_paid_quantity <= supply_cap", name="minimum_within_supply_cap"
+            "preorder_only OR min_paid_quantity <= supply_cap", name="minimum_within_supply_cap"
         ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    preorder_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     source_proposal_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("vote_proposals.id", ondelete="SET NULL"),
         nullable=True,

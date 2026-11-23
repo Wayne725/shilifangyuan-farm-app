@@ -163,15 +163,16 @@ def apply_proposal_clock(
     return changed
 
 
-def validate_campaign_schedule(campaign: GroupCampaign, now: datetime) -> None:
-    if campaign.confirmation_deadline is None:
-        campaign.confirmation_deadline = aware(campaign.deadline) + timedelta(hours=72)
-    if aware(campaign.confirmation_deadline) <= aware(campaign.deadline):
-        raise DomainError("管理員處理提醒日必須晚於付款截止")
-    if aware(campaign.confirmation_deadline) > aware(campaign.estimated_pickup_start):
-        raise DomainError("管理員處理提醒日不可晚於預估取貨開始")
-    if campaign.min_paid_quantity > campaign.supply_cap:
-        raise DomainError("成團門檻不可高於供應上限")
+def validate_campaign_schedule(campaign: GroupCampaign, now: datetime, *, preorder_only: bool = False) -> None:
+    if not preorder_only:
+        if campaign.confirmation_deadline is None:
+            campaign.confirmation_deadline = aware(campaign.deadline) + timedelta(hours=72)
+        if aware(campaign.confirmation_deadline) <= aware(campaign.deadline):
+            raise DomainError("管理員處理提醒日必須晚於付款截止")
+        if aware(campaign.confirmation_deadline) > aware(campaign.estimated_pickup_start):
+            raise DomainError("管理員處理提醒日不可晚於預估取貨開始")
+        if campaign.min_paid_quantity > campaign.supply_cap:
+            raise DomainError("成團門檻不可高於供應上限")
     if aware(campaign.deadline) <= now:
         raise DomainError("共同購買截止時間必須在未來")
     if aware(campaign.estimated_pickup_start) < aware(campaign.deadline):
@@ -233,8 +234,11 @@ def refresh_campaign_intake(campaign: GroupCampaign, now: datetime) -> None:
     if campaign.decision_status not in {GroupDecisionStatus.RECRUITING, GroupDecisionStatus.CONFIRMED}:
         return
     if now >= aware(campaign.deadline):
-        campaign.intake_status = (GroupIntakeStatus.CLOSED if campaign.decision_status == GroupDecisionStatus.CONFIRMED else GroupIntakeStatus.SETTLING)
-    elif campaign.decision_status == GroupDecisionStatus.RECRUITING or campaign.legacy_confirmed_intake:
+        campaign.intake_status = (GroupIntakeStatus.CLOSED
+            if campaign.decision_status == GroupDecisionStatus.CONFIRMED and not campaign.preorder_only else GroupIntakeStatus.SETTLING)
+    elif campaign.preorder_only and campaign.intake_status in {GroupIntakeStatus.PAUSED, GroupIntakeStatus.CLOSED}:
+        return
+    elif campaign.decision_status == GroupDecisionStatus.RECRUITING or campaign.legacy_confirmed_intake or campaign.preorder_only:
         campaign.intake_status = (GroupIntakeStatus.FULL if campaign_available_quantity(campaign) == 0 else GroupIntakeStatus.OPEN)
 
 
@@ -253,6 +257,8 @@ def confirm_campaign(
     reason: str = "",
 ) -> None:
     current = now or utcnow()
+    if campaign.preorder_only:
+        raise DomainError("預訂檔期不需確認成團")
     if current < aware(campaign.deadline):
         raise DomainError("付款截止後才可確認共同購買")
     if campaign.decision_status != GroupDecisionStatus.PENDING_CONFIRMATION or campaign.intake_status != GroupIntakeStatus.CLOSED:

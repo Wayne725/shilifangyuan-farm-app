@@ -20,12 +20,14 @@ async def test_admin_quantity_settings_apply_to_proposal_campaign_and_lock_after
     assert opened.status_code == 201, opened.text
     campaign_id = opened.json()["id"]
     path = f"/v1/group-campaigns/{campaign_id}"
-    settings = {"per_user_cap": 2, "min_paid_quantity": 4, "supply_cap": 12}
+    settings = {"per_user_cap": 2, "supply_cap": 12}
     assert (await client.patch(path, headers=auth_headers(ctx["proposer"]), json=settings)).status_code == 403
     updated = await client.patch(path, headers=admin, json=settings)
     assert updated.status_code == 200, updated.text
     persisted = (await client.get(path)).json()
     assert {key: persisted[key] for key in settings} == settings
+    assert persisted["preorder_only"] is True and persisted["min_paid_quantity"] == 1
+    assert (await client.patch(path, headers=admin, json={"min_paid_quantity": 4})).status_code == 422
     assert persisted["source_proposal_id"] == ctx["proposal"].id
     assert persisted["member_price"] == opened.json()["member_price"]
     too_many = await client.post(f"{path}/join", headers=auth_headers(ctx["proposer"]),
@@ -34,12 +36,12 @@ async def test_admin_quantity_settings_apply_to_proposal_campaign_and_lock_after
     campaign = await session.get(GroupCampaign, campaign_id)
     apply_paid_quantity(campaign, 2, datetime.now(timezone.utc))
     await session.commit()
-    assert (await client.get(path)).json()["decision_status"] == "recruiting"
-    locked = await client.patch(path, headers=admin, json={"per_user_cap": 3, "min_paid_quantity": 6})
+    assert (await client.get(path)).json()["decision_status"] == "confirmed"
+    locked = await client.patch(path, headers=admin, json={"per_user_cap": 3})
     assert locked.status_code == 409 and "首筆付款" in locked.json()["detail"]
     apply_paid_quantity(campaign, 2, datetime.now(timezone.utc))
     await session.commit()
-    assert (await client.get(path)).json()["decision_status"] == "recruiting"
+    assert (await client.get(path)).json()["decision_status"] == "confirmed"
 
 
 @pytest.mark.asyncio
@@ -51,7 +53,7 @@ async def test_admin_can_open_pending_proposal_without_votes_once(campaign_conte
     # Retire the fixture's open proposal so the product submission creates a new pending request.
     ctx["proposal"].status = ProposalStatus.REJECTED
     await session.commit()
-    proposal = (await client.post("/v1/vote-proposals", headers=auth_headers(ctx["proposer"]), json=payload)).json()
+    proposal = (await client.post("/v1/vote-proposals", headers=auth_headers(ctx["admin"]), json=payload)).json()
     assert proposal["status"] == "pending_review" and proposal["vote_count"] == 0
     path = f"/v1/vote-proposals/{proposal['id']}/admin/open-direct"
     body = campaign_payload(ctx["product"].id, member_price=450, nonmember_price=500)
@@ -63,7 +65,8 @@ async def test_admin_can_open_pending_proposal_without_votes_once(campaign_conte
     assert opened.status_code == 201, opened.text
     campaign = opened.json()
     assert campaign["source_proposal_id"] == proposal["id"]
-    assert campaign["member_price"] == 450 and campaign["decision_status"] == "recruiting"
+    assert campaign["member_price"] == 450 and campaign["decision_status"] == "confirmed"
+    assert campaign["preorder_only"] is True
     assert (await client.post(path, headers=admin, json=body)).status_code == 409
     assert await session.scalar(select(func.count()).select_from(GroupCampaign).where(GroupCampaign.source_proposal_id == proposal["id"])) == 1
     assert await session.scalar(select(func.count()).select_from(OutboxEvent).where(OutboxEvent.event_type == "group.opened")) == 1
@@ -79,10 +82,12 @@ async def test_direct_open_validates_target_schedule_and_closed_proposals(campai
     await ctx["session"].commit()
     path = f"/v1/vote-proposals/{proposal.id}/admin/open-direct"
     client, admin = ctx["client"], auth_headers(ctx["admin"])
-    for changes in [{"target_id": "missing"}, {"source_proposal_id": "another"}, {"min_paid_quantity": 30, "supply_cap": 20}, {"deadline": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()}]:
+    for changes in [{"target_id": "missing"}, {"source_proposal_id": "another"}, {"deadline": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()}]:
         response = await client.post(path, headers=admin, json=campaign_payload(ctx["product"].id, **changes))
         assert response.status_code == 422, response.text
-    assert (await client.post(path, headers=admin, json=campaign_payload(ctx["product"].id))).status_code == 201
+    opened = await client.post(path, headers=admin, json=campaign_payload(ctx["product"].id, min_paid_quantity=30))
+    assert opened.status_code == 201
+    assert opened.json()["min_paid_quantity"] == 1
     proposal.status = ProposalStatus.REJECTED
     await ctx["session"].commit()
     assert (await client.post(path, headers=admin, json=campaign_payload(ctx["product"].id))).status_code == 409

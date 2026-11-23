@@ -483,7 +483,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
                 <article className={quantity > 0 ? "meal-offering selected" : "meal-offering"} key={offering.id}>
                   <div className="meal-offering-summary">
                     <MealPhoto className="meal-offering-photo" src={offering.image_url} alt={`${offering.meal_name}照片`} />
-                    <div className="meal-offering-copy"><small>剩餘 {offering.available_quantity} 份</small><h3>{offering.meal_name}</h3>{offering.description && <p>{offering.description}</p>}<strong>{formatMoney(offering.price)} 起</strong></div>
+                    <div className="meal-offering-copy">{offering.available_quantity <= 0 && <small>已售完</small>}<h3>{offering.meal_name}</h3>{offering.description && <p>{offering.description}</p>}<strong>{formatMoney(offering.price)} 起</strong></div>
                     <div className="quantity-control" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTouched(current => ({ ...current, quantity: true })); }}>
                       <button type="button" disabled={quantity === 0} onClick={() => changeQuantity(offering.id, quantity - 1, offering.available_quantity)} aria-label={`減少${offering.meal_name}`}><Minus size={20} /></button>
                       <span aria-label={`${offering.meal_name} ${quantity} 份`}>{quantity}</span>

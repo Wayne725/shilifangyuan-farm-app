@@ -28,10 +28,8 @@ const workItems = [
   { key: "today_business_cash_uncollected", label: "今日會餐現金未收", unit: "筆", link: linkOptions({ to: "/admin/meals", search: { tab: "orders", queue: "today_business_cash_uncollected" } }) },
   { key: "pending_activity_refunds", label: "待審活動退款", unit: "筆", link: linkOptions({ to: "/admin/social", search: { tab: "activities", view: "refunds" } }) },
   { key: "invoice_followups", label: "發票待合作社處理", unit: "筆", link: linkOptions({ to: "/admin", search: { section: "orders", queue: "invoice" } }) },
-  { key: "pending_campaign_decisions", label: "待確認成團", unit: "團", link: linkOptions({ to: "/admin/groups", search: { tab: "campaigns", view: "decision" } }) },
   { key: "active_activities", label: "進行中的活動", unit: "場", link: linkOptions({ to: "/admin/social", search: { tab: "activities", view: "active" } }) },
   { key: "active_campaigns", label: "進行中的共同購買", unit: "團", link: linkOptions({ to: "/admin/groups", search: { tab: "campaigns", view: "active" } }) },
-  { key: "voting_group_proposals", label: "投票中的團購提案", unit: "件", link: linkOptions({ to: "/admin/groups", search: { tab: "proposals", view: "voting" } }) },
   { key: "voting_member_proposals", label: "表決中的社員提案", unit: "件", link: linkOptions({ to: "/admin/social", search: { tab: "proposals", view: "voting" } }) },
 ] as const;
 

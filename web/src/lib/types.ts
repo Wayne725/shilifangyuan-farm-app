@@ -428,6 +428,7 @@ export interface MembershipApplication {
 }
 
 export interface GroupCampaign {
+  preorder_only: boolean;
   is_public?: boolean;
   id: string;
   source_proposal_id?: string | null;

@@ -23,7 +23,7 @@ export function defaultReviewDeadline(deadline: string) {
 
 export function campaignOrderBlockReason(campaign: GroupCampaign, now = Date.now()) {
   if (campaign.is_public === false) return "此共同購買已停止公開";
-  if (!["recruiting", "confirmed"].includes(campaign.decision_status)) return campaign.decision_status === "pending_confirmation" ? "已截止，等待管理員審核" : "此共同購買已停止接單";
+  if (!["recruiting", "confirmed"].includes(campaign.decision_status)) return "此共同購買已停止接單";
   if (!Number.isFinite(campaignTimestamp(campaign.deadline))) return "付款截止時間待確認";
   if (campaignTimestamp(campaign.deadline) <= now) return campaign.intake_status === "settling" ? "已截止，付款結算中" : "共同購買已截止";
   if (campaign.intake_status !== "open" || campaign.available_quantity <= 0) return campaign.intake_status === "full" ? "本團供應已額滿" : "此共同購買目前未開放接單";
@@ -31,12 +31,35 @@ export function campaignOrderBlockReason(campaign: GroupCampaign, now = Date.now
 }
 
 export function campaignStatusLabel(campaign: GroupCampaign, now = Date.now()) {
+  if (campaign.preorder_only) {
+    if (campaign.decision_status === "cancelled") return "已取消";
+    if (["rejected", "failed_unmet", "expired_unconfirmed"].includes(campaign.decision_status)) return "已結束";
+    if (campaign.intake_status === "settling") return "付款核對中";
+    if (campaignTimestamp(campaign.deadline) <= now) return "已截止";
+    if (campaign.intake_status === "full" || campaign.available_quantity <= 0) return "供應額滿";
+    if (campaign.intake_status !== "open") return "暫停預訂";
+    return "開放預訂";
+  }
   const final = { confirmed: "已成團", rejected: "不成團", failed_unmet: "未達門檻", expired_unconfirmed: "逾期未確認", cancelled: "已取消" }[campaign.decision_status];
   if (final) return final;
   if (campaign.intake_status === "settling") return "付款結算中";
   if (campaign.decision_status === "pending_confirmation" || campaignTimestamp(campaign.deadline) <= now) return "待成團審核";
   if (campaign.intake_status === "full") return "供應額滿";
   return campaign.paid_quantity >= campaign.min_paid_quantity ? "已達門檻，持續集單" : "集單中";
+}
+
+export function publicCampaignStatusLabel(campaign: GroupCampaign, now = Date.now()) {
+  return ["failed_unmet", "rejected", "expired_unconfirmed"].includes(campaign.decision_status) ? "已結束" : campaignStatusLabel(campaign, now);
+}
+
+export function campaignPreorderScheduleError(deadline: string, pickupStart: string, pickupEnd: string, now = Date.now(), editing = false) {
+  const values = [deadline, pickupStart, pickupEnd].map(value => value ? new Date(`${value}:00+08:00`).getTime() : NaN);
+  if (!values.every(Number.isFinite)) return "請填寫完整的付款截止與取貨時間";
+  const [payment, start, end] = values;
+  if (!editing && payment <= now) return "付款截止必須晚於現在";
+  if (start < payment) return "取貨開始不可早於付款截止";
+  if (end <= start) return "取貨結束須晚於開始時間";
+  return "";
 }
 
 export function campaignConfirmBlockReason(campaign: GroupCampaign, now = Date.now()) {
