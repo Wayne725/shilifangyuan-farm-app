@@ -94,7 +94,8 @@ test("每月預訂只檢查付款截止與取貨時序，沒有審核等待期",
   const scheduleError = modules["./group-campaigns"].campaignPreorderScheduleError;
   assert.equal(scheduleError("2030-01-03T10:00", "2030-01-03T11:00", "2030-01-03T12:00", now), "");
   assert.ok(scheduleError("2030-01-01T10:00", "2030-01-03T11:00", "2030-01-03T12:00", now));
-  assert.ok(scheduleError("2030-01-03T10:00", "2030-01-03T09:00", "2030-01-03T12:00", now));
+  assert.equal(scheduleError("2030-01-03T10:00", "2030-01-03T09:00", "2030-01-03T12:00", now), "");
+  assert.equal(scheduleError("2030-01-03T10:00", "2030-01-02T09:00", "2030-01-03T09:00", now), "取貨期間結束不可早於付款截止");
   assert.ok(scheduleError("2030-01-03T10:00", "2030-01-03T11:00", "2030-01-03T10:30", now));
   assert.equal(scheduleError("2030-01-01T10:00", "2030-01-03T11:00", "2030-01-03T12:00", now, true), "");
 });
