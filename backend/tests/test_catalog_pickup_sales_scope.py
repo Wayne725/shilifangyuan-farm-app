@@ -120,7 +120,7 @@ async def test_group_catalog_product_completes_pickup_checkout(campaign_context)
     buyer = campaign_context["proposer"]
     headers = {"Authorization": f"Bearer {create_token(buyer, 'access', timedelta(minutes=5), settings=settings)}"}
     created = await client.post(f"/v1/group-campaigns/{campaign.json()['id']}/join", headers=headers, json={
-        "quantity": 2, "contact_email": "catalog@example.com", "fulfillment_method": "cooperative_pickup",
+        "quantity": 2, "contact_email": "catalog@example.com", "fulfillment_method": "cooperative_pickup", "pickup_slot_id": "fri",
     })
     assert created.status_code == 201, created.text
     started = await client.post(f"/v1/orders/{created.json()['id']}/payment-attempts", headers=headers)

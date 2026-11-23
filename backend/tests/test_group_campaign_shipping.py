@@ -58,6 +58,7 @@ def campaign_payload(product_id: str, **overrides) -> dict:
         "can_ship": True,
         "shipping_temperature": "chilled",
         "allowed_shipping_channels": ["home_delivery"],
+        "pickup_slots": [{"id": "fri", "weekday": 4, "starts_at": "11:30", "ends_at": "13:00"}],
     }
     payload.update(overrides)
     return payload

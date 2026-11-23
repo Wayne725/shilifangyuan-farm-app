@@ -78,7 +78,7 @@ async def test_stopped_product_blocks_group_quote_join_and_increase_but_keeps_ex
     created = await client.post("/v1/group-campaigns", headers=admin, json=campaign_payload(target.id, target_type=target_type))
     assert created.status_code == 201, created.text
     path = f"/v1/group-campaigns/{created.json()['id']}"
-    body = {"quantity": 2, "contact_email": "buyer@example.com"}
+    body = {"quantity": 2, "contact_email": "buyer@example.com", "pickup_slot_id": "fri"}
     joined = await client.post(f"{path}/join", headers=customer, json=body)
     assert joined.status_code == 201, joined.text
     order = joined.json()
