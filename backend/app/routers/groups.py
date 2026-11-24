@@ -20,7 +20,7 @@ from ..auth import (
 from ..database import get_session
 from ..product_creation import create_product_record
 from ..platform_settings import require_accepting_orders
-from ..pickup_locations import checkout_pickup_location
+from ..pickup_locations import checkout_pickup_location, pickup_location_allowed, selectable_pickup_location_ids
 from ..config import Settings, get_settings
 from ..sales_scope import require_sales_scope_allows
 from ..supplier_order_demand import product_procurement_snapshot
@@ -142,6 +142,7 @@ def campaign_read(campaign: GroupCampaign) -> CampaignRead:
         can_ship=campaign.can_ship,
         shipping_temperature=campaign.shipping_temperature,
         pickup_slots=group_pickup_slots_read(campaign.pickup_slots),
+        pickup_location_ids=list(campaign.pickup_location_ids or []),
         allowed_shipping_channels=campaign.allowed_shipping_channels or [],
         created_at=aware(campaign.created_at),
     )
@@ -311,6 +312,7 @@ async def create_campaign(
     body.confirmation_deadline = None
     if not body.pickup_slots:
         raise HTTPException(status_code=422, detail="請至少設定一個取貨時段")
+    await selectable_pickup_location_ids(session, body.pickup_location_ids)
     try:
         validate_campaign_schedule(body, datetime.now(timezone.utc), preorder_only=True)
     except DomainError as exc:
@@ -390,9 +392,11 @@ async def update_campaign(
         raise HTTPException(status_code=409, detail="取貨安排已更新，請重新核對後儲存")
     if campaign.preorder_only and "min_paid_quantity" in updates:
         raise HTTPException(status_code=422, detail="預訂檔期不使用成團門檻")
+    if "pickup_location_ids" in updates:
+        await selectable_pickup_location_ids(session, updates["pickup_location_ids"])
     editable_details = {"title", "description"}
     if campaign.preorder_only:
-        editable_details.update({"image_url", "estimated_pickup_start", "estimated_pickup_end", "pickup_slots"})
+        editable_details.update({"image_url", "estimated_pickup_start", "estimated_pickup_end", "pickup_slots", "pickup_location_ids"})
     if updates.keys() <= editable_details:
         if "title" in updates and not updates["title"].strip():
             raise HTTPException(status_code=422, detail="請填寫共同購買名稱")
@@ -434,6 +438,7 @@ async def update_campaign(
         "shipping_temperature": campaign.shipping_temperature,
         "allowed_shipping_channels": campaign.allowed_shipping_channels or [],
         "pickup_slots": campaign.pickup_slots or [],
+        "pickup_location_ids": campaign.pickup_location_ids or [],
         **updates,
     }
     try:
@@ -716,6 +721,10 @@ async def join_campaign(
         pickup_location = await checkout_pickup_location(session, body.pickup_location_id)
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的領取地點")
+    if body.fulfillment_method == FulfillmentMethod.COOPERATIVE_PICKUP and not pickup_location_allowed(
+        campaign.pickup_location_ids, pickup_location.id if pickup_location is not None else None,
+    ):
+        raise HTTPException(status_code=422, detail="此共同購買只開放指定的取貨地點，請重新選擇")
     order = Order(
         order_number=await allocate_order_number(session, "O"),
         client_request_id=str(body.client_request_id) if body.client_request_id is not None else None,

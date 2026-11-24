@@ -36,6 +36,7 @@ async function fixture(t, width) {
       if (path === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
       if (path === '/v1/meal-announcements') return route.fulfill({ json: [] });
       if (path === '/v1/platform') return route.fulfill({json: {orders_open: true, closed_message: '', sales_scope: 'all'}});
+      if (path === '/v1/pickup-locations') return route.fulfill({json: []});
       if (path === '/v1/admin/printers/status') return route.fulfill({json: {enabled: false, dry_run: true, status: 'disabled', error: null}});
       if (path === '/v1/admin/printers/jobs') return route.fulfill({json: {items: [], total: 0}});
       if (path === '/v1/admin/platform') return route.fulfill({json:{orders_open:true,closed_message:'',printer_brand:'',printer_model:'',printer_connection:'unknown',kitchen_sound:false,invoice_provider:'fanyu'}});

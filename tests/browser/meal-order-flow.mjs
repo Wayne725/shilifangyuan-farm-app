@@ -696,7 +696,6 @@ test('每日午晚餐排程預設週一至五且停用，須明確啟用及自�
   await next.click();
   await page.getByRole('checkbox', { name: '隔離每日便當 $120', exact: true }).check();
   await next.click();
-  await next.click();
   await page.getByLabel('排程名稱', { exact: true }).fill('隔離每日晚餐排程');
   await page.getByLabel('供餐地區', { exact: true }).fill('隔離取餐區');
   await next.click();
@@ -757,17 +756,15 @@ test('390px 進行中的場次可加入多道餐點，已有訂單的餐點與�
   await form.getByRole('checkbox', { name: /隔離雞腿餐.*139/ }).check();
   await form.getByRole('checkbox', { name: /隔離蔬食餐.*120/ }).check();
   const submit = form.getByRole('button', { name: '加入場次', exact: true });
-  await form.getByLabel('隔離雞腿餐份數', { exact: true }).fill('15');
-  assert.equal(await submit.isDisabled(), true);
-  await form.getByLabel('隔離蔬食餐份數', { exact: true }).fill('8');
+  assert.equal(await form.getByLabel(/份數/).count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
   await captureMealScreenshot(page, 'meal-add-offerings-mobile.png');
   await submit.click();
   await event.getByText('已新增場次餐點', { exact: true }).waitFor();
-  await event.getByText('隔離雞腿餐 0/15', { exact: true }).waitFor();
-  await event.getByText('隔離蔬食餐 0/8', { exact: true }).waitFor();
+  await event.getByText('隔離雞腿餐 已訂 0 份', { exact: true }).waitFor();
+  await event.getByText('隔離蔬食餐 已訂 0 份', { exact: true }).waitFor();
   assert.deepEqual(state.writes, [{ method: 'POST', path: '/v1/admin/meal-events/scheduled-lunch/offerings', payload: {
-    offerings: [{ meal_id: 'add-chicken', capacity: 15 }, { meal_id: 'add-veggie', capacity: 8 }],
+    offerings: [{ meal_id: 'add-chicken', capacity: 100000 }, { meal_id: 'add-veggie', capacity: 100000 }],
   } }]);
   assert.deepEqual(state.events[0].offerings[0], original);
   assert.deepEqual(state.unknownApi, []);
@@ -1139,8 +1136,7 @@ test('手機從天災取消紀錄帶入補開草稿，原場次維持取消', { 
   const form = page.getByRole('form', { name: '建立補開草稿', exact: true });
   assert.equal(await form.getByLabel('場次名稱', { exact: true }).inputValue(), original.title);
   assert.equal(await form.getByLabel('取餐開始（台灣時間）', { exact: true }).inputValue(), '2026-09-17T11:00');
-  assert.equal(await form.getByLabel('份數', { exact: true }).count(), 1);
-  assert.equal(await form.getByLabel('份數', { exact: true }).inputValue(), '50');
+  assert.equal(await form.getByLabel('份數', { exact: true }).count(), 0);
   assert.equal(state.writes.length, 1);
   await captureMealScreenshot(page, 'meal-replacement-draft-mobile.png');
   await form.getByRole('button', { name: '建立補開草稿', exact: true }).click();
@@ -1151,7 +1147,7 @@ test('手機從天災取消紀錄帶入補開草稿，原場次維持取消', { 
   assert.equal(request.path, '/v1/admin/meal-events');
   assert.equal(request.payload.replaces_event_id, original.id);
   assert.equal(request.payload.allow_cash_payment, false);
-  assert.deepEqual(request.payload.offerings, [{ meal_id: 'scheduled-meal', price: 120, capacity: 50, position: 0 }]);
+  assert.deepEqual(request.payload.offerings, [{ meal_id: 'scheduled-meal', price: 120, capacity: 100000, position: 0 }]);
   assert.equal(state.events.find(event => event.id === original.id).status, 'cancelled');
   assert.equal(state.events.find(event => event.id === 'replacement-lunch').status, 'draft');
   const draft = page.locator('.meal-event-admin-card').filter({ has: page.getByRole('button', { name: '發布', exact: true }) });

@@ -34,7 +34,7 @@ from ..order_history import OrderHistoryQuery, read_order_history
 from ..printing import enqueue_order_print, stop_cancelled_order_prints
 from ..printer_worker import wake_printer
 from ..platform_settings import require_accepting_orders
-from ..pickup_locations import checkout_pickup_location
+from ..pickup_locations import checkout_pickup_location, pickup_location_allowed, selectable_pickup_location_ids
 from ..domain import (
     DomainError,
     invoice_estimated_tax_amount,
@@ -77,7 +77,7 @@ from ..meal_booking import (
     meal_service_date,
     validate_meal_booking_day,
 )
-from ..meal_schedules import TAIPEI, advance_meal_schedule_version, generate_scheduled_meal_events
+from ..meal_schedules import TAIPEI, advance_meal_schedule_version, apply_schedule_pickup_locations, generate_scheduled_meal_events
 from ..workday_calendar import CalendarUnavailable, calendar_status, is_workday, next_workday, previous_workday
 from ..meal_operations import meal_operations_summary, search_meal_orders
 from ..sales_scope import DEMO_MEAL_EVENT_IDS
@@ -272,6 +272,7 @@ def _meal_event_booking_fields(event: MealEvent) -> dict[str, Any]:
         "meal_period": meal_period(event),
         "pickup_slot_ends_at": _aware(event.pickup_slot_ends_at) if event.pickup_slot_ends_at else None,
         "pickup_slots": meal_pickup_slots(event),
+        "pickup_location_ids": list(event.pickup_location_ids or []),
         "booking_starts_at": booking_start,
         "booking_ends_at": booking_end,
     }
@@ -850,6 +851,10 @@ async def quote_meal_order(
             raise HTTPException(status_code=422, detail="找不到可用的取餐點，請重新選擇")
         if pickup_location.requires_pickup_note and not (body.kitchen_note or "").strip():
             raise HTTPException(422, "請填寫實際取餐位置")
+    if not business and not pickup_location_allowed(
+        event.pickup_location_ids, pickup_location.id if pickup_location is not None else None,
+    ):
+        raise HTTPException(422, "此場次只開放指定的取餐點，請重新選擇")
     by_id = {offering.id: offering for offering in event.offerings}
     now = datetime.now(timezone.utc)
     membership_type = (
@@ -1520,6 +1525,7 @@ async def admin_create_meal_schedule(
 ) -> MealScheduleRead:
     _validate_schedule_pickup_slots(body)
     await _validate_schedule_meals(session, body)
+    await selectable_pickup_location_ids(session, body.pickup_location_ids)
     template = MealScheduleTemplate(**_schedule_values(body), created_by_id=admin.id)
     session.add(template)
     await session.flush()
@@ -1546,15 +1552,18 @@ async def admin_update_meal_schedule(
         raise HTTPException(409, "每日供餐設定已更新，請重新開啟編輯後再試")
     _validate_schedule_pickup_slots(body, template)
     await _validate_schedule_meals(session, body)
+    await selectable_pickup_location_ids(session, body.pickup_location_ids)
     before = MealScheduleRead.model_validate(template).model_dump(mode="json")
     values = _schedule_values(body)
-    if "sunday_business_only" not in body.model_fields_set:
-        values.pop("sunday_business_only")
+    for name in ("sunday_business_only", "pickup_location_ids"):
+        if name not in body.model_fields_set:
+            values.pop(name)
     if template.fixed_booking_window:
         values.update(cutoff_days_before=1, cutoff_time="20:00", advance_days=7)
     for name, value in values.items():
         setattr(template, name, value)
     advance_meal_schedule_version(template, datetime.now(timezone.utc))
+    await apply_schedule_pickup_locations(session, template, admin.id, datetime.now(timezone.utc))
     await session.flush()
     session.add(AdminAudit(
         actor_id=admin.id, action="meal_schedule.update", aggregate_type="meal_schedule",
@@ -1945,7 +1954,7 @@ def _configured_event_values(
         policy = existing.booking_policy
     values["booking_policy"] = policy
     if existing is not None:
-        for name in ("same_day_preparation_minutes", "business_only"):
+        for name in ("same_day_preparation_minutes", "business_only", "pickup_location_ids"):
             if name not in body.model_fields_set:
                 values[name] = getattr(existing, name)
     same_day = values["same_day_preparation_minutes"] is not None
@@ -2026,6 +2035,7 @@ async def _create_meal_event(
     body: MealEventCreate, admin: User, session: AsyncSession, *, source: MealEvent | None = None,
 ) -> MealEventRead:
     values = _configured_event_values(body, pickup_source=source)
+    await selectable_pickup_location_ids(session, values["pickup_location_ids"])
     meal_ids = {offering.meal_id for offering in body.offerings}
     meals = (
         await session.scalars(
@@ -2098,6 +2108,7 @@ async def admin_update_meal_event(
     if await session.scalar(select(Order.id).where(Order.meal_event_id == event_id).limit(1)):
         raise HTTPException(status_code=409, detail="此場次已有訂單，為保留訂購承諾不可修改；請另建場次")
     values = _configured_event_values(body, existing=event)
+    await selectable_pickup_location_ids(session, values["pickup_location_ids"])
     service_date = _aware(body.pickup_starts_at).astimezone(TAIPEI).date()
     if event.schedule_template_id and service_date != event.service_date:
         raise HTTPException(status_code=422, detail="排程場次不可更換供餐日期；請另建手動場次")

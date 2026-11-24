@@ -157,6 +157,7 @@ async def generate_scheduled_meal_events(
                 pickup_ends_at=(pickup_end + timedelta(minutes=30)).astimezone(timezone.utc),
                 status=MealEventStatus.PUBLISHED if template.auto_publish else MealEventStatus.DRAFT,
                 created_by_id=template.created_by_id,
+                pickup_location_ids=list(template.pickup_location_ids or []),
                 offerings=[MealEventOffering(**item) for item in active_offerings],
             )
             session.add(event)
@@ -171,3 +172,27 @@ async def generate_scheduled_meal_events(
             created_ids.append(event.id)
     await session.commit()
     return created_ids
+
+
+async def apply_schedule_pickup_locations(
+    session: AsyncSession, template: MealScheduleTemplate, actor_id: str, now: datetime,
+) -> int:
+    target = list(template.pickup_location_ids or [])
+    events = list(await session.scalars(select(MealEvent).where(
+        MealEvent.schedule_template_id == template.id,
+        MealEvent.pickup_starts_at > now,
+        MealEvent.archived_at.is_(None),
+        MealEvent.status.not_in([MealEventStatus.CANCELLED, MealEventStatus.COMPLETED]),
+    ).order_by(MealEvent.id).with_for_update()))
+    changed = 0
+    for event in events:
+        before = list(event.pickup_location_ids or [])
+        if before == target:
+            continue
+        event.pickup_location_ids = target
+        session.add(AdminAudit(
+            actor_id=actor_id, action="meal_event.pickup_locations_update", aggregate_type="meal_event",
+            aggregate_id=event.id, data={"schedule_template_id": template.id, "before": before, "after": target},
+        ))
+        changed += 1
+    return changed

@@ -1350,6 +1350,7 @@ class GroupCampaign(Base):
     )
     allowed_shipping_channels: Mapped[List[str]] = mapped_column(JSON, default=list)
     pickup_slots: Mapped[List[dict]] = mapped_column(JSON, default=list, server_default="[]")
+    pickup_location_ids: Mapped[List[str]] = mapped_column(JSON, default=list, server_default="[]")
     created_by_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT")
     )
@@ -1802,6 +1803,7 @@ class MealEvent(Base):
     title: Mapped[str] = mapped_column(String(160))
     allow_cash_payment: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     location: Mapped[str] = mapped_column(String(240))
+    pickup_location_ids: Mapped[List[str]] = mapped_column(JSON, default=list, server_default="[]")
     schedule_template_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("meal_schedule_templates.id", ondelete="RESTRICT"), nullable=True, index=True
     )
@@ -1857,6 +1859,7 @@ class MealScheduleTemplate(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(140))
     location: Mapped[str] = mapped_column(String(240))
+    pickup_location_ids: Mapped[List[str]] = mapped_column(JSON, default=list, server_default="[]")
     meal_period: Mapped[str] = mapped_column(String(12))
     pickup_start_time: Mapped[str] = mapped_column(String(5))
     pickup_end_time: Mapped[str] = mapped_column(String(5))
