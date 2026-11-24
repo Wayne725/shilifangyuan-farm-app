@@ -18,7 +18,7 @@ import { apiFetch, formatDate, formatMoney } from "../lib/api";
 import { shippingChannelLabels, temperatureLabels } from "../lib/commerce";
 import type {
   PickupLocation,
-  Product,
+  AdminProduct,
   ShippingChannel,
   ShippingTemperature,
   Supplier,
@@ -120,7 +120,7 @@ export function AdminCatalogPage() {
   const [saleNotice, setSaleNotice] = useState("");
   const [products, suppliers, locations] = useQueries({
     queries: [
-      { queryKey: saleFilter === "archived" ? ["admin-products", "archived"] : ["admin-products"], queryFn: () => apiFetch<Product[]>(saleFilter === "archived" ? "/v1/products?archive=archived" : "/v1/products"), enabled: isAdmin },
+      { queryKey: saleFilter === "archived" ? ["admin-products", "archived"] : ["admin-products"], queryFn: () => apiFetch<AdminProduct[]>(saleFilter === "archived" ? "/v1/admin/products?archive=archived" : "/v1/admin/products"), enabled: isAdmin },
       { queryKey: ["admin-suppliers"], queryFn: () => apiFetch<Supplier[]>("/v1/admin/suppliers"), enabled: isAdmin },
       { queryKey: ["admin-pickup-locations"], queryFn: () => apiFetch<PickupLocation[]>("/v1/admin/pickup-locations"), enabled: isAdmin },
     ],
@@ -186,7 +186,7 @@ export function AdminCatalogPage() {
             <div className="admin-record-grid">
               {visibleProducts.map((product) => (
                 <ProductEditor key={product.id} product={product} suppliers={suppliers.data || []} onDone={refreshProducts} onSaleChanged={(saved) => {
-                  queryClient.setQueryData<Product[]>(["admin-products"], (current) => current?.map((item) => item.id === saved.id ? saved : item));
+                  queryClient.setQueryData<AdminProduct[]>(["admin-products"], (current) => current?.map((item) => item.id === saved.id ? saved : item));
                   setSaleNotice(`${saved.name}已${saved.is_active ? "恢復" : "停止"}販售。`);
                 }} />
               ))}
@@ -237,8 +237,8 @@ function ProductCreateForm({ suppliers, onDone }: { suppliers: Supplier[]; onDon
   const create = useMutation({
     mutationFn: async () => {
       const product = createdId
-        ? await apiFetch<Product>(`/v1/products/${createdId}`, { method: "PATCH", body: JSON.stringify(productPayload(draft)) })
-        : await apiFetch<Product>("/v1/products", { method: "POST", body: JSON.stringify(productPayload(draft)) });
+        ? await apiFetch<AdminProduct>(`/v1/products/${createdId}`, { method: "PATCH", body: JSON.stringify(productPayload(draft)) })
+        : await apiFetch<AdminProduct>("/v1/products", { method: "POST", body: JSON.stringify(productPayload(draft)) });
       setCreatedId(product.id);
       try { await savePhoto(`/v1/admin/products/${product.id}/photo`, photo, false); }
       catch (error) { onDone(); throw new Error(`商品已儲存，照片尚未完成：${(error as Error).message}`); }
@@ -253,7 +253,7 @@ function ProductCreateForm({ suppliers, onDone }: { suppliers: Supplier[]; onDon
   );
 }
 
-function productDraft(product: Product): ProductDraft {
+function productDraft(product: AdminProduct): ProductDraft {
   return {
     product_number: product.product_number || "", sku: product.sku || "", supplier_id: product.supplier_id || "", name: product.name,
     description: product.description, category: product.category, unit: product.unit,
@@ -264,7 +264,7 @@ function productDraft(product: Product): ProductDraft {
   };
 }
 
-function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product: Product; suppliers: Supplier[]; onDone: () => void; onSaleChanged: (product: Product) => void }) {
+function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product: AdminProduct; suppliers: Supplier[]; onDone: () => void; onSaleChanged: (product: AdminProduct) => void }) {
   const [editing, setEditing] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [draft, setDraft] = useState<ProductDraft>(() => productDraft(product));
@@ -273,7 +273,7 @@ function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product:
   const [photo, setPhoto] = useState<File | null>(null);
   const [removePhoto, setRemovePhoto] = useState(false);
   const sale = useMutation({
-    mutationFn: () => apiFetch<Product>(`/v1/products/${product.id}`, { method: "PATCH", body: JSON.stringify({ is_active: !product.is_active }) }),
+    mutationFn: () => apiFetch<AdminProduct>(`/v1/products/${product.id}`, { method: "PATCH", body: JSON.stringify({ is_active: !product.is_active }) }),
     onSuccess: async (saved) => { onSaleChanged(saved); await onDone(); },
     onSettled: () => { saleInFlight.current = false; },
   });
@@ -281,14 +281,14 @@ function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product:
     mutationFn: async () => {
       const original = productPayload(originalDraft);
       const changes = Object.fromEntries(Object.entries(productPayload(draft)).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(original[key as keyof typeof original])));
-      if (Object.keys(changes).length) await apiFetch<Product>(`/v1/products/${product.id}`, { method: "PATCH", body: JSON.stringify(changes) });
+      if (Object.keys(changes).length) await apiFetch<AdminProduct>(`/v1/products/${product.id}`, { method: "PATCH", body: JSON.stringify(changes) });
       try { await savePhoto(`/v1/admin/products/${product.id}/photo`, photo, removePhoto); }
       catch (error) { onDone(); throw new Error(`商品資料已儲存，照片尚未完成：${(error as Error).message}`); }
     },
     onSuccess: async () => { setEditing(false); setPhoto(null); setRemovePhoto(false); await onDone(); },
   });
   const archive = useMutation({
-    mutationFn: (archived: boolean) => apiFetch<Product>(`/v1/admin/products/${product.id}/archive`, {
+    mutationFn: (archived: boolean) => apiFetch<AdminProduct>(`/v1/admin/products/${product.id}/archive`, {
       method: "PATCH", body: JSON.stringify({ archived }),
     }),
     onSuccess: () => { setConfirmArchive(false); onDone(); },

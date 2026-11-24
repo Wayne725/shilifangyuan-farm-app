@@ -26,9 +26,6 @@ export interface AuthActionResponse {
 export interface Product {
   archived_at?: string | null;
   id: string;
-  product_number?: string | null;
-  sku?: string | null;
-  supplier_id?: string | null;
   supplier_name?: string | null;
   slug: string;
   name: string;
@@ -45,6 +42,12 @@ export interface Product {
   allowed_shipping_channels: ShippingChannel[];
   is_active: boolean;
   daily_sales_enabled: boolean;
+}
+
+export interface AdminProduct extends Product {
+  product_number: string | null;
+  sku: string | null;
+  supplier_id: string | null;
 }
 
 export type FulfillmentMethod =
@@ -264,7 +267,7 @@ export interface PickupLocation {
 export interface Activity {
   is_public?: boolean;
   id: string;
-  created_by_id: string;
+  is_mine: boolean;
   title: string;
   description: string;
   location: string;
@@ -504,7 +507,7 @@ export interface GroupBundle {
 
 export interface GroupVoteProposal {
   id: string;
-  proposer_id: string;
+  is_mine: boolean;
   target_type: "product" | "bundle" | "custom";
   target_id: string | null;
   target_name: string;

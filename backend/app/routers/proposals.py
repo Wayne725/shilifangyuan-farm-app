@@ -15,7 +15,7 @@ from ..auth import get_current_user, get_optional_user, require_admin
 from ..database import get_session
 from ..product_creation import create_product_record
 from ..config import get_settings
-from ..domain import apply_proposal_clock, aware, validate_campaign_schedule
+from ..domain import apply_proposal_clock, aware, proposal_clock_state, validate_campaign_schedule
 from ..models import (
     AdminAudit,
     GroupBundle,
@@ -69,8 +69,11 @@ async def resolve_target(
 
 
 def proposal_read(
-    proposal: VoteProposal, current_user: Optional[User]
+    proposal: VoteProposal, current_user: Optional[User], *, now: Optional[datetime] = None
 ) -> ProposalRead:
+    is_mine = current_user is not None and proposal.proposer_id == current_user.id
+    can_review = is_mine or (current_user is not None and current_user.user_role == UserRole.ADMIN)
+    display_status, conversion_deadline = proposal_clock_state(proposal, len(proposal.votes), now)
     my_vote = next(
         (
             vote
@@ -81,15 +84,15 @@ def proposal_read(
     )
     return ProposalRead(
         id=proposal.id,
-        proposer_id=proposal.proposer_id,
+        is_mine=is_mine,
         target_type=proposal.target_type,
         target_id=proposal.target_id,
         target_name=proposal.target_name_snapshot,
         request_details=proposal.request_details,
-        status=proposal.status,
+        status=display_status,
         threshold=proposal.threshold,
         deadline=proposal.deadline,
-        conversion_deadline=proposal.conversion_deadline,
+        conversion_deadline=conversion_deadline,
         vote_count=len(proposal.votes),
         estimated_quantity=sum(
             vote.estimated_quantity for vote in proposal.votes
@@ -97,7 +100,7 @@ def proposal_read(
         my_vote_quantity=(
             my_vote.estimated_quantity if my_vote is not None else None
         ),
-        review_reason=proposal.review_reason,
+        review_reason=proposal.review_reason if can_review else None,
         created_at=proposal.created_at,
     )
 
@@ -194,15 +197,8 @@ async def list_proposals(
     proposals = list(
         await session.scalars(query.order_by(VoteProposal.created_at.desc(), VoteProposal.id.desc()))
     )
-    changed = False
     now = datetime.now(timezone.utc)
-    for proposal in proposals:
-        changed = (
-            await apply_clock_with_events(session, proposal, now) or changed
-        )
-    if changed:
-        await session.commit()
-    return [proposal_read(proposal, current_user) for proposal in proposals]
+    return [proposal_read(proposal, current_user, now=now) for proposal in proposals]
 
 
 @proposals_router.get("/{proposal_id}", response_model=ProposalRead)
@@ -225,10 +221,6 @@ async def get_proposal(
         )
     ):
         raise HTTPException(status_code=404, detail="找不到投票提案")
-    if await apply_clock_with_events(
-        session, proposal, datetime.now(timezone.utc)
-    ):
-        await session.commit()
     return proposal_read(proposal, current_user)
 
 
