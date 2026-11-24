@@ -77,6 +77,7 @@ def test_preorder_migration_preserves_orders_contracts_and_closed_history(preord
     command.upgrade(database.config, REVISION)
     assert database.rows("group_campaigns") == list(after.values())
     assert database.rows("admin_audits") == immutable["admin_audits"]
+    command.upgrade(database.config, "head")
     command.check(database.config)
 
 

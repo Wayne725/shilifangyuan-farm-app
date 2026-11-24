@@ -1349,6 +1349,7 @@ class GroupCampaign(Base):
         nullable=True,
     )
     allowed_shipping_channels: Mapped[List[str]] = mapped_column(JSON, default=list)
+    pickup_slots: Mapped[List[dict]] = mapped_column(JSON, default=list, server_default="[]")
     created_by_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT")
     )
@@ -2306,6 +2307,7 @@ class OrderFulfillment(Base):
     pickup_location: Mapped[Optional[str]] = mapped_column(
         String(240), nullable=True
     )
+    pickup_slot_label: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     pickup_address: Mapped[str] = mapped_column(String(500), default="", server_default="")
     pickup_instructions: Mapped[str] = mapped_column(Text, default="", server_default="")
     needs_utensils: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

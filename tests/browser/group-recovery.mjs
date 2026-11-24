@@ -7,7 +7,7 @@ const { chromium, webkit } = createRequire(import.meta.url)('playwright');
 const engine = process.env.BROWSER_ENGINE === 'webkit' ? webkit : chromium;
 const base = 'http://127.0.0.1:4261';
 const root = resolve(process.env.BROWSER_DIST_ROOT || resolve(import.meta.dirname, '../../web/dist'));
-const campaign = { id: 'recovery-group', title: '恢復測試共同購買', description: '', target_type: 'product', target_id: 'group-product', member_price: 100, nonmember_price: 100, min_paid_quantity: 1, paid_quantity: 0, reserved_quantity: 0, supply_cap: 20, per_user_cap: 10, available_quantity: 20, intake_status: 'open', preorder_only: true, decision_status: 'confirmed', deadline: '2030-01-02T00:00:00Z', estimated_pickup_start: '2030-01-03T00:00:00Z', estimated_pickup_end: '2030-01-04T00:00:00Z', can_ship: false, allowed_shipping_channels: [] };
+const campaign = { id: 'recovery-group', title: '恢復測試共同購買', description: '', target_type: 'product', target_id: 'group-product', member_price: 100, nonmember_price: 100, min_paid_quantity: 1, paid_quantity: 0, reserved_quantity: 0, supply_cap: 20, per_user_cap: 10, available_quantity: 20, intake_status: 'open', preorder_only: true, decision_status: 'confirmed', deadline: '2030-01-02T00:00:00Z', pickup_slots: [{ id: 'fri', weekday: 4, starts_at: '11:30', ends_at: '13:00', label: '每週五 11:30~13:00' }], estimated_pickup_start: '2030-01-03T00:00:00Z', estimated_pickup_end: '2030-01-04T00:00:00Z', can_ship: false, allowed_shipping_channels: [] };
 const types = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
 async function fixture(t, { loseResponse = false, blockedStorage = false, loseBeforeCreate = false, rejection = null, missingFingerprint = false, shipping = false, origin = base } = {}) {
   const browser = await engine.launch({ headless: true, ...(engine === chromium ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
@@ -34,7 +34,7 @@ async function fixture(t, { loseResponse = false, blockedStorage = false, loseBe
       assert.ok(file.startsWith(`${root}/`));
       return route.fulfill({ contentType: types[extname(file)] || 'application/octet-stream', body: await readFile(file) });
     }
-    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-group', user: { id: state.userId, email: 'buyer@example.com', display_name: state.userId, membership_type: 'nonmember', user_role: 'customer' } } });
+    if (path === '/v1/auth/refresh') return route.fulfill({ json: { access_token: 'isolated-group', user: { id: state.userId, email: 'buyer@example.com', display_name: state.userId, membership_type: 'member', user_role: 'customer' } } });
     if (path === '/v1/platform') return route.fulfill({ json: { orders_open: state.open, closed_message: '暫停接單' } });
     if (path === '/v1/pickup-locations') return route.fulfill({ json: [{ id: 'group-pickup', name: '合作社取貨點', is_active: true }] });
     if (path === '/v1/group-campaigns/recovery-group') return state.campaignError ? route.fulfill({ status: 404, json: { detail: '共同購買暫時無法讀取' } }) : route.fulfill({ json: { ...campaign, ...(shipping ? { can_ship: true, shipping_temperature: 'ambient', allowed_shipping_channels: ['home_delivery'] } : {}), available_quantity: state.open ? 20 : 0, intake_status: state.open ? 'open' : 'closed' } });

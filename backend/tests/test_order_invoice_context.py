@@ -2,11 +2,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models import GroupCampaign, Meal, MealEvent, MealEventOffering, MealEventStatus, Order, TargetType
+from app.models import GroupCampaign, Membership, MembershipStatus, Meal, MealEvent, MealEventOffering, MealEventStatus, Order, TargetType
 from app.routers.groups import groups_router
 from app.routers.meals import meals_router
 from app.routers.orders import orders_router
-from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings, tomorrow_meal_timeline
+from tests.support import api_test_context, auth_headers, fanyu_test_context, make_test_settings, tomorrow_meal_timeline, TEST_PICKUP_SLOTS, with_pickup_slot
 from tests.test_integrations import make_regular_order
 
 
@@ -27,11 +27,13 @@ async def test_each_checkout_persists_server_invoice_context_before_payment(data
             member_price=100, nonmember_price=100, min_paid_quantity=1, supply_cap=5,
             deadline=now + timedelta(days=1), estimated_pickup_start=now + timedelta(days=2),
             estimated_pickup_end=now + timedelta(days=3), created_by_id=user.id,
+            pickup_slots=TEST_PICKUP_SLOTS,
         )
-        database_session.add(campaign)
+        database_session.add_all([campaign, Membership(user_id=user.id, status=MembershipStatus.ACTIVE)])
         await database_session.flush()
         path = f"/v1/group-campaigns/{campaign.id}/join"
         payload["quantity"] = 1
+        payload = with_pickup_slot(payload)
     else:
         event = MealEvent(
             title="隔離便當", location="測試取餐點", status=MealEventStatus.PUBLISHED,

@@ -57,8 +57,8 @@ export function campaignPreorderScheduleError(deadline: string, pickupStart: str
   if (!values.every(Number.isFinite)) return "請填寫完整的付款截止與取貨時間";
   const [payment, start, end] = values;
   if (!editing && payment <= now) return "付款截止必須晚於現在";
-  if (start < payment) return "取貨開始不可早於付款截止";
   if (end <= start) return "取貨結束須晚於開始時間";
+  if (end < payment) return "取貨期間結束不可早於付款截止";
   return "";
 }
 

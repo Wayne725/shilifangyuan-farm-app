@@ -10,7 +10,7 @@ const now='2030-01-02T10:00:00+08:00';
 const adminCampaignList='/v1/group-campaigns?include_hidden=true';
 const adminWorkspaceReads=new Set(['/v1/products','/v1/group-bundles','/v1/vote-proposals',adminCampaignList]);
 const product={id:'product',name:'原始團購白米',category:'蔬果',description:'隔離商品',unit:'袋',member_price:90,nonmember_price:100,stock_quantity:30,is_active:true,can_ship:false,allowed_shipping_channels:[]};
-const closedCampaign={id:'campaign',title:'每月預訂隔離共同購買',description:'隔離測試',target_type:'product',target_id:'product',member_price:90,nonmember_price:100,min_paid_quantity:10,supply_cap:30,per_user_cap:5,paid_quantity:1,reserved_quantity:0,available_quantity:29,deadline:'2030-01-01T04:00:00Z',confirmation_deadline:'2030-01-04T04:00:00Z',estimated_pickup_start:'2030-01-06T04:00:00Z',estimated_pickup_end:'2030-01-07T04:00:00Z',preorder_only:true,decision_status:'confirmed',intake_status:'closed',threshold_version:2,updated_at:'2030-01-01T05:00:00Z',review_overdue:false,can_confirm:false,can_edit_review_deadline:false,confirmation_blocked_reason:null,can_ship:false,allowed_shipping_channels:[],core_locked_at:'2030-01-01T00:00:00Z'};
+const closedCampaign={id:'campaign',pickup_slots:[{id:'fri',weekday:4,starts_at:'11:30',ends_at:'13:00',label:'每週五 11:30~13:00'}],title:'每月預訂隔離共同購買',description:'隔離測試',target_type:'product',target_id:'product',member_price:90,nonmember_price:100,min_paid_quantity:10,supply_cap:30,per_user_cap:5,paid_quantity:1,reserved_quantity:0,available_quantity:29,deadline:'2030-01-01T04:00:00Z',confirmation_deadline:'2030-01-04T04:00:00Z',estimated_pickup_start:'2030-01-06T04:00:00Z',estimated_pickup_end:'2030-01-07T04:00:00Z',preorder_only:true,decision_status:'confirmed',intake_status:'closed',threshold_version:2,updated_at:'2030-01-01T05:00:00Z',review_overdue:false,can_confirm:false,can_edit_review_deadline:false,confirmation_blocked_reason:null,can_ship:false,allowed_shipping_channels:[],core_locked_at:'2030-01-01T00:00:00Z'};
 const openCampaign={...closedCampaign,decision_status:'confirmed',intake_status:'open',deadline:'2030-01-03T04:00:00Z',confirmation_deadline:'2030-01-06T04:00:00Z',estimated_pickup_start:'2030-01-07T04:00:00Z',estimated_pickup_end:'2030-01-08T04:00:00Z',can_confirm:false};
 async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=closedCampaign,proposal=false,proposalStatus='pending_review',proposalRows,timezone='Asia/Taipei'}={}) {
   const browser=await engine.launch({headless:true,...(engine===chromium?{executablePath:process.env.BROWSER_EXECUTABLE}:{})});t.after(()=>browser.close());
@@ -20,7 +20,7 @@ async function fixture(t,{role='admin',width=1280,path='/admin/groups',campaign=
     const request=route.request(),url=new URL(request.url()),endpoint=url.pathname,method=request.method();
     if(url.origin!==base)return route.abort();
     if(!endpoint.startsWith('/v1/'))return method==='GET'?route.continue():route.abort();
-    if(endpoint==='/v1/auth/refresh')return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'訪客'}:{access_token:'isolated',user:{id:'review-user',email:'review@example.test',display_name:'隔離管理者',user_role:role,membership_type:'nonmember'}}});
+    if(endpoint==='/v1/auth/refresh')return route.fulfill({status:role==='guest'?401:200,json:role==='guest'?{detail:'訪客'}:{access_token:'isolated',user:{id:'review-user',email:'review@example.test',display_name:'隔離管理者',user_role:role,membership_type:'member'}}});
     if(method==='GET') {
       const readPath=endpoint+url.search;
       state.reads.push(endpoint);state.readUrls.push(url.href);
@@ -166,9 +166,15 @@ for (const width of [1280, 390]) for (const ended of [false, true]) test(`買家
   await visit();
   await page.getByRole('heading', { name: '每月共同購買', exact: true }).waitFor();
   const listing = page.locator('.editorial-card');
-  await listing.getByText(ended ? '已結束' : '開放預訂', { exact: true }).waitFor();
   assert.equal(await page.locator('a[href^="/group-votes"]').count(), 0);
-  await listing.getByRole('link').click();
+  if (ended) {
+    await page.getByText('本月共同購買尚未開放', { exact: true }).waitFor();
+    assert.equal(await listing.count(), 0);
+    await page.goto(`${base}/groups/${campaign.id}`);
+  } else {
+    await listing.getByText('開放預訂', { exact: true }).waitFor();
+    await listing.getByRole('link').click();
+  }
   await page.getByRole('heading', { name: campaign.title, exact: true }).waitFor();
   assert.equal(await page.getByText(/份門檻|審核截止/).count(), 0);
   if (ended) {

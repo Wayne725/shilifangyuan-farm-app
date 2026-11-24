@@ -49,6 +49,8 @@ from ..models import (
     GroupDecisionStatus,
     GroupIntakeStatus,
     InventoryReservation,
+    InvoiceBuyerType,
+    MembershipType,
     Order,
     OrderFulfillment,
     OrderItem,
@@ -71,6 +73,9 @@ from ..schemas import (
     CampaignCreate,
     CampaignDecision,
     CampaignRead,
+    group_pickup_slots_read,
+    GroupPickupSlotOrder,
+    GroupPickupSlotSummary,
     CampaignReviewDeadlineUpdate,
     CampaignReject,
     CampaignUpdate,
@@ -136,6 +141,7 @@ def campaign_read(campaign: GroupCampaign) -> CampaignRead:
         core_locked_at=aware(campaign.core_locked_at) if campaign.core_locked_at else None,
         can_ship=campaign.can_ship,
         shipping_temperature=campaign.shipping_temperature,
+        pickup_slots=group_pickup_slots_read(campaign.pickup_slots),
         allowed_shipping_channels=campaign.allowed_shipping_channels or [],
         created_at=aware(campaign.created_at),
     )
@@ -303,6 +309,8 @@ async def create_campaign(
         )
     body.min_paid_quantity = 1
     body.confirmation_deadline = None
+    if not body.pickup_slots:
+        raise HTTPException(status_code=422, detail="請至少設定一個取貨時段")
     try:
         validate_campaign_schedule(body, datetime.now(timezone.utc), preorder_only=True)
     except DomainError as exc:
@@ -384,15 +392,15 @@ async def update_campaign(
         raise HTTPException(status_code=422, detail="預訂檔期不使用成團門檻")
     editable_details = {"title", "description"}
     if campaign.preorder_only:
-        editable_details.update({"image_url", "estimated_pickup_start", "estimated_pickup_end"})
+        editable_details.update({"image_url", "estimated_pickup_start", "estimated_pickup_end", "pickup_slots"})
     if updates.keys() <= editable_details:
         if "title" in updates and not updates["title"].strip():
             raise HTTPException(status_code=422, detail="請填寫共同購買名稱")
         if campaign.preorder_only:
             start = updates.get("estimated_pickup_start", aware(campaign.estimated_pickup_start))
             end = updates.get("estimated_pickup_end", aware(campaign.estimated_pickup_end))
-            if start < aware(campaign.deadline) or end < start:
-                raise HTTPException(status_code=422, detail="取貨開始不可早於預訂截止，取貨結束不可早於開始")
+            if end < aware(campaign.deadline) or end < start:
+                raise HTTPException(status_code=422, detail="取貨期間結束不可早於預訂截止，取貨結束不可早於開始")
         changes = {}
         for field, value in updates.items():
             previous = getattr(campaign, field)
@@ -425,6 +433,7 @@ async def update_campaign(
         "can_ship": campaign.can_ship,
         "shipping_temperature": campaign.shipping_temperature,
         "allowed_shipping_channels": campaign.allowed_shipping_channels or [],
+        "pickup_slots": campaign.pickup_slots or [],
         **updates,
     }
     try:
@@ -552,6 +561,10 @@ async def _group_join_quote(session, campaign, body, user, *, target_snapshot=No
     except DomainError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     membership_type = membership_type_for_user(user)
+    if membership_type != MembershipType.MEMBER:
+        raise HTTPException(status_code=403, detail="共同購買僅限正式社員參加", headers={"X-Error-Code": "group_members_only"})
+    if body.invoice_buyer_type != InvoiceBuyerType.PERSONAL:
+        raise HTTPException(status_code=422, detail="共同購買一律開立社員免稅個人發票，不提供公司統編發票")
     unit_price = price_for_membership(
         campaign.member_price,
         campaign.nonmember_price,
@@ -683,6 +696,16 @@ async def join_campaign(
         raise HTTPException(409, "共同購買報價已更新，請重新確認後再送單", headers={"X-Error-Code": "quote_changed"})
     name, unit, _, product_id, bundle_id, procurement_snapshot = snapshot
     membership_type, tax_type, unit_price = quote.membership_type, quote.tax_type, quote.unit_price
+    pickup_slot_label = None
+    if body.fulfillment_method == FulfillmentMethod.COOPERATIVE_PICKUP:
+        slots = {slot.id: slot.label for slot in group_pickup_slots_read(campaign.pickup_slots)}
+        if not slots:
+            raise HTTPException(status_code=422, detail="此共同購買尚未設定取貨時段，暫時無法訂購")
+        pickup_slot_label = slots.get(body.pickup_slot_id or "")
+        if pickup_slot_label is None:
+            raise HTTPException(status_code=422, detail="請選擇取貨時段")
+    elif body.pickup_slot_id is not None:
+        raise HTTPException(status_code=422, detail="只有合作社取貨可選擇取貨時段")
     pickup_location = None
     if body.pickup_location_id is not None:
         if body.fulfillment_method != FulfillmentMethod.COOPERATIVE_PICKUP:
@@ -755,6 +778,7 @@ async def join_campaign(
             pickup_location=(
                 pickup_location.name if pickup_location is not None else None
             ),
+            pickup_slot_label=pickup_slot_label,
         ),
     )
     user.notification_email = order.contact_email
@@ -1008,3 +1032,41 @@ async def cancel_group(
 
 
 router = groups_router
+
+
+@groups_router.get("/{campaign_id}/admin/pickup-slot-summary", response_model=List[GroupPickupSlotSummary])
+async def pickup_slot_summary(
+    campaign_id: str,
+    _admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+) -> List[GroupPickupSlotSummary]:
+    campaign = await load_campaign(session, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="找不到共同購買")
+    orders = list(await session.scalars(
+        select(Order)
+        .where(
+            Order.group_campaign_id == campaign.id,
+            Order.payment_status == PaymentStatus.PAID,
+            Order.fulfillment_status != FulfillmentStatus.CANCELLED,
+        )
+        .options(selectinload(Order.items), selectinload(Order.fulfillment), selectinload(Order.user))
+        .order_by(Order.created_at, Order.id)
+    ))
+    groups: dict[str, list[GroupPickupSlotOrder]] = {
+        slot.label: [] for slot in group_pickup_slots_read(campaign.pickup_slots)
+    }
+    for order in orders:
+        label = (order.fulfillment.pickup_slot_label if order.fulfillment else None) or (
+            "宅配" if order.fulfillment_method == FulfillmentMethod.ECPAY_LOGISTICS else "未選取貨時段")
+        groups.setdefault(label, []).append(GroupPickupSlotOrder(
+            order_number=order.order_number,
+            buyer_name=order.user.display_name if order.user else "",
+            contact_email=order.contact_email,
+            quantity=sum(item.quantity for item in order.items),
+            fulfillment_status=order.fulfillment_status.value,
+        ))
+    return [
+        GroupPickupSlotSummary(label=label, order_count=len(rows), quantity=sum(row.quantity for row in rows), orders=rows)
+        for label, rows in groups.items()
+    ]

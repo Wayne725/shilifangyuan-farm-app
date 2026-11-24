@@ -89,6 +89,7 @@ export interface OrderFulfillment {
   status: string;
   pickup_location_id?: string | null;
   pickup_location?: string | null;
+  pickup_slot_label?: string | null;
   pickup_address?: string;
   needs_utensils?: boolean;
   pickup_starts_at?: string | null;
@@ -430,7 +431,23 @@ export interface MembershipApplication {
   documents: MembershipDocument[];
 }
 
+export interface GroupPickupSlot {
+  id?: string;
+  weekday: number;
+  starts_at: string;
+  ends_at: string;
+  label?: string;
+}
+
+export interface GroupPickupSlotSummary {
+  label: string;
+  order_count: number;
+  quantity: number;
+  orders: { order_number: string; buyer_name: string; contact_email: string; quantity: number; fulfillment_status: string }[];
+}
+
 export interface GroupCampaign {
+  pickup_slots?: GroupPickupSlot[];
   preorder_only: boolean;
   is_public?: boolean;
   id: string;

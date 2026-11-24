@@ -117,6 +117,7 @@
   "GET /v1/group-bundles/{bundle_id}",
   "GET /v1/group-campaigns",
   "GET /v1/group-campaigns/{campaign_id}",
+  "GET /v1/group-campaigns/{campaign_id}/admin/pickup-slot-summary",
   "GET /v1/me/badges",
   "GET /v1/me/points",
   "GET /v1/me/surplus-distributions",

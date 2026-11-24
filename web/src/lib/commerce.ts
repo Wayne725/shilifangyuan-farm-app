@@ -262,6 +262,7 @@ export async function refreshPaymentAttempt(
 export type GroupCheckoutInput = Omit<CheckoutInput, "items"> & {
   campaignId: string;
   quantity: number;
+  pickupSlotId?: string;
 };
 
 export interface GroupCommerceGateway extends Pick<CommerceGateway, "createLogisticsSelection" | "createPaymentAttempt"> {
@@ -293,7 +294,7 @@ export async function beginGroupCheckout(
             ? "ecpay_logistics"
             : "cooperative_pickup",
         ...(input.fulfillment.kind === "pickup"
-          ? { pickup_location_id: input.fulfillment.pickupLocationId }
+          ? { pickup_location_id: input.fulfillment.pickupLocationId, ...(input.pickupSlotId ? { pickup_slot_id: input.pickupSlotId } : {}) }
           : { shipping_channel: input.fulfillment.channel }),
   });
   checkIdentity();

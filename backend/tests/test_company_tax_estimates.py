@@ -44,6 +44,10 @@ async def test_company_quote_and_new_order_match_provider_tax(database_session, 
     )
 
     context = await checkout_context(database_session, channel, buyer_type='company')
+    if channel == 'group':
+        from tests.test_member_invoice_tax import assert_group_rejected
+        await assert_group_rejected(database_session, context)
+        return
     if channel == 'regular':
         context.sources[0].member_price = context.sources[0].nonmember_price = 545
     elif channel == 'meal':

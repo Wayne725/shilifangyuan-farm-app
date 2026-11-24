@@ -11,7 +11,7 @@ from tests.test_member_invoice_tax import CHANNELS, ROUTERS, checkout_context, t
 @pytest.mark.parametrize("channel", CHANNELS)
 @pytest.mark.parametrize("contact_field", ["filled", "null", "missing"])
 async def test_line_customer_defers_email_until_checkout_without_changing_login(database_session, channel, contact_field):
-    context = await checkout_context(database_session, channel, membership_state="nonmember", buyer_type="personal", base_tax_type=TaxType.TAXABLE)
+    context = await checkout_context(database_session, channel, membership_state="active" if channel == "group" else "nonmember", buyer_type="personal", base_tax_type=TaxType.TAXABLE)
     context.user.email = None
     context.user.email_verified_at = None
     identity = ExternalIdentity(user_id=context.user.id, provider="line", subject="U-email-less-checkout")

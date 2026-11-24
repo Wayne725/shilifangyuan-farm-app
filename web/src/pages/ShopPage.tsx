@@ -72,6 +72,7 @@ export function ShopPage() {
     queryKey: ["group-campaigns"],
     queryFn: () => apiFetch<GroupCampaign[]>("/v1/group-campaigns"),
   });
+  const openCampaigns = campaigns.data?.filter((campaign) => !campaignOrderBlockReason(campaign, now) || (campaign.intake_status === "full" && new Date(campaign.deadline).getTime() > now));
   const meals = useQuery({
     queryKey: ["meal-events", "calendar"],
     queryFn: async ({ signal }) => {
@@ -212,6 +213,7 @@ export function ShopPage() {
             eyebrow="BUYING TOGETHER / 共同購買"
             title="每月共同購買"
           />
+          <p className="field-help">共同購買僅限正式社員參加，享社員價並開立免稅發票。</p>
           {campaigns.isPending && <LoadingLines count={3} />}
           {campaigns.isError && (
             <DataState
@@ -221,14 +223,15 @@ export function ShopPage() {
               onAction={() => campaigns.refetch()}
             />
           )}
+          {openCampaigns?.length === 0 && <DataState title="本月共同購買尚未開放" detail="每月開放一期，開放後會在這裡公告。" />}
           <div className="editorial-list">
-            {campaigns.data?.map((campaign, index) => (
+            {openCampaigns?.map((campaign, index) => (
               <article key={campaign.id} className="editorial-card">
                 <div className="editorial-number">{String(index + 1).padStart(2, "0")}</div>
                 <div>
                   <span>{publicCampaignStatusLabel(campaign, now)}</span>
                   <h3>{campaign.title || "共同採購"}</h3>
-                  {campaign.description && <p>{campaign.description}</p>}
+                  {campaign.description && <p className="campaign-description campaign-description-clamped">{campaign.description}</p>}
                 </div>
                 <Link className="editorial-end" to="/groups/$campaignId" params={{ campaignId: campaign.id }}>
                   <small>截止 {formatDate(campaign.deadline)}</small>

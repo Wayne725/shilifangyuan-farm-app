@@ -6,11 +6,11 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import (GroupCampaign, Order, PaymentAttempt, Product, ShippingChannel,
-    ShippingRate, ShippingTemperature, SystemSetting, TaxType, User, UserRole)
+    ShippingRate, ShippingTemperature, SystemSetting, User, UserRole)
 from app.routers.groups import groups_router
 from app.routers.orders import orders_router
 from app.routers.payments import payments_router
-from tests.support import api_test_context, auth_headers
+from tests.support import api_test_context, auth_headers, TEST_PICKUP_SLOTS, with_pickup_slot, active_member
 from tests.test_integrations import payment_settings
 
 
@@ -19,7 +19,7 @@ async def prepare_group(session):
     buyers = [User(email=f"group-contract-{index}@example.com", display_name=f"買家{index}", password_hash="test") for index in range(2)]
     products = [Product(slug=f"group-contract-{index}", name=f"商品{index}", category="測試", unit="份",
                         member_price=100, nonmember_price=100, stock_quantity=20) for index in range(2)]
-    session.add_all([admin, *buyers, *products])
+    session.add_all([admin, *map(active_member, buyers), *products])
     await session.commit()
     now = datetime.now(timezone.utc)
     async with api_test_context(session, [groups_router], settings=payment_settings()) as client:
@@ -31,6 +31,7 @@ async def prepare_group(session):
             "confirmation_deadline": (now + timedelta(days=3)).isoformat(),
             "estimated_pickup_start": (now + timedelta(days=4)).isoformat(),
             "estimated_pickup_end": (now + timedelta(days=5)).isoformat(),
+            "pickup_slots": TEST_PICKUP_SLOTS,
         })
     assert response.status_code == 201, response.text
     return SimpleNamespace(session=session, campaign_id=response.json()["id"],
@@ -47,7 +48,7 @@ async def group_checkout(database_session):
 
 
 def join_body(**changes):
-    return {"quantity": 1, "contact_email": "group-buyer@example.com", **changes}
+    return with_pickup_slot({"quantity": 1, "contact_email": "group-buyer@example.com", **changes})
 
 
 async def join(context, body=None, *, buyer=0, campaign_id=None):
@@ -124,18 +125,13 @@ async def test_group_submission_changed_content_is_conflict_and_other_user_has_i
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["price", "target", "tax"])
+@pytest.mark.parametrize("change", ["price", "target", "member_price"])
 async def test_group_quote_confirmation_rejects_changed_total_or_same_total_terms_without_order(group_checkout, change):
     c = group_checkout
     confirmed = await quote(c)
-    if change == "tax":
-        product = await c.session.get(Product, c.product_ids[0])
-        product.tax_type = TaxType.TAX_EXEMPT
-        await c.session.commit()
-    else:
-        response = await c.client.patch(f"/v1/group-campaigns/{c.campaign_id}", headers=c.admin_headers,
-            json={"nonmember_price": 120} if change == "price" else {"target_id": c.product_ids[1]})
-        assert response.status_code == 200, response.text
+    changes = {"price": {"nonmember_price": 120}, "target": {"target_id": c.product_ids[1]}, "member_price": {"member_price": 90}}
+    response = await c.client.patch(f"/v1/group-campaigns/{c.campaign_id}", headers=c.admin_headers, json=changes[change])
+    assert response.status_code == 200, response.text
     response = await join(c, join_body(client_request_id=str(uuid4()), expected_total=confirmed["amount_total"],
         expected_quote_fingerprint=confirmed.get("confirmation_fingerprint", "0" * 64)))
     assert response.status_code == 409, response.text

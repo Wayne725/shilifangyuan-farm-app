@@ -194,7 +194,10 @@ def validate_campaign_schedule(campaign: GroupCampaign, now: datetime, *, preord
             raise DomainError("成團門檻不可高於供應上限")
     if aware(campaign.deadline) <= now:
         raise DomainError("共同購買截止時間必須在未來")
-    if aware(campaign.estimated_pickup_start) < aware(campaign.deadline):
+    if preorder_only:
+        if aware(campaign.estimated_pickup_end) < aware(campaign.deadline):
+            raise DomainError("取貨期間結束不可早於付款截止")
+    elif aware(campaign.estimated_pickup_start) < aware(campaign.deadline):
         raise DomainError("預估取貨起始時間不可早於共同購買截止")
     if aware(campaign.estimated_pickup_end) < aware(
         campaign.estimated_pickup_start

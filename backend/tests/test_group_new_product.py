@@ -140,7 +140,7 @@ async def test_group_only_product_is_visible_for_units_but_regular_checkout_requ
     for path in ("/v1/orders/quote", "/v1/orders"):
         blocked = await client.post(path, headers=customer, json=regular)
         assert blocked.status_code == 422 and "未開放日常選購" in blocked.json()["detail"], blocked.text
-    group_body = {"quantity": 2, "contact_email": "buyer@example.com"}
+    group_body = {"quantity": 2, "contact_email": "buyer@example.com", "pickup_slot_id": "fri"}
     assert (await client.post(f"/v1/group-campaigns/{campaign_id}/quote", headers=customer, json=group_body)).status_code == 200
     joined = await client.post(f"/v1/group-campaigns/{campaign_id}/join", headers=customer, json=group_body)
     assert joined.status_code == 201, joined.text
