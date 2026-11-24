@@ -1,3 +1,4 @@
+import { allowedPickupLocations } from "../components/PickupLocationPicker";
 import { StorefrontClosed, useStorefrontStatus } from "../components/StorefrontStatus";
 import {
   ArrowLeft,
@@ -131,7 +132,11 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
     refetchInterval: 30000,
     enabled: !leavingCheckout,
   });
-  const activeLocations = useMemo(() => locations.data?.filter((location) => location.is_active && (business || !location.business_meal_only)), [locations.data, business]);
+  const allowedLocationIds = event.data?.pickup_location_ids;
+  const activeLocations = useMemo(() => {
+    const usable = locations.data?.filter((location) => location.is_active && (business || !location.business_meal_only));
+    return business ? usable : allowedPickupLocations(usable, allowedLocationIds);
+  }, [locations.data, business, allowedLocationIds]);
   const currentDraft = useMemo(
     () => event.data ? reconcileMealDraft(draft, event.data, now, activeLocations) : draft,
     [draft, event.data, now, activeLocations],

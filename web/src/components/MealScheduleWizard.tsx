@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError, apiFetch, formatMoney } from "../lib/api";
 import type { Meal, MealSchedule } from "../lib/types";
+import { PickupLocationPicker, UNLIMITED_MEAL_CAPACITY, pickupLocationSummary, usePickupLocations } from "./PickupLocationPicker";
 import "./MealScheduleWizard.css";
 
 type Period = MealSchedule["meal_period"];
@@ -21,6 +22,7 @@ type ScheduleInput = ServingDays & {
   enabled: boolean;
   auto_publish: boolean;
   offerings: MenuItem[];
+  pickup_location_ids: string[];
 };
 type EventPreview = { id: string; title: string; service_date: string; meal_period: Period };
 type SchedulePreview = {
@@ -33,7 +35,8 @@ type PeriodDraft = {
   title: string; location: string; start: string; end: string; enabled: boolean; autoPublish: boolean;
 };
 
-const steps = ["餐別與供餐日", "選餐點", "份數", "取餐時間與地區", "統整確認"] as const;
+const steps = ["餐別與供餐日", "選餐點", "取餐時間與地區", "統整確認"] as const;
+const reviewStep = steps.length - 1;
 const periods: Period[] = ["lunch", "dinner"];
 const weekdays = [0, 1, 2, 3, 4];
 const weekdayNames = ["週一", "週二", "週三", "週四", "週五"];
@@ -78,8 +81,8 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
   onCancel: () => void;
   onConflict: () => void;
 }) {
-  const [step, setStep] = useState(initial ? 4 : 0);
-  const [furthestStep, setFurthestStep] = useState(initial ? 4 : 0);
+  const [step, setStep] = useState(initial ? reviewStep : 0);
+  const [furthestStep, setFurthestStep] = useState(initial ? reviewStep : 0);
   const [reviewReturn, setReviewReturn] = useState(false);
   const stepHeading = useRef<HTMLHeadingElement>(null);
   const [periodChoices, setPeriodChoices] = useState<Period[]>([initial?.meal_period ?? "lunch"]);
@@ -93,8 +96,9 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
     dinner: periodDraft("dinner", initial?.meal_period === "dinner" ? initial : undefined),
   });
   const [counterpartId, setCounterpartId] = useState("");
-  const [offerings, setOfferings] = useState<MenuItem[]>(initial?.offerings.map(({ meal_id, capacity }) => ({ meal_id, capacity })) ?? []);
-  const [bulk, setBulk] = useState("");
+  const [offerings, setOfferings] = useState<MenuItem[]>(initial?.offerings.map(({ meal_id }) => ({ meal_id, capacity: UNLIMITED_MEAL_CAPACITY })) ?? []);
+  const [pickupLocationIds, setPickupLocationIds] = useState<string[]>(initial?.pickup_location_ids ?? []);
+  const locations = usePickupLocations(pickupLocationIds.length > 0 || Boolean(initial?.pickup_location_ids?.length));
   const [scope, setScope] = useState<Scope>("empty_future");
   const [reviewChanged, setReviewChanged] = useState(false);
   const byMeal = new Map(meals.map(meal => [meal.id, meal]));
@@ -112,13 +116,12 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
       ...(current ? { id: current.id, expected_updated_at: current.updated_at } : {}),
       title: settings.title.trim() || defaultTitle(settings.location, period),
       location: settings.location.trim(), meal_period: period, pickup_start_time: settings.start, pickup_end_time: settings.end,
-      enabled: settings.enabled, auto_publish: settings.autoPublish, offerings,
+      enabled: settings.enabled, auto_publish: settings.autoPublish, offerings, pickup_location_ids: pickupLocationIds,
     };
   });
   const problems = [
     !periodChoices.length ? "請選擇餐別。" : !(days.weekdays.length || days.saturday_business_only || days.sunday_business_only) ? "請選擇供餐日。" : missingCounterpart ? "請選擇要一起更新的排程。" : "",
     offerings.length === 0 ? "請至少選擇一道餐點。" : offerings.length > 100 ? "每個排程最多選擇 100 道餐點。" : offerings.some(item => !byMeal.get(item.meal_id)?.is_active) ? "請取消勾選已停售或無法讀取的餐點。" : "",
-    offerings.some(item => !validCapacity(item.capacity)) ? "每日份數須為 1 至 100,000 的整數。" : "",
     inputs.some(item => !item.location || !item.pickup_start_time || !item.pickup_end_time || item.pickup_start_time === item.pickup_end_time) ? "請填寫供餐地區，並設定不同的取餐開始與結束時間。" : "",
   ];
   const firstProblem = problems.findIndex(Boolean);
@@ -127,7 +130,7 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
     queryFn: ({ signal }) => apiFetch<SchedulePreview>("/v1/admin/meal-schedules/wizard/preview", {
       method: "POST", signal, body: JSON.stringify({ schedules: inputs, scope }),
     }),
-    enabled: step === 4 && firstProblem === -1,
+    enabled: step === reviewStep && firstProblem === -1,
     retry: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -157,7 +160,7 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
     setPeriodSettings(current => ({ ...current, [period]: { ...current[period], ...fields } }));
   }
   function toggleOffering(id: string) {
-    setOfferings(items => items.some(item => item.meal_id === id) ? items.filter(item => item.meal_id !== id) : [...items, { meal_id: id, capacity: 20 }]);
+    setOfferings(items => items.some(item => item.meal_id === id) ? items.filter(item => item.meal_id !== id) : [...items, { meal_id: id, capacity: UNLIMITED_MEAL_CAPACITY }]);
   }
   function selectCounterpart(id: string) {
     setCounterpartId(id);
@@ -171,8 +174,8 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
   const showImpact = initial && inputs.some(item => item.id);
   return <form className="social-form admin-master-form meal-schedule-wizard" onSubmit={event => {
     event.preventDefault();
-    if (step < 4 && !problems[step]) goTo(reviewReturn ? 4 : step + 1);
-    if (step === 4 && firstProblem === -1 && preview.isSuccess && !preview.isFetching && !save.isPending) {
+    if (step < reviewStep && !problems[step]) goTo(reviewReturn ? reviewStep : step + 1);
+    if (step === reviewStep && firstProblem === -1 && preview.isSuccess && !preview.isFetching && !save.isPending) {
       save.mutate(preview.data.preview_version);
     }
   }}>
@@ -208,17 +211,6 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
         <Link to="/admin/meals" search={{ tab: "meals" }} target="_blank" rel="noopener" className="text-link">找不到餐點？去新增餐點</Link>
       </>}
       {step === 2 && <>
-        <div className="meal-schedule-bulk">
-          <label className="field"><span>全部設為幾份</span><input type="number" inputMode="numeric" min={1} max={100000} step={1} value={bulk} onChange={event => setBulk(event.target.value)} /></label>
-          <button type="button" className="button button-quiet" disabled={!offerings.length || !validCapacity(Number(bulk))} onClick={() => setOfferings(items => items.map(item => ({ ...item, capacity: Number(bulk) })))}>全部套用</button>
-        </div>
-        {offerings.map(item => <label key={item.meal_id} className="field meal-schedule-portion">
-          <span>{byMeal.get(item.meal_id)?.name || "餐點"}的每日份數</span>
-          <input type="number" inputMode="numeric" min={1} max={100000} step={1} value={item.capacity || ""}
-            onChange={event => setOfferings(items => items.map(offer => offer.meal_id === item.meal_id ? { ...offer, capacity: Number(event.target.value) } : offer))} />
-        </label>)}
-      </>}
-      {step === 3 && <>
         {periods.filter(period => periodChoices.includes(period)).map(period => {
           const current = periodSettings[period];
           return <fieldset key={period}><legend>{mealPeriodLabels[period]}</legend><div className="field-grid two-columns">
@@ -228,18 +220,20 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
             <label className="field"><span>排程名稱</span><input maxLength={140} placeholder={defaultTitle(current.location, period)} value={current.title} onChange={event => editPeriod(period, { title: event.target.value })} /></label>
           </div></fieldset>;
         })}
-        <p>買家實際取餐的地點，在「<Link to="/admin/catalog" search={{ tab: "locations" }} target="_blank" rel="noopener" className="text-link">商品 → 取餐地點</Link>」管理。</p>
+        <PickupLocationPicker legend="開放的取餐點" value={pickupLocationIds} onChange={setPickupLocationIds} />
+        <p>要新增或修改取餐點，到「<Link to="/admin/catalog" search={{ tab: "locations" }} target="_blank" rel="noopener" className="text-link">商品 → 取餐地點</Link>」管理。</p>
       </>}
-      {step === 4 && <>
+      {step === reviewStep && <>
         <div className="meal-schedule-review" aria-label="排程統整確認">
           <dl>
             <div><dt>餐別與供餐日</dt><dd>{inputs.map(item => mealPeriodLabels[item.meal_period]).join("、")} · {scheduleDayLabel(days)}</dd><EditStep label="餐別與供餐日" onClick={() => goTo(0, true)} /></div>
-            <div><dt>餐點與每日份數</dt><dd><ul>{offerings.map(item => {
+            <div><dt>餐點（預訂不限份數）</dt><dd><ul>{offerings.map(item => {
               const price = displayPrice(item.meal_id);
-              return <li key={item.meal_id}>{byMeal.get(item.meal_id)?.name || "餐點"} · {price == null ? "—" : formatMoney(price)} · {item.capacity} 份</li>;
+              return <li key={item.meal_id}>{byMeal.get(item.meal_id)?.name || "餐點"} · {price == null ? "—" : formatMoney(price)}</li>;
             })}</ul></dd>
-              <span className="meal-schedule-edit-links"><EditStep label="餐點" text="修改餐點" onClick={() => goTo(1, true)} /><EditStep label="份數" text="修改份數" onClick={() => goTo(2, true)} /></span></div>
-            <div><dt>取餐時間與地區</dt><dd><ul>{inputs.map(item => <li key={item.meal_period}>{item.title} · {settingsLabel(item)}</li>)}</ul></dd><EditStep label="取餐時間與地區" onClick={() => goTo(3, true)} /></div>
+              <span className="meal-schedule-edit-links"><EditStep label="餐點" text="修改餐點" onClick={() => goTo(1, true)} /></span></div>
+            <div><dt>取餐時間與地區</dt><dd><ul>{inputs.map(item => <li key={item.meal_period}>{item.title} · {settingsLabel(item)}</li>)}</ul></dd><EditStep label="取餐時間與地區" onClick={() => goTo(2, true)} /></div>
+            <div><dt>開放的取餐點</dt><dd>{pickupLocationSummary(pickupLocationIds, locations.data)}</dd><EditStep label="開放的取餐點" onClick={() => goTo(2, true)} /></div>
             <div><dt>預訂規則</dt><dd>{days.weekdays.length > 0 && <div>{weekdayRule}</div>}{(days.saturday_business_only || days.sunday_business_only) && <div>{weekendRule}</div>}</dd></div>
           </dl>
         </div>
@@ -249,7 +243,8 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
           return <fieldset key={period}><legend>{mealPeriodLabels[period]}排程</legend>
             <label className="meal-choice"><input type="checkbox" disabled={previous?.enabled === true} checked={input.enabled} onChange={event => editPeriod(period, { enabled: event.target.checked })} />啟用自動排程</label>
             <label className="meal-choice"><input type="checkbox" checked={input.auto_publish} onChange={event => editPeriod(period, { autoPublish: event.target.checked })} />新場次自動發布</label>
-            {initial && <ScheduleChanges input={input} previous={previous} mealLabel={id => byMeal.get(id)?.name ?? "已移除的餐點"} mealPrice={displayPrice} />}
+            {initial && <ScheduleChanges input={input} previous={previous} mealLabel={id => byMeal.get(id)?.name ?? "已移除的餐點"} mealPrice={displayPrice}
+              locationLabel={ids => pickupLocationSummary(ids, locations.data)} />}
             {previous && ((previous.saturday_business_only && !input.saturday_business_only) || (previous.sunday_business_only && !input.sunday_business_only)) &&
               <p>已建立的週末場次可在「接下來的週末會餐」逐場停用。</p>}
           </fieldset>;
@@ -266,19 +261,15 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
         {save.isError && save.error.message !== preview.error?.message && <p className="form-error" role="alert">{save.error.message}</p>}
       </>}
     </fieldset>
-    {step < 4 && problems[step] && <p className="form-error">{problems[step]}</p>}
+    {step < reviewStep && problems[step] && <p className="form-error">{problems[step]}</p>}
     <div className="form-actions">
       <button type="button" className="button button-quiet" disabled={save.isPending} onClick={onCancel}>取消</button>
       {step > 0 && <button type="button" className="button button-quiet" disabled={save.isPending} onClick={() => goTo(step - 1)}>上一步</button>}
-      <button key={step} type="submit" className="button button-primary" disabled={step < 4 ? Boolean(problems[step]) : firstProblem !== -1 || !preview.isSuccess || preview.isFetching || save.isPending}>
-        {step < 4 ? reviewReturn ? "返回確認" : "下一步" : save.isPending ? "儲存中…" : initial ? "確認修改" : "確認建立"}
+      <button key={step} type="submit" className="button button-primary" disabled={step < reviewStep ? Boolean(problems[step]) : firstProblem !== -1 || !preview.isSuccess || preview.isFetching || save.isPending}>
+        {step < reviewStep ? reviewReturn ? "返回確認" : "下一步" : save.isPending ? "儲存中…" : initial ? "確認修改" : "確認建立"}
       </button>
     </div>
   </form>;
-}
-
-function validCapacity(value: number) {
-  return Number.isInteger(value) && value >= 1 && value <= 100000;
 }
 
 function EditStep({ label, onClick, text = "修改" }: { label: string; onClick: () => void; text?: string }) {
@@ -295,8 +286,9 @@ function ScheduleImpact({ preview }: { preview: SchedulePreview }) {
   </>;
 }
 
-function ScheduleChanges({ input, previous, mealLabel, mealPrice }: {
+function ScheduleChanges({ input, previous, mealLabel, mealPrice, locationLabel }: {
   input: ScheduleInput; previous?: MealSchedule | null; mealLabel: (id: string) => string; mealPrice: (id: string) => number | undefined;
+  locationLabel: (ids: string[]) => string;
 }) {
   if (!previous) return <p>新增{mealPeriodLabels[input.meal_period]}排程</p>;
   const changes: string[] = [];
@@ -314,13 +306,16 @@ function ScheduleChanges({ input, previous, mealLabel, mealPrice }: {
     const name = mealLabel(item.meal_id);
     if (!current) changes.push(`新增：${name}`);
     else {
-      if (current.capacity !== item.capacity) changes.push(`${name} ${current.capacity} → ${item.capacity} 份`);
+      if (current.capacity < item.capacity) changes.push(`${name} 改為不限份數`);
       if (price != null && current.price !== price) changes.push(`${name} ${formatMoney(current.price)} → ${formatMoney(price)}`);
     }
   }
   for (const item of previous.offerings) {
     if (!menu.has(item.meal_id)) changes.push(`移除：${mealLabel(item.meal_id)}`);
   }
+  const oldLocations = locationLabel(previous.pickup_location_ids ?? []);
+  const newLocations = locationLabel(input.pickup_location_ids);
+  if (oldLocations !== newLocations) changes.push(`開放取餐點：${oldLocations} → ${newLocations}`);
   if (input.enabled !== previous.enabled) changes.push("啟用自動排程");
   if (input.auto_publish !== previous.auto_publish) changes.push(input.auto_publish ? "新場次改為自動發布" : "新場次改為草稿");
   return changes.length > 0 ? <ul aria-label={`${mealPeriodLabels[input.meal_period]}變更`}>{changes.map(change => <li key={change}>{change}</li>)}</ul> : null;

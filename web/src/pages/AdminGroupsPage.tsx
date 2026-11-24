@@ -14,7 +14,8 @@ import { ApiError, apiFetch, captureSessionIdentityGuard, formatDateTime, format
 import { campaignAccessDenied, campaignDateTime, campaignPreorderScheduleError, campaignStatusLabel, campaignTimestamp, groupProposalStatusLabel, retryCampaignRead } from "../lib/group-campaigns";
 import { taipeiDate, taipeiDateTimeInput, taipeiInputToIso } from "../lib/meal-time";
 import { useDeadlineClock } from "../lib/use-deadline-clock";
-import { CampaignPickupSlots, defaultPickupSlots, PickupSlotEditor, pickupSlotsError, pickupSlotsPayload } from "../components/GroupPickupSlots";
+import { CampaignPickupLocations, CampaignPickupSlots, defaultPickupSlots, PickupSlotEditor, pickupSlotsError, pickupSlotsPayload } from "../components/GroupPickupSlots";
+import { PickupLocationPicker } from "../components/PickupLocationPicker";
 import type { GroupBundle, GroupCampaign, GroupPickupSlot, GroupVoteProposal, Product } from "../lib/types";
 import { OptionalMark } from "../components/OptionalMark";
 import { CatalogVisibilityControl } from '../components/CatalogVisibilityControl';
@@ -210,6 +211,7 @@ function CampaignCreateForm({ products, bundles, onDone, onAccessDenied }: { pro
   const [pickupStart, setPickupStart] = useState(localDateTime(11));
   const [pickupEnd, setPickupEnd] = useState(localDateTime(12));
   const [pickupSlots, setPickupSlots] = useState<GroupPickupSlot[]>(defaultPickupSlots);
+  const [pickupLocationIds, setPickupLocationIds] = useState<string[]>([]);
   const scheduleError = campaignPreorderScheduleError(deadline, pickupStart, pickupEnd) || pickupSlotsError(pickupSlots);
   const targets = (targetType === "product" ? products : bundles).filter((item) => item.is_active);
   const target = targets.find((item) => item.id === targetId);
@@ -241,6 +243,7 @@ function CampaignCreateForm({ products, bundles, onDone, onAccessDenied }: { pro
         deadline: taipeiInputToIso(deadline),
         estimated_pickup_start: taipeiInputToIso(pickupStart), estimated_pickup_end: taipeiInputToIso(pickupEnd),
         pickup_slots: pickupSlotsPayload(pickupSlots),
+        pickup_location_ids: pickupLocationIds,
         can_ship: product?.can_ship || false, shipping_temperature: product?.can_ship ? product.shipping_temperature : null,
         allowed_shipping_channels: product?.can_ship ? product.allowed_shipping_channels : [],
       }) });
@@ -285,6 +288,7 @@ function CampaignCreateForm({ products, bundles, onDone, onAccessDenied }: { pro
         <label className="field"><span>預計取貨結束（台灣）</span><input type="datetime-local" required value={pickupEnd} onChange={event => setPickupEnd(event.target.value)} /></label>
       </div>
       <PickupSlotEditor value={pickupSlots} onChange={setPickupSlots} disabled={create.isPending} />
+      <PickupLocationPicker value={pickupLocationIds} onChange={setPickupLocationIds} disabled={create.isPending} />
       {memberPrice > nonmemberPrice && <p className="form-error">社員價不可高於一般價</p>}
       {scheduleError && <p className="form-error" role="alert">{scheduleError}</p>}
       {create.isError && <p className="form-error" role="alert">{create.error.message}</p>}
@@ -301,6 +305,7 @@ function CampaignAdminCard({ campaign, products, onDone, onAccessDenied }: { cam
     <CampaignTextEditor campaign={campaign} onDone={onDone} onAccessDenied={onAccessDenied} />
     <CatalogVisibilityControl kind="group" record={campaign} onDone={onDone} onDenied={onAccessDenied}/>
     <CampaignPickupSlots campaign={campaign} onDone={onDone} onAccessDenied={onAccessDenied} />
+    <CampaignPickupLocations campaign={campaign} onDone={onDone} onAccessDenied={onAccessDenied} />
     <CampaignReviewPanel campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />
     <CampaignQuantityEditor campaign={campaign} unit={campaignUnit(campaign, products)} onAccessDenied={onAccessDenied} onDone={onDone} />
   </article>;

@@ -16,9 +16,10 @@ from .audited_changes import audit_changes
 from .auth import require_admin
 from .database import get_session
 from .meal_booking import MEAL_ORDER_CUTOFF, MEAL_PICKUP_TIMES, _aware, meal_period, meal_schedule_has_pickup_slots, meal_service_date
-from .meal_schedules import advance_meal_schedule_version, generate_scheduled_meal_events
+from .meal_schedules import advance_meal_schedule_version, apply_schedule_pickup_locations, generate_scheduled_meal_events
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User
-from .schemas import MealScheduleRead
+from .pickup_locations import selectable_pickup_location_ids
+from .schemas import UNLIMITED_MEAL_CAPACITY, MealScheduleRead, validate_pickup_location_ids
 
 
 router = APIRouter(prefix="/v1/admin/meal-schedules/wizard", tags=["meals"])
@@ -28,7 +29,7 @@ class ScheduleMenuItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     meal_id: str = Field(min_length=1, max_length=36)
-    capacity: int = Field(ge=1, le=100000, strict=True)
+    capacity: int = Field(default=UNLIMITED_MEAL_CAPACITY, ge=1, le=UNLIMITED_MEAL_CAPACITY, strict=True)
 
 
 class ScheduleWizardEntry(BaseModel):
@@ -47,9 +48,11 @@ class ScheduleWizardEntry(BaseModel):
     enabled: bool = True
     auto_publish: bool = True
     offerings: list[ScheduleMenuItem] = Field(min_length=1, max_length=100)
+    pickup_location_ids: list[str] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def validate_entry(self) -> ScheduleWizardEntry:
+        validate_pickup_location_ids(self.pickup_location_ids)
         if (self.id is None) != (self.expected_updated_at is None):
             raise ValueError("編輯排程時須提供當前版本")
         if self.expected_updated_at is not None and self.expected_updated_at.tzinfo is None:
@@ -162,6 +165,8 @@ async def _plan_wizard(
     session: AsyncSession, body: ScheduleWizardInput, now: datetime, *, lock: bool,
 ) -> ScheduleWizardPlan:
     templates = await _wizard_templates(session, body, lock=lock)
+    for entry in body.schedules:
+        await selectable_pickup_location_ids(session, entry.pickup_location_ids)
     future = select(MealEvent).where(
         MealEvent.schedule_template_id.in_(templates),
         MealEvent.pickup_starts_at > now,
@@ -258,6 +263,8 @@ async def save_wizard(
             cutoff_days_before=1, advance_days=7, fixed_booking_window=True, offerings=plan.menu,
         )
         template = plan.templates.get(entry.id)
+        if template is not None and "pickup_location_ids" not in entry.model_fields_set:
+            values.pop("pickup_location_ids")
         if template is None:
             template = MealScheduleTemplate(**values, created_by_id=admin.id)
             session.add(template)
@@ -270,6 +277,7 @@ async def save_wizard(
                 setattr(template, name, value)
             advance_meal_schedule_version(template, now)
             audit_changes(session, admin.id, "meal_schedule", template.id, "meal_schedule.update", before, values)
+            await apply_schedule_pickup_locations(session, template, admin.id, now)
         templates.append(template)
 
     after = [{**item, "is_active": True} for item in plan.menu]

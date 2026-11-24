@@ -6,8 +6,9 @@ import {
 } from "@phosphor-icons/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { allowedPickupLocations } from "../components/PickupLocationPicker";
 import { DataState, LoadingLines } from "../components/Shared";
 import { storefrontCapabilities, storefrontOrderBlockReason, useStorefrontStatus } from "../components/StorefrontStatus";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
@@ -68,10 +69,13 @@ export function GroupCampaignPage() {
     || (campaign.data ? campaignOrderBlockReason(campaign.data, now) : "")
     || (user && user.membership_type !== "member" ? "共同購買僅限正式社員參加" : "")
     || (method === "shipping" && !shippingEnabled ? "目前未開放配送，請選擇合作社取貨" : "");
-  const locations = useQuery({
+  const pickupLocations = useQuery({
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
   });
+  const allowedLocationIds = campaign.data?.pickup_location_ids;
+  const locationOptions = useMemo(() => allowedPickupLocations(pickupLocations.data, allowedLocationIds), [pickupLocations.data, allowedLocationIds]);
+  const locations = { ...pickupLocations, data: locationOptions };
   const selectedPickupLocation = locations.data?.find((location) => location.id === pickupLocationId);
   const quote = useQuery({
     queryKey: ["group-quote", campaignId, quantity, method, shippingChannel, user?.id, user?.membership_type, invoicePreference.buyerType],

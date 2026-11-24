@@ -459,6 +459,19 @@ def validate_group_pickup_slots(slots: List[GroupPickupSlot]) -> List[GroupPicku
     return sorted(slots, key=lambda slot: (slot.weekday, slot.starts_at, slot.ends_at))
 
 
+UNLIMITED_MEAL_CAPACITY = 100_000
+
+
+def validate_pickup_location_ids(ids: Optional[List[str]]) -> Optional[List[str]]:
+    if ids is None:
+        return None
+    if any(not 1 <= len(item) <= 36 for item in ids):
+        raise ValueError("取貨地點識別碼無效")
+    if len(set(ids)) != len(ids):
+        raise ValueError("取貨地點不可重複")
+    return ids
+
+
 class GroupPickupSlotOrder(ApiModel):
     order_number: str
     buyer_name: str
@@ -495,11 +508,17 @@ class CampaignCreate(BaseModel):
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
     pickup_slots: List[GroupPickupSlot] = Field(default_factory=list, max_length=21)
+    pickup_location_ids: List[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("pickup_slots")
     @classmethod
     def validate_pickup_slots(cls, value: List[GroupPickupSlot]) -> List[GroupPickupSlot]:
         return validate_group_pickup_slots(value)
+
+    @field_validator("pickup_location_ids")
+    @classmethod
+    def validate_location_ids(cls, value: List[str]) -> List[str]:
+        return validate_pickup_location_ids(value)
 
     @model_validator(mode="after")
     def validate_target(self) -> "CampaignCreate":
@@ -561,11 +580,17 @@ class CampaignUpdate(BaseModel):
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: Optional[List[ShippingChannel]] = None
     pickup_slots: Optional[List[GroupPickupSlot]] = Field(default=None, min_length=1, max_length=21)
+    pickup_location_ids: Optional[List[str]] = Field(default=None, max_length=50)
 
     @field_validator("pickup_slots")
     @classmethod
     def validate_pickup_slots(cls, value: Optional[List[GroupPickupSlot]]) -> Optional[List[GroupPickupSlot]]:
         return validate_group_pickup_slots(value) if value is not None else None
+
+    @field_validator("pickup_location_ids")
+    @classmethod
+    def validate_location_ids(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        return validate_pickup_location_ids(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -667,6 +692,7 @@ class CampaignRead(ApiModel):
     shipping_temperature: Optional[ShippingTemperature] = None
     allowed_shipping_channels: List[ShippingChannel] = Field(default_factory=list)
     pickup_slots: List[GroupPickupSlotRead] = Field(default_factory=list)
+    pickup_location_ids: List[str] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -1637,7 +1663,7 @@ class MealOptionsUpdate(BaseModel):
 class MealOfferingInput(BaseModel):
     meal_id: str
     price: int = Field(ge=0)
-    capacity: int = Field(ge=1, le=100000)
+    capacity: int = Field(default=UNLIMITED_MEAL_CAPACITY, ge=1, le=UNLIMITED_MEAL_CAPACITY)
     position: int = Field(default=0, ge=0)
 
 
@@ -1653,6 +1679,12 @@ class MealEventCreate(BaseModel):
     pickup_starts_at: datetime
     pickup_ends_at: datetime
     offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
+    pickup_location_ids: List[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("pickup_location_ids")
+    @classmethod
+    def validate_location_ids(cls, value: List[str]) -> List[str]:
+        return validate_pickup_location_ids(value)
 
     @model_validator(mode="after")
     def validate_timeline(self) -> "MealEventCreate":
@@ -1686,6 +1718,12 @@ class MealScheduleInput(BaseModel):
     enabled: bool = False
     auto_publish: bool = False
     offerings: List[MealOfferingInput] = Field(min_length=1, max_length=100)
+    pickup_location_ids: List[str] = Field(default_factory=list, max_length=50)
+
+    @field_validator("pickup_location_ids")
+    @classmethod
+    def validate_location_ids(cls, value: List[str]) -> List[str]:
+        return validate_pickup_location_ids(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -1833,6 +1871,7 @@ class MealEventBookingRead(MealEventSummary):
     meal_period: Literal["lunch", "dinner"]
     pickup_slot_ends_at: Optional[datetime] = None
     pickup_slots: List[datetime] = Field(default_factory=list)
+    pickup_location_ids: List[str] = Field(default_factory=list)
     booking_starts_at: datetime
     booking_ends_at: datetime
 

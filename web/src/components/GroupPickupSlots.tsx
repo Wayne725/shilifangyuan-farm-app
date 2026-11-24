@@ -3,6 +3,7 @@ import { useState } from "react";
 import { apiFetch } from "../lib/api";
 import { campaignAccessDenied } from "../lib/group-campaigns";
 import type { GroupCampaign, GroupPickupSlot, GroupPickupSlotSummary } from "../lib/types";
+import { PickupLocationPicker, pickupLocationSummary, usePickupLocations } from "./PickupLocationPicker";
 
 const weekdays = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"];
 
@@ -74,5 +75,31 @@ export function CampaignPickupSlots({ campaign, onDone, onAccessDenied }: { camp
         </table>
       </div>}
     </details>
+  </section>;
+}
+
+export function CampaignPickupLocations({ campaign, onDone, onAccessDenied }: { campaign: GroupCampaign; onDone: () => void; onAccessDenied: () => void }) {
+  const [draft, setDraft] = useState<string[] | null>(null);
+  const current = campaign.pickup_location_ids ?? [];
+  const locations = usePickupLocations(current.length > 0);
+  const save = useMutation({
+    mutationFn: (ids: string[]) => apiFetch<GroupCampaign>(`/v1/group-campaigns/${campaign.id}`, {
+      method: "PATCH", body: JSON.stringify({ pickup_location_ids: ids }),
+    }),
+    onSuccess: () => { setDraft(null); onDone(); },
+    onError: (error) => { if (campaignAccessDenied(error)) onAccessDenied(); },
+  });
+  return <section className="campaign-pickup-locations" aria-label={`${campaign.title} 取貨地點`}>
+    <h4>取貨地點</h4>
+    {draft ? <form onSubmit={(event) => { event.preventDefault(); save.mutate(draft); }}>
+      <PickupLocationPicker value={draft} onChange={setDraft} disabled={save.isPending} />
+      <p className="field-help">已成立的訂單保留原本選的取貨地點，不會跟著改。</p>
+      {save.isError && <p className="form-error" role="alert">{save.error.message}</p>}
+      <div className="form-actions"><button className="button button-quiet" type="button" disabled={save.isPending} onClick={() => setDraft(null)}>取消</button><button className="button button-primary" disabled={save.isPending}>儲存取貨地點</button></div>
+    </form> : <>
+      <p>{pickupLocationSummary(current, locations.data)}</p>
+      <button className="button button-quiet" type="button" onClick={() => { save.reset(); setDraft([...current]); }}>編輯取貨地點</button>
+    </>}
+    {save.isSuccess && !draft && <p className="form-success" role="status">取貨地點已儲存</p>}
   </section>;
 }

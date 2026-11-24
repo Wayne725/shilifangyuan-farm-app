@@ -448,6 +448,7 @@ export interface GroupPickupSlotSummary {
 
 export interface GroupCampaign {
   pickup_slots?: GroupPickupSlot[];
+  pickup_location_ids?: string[];
   preorder_only: boolean;
   is_public?: boolean;
   id: string;
@@ -566,6 +567,7 @@ export interface MealEventTiming {
   pickup_ends_at: string;
   pickup_slot_ends_at?: string | null;
   pickup_slots?: string[];
+  pickup_location_ids?: string[];
   booking_starts_at?: string;
   booking_ends_at?: string;
   ordering_starts_at: string;
@@ -643,6 +645,7 @@ export interface MealSchedule {
     capacity: number;
     position: number;
   }>;
+  pickup_location_ids?: string[];
   created_at: string;
   updated_at?: string;
 }

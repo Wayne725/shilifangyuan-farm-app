@@ -209,11 +209,11 @@ test('管理員預設採後端工作日，週末須明確改特殊加開才可�
 });
 
 for (const width of [390, 1440]) {
-  test(`${width}px 五步建立午晚餐排程，共用餐點、份數與週末會餐規則`, { timeout: 30000 }, async t => {
+  test(`${width}px 四步建立午晚餐排程，共用餐點、不限份數與週末會餐規則`, { timeout: 30000 }, async t => {
     const { page, unknown, scheduleUpdateRequests } = await fixture(t, width, { admin: true });
     await page.goto(`${base}/admin/meals?tab=schedules`);
     await page.getByRole('button', { name: '建立排程', exact: true }).click();
-    await page.getByRole('heading', { name: '1／5 餐別與供餐日', exact: true }).waitFor();
+    await page.getByRole('heading', { name: '1／4 餐別與供餐日', exact: true }).waitFor();
     assert.equal(await page.getByLabel('平日（週一到週五）', { exact: true }).isChecked(), true);
     await page.getByLabel('晚餐', { exact: true }).check();
     await page.getByLabel('週六・只接受會餐', { exact: true }).check();
@@ -226,14 +226,10 @@ for (const width of [390, 1440]) {
     assert.match(await page.getByRole('link', { name: '找不到餐點？去新增餐點' }).getAttribute('href'), /tab=meals/);
     assert.equal(await page.getByLabel('每日售價', { exact: true }).count(), 0);
     await next.click();
-    const portions = page.getByLabel('工作日測試便當的每日份數', { exact: true });
-    await page.getByLabel('全部設為幾份', { exact: true }).fill('34');
-    await page.getByRole('button', { name: '全部套用', exact: true }).click();
-    assert.equal(await portions.inputValue(), '34');
+    await page.getByRole('heading', { name: '3／4 取餐時間與地區', exact: true }).waitFor();
+    assert.equal(await page.getByLabel(/每日份數/).count(), 0);
     await page.getByRole('button', { name: '上一步', exact: true }).click();
     assert.equal(await mealOption.isChecked(), true);
-    await next.click();
-    assert.equal(await portions.inputValue(), '34');
     await next.click();
     const lunch = page.getByRole('group', { name: '午餐', exact: true });
     const dinner = page.getByRole('group', { name: '晚餐', exact: true });
@@ -246,10 +242,9 @@ for (const width of [390, 1440]) {
     await next.click();
     await page.getByText('平日：前一個工作日 00:00–20:00', { exact: true }).waitFor();
     await page.getByText('週六、週日：週五 00:00–20:00', { exact: true }).waitFor();
-    await page.getByRole('button', { name: '修改份數', exact: true }).click();
-    await portions.fill('40');
-    await page.getByRole('button', { name: '返回確認', exact: true }).click();
-    await page.getByText('工作日測試便當 · $120 · 40 份', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '修改份數', exact: true }).count(), 0);
+    await page.getByText('工作日測試便當 · $120', { exact: true }).waitFor();
+    await page.getByText('全部取貨地點', { exact: true }).waitFor();
     await noOverflow(page);
     await screenshot(page, `schedule-wizard-review-${width}`);
     await page.getByRole('button', { name: '確認建立', exact: true }).click();
@@ -259,12 +254,13 @@ for (const width of [390, 1440]) {
     assert.equal(payload.preview_version, 'a'.repeat(64));
     assert.deepEqual(payload.schedules.map(row => [row.meal_period, row.location]), [['lunch', '清華大學'], ['dinner', '隔離晚餐區']]);
     assert.ok(payload.schedules.every(row => row.saturday_business_only && row.sunday_business_only
-      && row.offerings.length === 1 && row.offerings[0].capacity === 40 && !Object.hasOwn(row.offerings[0], 'price')));
+      && row.offerings.length === 1 && row.offerings[0].capacity === 100000 && !Object.hasOwn(row.offerings[0], 'price')
+      && Array.isArray(row.pickup_location_ids) && row.pickup_location_ids.length === 0));
     assert.deepEqual(unknown, []);
   });
 }
 
-test('排程編輯顯示目前主檔售價、標出份數變更並可切換套用範圍', { timeout: 30000 }, async t => {
+test('排程編輯顯示目前主檔售價、改為不限份數並可切換套用範圍', { timeout: 30000 }, async t => {
   const schedule = {
     ...scheduleForDisable(), weekdays: [0, 1, 2, 3, 4, 5],
     offerings: [{ meal_id: meal.id, price: 110, capacity: 20, position: 0 }],
@@ -274,7 +270,7 @@ test('排程編輯顯示目前主檔售價、標出份數變更並可切換套�
   const { page, unknown, scheduleUpdateRequests, wizardPreviews } = await fixture(t, 390, { admin: true, schedules: [schedule], wizardEvents: [locked, empty] });
   await page.goto(`${base}/admin/meals?tab=schedules`);
   await page.getByRole('button', { name: '編輯排程', exact: true }).click();
-  await page.getByRole('heading', { name: '5／5 統整確認', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '4／4 統整確認', exact: true }).waitFor();
   await page.getByText('將同步 1 個未有訂單的未來場次。', { exact: true }).waitFor();
   await page.getByText('以下 1 個場次已有訂單，維持原菜單。', { exact: true }).waitFor();
   await page.getByText(/已有訂單的午餐/).waitFor();
@@ -282,10 +278,7 @@ test('排程編輯顯示目前主檔售價、標出份數變更並可切換套�
   await page.getByRole('button', { name: '修改餐別與供餐日', exact: true }).click();
   assert.equal(await page.getByLabel('週六・只接受會餐', { exact: true }).isChecked(), false);
   await page.getByRole('button', { name: '返回確認', exact: true }).click();
-  await page.getByRole('button', { name: '修改份數', exact: true }).click();
-  await page.getByLabel('工作日測試便當的每日份數', { exact: true }).fill('33');
-  await page.getByRole('button', { name: '返回確認', exact: true }).click();
-  await page.getByText('工作日測試便當 20 → 33 份', { exact: true }).waitFor();
+  await page.getByText('工作日測試便當 改為不限份數', { exact: true }).waitFor();
   await page.getByRole('radio', { name: '只影響之後新建的場次', exact: true }).check();
   await page.getByText('將同步 1 個未有訂單的未來場次。', { exact: true }).waitFor({ state: 'hidden' });
   await page.getByText('以下 1 個場次已有訂單，維持原菜單。', { exact: true }).waitFor();
