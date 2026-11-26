@@ -429,7 +429,7 @@ type LocationDraft = Omit<PickupLocation, "id">;
 
 const emptyLocation: LocationDraft = {
   code: "", name: "", address: "", instructions: "", sort_order: 0, is_active: true,
-  business_meal_only: false, requires_pickup_note: false,
+  business_meal_only: false, requires_pickup_note: false, retail_pickup: true,
 };
 
 function LocationCreateForm({ onDone }: { onDone: () => void }) {
@@ -446,14 +446,18 @@ function LocationEditor({ location, onDone }: { location: PickupLocation; onDone
   return <article className="admin-record-card">
     <MapPin size={22} weight="light" />
     <span className={`status-chip ${location.is_active ? "passed" : ""}`}>{location.is_active ? "啟用" : "停用"}</span>
-    {location.business_meal_only && <span className="status-chip">會餐專用</span>}
+    {location.business_meal_only ? <span className="status-chip">會餐專用</span>
+      : location.retail_pickup !== false && !location.requires_pickup_note ? <span className="status-chip">選品團購</span>
+      : <span className="status-chip">限便當</span>}
+    {location.requires_pickup_note && <span className="status-chip">需填位置</span>}
     <h3>{location.name}</h3><p>{location.address || "詳細位置待合作社確認"}</p>
     <small>{location.code} · 排序 {location.sort_order}</small>
     <button type="button" onClick={() => {
       const { code, name, address, instructions, sort_order, is_active } = location;
       update.reset();
       setDraft({ code, name, address, instructions, sort_order, is_active,
-        business_meal_only: Boolean(location.business_meal_only), requires_pickup_note: Boolean(location.requires_pickup_note) });
+        business_meal_only: Boolean(location.business_meal_only), requires_pickup_note: Boolean(location.requires_pickup_note),
+        retail_pickup: location.retail_pickup !== false && !location.business_meal_only && !location.requires_pickup_note });
     }}>編輯取貨點</button>
   </article>;
 }
@@ -469,8 +473,10 @@ function LocationForm({ title, draft, busy, error, onChange, onCancel, onSubmit 
       <label className="field"><span>排序</span><input min={0} type="number" value={draft.sort_order} onChange={(event) => onChange({ ...draft, sort_order: Number(event.target.value) })} /></label>
     </div>
     <label className="switch-field"><input type="checkbox" checked={draft.is_active} onChange={(event) => onChange({ ...draft, is_active: event.target.checked })} />啟用取貨點</label>
-    <label className="switch-field"><input type="checkbox" checked={draft.business_meal_only} onChange={(event) => onChange({ ...draft, business_meal_only: event.target.checked, requires_pickup_note: event.target.checked && draft.requires_pickup_note })} />僅供會餐使用</label>
-    {draft.business_meal_only && <label className="switch-field"><input type="checkbox" checked={draft.requires_pickup_note} onChange={(event) => onChange({ ...draft, requires_pickup_note: event.target.checked })} />須填寫校內取餐位置</label>}
+    <label className="switch-field"><input type="checkbox" checked={draft.business_meal_only} onChange={(event) => onChange({ ...draft, business_meal_only: event.target.checked, retail_pickup: !event.target.checked && draft.retail_pickup })} />僅供會餐使用</label>
+    <label className="switch-field"><input type="checkbox" checked={draft.requires_pickup_note} onChange={(event) => onChange({ ...draft, requires_pickup_note: event.target.checked, retail_pickup: !event.target.checked && draft.retail_pickup })} />須填寫校內取餐位置</label>
+    {!draft.business_meal_only && !draft.requires_pickup_note && <label className="switch-field"><input type="checkbox" checked={draft.retail_pickup !== false} onChange={(event) => onChange({ ...draft, retail_pickup: event.target.checked })} />日常選品、團購也可取貨</label>}
+    <p className="field-help">{draft.business_meal_only ? "只在會餐訂購時出現。" : draft.requires_pickup_note || draft.retail_pickup === false ? "只在便當訂購時出現（一般便當與會餐）。" : "便當、日常選品與共同購買結帳都會出現。"}{draft.requires_pickup_note && "買家須填寫實際取餐位置。"}</p>
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="form-actions"><button className="button button-quiet" type="button" onClick={onCancel}>取消</button><button className="button button-primary" disabled={busy}>儲存取貨點</button></div>
   </form>;

@@ -2342,6 +2342,9 @@ class ShippingRateRead(ApiModel):
     is_active: bool
 
 
+RETAIL_PICKUP_CONFLICT = "會餐專用或須填寫取餐位置的地點，不能開放給日常選品與團購"
+
+
 class PickupLocationCreate(BaseModel):
     code: str = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9-]+$")
     name: str = Field(min_length=1, max_length=160)
@@ -2351,11 +2354,15 @@ class PickupLocationCreate(BaseModel):
     is_active: bool = True
     business_meal_only: bool = False
     requires_pickup_note: bool = False
+    retail_pickup: Optional[bool] = None
 
     @model_validator(mode="after")
-    def pickup_note_requires_business_meal(self) -> "PickupLocationCreate":
-        if self.requires_pickup_note and not self.business_meal_only:
-            raise ValueError("需填取餐備註的地點須設為會餐專用")
+    def retail_pickup_needs_plain_location(self) -> "PickupLocationCreate":
+        restricted = self.business_meal_only or self.requires_pickup_note
+        if self.retail_pickup is None:
+            self.retail_pickup = not restricted
+        elif self.retail_pickup and restricted:
+            raise ValueError(RETAIL_PICKUP_CONFLICT)
         return self
 
 
@@ -2373,8 +2380,9 @@ class PickupLocationUpdate(BaseModel):
     is_active: Optional[bool] = None
     business_meal_only: Optional[bool] = None
     requires_pickup_note: Optional[bool] = None
+    retail_pickup: Optional[bool] = None
 
-    @field_validator("business_meal_only", "requires_pickup_note")
+    @field_validator("business_meal_only", "requires_pickup_note", "retail_pickup")
     @classmethod
     def pickup_flag_is_boolean(cls, value: Optional[bool]) -> bool:
         if value is None:
@@ -2392,6 +2400,7 @@ class PickupLocationRead(ApiModel):
     is_active: bool
     business_meal_only: bool
     requires_pickup_note: bool
+    retail_pickup: bool = True
 
 
 class SupplierCreate(BaseModel):

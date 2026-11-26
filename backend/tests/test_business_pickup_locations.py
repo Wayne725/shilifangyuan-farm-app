@@ -5,7 +5,6 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, select, text
-from sqlalchemy.exc import IntegrityError
 
 from app.models import AdminAudit, Order, PickupLocation
 from tests.support import auth_headers
@@ -24,15 +23,18 @@ async def test_admin_configures_business_pickup_and_public_list_filters_scope(re
     public = "/v1/pickup-locations"
 
     general = await client.post(base, json={"code": "gate", "name": "校門口"}, headers=admin)
-    invalid = await client.post(base, json={"code": "other", "name": "校內其他地點", "requires_pickup_note": True}, headers=admin)
+    conflict = await client.post(base, json={
+        "code": "other", "name": "校內其他地點", "requires_pickup_note": True, "retail_pickup": True,
+    }, headers=admin)
     restricted = await client.post(base, json={
         "code": "other", "name": "校內其他地點", "business_meal_only": True, "requires_pickup_note": True,
     }, headers=admin)
     inactive = await client.post(base, json={
         "code": "hall", "name": "校內會堂", "is_active": False, "business_meal_only": True,
     }, headers=admin)
-    assert [result.status_code for result in (general, invalid, restricted, inactive)] == [201, 422, 201, 201]
+    assert [result.status_code for result in (general, conflict, restricted, inactive)] == [201, 422, 201, 201]
     assert general.json()["business_meal_only"] is general.json()["requires_pickup_note"] is False
+    assert general.json()["retail_pickup"] is True and restricted.json()["retail_pickup"] is False
     assert {row["code"] for row in (await client.get(public)).json()} == {"gate"}
     business_locations = {row["code"]: row for row in (await client.get(public, params={"business_meal": True})).json()}
     assert set(business_locations) == {"gate", "other"}
@@ -40,16 +42,18 @@ async def test_admin_configures_business_pickup_and_public_list_filters_scope(re
 
     path = f"{base}/{restricted.json()['id']}"
     assert (await client.patch(path, json={"is_active": False}, headers=buyer)).status_code == 403
-    assert (await client.patch(path, json={"business_meal_only": False}, headers=admin)).status_code == 422
+    assert (await client.patch(path, json={"retail_pickup": True}, headers=admin)).status_code == 422
     assert (await client.patch(path, json={"requires_pickup_note": None}, headers=admin)).status_code == 422
-    changed = await client.patch(path, json={"business_meal_only": False, "requires_pickup_note": False}, headers=admin)
+    changed = await client.patch(path, json={"business_meal_only": False}, headers=admin)
     assert changed.status_code == 200, changed.text
+    assert changed.json()["requires_pickup_note"] is True and changed.json()["retail_pickup"] is False
     assert {row["code"] for row in (await client.get(public)).json()} == {"gate", "other"}
+    assert {row["code"] for row in (await client.get(public, params={"retail": True})).json()} == {"gate"}
     audit = await session.scalar(select(AdminAudit).where(
         AdminAudit.aggregate_id == changed.json()["id"], AdminAudit.action == "pickup_location.updated",
     ))
-    assert audit.data["before"] == {"business_meal_only": True, "requires_pickup_note": True}
-    assert audit.data["after"] == {"business_meal_only": False, "requires_pickup_note": False}
+    assert audit.data["before"] == {"business_meal_only": True, "retail_pickup": False}
+    assert audit.data["after"] == {"business_meal_only": False, "retail_pickup": False}
 
 
 @pytest.mark.parametrize("requires_note", [False, True])
@@ -138,9 +142,9 @@ def test_pickup_scope_migration_preserves_existing_locations_and_hides_restricte
                 SELECT id, is_active, business_meal_only, requires_pickup_note
                 FROM pickup_locations WHERE id IN ('regular', 'business') ORDER BY sort_order
             """)).all() == [("regular", 1, 0, 0), ("business", 1, 0, 0)]
-            with pytest.raises(IntegrityError):
-                with connection.begin_nested():
-                    connection.execute(text("UPDATE pickup_locations SET requires_pickup_note = true WHERE id = 'regular'"))
+            assert connection.execute(text(
+                "SELECT id, retail_pickup FROM pickup_locations WHERE id IN ('regular', 'business') ORDER BY sort_order"
+            )).all() == [("regular", 1), ("business", 1)]
             connection.execute(text("""
                 UPDATE pickup_locations SET business_meal_only = true, requires_pickup_note = true WHERE id = 'business'
             """))

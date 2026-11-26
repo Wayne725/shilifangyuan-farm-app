@@ -262,6 +262,7 @@ export interface PickupLocation {
   is_active: boolean;
   business_meal_only: boolean;
   requires_pickup_note: boolean;
+  retail_pickup?: boolean;
 }
 
 export interface Activity {

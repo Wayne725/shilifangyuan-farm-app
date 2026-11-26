@@ -10,6 +10,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
+import { retailPickupLocations } from "../components/PickupLocationPicker";
 import { DataState, LoadingLines } from "../components/Shared";
 import { storefrontCapabilities, storefrontOrderBlockReason, useStorefrontStatus } from "../components/StorefrontStatus";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
@@ -88,6 +89,7 @@ export function CheckoutPage() {
   const locations = useQuery({
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
+    select: retailPickupLocations,
   });
   const selectedPickupLocation = locations.data?.find((location) => location.id === pickupLocationId);
   const rates = useQuery({

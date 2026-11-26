@@ -384,7 +384,7 @@ async def create_order(
                 status_code=422,
                 detail="只有合作社取貨可選擇領取地點",
             )
-        pickup_location = await checkout_pickup_location(session, body.pickup_location_id)
+        pickup_location = await checkout_pickup_location(session, body.pickup_location_id, retail=True)
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     order = Order(

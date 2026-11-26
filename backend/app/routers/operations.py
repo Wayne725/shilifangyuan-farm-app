@@ -47,6 +47,7 @@ from ..recovery_work import outbox_is_held, outbox_work_held
 from ..schemas import (
     AdminActionReason,
     PickupLocationCreate,
+    RETAIL_PICKUP_CONFLICT,
     OrderRead,
     PickupLocationRead,
     PickupLocationUpdate,
@@ -417,10 +418,11 @@ def _supplier_query():
 async def list_pickup_locations(
     session: AsyncSession = Depends(get_session),
     business_meal: bool = False,
+    retail: bool = False,
 ) -> list[PickupLocation]:
     return list(
         await session.scalars(
-            available_pickup_locations(business_meal=business_meal)
+            available_pickup_locations(business_meal=business_meal, retail=retail)
             .order_by(PickupLocation.sort_order, PickupLocation.name)
         )
     )
@@ -469,6 +471,7 @@ async def create_pickup_location(
                     "name": location.name,
                     "business_meal_only": location.business_meal_only,
                     "requires_pickup_note": location.requires_pickup_note,
+                    "retail_pickup": location.retail_pickup,
                 },
             )
         )
@@ -500,11 +503,14 @@ async def update_pickup_location(
     if location is None:
         raise HTTPException(status_code=404, detail="找不到領取地點")
     updates = body.model_dump(exclude_unset=True)
-    if updates.get("requires_pickup_note", location.requires_pickup_note) and not updates.get(
-        "business_meal_only", location.business_meal_only
-    ):
-        raise HTTPException(422, "需填取餐備註的地點須設為會餐專用")
-    policy_fields = updates.keys() & {"business_meal_only", "requires_pickup_note"}
+    restricted = updates.get("business_meal_only", location.business_meal_only) or updates.get(
+        "requires_pickup_note", location.requires_pickup_note
+    )
+    if restricted and "retail_pickup" not in updates:
+        updates["retail_pickup"] = False
+    if restricted and updates.get("retail_pickup", location.retail_pickup):
+        raise HTTPException(422, RETAIL_PICKUP_CONFLICT)
+    policy_fields = updates.keys() & {"business_meal_only", "requires_pickup_note", "retail_pickup"}
     audit_data = {"updated_fields": sorted(updates)}
     if policy_fields:
         audit_data.update(

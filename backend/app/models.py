@@ -2371,12 +2371,8 @@ class PickupLocation(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     business_meal_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
-    requires_pickup_note: Mapped[bool] = mapped_column(
-        Boolean,
-        CheckConstraint("NOT requires_pickup_note OR business_meal_only", name="note_requires_business_meal"),
-        default=False,
-        server_default=false(),
-    )
+    requires_pickup_note: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    retail_pickup: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
