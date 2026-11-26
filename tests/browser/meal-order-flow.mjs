@@ -689,8 +689,8 @@ test('每日午晚餐排程預設週一至五且停用，須明確啟用及自�
   await page.getByRole('button', { name: '建立排程', exact: true }).click();
   const next = page.getByRole('button', { name: '下一步', exact: true });
   assert.equal(await page.getByLabel('平日（週一到週五）', { exact: true }).isChecked(), true);
-  assert.equal(await page.getByLabel('週六・只接受會餐', { exact: true }).isChecked(), false);
-  assert.equal(await page.getByLabel('週日・會議餐（只接受會餐）', { exact: true }).isChecked(), false);
+  assert.equal(await page.getByLabel('週六', { exact: true }).inputValue(), 'off');
+  assert.equal(await page.getByLabel('週日', { exact: true }).inputValue(), 'off');
   await page.getByLabel('午餐', { exact: true }).uncheck();
   await page.getByLabel('晚餐', { exact: true }).check();
   await next.click();
@@ -836,6 +836,24 @@ for (const width of [390, 1440]) {
     assert.deepEqual(state.unknownApi, []);
   });
 }
+
+test('場次清單先列草稿與開放預訂，已截止的未來場次排在後面', { timeout: 20000 }, async (t) => {
+  const { page, state } = await scheduleFixture(t, { admin: true });
+  state.events.push(
+    scheduledEvent({ id: 'closed-early', title: '已截止早場', status: 'ordering_closed', can_edit: false,
+      pickup_starts_at: '2026-09-17T02:00:00Z', pickup_ends_at: '2026-09-17T04:00:00Z' }),
+    scheduledEvent({ id: 'draft-later', title: '草稿加開場', status: 'draft', service_date: '2026-09-18',
+      pickup_starts_at: '2026-09-18T03:00:00Z', pickup_ends_at: '2026-09-18T05:30:00Z' }),
+  );
+  await page.goto(`${base}/admin/meals?tab=events`);
+  const titles = page.locator('.meal-event-admin-card').getByRole('heading', { level: 3 });
+  await titles.first().waitFor();
+  const order = await titles.allInnerTexts();
+  assert.equal(order[0], '草稿加開場');
+  assert.ok(order.indexOf('已截止早場') > order.indexOf('隔離每日晚餐'), order.join('、'));
+  assert.ok(order.indexOf('隔離每日晚餐') > order.indexOf('隔離每日午餐'), order.join('、'));
+  assert.deepEqual(state.unknownApi, []);
+});
 
 test('便當後台每30秒更新場次，供餐狀態更新時仍隱藏核銷且保留未儲存編輯', { timeout: 20000 }, async (t) => {
   const { page, state } = await scheduleFixture(t, { admin: true });

@@ -216,8 +216,8 @@ for (const width of [390, 1440]) {
     await page.getByRole('heading', { name: '1／4 餐別與供餐日', exact: true }).waitFor();
     assert.equal(await page.getByLabel('平日（週一到週五）', { exact: true }).isChecked(), true);
     await page.getByLabel('晚餐', { exact: true }).check();
-    await page.getByLabel('週六・只接受會餐', { exact: true }).check();
-    await page.getByLabel('週日・會議餐（只接受會餐）', { exact: true }).check();
+    await page.getByLabel('週六', { exact: true }).selectOption({ label: '只接受會餐' });
+    await page.getByLabel('週日', { exact: true }).selectOption({ label: '只接受會餐' });
     const next = page.getByRole('button', { name: '下一步', exact: true });
     await next.click();
     const mealOption = page.getByLabel(/工作日測試便當/);
@@ -260,6 +260,31 @@ for (const width of [390, 1440]) {
   });
 }
 
+test('排程的週六可同時開放一般便當與會餐', { timeout: 30000 }, async t => {
+  const { page, unknown, scheduleUpdateRequests } = await fixture(t, 390, { admin: true });
+  await page.goto(`${base}/admin/meals?tab=schedules`);
+  await page.getByRole('button', { name: '建立排程', exact: true }).click();
+  await page.getByLabel('平日（週一到週五）', { exact: true }).uncheck();
+  const saturday = page.getByLabel('週六', { exact: true });
+  assert.equal(await saturday.inputValue(), 'off');
+  await saturday.selectOption({ label: '一般便當與會餐' });
+  await screenshot(page, 'schedule-weekend-regular-390');
+  const next = page.getByRole('button', { name: '下一步', exact: true });
+  await next.click();
+  await page.getByLabel(/工作日測試便當/).check();
+  await next.click();
+  await next.click();
+  await page.getByText(/週六・一般便當與會餐/).waitFor();
+  await page.getByText('週六、週日：週五 00:00–20:00', { exact: true }).waitFor();
+  assert.equal(await page.getByText('平日：前一個工作日 00:00–20:00', { exact: true }).count(), 0);
+  await page.getByRole('button', { name: '確認建立', exact: true }).click();
+  await page.getByText('已建立 1 個排程。', { exact: true }).waitFor();
+  const [row] = scheduleUpdateRequests[0].schedules;
+  assert.deepEqual([row.weekdays, row.saturday_business_only, row.sunday_business_only], [[5], false, false]);
+  await noOverflow(page);
+  assert.deepEqual(unknown, []);
+});
+
 test('排程編輯顯示目前主檔售價、改為不限份數並可切換套用範圍', { timeout: 30000 }, async t => {
   const schedule = {
     ...scheduleForDisable(), weekdays: [0, 1, 2, 3, 4, 5],
@@ -276,7 +301,7 @@ test('排程編輯顯示目前主檔售價、改為不限份數並可切換套�
   await page.getByText(/已有訂單的午餐/).waitFor();
   await page.getByText('工作日測試便當 $110 → $120', { exact: true }).waitFor();
   await page.getByRole('button', { name: '修改餐別與供餐日', exact: true }).click();
-  assert.equal(await page.getByLabel('週六・只接受會餐', { exact: true }).isChecked(), false);
+  assert.equal(await page.getByLabel('週六', { exact: true }).inputValue(), 'all');
   await page.getByRole('button', { name: '返回確認', exact: true }).click();
   await page.getByText('工作日測試便當 改為不限份數', { exact: true }).waitFor();
   await page.getByRole('radio', { name: '只影響之後新建的場次', exact: true }).check();

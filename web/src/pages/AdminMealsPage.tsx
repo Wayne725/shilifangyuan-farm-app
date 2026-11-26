@@ -16,6 +16,7 @@ import { MealScheduleSettings } from "../components/MealScheduleSettings";
 import { MealEventConflicts } from "../components/MealEventConflicts";
 import { MealOptionsEditor } from "../components/MealOptionsEditor";
 import { MealDetailsEditor } from "../components/MealDetailsEditor";
+import { DeleteRecordAction } from "../components/DeleteRecordAction";
 import { MealImageEditor } from "../components/MealImageEditor";
 import { DataState, LoadingLines } from "../components/Shared";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
@@ -139,7 +140,7 @@ export function AdminMealsPage() {
           <MealCreateForm onDone={refreshMeals} />
           {meals.isPending && <LoadingLines count={3} />}
           {meals.isError && <DataState kind="error" title="餐點資料無法讀取" detail={meals.error.message} />}
-          <div className="admin-record-grid">{meals.data?.map((meal) => <article className="admin-record-card" key={meal.id}><BowlFood size={22} weight="light" /><span className={`status-chip ${meal.is_active ? "passed" : ""}`}>{meal.is_active ? "啟用" : "停用"}</span><h3>{meal.name}</h3><p>{meal.description || "尚未填寫餐點介紹"}</p><dl><div><dt>售價</dt><dd>{formatMoney(meal.price)}</dd></div><div><dt>選項</dt><dd>{meal.option_groups.length} 組</dd></div><div><dt>稅別</dt><dd>{meal.tax_type === "taxable" ? "應稅" : "免稅"}</dd></div></dl><MealDetailsEditor meal={meal} onDone={refreshMeals} /><MealOptionsEditor meal={meal} onDone={refreshMeals} /><MealImageEditor meal={meal} onDone={refreshMeals} /></article>)}</div>
+          <div className="admin-record-grid">{meals.data?.map((meal) => <article className="admin-record-card" key={meal.id}><BowlFood size={22} weight="light" /><span className={`status-chip ${meal.is_active ? "passed" : ""}`}>{meal.is_active ? "啟用" : "停用"}</span><h3>{meal.name}</h3><p>{meal.description || "尚未填寫餐點介紹"}</p><dl><div><dt>售價</dt><dd>{formatMoney(meal.price)}</dd></div><div><dt>選項</dt><dd>{meal.option_groups.length} 組</dd></div><div><dt>稅別</dt><dd>{meal.tax_type === "taxable" ? "應稅" : "免稅"}</dd></div></dl><MealDetailsEditor meal={meal} onDone={refreshMeals} /><MealOptionsEditor meal={meal} onDone={refreshMeals} /><MealImageEditor meal={meal} onDone={refreshMeals} /><DeleteRecordAction label="刪除餐點" detail="建錯或不需要的餐點可以直接刪除；已排進場次或排程菜單的請改為停售。" remove={() => apiFetch(`/v1/admin/meals/${meal.id}`, { method: "DELETE" })} onDeleted={refreshMeals} /></article>)}</div>
         </Tabs.Content>
       </Tabs.Root>
     </section>
@@ -152,6 +153,11 @@ const emptyEventSearch = { date: "", status: "", query: "" };
 
 function adminMealEventLabel(status: string) {
   return status === "pickup_open" ? "供餐中" : mealEventStatusLabel(status);
+}
+
+function upcomingStatusOrder(status: string) {
+  const index = eventStatuses.indexOf(status);
+  return index === -1 ? eventStatuses.length : index;
 }
 
 function mealEventIsFinal(event: MealEvent) {
@@ -193,7 +199,9 @@ function MealEventList({ initialDate, events, meals, onDone, onEdit }: {
     const rightPast = Date.parse(right.pickup_ends_at) <= now;
     if (leftPast !== rightPast) return leftPast ? 1 : -1;
     const byPickup = Date.parse(left.pickup_starts_at) - Date.parse(right.pickup_starts_at);
-    return leftPast ? -byPickup : byPickup;
+    if (leftPast) return -byPickup;
+    // Upcoming drafts and open events need action first; closed or in-pickup ones follow.
+    return upcomingStatusOrder(left.status) - upcomingStatusOrder(right.status) || byPickup;
   });
   const lastPage = Math.max(1, Math.ceil(matches.length / eventListPageSize));
   const currentPage = Math.min(page, lastPage);

@@ -43,13 +43,36 @@ const weekdayNames = ["週一", "週二", "週三", "週四", "週五"];
 export const mealPeriodLabels = { lunch: "午餐", dinner: "晚餐" };
 const weekdayRule = "平日：前一個工作日 00:00–20:00";
 const weekendRule = "週六、週日：週五 00:00–20:00";
+type WeekendMode = "off" | "business" | "all";
+const weekendModeLabels: Record<WeekendMode, string> = { off: "不供餐", business: "只接受會餐", all: "一般便當與會餐" };
+const weekendDays = [{ day: 5, name: "週六" }, { day: 6, name: "週日" }] as const;
+
+function weekendMode(days: ServingDays, day: 5 | 6): WeekendMode {
+  if (days.weekdays.includes(day)) return "all";
+  return days[day === 5 ? "saturday_business_only" : "sunday_business_only"] ? "business" : "off";
+}
+
+function withWeekendMode(days: ServingDays, day: 5 | 6, mode: WeekendMode): ServingDays {
+  const others = days.weekdays.filter(item => item !== day);
+  return {
+    ...days,
+    weekdays: mode === "all" ? [...others, day].sort((a, b) => a - b) : others,
+    [day === 5 ? "saturday_business_only" : "sunday_business_only"]: mode === "business",
+  };
+}
+
+function servesDays(days: ServingDays) {
+  return days.weekdays.length > 0 || days.saturday_business_only || days.sunday_business_only;
+}
 
 export function scheduleDayLabel(days: ServingDays) {
   const weekdaysLabel = days.weekdays.filter(day => day < 5);
   return [
     weekdaysLabel.length === weekdays.length ? "平日" : weekdaysLabel.map(day => weekdayNames[day]).join("、"),
-    days.saturday_business_only && "週六・只接受會餐",
-    days.sunday_business_only && "週日・會議餐",
+    weekendMode(days, 5) === "business" && "週六・只接受會餐",
+    weekendMode(days, 5) === "all" && "週六・一般便當與會餐",
+    weekendMode(days, 6) === "business" && "週日・會議餐",
+    weekendMode(days, 6) === "all" && "週日・一般便當與會餐",
   ].filter(Boolean).join("、");
 }
 
@@ -87,10 +110,11 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
   const stepHeading = useRef<HTMLHeadingElement>(null);
   const [periodChoices, setPeriodChoices] = useState<Period[]>([initial?.meal_period ?? "lunch"]);
   const [days, setDays] = useState<ServingDays>({
-    weekdays: initial?.weekdays.filter(day => day < 5) ?? weekdays,
+    weekdays: initial?.weekdays ?? weekdays,
     saturday_business_only: initial?.saturday_business_only ?? false,
     sunday_business_only: initial?.sunday_business_only ?? false,
   });
+  const selectedWeekdays = days.weekdays.filter(day => day < 5);
   const [periodSettings, setPeriodSettings] = useState<Record<Period, PeriodDraft>>({
     lunch: periodDraft("lunch", initial?.meal_period === "lunch" ? initial : undefined),
     dinner: periodDraft("dinner", initial?.meal_period === "dinner" ? initial : undefined),
@@ -120,7 +144,7 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
     };
   });
   const problems = [
-    !periodChoices.length ? "請選擇餐別。" : !(days.weekdays.length || days.saturday_business_only || days.sunday_business_only) ? "請選擇供餐日。" : missingCounterpart ? "請選擇要一起更新的排程。" : "",
+    !periodChoices.length ? "請選擇餐別。" : !servesDays(days) ? "請選擇供餐日。" : missingCounterpart ? "請選擇要一起更新的排程。" : "",
     offerings.length === 0 ? "請至少選擇一道餐點。" : offerings.length > 100 ? "每個排程最多選擇 100 道餐點。" : offerings.some(item => !byMeal.get(item.meal_id)?.is_active) ? "請取消勾選已停售或無法讀取的餐點。" : "",
     inputs.some(item => !item.location || !item.pickup_start_time || !item.pickup_end_time || item.pickup_start_time === item.pickup_end_time) ? "請填寫供餐地區，並設定不同的取餐開始與結束時間。" : "",
   ];
@@ -197,10 +221,12 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
             {counterparts.map(schedule => <option key={schedule.id} value={schedule.id}>{schedule.title}</option>)}
           </select></label>}
         <fieldset><legend>供餐日</legend><div className="meal-choice-grid">
-          <label className="meal-choice"><input type="checkbox" checked={days.weekdays.length > 0} onChange={event => setDays({ ...days, weekdays: event.target.checked ? weekdays : [] })} />平日（週一到週五）</label>
-          <label className="meal-choice"><input type="checkbox" checked={days.saturday_business_only} onChange={event => setDays({ ...days, saturday_business_only: event.target.checked })} />週六・只接受會餐</label>
-          <label className="meal-choice"><input type="checkbox" checked={days.sunday_business_only} onChange={event => setDays({ ...days, sunday_business_only: event.target.checked })} />週日・會議餐（只接受會餐）</label>
-        </div>{days.weekdays.length > 0 && days.weekdays.length < 5 && <p>目前平日供餐日為 {days.weekdays.map(day => weekdayNames[day]).join("、")}。</p>}</fieldset>
+          <label className="meal-choice"><input type="checkbox" checked={selectedWeekdays.length > 0} onChange={event => setDays({ ...days, weekdays: [...(event.target.checked ? weekdays : []), ...days.weekdays.filter(day => day >= 5)] })} />平日（週一到週五）</label>
+          {weekendDays.map(({ day, name }) => <label key={day} className="field"><span>{name}</span>
+            <select aria-label={name} value={weekendMode(days, day)} onChange={event => setDays(withWeekendMode(days, day, event.target.value as WeekendMode))}>
+              {(Object.keys(weekendModeLabels) as WeekendMode[]).map(mode => <option key={mode} value={mode}>{weekendModeLabels[mode]}</option>)}
+            </select></label>)}
+        </div>{selectedWeekdays.length > 0 && selectedWeekdays.length < 5 && <p>目前平日供餐日為 {selectedWeekdays.map(day => weekdayNames[day]).join("、")}。</p>}</fieldset>
       </>}
       {step === 1 && <>
         <div className="meal-choice-grid">{menuOptions.map(meal => <label key={meal.id} className="meal-choice">
@@ -234,7 +260,7 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
               <span className="meal-schedule-edit-links"><EditStep label="餐點" text="修改餐點" onClick={() => goTo(1, true)} /></span></div>
             <div><dt>取餐時間與地區</dt><dd><ul>{inputs.map(item => <li key={item.meal_period}>{item.title} · {settingsLabel(item)}</li>)}</ul></dd><EditStep label="取餐時間與地區" onClick={() => goTo(2, true)} /></div>
             <div><dt>開放的取餐點</dt><dd>{pickupLocationSummary(pickupLocationIds, locations.data)}</dd><EditStep label="開放的取餐點" onClick={() => goTo(2, true)} /></div>
-            <div><dt>預訂規則</dt><dd>{days.weekdays.length > 0 && <div>{weekdayRule}</div>}{(days.saturday_business_only || days.sunday_business_only) && <div>{weekendRule}</div>}</dd></div>
+            <div><dt>預訂規則</dt><dd>{selectedWeekdays.length > 0 && <div>{weekdayRule}</div>}{weekendDays.some(({ day }) => weekendMode(days, day) !== "off") && <div>{weekendRule}</div>}</dd></div>
           </dl>
         </div>
         {inputs.map(input => {
@@ -245,8 +271,10 @@ export function MealScheduleWizard({ initial, meals, schedules, onDone, onCancel
             <label className="meal-choice"><input type="checkbox" checked={input.auto_publish} onChange={event => editPeriod(period, { autoPublish: event.target.checked })} />新場次自動發布</label>
             {initial && <ScheduleChanges input={input} previous={previous} mealLabel={id => byMeal.get(id)?.name ?? "已移除的餐點"} mealPrice={displayPrice}
               locationLabel={ids => pickupLocationSummary(ids, locations.data)} />}
-            {previous && ((previous.saturday_business_only && !input.saturday_business_only) || (previous.sunday_business_only && !input.sunday_business_only)) &&
+            {previous && weekendDays.some(({ day }) => weekendMode(previous, day) !== "off" && weekendMode(input, day) === "off") &&
               <p>已建立的週末場次可在「接下來的週末會餐」逐場停用。</p>}
+            {previous && weekendDays.some(({ day }) => weekendMode(previous, day) !== weekendMode(input, day) && weekendMode(input, day) !== "off") &&
+              <p>已建立的週末場次會一起改成新的接單方式；改成只接受會餐時，已有訂單的場次維持原樣。</p>}
           </fieldset>;
         })}
         {showImpact && <fieldset><legend>套用範圍</legend>

@@ -6,6 +6,7 @@ import { ApiError, apiFetch } from "../lib/api";
 import { formatMealDateTime, mealCanChangeOrderingPause } from "../lib/meal-time";
 import type { Meal, MealEvent, MealSchedule } from "../lib/types";
 import { DataState, LoadingLines } from "./Shared";
+import { DeleteRecordAction } from "./DeleteRecordAction";
 import { MealScheduleWizard, mealPeriodLabels, scheduleDayLabel } from "./MealScheduleWizard";
 import "./OrderCancellation.css";
 
@@ -43,6 +44,11 @@ export function MealScheduleSettings({ meals, events, onEventsChanged }: { meals
       schedule.id === scheduleId ? { ...schedule, enabled: false } : schedule));
     refresh();
   };
+  const onDeleted = (scheduleId: string) => {
+    setEditing(current => current?.id === scheduleId ? null : current);
+    queryClient.setQueryData<MealSchedule[]>(["admin-meal-schedules"], current => current?.filter(schedule => schedule.id !== scheduleId));
+    refresh();
+  };
   return <>
     {calendar.data && <div className="meal-calendar-status"><span className={`status-chip ${calendar.data.available ? "passed" : ""}`}>{calendar.data.available ? "工作日日曆已就緒" : "工作日日曆無法使用"}</span><span>{calendar.data.from_date} 至 {calendar.data.to_date}</span></div>}
     {calendar.data && !calendar.data.available && <p className="form-error" role="alert">{calendar.data.message}</p>}
@@ -57,12 +63,12 @@ export function MealScheduleSettings({ meals, events, onEventsChanged }: { meals
     {schedules.isPending && <LoadingLines count={2} />}
     {schedules.isError && <DataState kind="error" title="每日排程無法讀取" detail={schedules.error.message} onAction={() => schedules.refetch()} />}
     {schedules.data?.length === 0 && <DataState title="尚未設定每日排程" detail="先設定午餐或晚餐的餐點、份數與時間，再決定是否啟用。沒有設定就不會產生場次。" />}
-    <div className="admin-record-grid">{schedules.data?.map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} onEdit={() => { setNotice(""); setCreating(false); setEditing(schedule); }} onDone={refresh} onDisabled={() => onDisabled(schedule.id)} />)}</div>
+    <div className="admin-record-grid">{schedules.data?.map((schedule) => <ScheduleCard key={schedule.id} schedule={schedule} onEdit={() => { setNotice(""); setCreating(false); setEditing(schedule); }} onDone={refresh} onDisabled={() => onDisabled(schedule.id)} onDeleted={() => onDeleted(schedule.id)} />)}</div>
   </>;
 }
 
-function ScheduleCard({ schedule, onEdit, onDone, onDisabled }: {
-  schedule: MealSchedule; onEdit: () => void; onDone: () => void; onDisabled: () => void;
+function ScheduleCard({ schedule, onEdit, onDone, onDisabled, onDeleted }: {
+  schedule: MealSchedule; onEdit: () => void; onDone: () => void; onDisabled: () => void; onDeleted: () => void;
 }) {
   const editButton = useRef<HTMLButtonElement>(null);
   const focusEditOnClose = useRef(false);
@@ -174,6 +180,9 @@ function ScheduleCard({ schedule, onEdit, onDone, onDisabled }: {
       ? `已停用排程並暫停 ${disable.data.paused_event_count} 場的新預訂。` : "已停用排程。"}</p>}
     {generate.isSuccess && <p className="form-success">已完成排程補齊，既有日期不會重複建立。</p>}
     {generate.isError && <p className="form-error">{generate.error.message}</p>}
+    <DeleteRecordAction label="刪除排程" detail="建錯或不需要的排程可以直接刪除，它產生、還沒有訂單的場次會一起刪除；已有訂單的排程請改用停用。"
+      remove={() => apiFetch(`/v1/admin/meal-schedules/${schedule.id}`, { method: "DELETE" })} onDeleted={onDeleted}
+      disabled={generate.isPending || disable.isPending} />
   </article>;
 }
 
