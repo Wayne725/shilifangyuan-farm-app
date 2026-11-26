@@ -1019,7 +1019,7 @@ test('循環排程保留自訂取餐時段並擋下相同開始結束時間', { 
   assert.equal(await review.isDisabled(), true);
   await end.fill('12:30');
   await review.click();
-  await page.getByText('平日：前一個工作日 00:00–20:00', { exact: true }).waitFor();
+  await page.getByText('平日：前一個工作日 00:00 開放，取餐前一天 20:00 截止', { exact: true }).waitFor();
   await captureMealScreenshot(page, 'meal-confirmed-lunch-schedule-mobile.png');
   await page.getByRole('button', { name: '確認修改', exact: true }).click();
   await page.getByText('已更新 1 個排程。', { exact: true }).waitFor();

@@ -1,0 +1,8 @@
+.meal-notice-overlay { position: fixed; inset: 0; z-index: 150; background: rgb(24 35 28 / 48%); }
+.meal-notice-dialog { position: fixed; top: 50%; left: 50%; z-index: 151; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 28px; overflow-y: auto; transform: translate(-50%, -50%); border: 1px solid var(--line); background: var(--paper-light); color: var(--ink); }
+.meal-notice-dialog h2 { margin: 0 0 16px; font-size: 1.5rem; }
+.meal-notice-body p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.meal-notice-date { font-size: 1.15rem; }
+.meal-notice-message { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); white-space: pre-line; }
+.meal-notice-dialog .form-actions { margin-top: 20px; }
+.meal-notice-dialog .form-actions .button { width: 100%; }

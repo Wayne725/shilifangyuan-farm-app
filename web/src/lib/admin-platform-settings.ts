@@ -14,6 +14,13 @@ interface SettingsFields {
   printer_connection: "unknown" | "browser" | "usb" | "network" | "bluetooth";
   kitchen_sound: boolean;
   public_information: PublicInformation;
+  meal_order_notice: MealOrderNoticeSettings;
+}
+
+export interface MealOrderNoticeSettings {
+  enabled: boolean;
+  title: string;
+  message: string;
 }
 
 type PlatformSettings = StorefrontStatus & SettingsFields & {
@@ -32,6 +39,7 @@ const defaults: SettingsFields = {
   printer_connection: "unknown",
   kitchen_sound: false,
   public_information: emptyPublicInformation,
+  meal_order_notice: { enabled: false, title: "訂購須知", message: "" },
 };
 
 function fieldsFrom(value?: PlatformSettings): SettingsFields {
@@ -44,6 +52,7 @@ function fieldsFrom(value?: PlatformSettings): SettingsFields {
     printer_connection: value?.printer_connection ?? defaults.printer_connection,
     kitchen_sound: value?.kitchen_sound ?? defaults.kitchen_sound,
     public_information: value?.public_information ?? defaults.public_information,
+    meal_order_notice: value?.meal_order_notice ?? defaults.meal_order_notice,
   };
 }
 

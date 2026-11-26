@@ -240,7 +240,7 @@ for (const width of [390, 1440]) {
     assert.equal(await lunch.getByLabel('供餐地區', { exact: true }).inputValue(), '清華大學');
     await dinner.getByLabel('供餐地區', { exact: true }).fill('隔離晚餐區');
     await next.click();
-    await page.getByText('平日：前一個工作日 00:00–20:00', { exact: true }).waitFor();
+    await page.getByText('平日：前一個工作日 00:00 開放，取餐前一天 20:00 截止', { exact: true }).waitFor();
     await page.getByText('週六、週日：週五 00:00–20:00', { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '修改份數', exact: true }).count(), 0);
     await page.getByText('工作日測試便當 · $120', { exact: true }).waitFor();
@@ -276,7 +276,7 @@ test('排程的週六可同時開放一般便當與會餐', { timeout: 30000 }, 
   await next.click();
   await page.getByText(/週六・一般便當與會餐/).waitFor();
   await page.getByText('週六、週日：週五 00:00–20:00', { exact: true }).waitFor();
-  assert.equal(await page.getByText('平日：前一個工作日 00:00–20:00', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('平日：前一個工作日 00:00 開放，取餐前一天 20:00 截止', { exact: true }).count(), 0);
   await page.getByRole('button', { name: '確認建立', exact: true }).click();
   await page.getByText('已建立 1 個排程。', { exact: true }).waitFor();
   const [row] = scheduleUpdateRequests[0].schedules;
@@ -393,7 +393,7 @@ test('當日一般便當只顯示來得及備餐的時段，切到會餐後保�
   await page.getByText('會餐預訂已截止。', { exact: true }).waitFor();
   assert.equal(await business.isChecked(), true);
   assert.equal(await page.getByRole('button', { name: '送出會餐訂單（取餐當日付款）' }).isDisabled(), true);
-  assert.match(await page.locator('.meal-booking-deadline').innerText(), /20:00/);
+  assert.equal(await page.locator('.meal-booking-deadline').count(), 0);
   await page.getByRole('radio', { name: '一般餐點', exact: true }).check();
   assert.equal(await pickupTime.inputValue(), `${date}T12:00`);
   await noOverflow(page);

@@ -8,6 +8,7 @@ export interface StorefrontStatus {
   closed_message: string;
   support_phone?: string;
   public_information?: PublicInformation | null;
+  meal_order_notice?: { title: string; message: string } | null;
   sales_scope?: "all" | "meals_only" | "pickup";
   regular_orders_enabled?: boolean;
   group_orders_enabled?: boolean;

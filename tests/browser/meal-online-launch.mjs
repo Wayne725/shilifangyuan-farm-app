@@ -57,7 +57,7 @@ const order = {
   available_actions: ['pay', 'cancel'], items: quote.items,
 };
 
-async function fixture(t) {
+async function fixture(t, { notice = null } = {}) {
   const browser = await engine.launch({ headless: true, executablePath: process.env.BROWSER_EXECUTABLE });
   t.after(() => browser.close());
   const context = await browser.newContext({
@@ -85,7 +85,7 @@ async function fixture(t) {
       if (method === 'GET') {
         if (url.pathname === '/v1/meal-checkout/contact') return route.fulfill({ json: { phone: '0912345678' } });
         if (url.pathname === '/v1/meal-announcements') return route.fulfill({ json: [] });
-        if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', support_phone: '' } });
+        if (url.pathname === '/v1/platform') return route.fulfill({ json: { orders_open: true, closed_message: '', support_phone: '', meal_order_notice: notice } });
         if (url.pathname === `/v1/meal-events/${eventId}`) return route.fulfill({ json: mealEvent });
         if (url.pathname === '/v1/meal-events/calendar') return route.fulfill({ json: mealCalendarFixture([mealEvent]) });
         if (['/v1/products', '/v1/group-campaigns', '/v1/pickup-locations'].includes(url.pathname)) return route.fulfill({ json: [] });
@@ -134,7 +134,8 @@ test('390px 正式 UUID 場次顯示完整臺灣時段，一次預訂只建立�
   await page.goto(`${base}/meals/${eventId}`);
   await page.getByRole('heading', { name: '選餐點與份數', exact: true }).waitFor();
   const content = page.locator('.meal-offer-page');
-  assert.match(await content.locator('.meal-booking-deadline').innerText(), /9\/13.*20:00/);
+  assert.match(await content.locator('.meal-summary .meal-booking-deadline').innerText(), /^請於 9\/13.*20:00 前完成預訂$/);
+  assert.equal(await content.locator('.offer-copy .meal-booking-deadline').count(), 0);
   await page.getByRole('heading', { name: mealName, exact: true }).waitFor();
   await verifyMobileOnlineOnly(page, state, content);
   assert.deepEqual(state.mutations, []);
@@ -171,4 +172,26 @@ test('390px 便當日期摘要保留首末取餐時段並連到原 UUID 場次',
   await verifyMobileOnlineOnly(page, state, calendar);
   assert.deepEqual(state.mutations, []);
   assert.equal(state.paymentVisits, 0);
+});
+
+test('390px 打開便當頁先跳出訂購須知，寫明預訂的日期、餐別與截止，關掉後本次不再跳出', { timeout: 30000 }, async (t) => {
+  const { page, state } = await fixture(t, { notice: { title: '訂購須知', message: '本週新品八折\n颱風天請留意停餐公告' } });
+  await page.goto(`${base}/meals/${eventId}`);
+  const dialog = page.getByRole('dialog', { name: '訂購須知', exact: true });
+  await dialog.waitFor();
+  const text = await dialog.innerText();
+  assert.match(text, /歡迎預訂 9\/14（週一，明天）的午餐/);
+  assert.match(text, /取餐時間：11:00–13:30/);
+  assert.match(text, /請於 9\/13.*20:00 前完成預訂。/);
+  assert.match(text, /本週新品八折\n颱風天請留意停餐公告/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  if (process.env.BROWSER_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.BROWSER_SCREENSHOT_DIR}/meal-order-notice-390.png` });
+  await dialog.getByRole('button', { name: '我知道了', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  await page.reload();
+  await page.getByRole('heading', { name: '選餐點與份數', exact: true }).waitFor();
+  await page.getByRole('heading', { name: mealName, exact: true }).waitFor();
+  assert.equal(await page.getByRole('dialog').count(), 0);
+  assert.deepEqual(state.mutations, []);
+  assert.deepEqual(state.unknownApi, []);
 });
