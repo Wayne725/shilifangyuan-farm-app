@@ -86,7 +86,9 @@ async def test_wizard_creates_both_periods_and_uses_current_meal_price_and_fixed
         for event in first_weekend_and_monday:
             starts, cutoff = meal_booking_window(event, business=event.business_only)
             assert starts == FRIDAY.replace(hour=0)
-            assert cutoff == FRIDAY.replace(hour=20)
+            # Weekend business meals close on Friday; Monday stays open until Sunday 20:00.
+            expected_cutoff = FRIDAY.replace(hour=20) if event.business_only else FRIDAY.replace(day=22, hour=20)
+            assert cutoff == expected_cutoff
             assert event.offerings[0].price == 100
         sunday = next(row for row in events if row.service_date.day == 22 and row.meal_period == "lunch")
         public = await client.get("/v1/meal-events/calendar")

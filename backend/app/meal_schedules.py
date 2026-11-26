@@ -138,7 +138,11 @@ async def generate_scheduled_meal_events(
                     ordering_start = datetime.combine(friday, time.min, TAIPEI)
                     cutoff = datetime.combine(friday, MEAL_ORDER_CUTOFF, TAIPEI)
                 else:
-                    configured_cutoff = None if template.fixed_booking_window else datetime.combine(
+                    # Wizard schedules open on the previous workday and close at 20:00 the day before pickup,
+                    # so Monday meals stay orderable from Friday through Sunday evening.
+                    configured_cutoff = datetime.combine(
+                        service_date - timedelta(days=1), MEAL_ORDER_CUTOFF, TAIPEI,
+                    ) if template.fixed_booking_window else datetime.combine(
                         service_date - timedelta(days=template.cutoff_days_before),
                         time.fromisoformat(template.cutoff_time), TAIPEI,
                     )
