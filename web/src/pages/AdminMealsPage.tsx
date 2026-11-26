@@ -155,6 +155,11 @@ function adminMealEventLabel(status: string) {
   return status === "pickup_open" ? "供餐中" : mealEventStatusLabel(status);
 }
 
+function upcomingStatusOrder(status: string) {
+  const index = eventStatuses.indexOf(status);
+  return index === -1 ? eventStatuses.length : index;
+}
+
 function mealEventIsFinal(event: MealEvent) {
   return event.status === "cancelled" || event.status === "completed";
 }
@@ -194,7 +199,9 @@ function MealEventList({ initialDate, events, meals, onDone, onEdit }: {
     const rightPast = Date.parse(right.pickup_ends_at) <= now;
     if (leftPast !== rightPast) return leftPast ? 1 : -1;
     const byPickup = Date.parse(left.pickup_starts_at) - Date.parse(right.pickup_starts_at);
-    return leftPast ? -byPickup : byPickup;
+    if (leftPast) return -byPickup;
+    // Upcoming drafts and open events need action first; closed or in-pickup ones follow.
+    return upcomingStatusOrder(left.status) - upcomingStatusOrder(right.status) || byPickup;
   });
   const lastPage = Math.max(1, Math.ceil(matches.length / eventListPageSize));
   const currentPage = Math.min(page, lastPage);
