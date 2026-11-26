@@ -393,7 +393,7 @@ test('當日一般便當只顯示來得及備餐的時段，切到會餐後保�
   await page.getByText('會餐預訂已截止。', { exact: true }).waitFor();
   assert.equal(await business.isChecked(), true);
   assert.equal(await page.getByRole('button', { name: '送出會餐訂單（取餐當日付款）' }).isDisabled(), true);
-  assert.match(await page.locator('.meal-booking-deadline').innerText(), /20:00/);
+  assert.equal(await page.locator('.meal-booking-deadline').count(), 0);
   await page.getByRole('radio', { name: '一般餐點', exact: true }).check();
   assert.equal(await pickupTime.inputValue(), `${date}T12:00`);
   await noOverflow(page);

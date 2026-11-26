@@ -134,7 +134,8 @@ test('390px 正式 UUID 場次顯示完整臺灣時段，一次預訂只建立�
   await page.goto(`${base}/meals/${eventId}`);
   await page.getByRole('heading', { name: '選餐點與份數', exact: true }).waitFor();
   const content = page.locator('.meal-offer-page');
-  assert.match(await content.locator('.meal-booking-deadline').innerText(), /9\/13.*20:00/);
+  assert.match(await content.locator('.meal-summary .meal-booking-deadline').innerText(), /^請於 9\/13.*20:00 前完成預訂$/);
+  assert.equal(await content.locator('.offer-copy .meal-booking-deadline').count(), 0);
   await page.getByRole('heading', { name: mealName, exact: true }).waitFor();
   await verifyMobileOnlineOnly(page, state, content);
   assert.deepEqual(state.mutations, []);

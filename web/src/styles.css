@@ -8672,7 +8672,6 @@ html[data-text-size="large"] { font-size: 20px; }
 .meal-offer-page .meal-offer-hero { margin-top: 16px; margin-bottom: 20px; }
 .meal-offer-page .offer-copy { padding: 20px 24px; }
 .meal-offer-page .offer-copy h1 { font-size: clamp(1.75rem, 3vw, 2.25rem); margin-bottom: 8px; }
-.meal-offer-page .offer-copy .meal-booking-deadline { margin: 8px 0 0; }
 .meal-selected-date { margin-bottom: 20px; }
 .meal-selected-date h2 { font-size: 1.25rem; margin: 0 0 8px; }
 .meal-selected-date p { flex-wrap: wrap; gap: 12px; }

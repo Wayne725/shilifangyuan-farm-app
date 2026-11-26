@@ -469,7 +469,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
         <div className="offer-copy">
           <p className="eyebrow">MEAL PREORDER / 便當預訂</p>
           <h1>選餐點與份數</h1>
-          <div className="meal-booking-meta"><span className="meal-event-status">{bookingStatus}</span><p className="meal-booking-deadline">預訂截止：{formatMealDateTime(deadline)}</p></div>
+          <div className="meal-booking-meta"><span className="meal-event-status">{bookingStatus}</span></div>
         </div>
       </div>
 
@@ -668,6 +668,7 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
           {noteLengthError && <p id="meal-note-length-error" className="form-error" role="alert">{noteLengthError}</p>}
           <div className="meal-payment-action">
           <dl className="meal-payment-total"><div className="offer-total"><dt>{totalLabel}</dt><dd>{totalDisplay}</dd></div></dl>
+          {["可預訂", "尚未開放"].includes(bookingStatus) && <p className="meal-booking-deadline">請於 {formatMealDateTime(deadline)} 前完成預訂</p>}
           {!user ? (
             <button className="button button-primary full-width" type="button" disabled={orderingPaused || ((businessOnly || mealEvent.same_day_preparation_minutes != null) && (!orderingOpen || !pickupOptions.length))} onClick={openLogin}>登入後預訂</button>
           ) : submissionReview ? (
