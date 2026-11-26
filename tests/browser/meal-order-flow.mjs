@@ -689,8 +689,8 @@ test('每日午晚餐排程預設週一至五且停用，須明確啟用及自�
   await page.getByRole('button', { name: '建立排程', exact: true }).click();
   const next = page.getByRole('button', { name: '下一步', exact: true });
   assert.equal(await page.getByLabel('平日（週一到週五）', { exact: true }).isChecked(), true);
-  assert.equal(await page.getByLabel('週六・只接受會餐', { exact: true }).isChecked(), false);
-  assert.equal(await page.getByLabel('週日・會議餐（只接受會餐）', { exact: true }).isChecked(), false);
+  assert.equal(await page.getByLabel('週六', { exact: true }).inputValue(), 'off');
+  assert.equal(await page.getByLabel('週日', { exact: true }).inputValue(), 'off');
   await page.getByLabel('午餐', { exact: true }).uncheck();
   await page.getByLabel('晚餐', { exact: true }).check();
   await next.click();

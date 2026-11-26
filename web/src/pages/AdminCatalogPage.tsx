@@ -9,6 +9,7 @@ import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { type FormEvent, useRef, useState } from "react";
 
+import { DeleteRecordAction } from "../components/DeleteRecordAction";
 import { PhotoPicker, savePhoto } from "../components/PhotoPicker";
 import { AdminNav } from "../components/AdminNav";
 import { SupplierOrderDemand } from "../components/SupplierOrderDemand";
@@ -327,6 +328,9 @@ function ProductEditor({ product, suppliers, onDone, onSaleChanged }: { product:
       </div>}
       {archive.error && <p className="form-error" role="alert">{archive.error.message}</p>}
       {sale.error && <p className="form-error" role="alert">{sale.error.message}</p>}
+      {!confirmArchive && <DeleteRecordAction label="刪除商品" detail="建錯或不需要的商品可以直接刪除；已有訂單、共同購買或提案的商品請改用封存。"
+        remove={() => apiFetch(`/v1/admin/products/${product.id}`, { method: "DELETE" })} onDeleted={onDone}
+        disabled={sale.isPending || archive.isPending} />}
     </article>
   );
 }
@@ -459,6 +463,8 @@ function LocationEditor({ location, onDone }: { location: PickupLocation; onDone
         business_meal_only: Boolean(location.business_meal_only), requires_pickup_note: Boolean(location.requires_pickup_note),
         retail_pickup: location.retail_pickup !== false && !location.business_meal_only && !location.requires_pickup_note });
     }}>編輯取貨點</button>
+    <DeleteRecordAction label="刪除取貨點" detail="建錯或不需要的取貨點可以直接刪除；已有訂單使用過的請改為停用。"
+      remove={() => apiFetch(`/v1/admin/pickup-locations/${location.id}`, { method: "DELETE" })} onDeleted={onDone} disabled={update.isPending} />
   </article>;
 }
 

@@ -16,7 +16,9 @@ from .audited_changes import audit_changes
 from .auth import require_admin
 from .database import get_session
 from .meal_booking import MEAL_ORDER_CUTOFF, MEAL_PICKUP_TIMES, _aware, meal_period, meal_schedule_has_pickup_slots, meal_service_date
-from .meal_schedules import advance_meal_schedule_version, apply_schedule_pickup_locations, generate_scheduled_meal_events
+from .meal_schedules import (
+    advance_meal_schedule_version, apply_schedule_pickup_locations, apply_schedule_weekend_access, generate_scheduled_meal_events,
+)
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User
 from .pickup_locations import selectable_pickup_location_ids
 from .schemas import UNLIMITED_MEAL_CAPACITY, MealScheduleRead, validate_pickup_location_ids
@@ -42,7 +44,7 @@ class ScheduleWizardEntry(BaseModel):
     meal_period: Literal["lunch", "dinner"]
     pickup_start_time: time | None = None
     pickup_end_time: time | None = None
-    weekdays: list[int] = Field(max_length=5)
+    weekdays: list[int] = Field(max_length=7)
     saturday_business_only: bool = False
     sunday_business_only: bool = False
     enabled: bool = True
@@ -57,8 +59,10 @@ class ScheduleWizardEntry(BaseModel):
             raise ValueError("編輯排程時須提供當前版本")
         if self.expected_updated_at is not None and self.expected_updated_at.tzinfo is None:
             raise ValueError("時間必須包含時區")
-        if len(set(self.weekdays)) != len(self.weekdays) or any(day not in range(5) for day in self.weekdays):
-            raise ValueError("請選擇有效的平日")
+        if len(set(self.weekdays)) != len(self.weekdays) or any(day not in range(7) for day in self.weekdays):
+            raise ValueError("請選擇有效的供餐日")
+        if (5 in self.weekdays and self.saturday_business_only) or (6 in self.weekdays and self.sunday_business_only):
+            raise ValueError("週末請選擇只接受會餐，或一般便當與會餐其中一種")
         if not (self.weekdays or self.saturday_business_only or self.sunday_business_only):
             raise ValueError("請至少選擇一個供餐日")
         if len({item.meal_id for item in self.offerings}) != len(self.offerings):
@@ -278,6 +282,7 @@ async def save_wizard(
             advance_meal_schedule_version(template, now)
             audit_changes(session, admin.id, "meal_schedule", template.id, "meal_schedule.update", before, values)
             await apply_schedule_pickup_locations(session, template, admin.id, now)
+            await apply_schedule_weekend_access(session, template, admin.id, now)
         templates.append(template)
 
     after = [{**item, "is_active": True} for item in plan.menu]

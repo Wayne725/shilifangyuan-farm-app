@@ -1,6 +1,10 @@
 [
+  "DELETE /v1/admin/meal-schedules/{template_id}",
+  "DELETE /v1/admin/meals/{meal_id}",
   "DELETE /v1/admin/meals/{meal_id}/photo",
   "DELETE /v1/admin/meetings/{meeting_id}",
+  "DELETE /v1/admin/pickup-locations/{location_id}",
+  "DELETE /v1/admin/products/{product_id}",
   "DELETE /v1/admin/products/{product_id}/photo",
   "DELETE /v1/admin/shipping-rates/{rate_id}",
   "DELETE /v1/members/me/photo",

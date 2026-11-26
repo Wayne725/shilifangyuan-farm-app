@@ -1,3 +1,4 @@
+from ..admin_deletions import router as admin_deletions_router
 from .activity_payments import router as activity_payments_router
 from .activity_finance import router as activity_finance_router
 from .photos import photos_router
@@ -34,6 +35,7 @@ from .walk_in_sales import walk_in_sales_router
 
 ALL_ROUTERS = [
     admin_help_router,
+    admin_deletions_router,
     walk_in_sales_router,
     activity_payments_router,
     activity_finance_router,

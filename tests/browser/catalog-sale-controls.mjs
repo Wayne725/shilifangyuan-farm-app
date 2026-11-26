@@ -20,7 +20,7 @@ async function fixture(t, width, { role = 'admin', patchError = '', deferPatch =
   const context = await browser.newContext({ viewport: { width, height: 950 }, serviceWorkers: 'block' });
   const state = {
     items: [product('new', '最新測試果醬', { supplier_name: '山城農場', supplier_id: 'supplier-1' }), product('old', '停售測試醬油', { is_active: false }), product('group', '共同購買專用商品', { daily_sales_enabled: false })],
-    patches: [], reads: 0, unknown: [], errors: [], releasePatch: null, locations: [], locationWrites: [],
+    patches: [], reads: 0, unknown: [], errors: [], releasePatch: null, locations: [], locationWrites: [], deletes: [],
   };
   let patchStarted;
   state.patchStarted = new Promise(resolve => { patchStarted = resolve; });
@@ -59,6 +59,14 @@ async function fixture(t, width, { role = 'admin', patchError = '', deferPatch =
       state.locationWrites.push(body);
       Object.assign(state.locations[0], body);
       return route.fulfill({ json: state.locations[0] });
+    }
+    if (request.method() === 'DELETE' && /^\/v1\/admin\/(products|pickup-locations)\/[^/]+$/.test(path)) {
+      const id = path.split('/').at(-1);
+      state.deletes.push(path);
+      if (id === 'old') return route.fulfill({ status: 409, json: { detail: '這個商品已有訂單、共同購買或提案紀錄，不能刪除；不再販售請改用封存' } });
+      state.items = state.items.filter(item => item.id !== id);
+      state.locations = state.locations.filter(item => item.id !== id);
+      return route.fulfill({ status: 204, body: '' });
     }
     if (path.startsWith('/v1/products/') && request.method() === 'PATCH') {
       const id = path.split('/').at(-1), body = request.postDataJSON();
@@ -133,6 +141,32 @@ test('取餐點可設定會餐專用、必填位置與選品團購，解除會�
   await editor.getByRole('button', { name: '儲存取貨點', exact: true }).click();
   await locationCard.getByText('選品團購', { exact: true }).waitFor();
   assert.deepEqual([state.locationWrites[2].requires_pickup_note, state.locationWrites[2].retail_pickup], [false, true]);
+  await verify(page, state);
+});
+
+test('390px 建錯的商品與取貨點可刪除，用過的商品提示改用封存', async t => {
+  const { page, state } = await fixture(t, 390);
+  await card(page).getByRole('button', { name: '刪除商品', exact: true }).click();
+  await card(page).getByText(/只有從沒被使用過的資料才能刪除/).waitFor();
+  await card(page).getByRole('button', { name: '取消', exact: true }).click();
+  assert.deepEqual(state.deletes, []);
+  await card(page).getByRole('button', { name: '刪除商品', exact: true }).click();
+  await card(page).getByRole('button', { name: '確認刪除商品', exact: true }).click();
+  await card(page).waitFor({ state: 'detached' });
+  const used = card(page, '停售測試醬油');
+  await used.getByRole('button', { name: '刪除商品', exact: true }).click();
+  await used.getByRole('button', { name: '確認刪除商品', exact: true }).click();
+  await used.getByRole('alert').getByText(/改用封存/).waitFor();
+  assert.deepEqual(state.deletes, ['/v1/admin/products/new', '/v1/admin/products/old']);
+
+  state.locations.push({ id: 'location-typo', code: 'typo', name: '打錯的取貨點', address: '', instructions: '', sort_order: 0,
+    is_active: true, business_meal_only: false, requires_pickup_note: false, retail_pickup: true });
+  await page.goto(`${base}/admin/catalog?tab=locations`);
+  const location = card(page, '打錯的取貨點');
+  await location.getByRole('button', { name: '刪除取貨點', exact: true }).click();
+  await location.getByRole('button', { name: '確認刪除取貨點', exact: true }).click();
+  await location.waitFor({ state: 'detached' });
+  assert.equal(state.deletes.at(-1), '/v1/admin/pickup-locations/location-typo');
   await verify(page, state);
 });
 

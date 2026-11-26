@@ -6,8 +6,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order
-from .meal_booking import MEAL_ORDER_CUTOFF, TAIPEI, _aware, meal_schedule_has_pickup_slots, workday_booking_window
+from .meal_booking import MEAL_ORDER_CUTOFF, TAIPEI, _aware, meal_schedule_has_pickup_slots, meal_service_date, workday_booking_window
 from .workday_calendar import CalendarUnavailable, is_weekend_catering_day, is_workday
+
+
+def weekend_regular_days(template: MealScheduleTemplate) -> set[int]:
+    # Only wizard-managed schedules treat Saturday/Sunday in weekdays as regular weekend service;
+    # older schedules always skipped non-workdays even when weekdays listed them.
+    return {day for day in template.weekdays if day >= 5} if template.fixed_booking_window else set()
 
 
 def advance_meal_schedule_version(template: MealScheduleTemplate, now: datetime) -> None:
@@ -106,25 +112,28 @@ async def generate_scheduled_meal_events(
             )
         ))
         weekend_enabled = {5: template.saturday_business_only, 6: template.sunday_business_only}
+        weekend_regular = weekend_regular_days(template)
         eligible_in_horizon = False
         for offset in range(1, 367):
             if offset > template.advance_days and (eligible_in_horizon or template.fixed_booking_window):
                 break
             service_date = today + timedelta(days=offset)
             try:
-                business_only = weekend_enabled.get(service_date.weekday(), False) and is_weekend_catering_day(service_date)
+                weekend = (weekend_enabled.get(service_date.weekday(), False) or service_date.weekday() in weekend_regular) \
+                    and is_weekend_catering_day(service_date)
+                business_only = weekend and service_date.weekday() not in weekend_regular
                 workday = is_workday(service_date)
             except CalendarUnavailable:
                 report["calendar_unavailable"] += 1
                 break
-            if not business_only and (not workday or service_date.weekday() not in template.weekdays):
+            if not weekend and (not workday or service_date.weekday() not in template.weekdays):
                 continue
             pickup_start = datetime.combine(service_date, pickup_start_time, TAIPEI)
             pickup_end = datetime.combine(service_date, pickup_end_time, TAIPEI)
             if pickup_end < pickup_start:
                 pickup_end += timedelta(days=1)
             try:
-                if business_only:
+                if weekend:
                     friday = service_date - timedelta(days=service_date.weekday() - 4)
                     ordering_start = datetime.combine(friday, time.min, TAIPEI)
                     cutoff = datetime.combine(friday, MEAL_ORDER_CUTOFF, TAIPEI)
@@ -148,7 +157,7 @@ async def generate_scheduled_meal_events(
                 schedule_template_id=template.id,
                 service_date=service_date,
                 meal_period=template.meal_period,
-                booking_policy="special" if business_only else "workday",
+                booking_policy="special" if weekend else "workday",
                 business_only=business_only,
                 ordering_starts_at=ordering_start.astimezone(timezone.utc),
                 ordering_ends_at=cutoff.astimezone(timezone.utc),
@@ -193,6 +202,49 @@ async def apply_schedule_pickup_locations(
         session.add(AdminAudit(
             actor_id=actor_id, action="meal_event.pickup_locations_update", aggregate_type="meal_event",
             aggregate_id=event.id, data={"schedule_template_id": template.id, "before": before, "after": target},
+        ))
+        changed += 1
+    return changed
+
+
+async def apply_schedule_weekend_access(
+    session: AsyncSession, template: MealScheduleTemplate, actor_id: str, now: datetime,
+) -> int:
+    """Match already generated weekend events to the schedule's weekend choice.
+
+    Opening a weekend to regular bookings only widens access, so it applies even when
+    business meals were already booked. Narrowing to business meals only touches events
+    without orders.
+    """
+    regular_days = weekend_regular_days(template)
+    business_days = {day for day, enabled in ((5, template.saturday_business_only), (6, template.sunday_business_only))
+                     if enabled and day not in regular_days}
+    if not regular_days and not business_days:
+        return 0
+    events = list(await session.scalars(select(MealEvent).where(
+        MealEvent.schedule_template_id == template.id,
+        MealEvent.pickup_starts_at > now,
+        MealEvent.archived_at.is_(None),
+        MealEvent.status.not_in([MealEventStatus.CANCELLED, MealEventStatus.COMPLETED]),
+    ).order_by(MealEvent.id).with_for_update()))
+    ordered = set(await session.scalars(select(Order.meal_event_id).where(
+        Order.meal_event_id.in_([event.id for event in events]),
+    ).distinct())) if events else set()
+    changed = 0
+    for event in events:
+        weekday = meal_service_date(event).weekday()
+        if weekday in regular_days and event.business_only:
+            target = False
+        elif weekday in business_days and not event.business_only and event.id not in ordered \
+                and event.booking_policy != "legacy" and event.same_day_preparation_minutes is None \
+                and not event.allow_cash_payment:
+            target = True
+        else:
+            continue
+        event.business_only = target
+        session.add(AdminAudit(
+            actor_id=actor_id, action="meal_event.weekend_access_update", aggregate_type="meal_event", aggregate_id=event.id,
+            data={"schedule_template_id": template.id, "before": {"business_only": not target}, "after": {"business_only": target}},
         ))
         changed += 1
     return changed
