@@ -288,7 +288,7 @@ function CampaignCreateForm({ products, bundles, onDone, onAccessDenied }: { pro
         <label className="field"><span>預計取貨結束（台灣）</span><input type="datetime-local" required value={pickupEnd} onChange={event => setPickupEnd(event.target.value)} /></label>
       </div>
       <PickupSlotEditor value={pickupSlots} onChange={setPickupSlots} disabled={create.isPending} />
-      <PickupLocationPicker value={pickupLocationIds} onChange={setPickupLocationIds} disabled={create.isPending} />
+      <PickupLocationPicker retail value={pickupLocationIds} onChange={setPickupLocationIds} disabled={create.isPending} />
       {memberPrice > nonmemberPrice && <p className="form-error">社員價不可高於一般價</p>}
       {scheduleError && <p className="form-error" role="alert">{scheduleError}</p>}
       {create.isError && <p className="form-error" role="alert">{create.error.message}</p>}

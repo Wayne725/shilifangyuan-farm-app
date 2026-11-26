@@ -89,34 +89,50 @@ async function verify(page, state) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
 }
 
-test('取餐點可設定會餐專用和必填位置，解除專用會清除必填', async t => {
+test('取餐點可設定會餐專用、必填位置與選品團購，解除會餐專用仍保留必填', async t => {
   const { page, state } = await fixture(t, 390);
   await page.getByRole('tab', { name: '取貨點', exact: true }).click();
   await page.getByRole('button', { name: '新增取貨點', exact: true }).click();
   const editor = page.locator('form.admin-master-form');
   const scope = editor.getByLabel('僅供會餐使用', { exact: true });
   const note = editor.getByLabel('須填寫校內取餐位置', { exact: true });
+  const retail = editor.getByLabel('日常選品、團購也可取貨', { exact: true });
   await editor.getByLabel('代碼', { exact: true }).fill('other-campus');
   await editor.getByLabel('名稱', { exact: true }).fill('校內其他地點');
   await editor.getByLabel('啟用取貨點', { exact: true }).uncheck();
-  assert.equal(await note.count(), 0);
+  assert.equal(await note.count(), 1);
+  assert.equal(await retail.isChecked(), true);
   await scope.check();
+  assert.equal(await retail.count(), 0);
   await note.check();
   await editor.getByRole('button', { name: '儲存取貨點', exact: true }).click();
   const locationCard = card(page, '校內其他地點');
   await locationCard.getByText('會餐專用', { exact: true }).waitFor();
+  await locationCard.getByText('需填位置', { exact: true }).waitFor();
   assert.equal(state.locationWrites[0].is_active, false);
   assert.equal(state.locationWrites[0].business_meal_only, true);
   assert.equal(state.locationWrites[0].requires_pickup_note, true);
+  assert.equal(state.locationWrites[0].retail_pickup, false);
 
   await locationCard.getByRole('button', { name: '編輯取貨點', exact: true }).click();
   assert.equal(await note.isChecked(), true);
   await scope.uncheck();
-  assert.equal(await note.count(), 0);
+  assert.equal(await note.isChecked(), true);
+  assert.equal(await retail.count(), 0);
+  await editor.getByText('只在便當訂購時出現（一般便當與會餐）。買家須填寫實際取餐位置。', { exact: true }).waitFor();
   await editor.getByRole('button', { name: '儲存取貨點', exact: true }).click();
-  await locationCard.getByRole('button', { name: '編輯取貨點', exact: true }).waitFor();
+  await locationCard.getByText('限便當', { exact: true }).waitFor();
   assert.equal(state.locationWrites[1].business_meal_only, false);
-  assert.equal(state.locationWrites[1].requires_pickup_note, false);
+  assert.equal(state.locationWrites[1].requires_pickup_note, true);
+  assert.equal(state.locationWrites[1].retail_pickup, false);
+
+  await locationCard.getByRole('button', { name: '編輯取貨點', exact: true }).click();
+  await note.uncheck();
+  assert.equal(await retail.isChecked(), false);
+  await retail.check();
+  await editor.getByRole('button', { name: '儲存取貨點', exact: true }).click();
+  await locationCard.getByText('選品團購', { exact: true }).waitFor();
+  assert.deepEqual([state.locationWrites[2].requires_pickup_note, state.locationWrites[2].retail_pickup], [false, true]);
   await verify(page, state);
 });
 

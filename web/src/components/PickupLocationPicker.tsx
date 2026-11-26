@@ -4,10 +4,15 @@ import type { PickupLocation } from "../lib/types";
 
 export const UNLIMITED_MEAL_CAPACITY = 100_000;
 
-export function usePickupLocations(enabled = true) {
+export function retailPickupLocations(locations: PickupLocation[]) {
+  return locations.filter((location) => location.retail_pickup !== false && !location.business_meal_only && !location.requires_pickup_note);
+}
+
+export function usePickupLocations(enabled = true, retail = false) {
   return useQuery({
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
+    select: retail ? retailPickupLocations : undefined,
     enabled,
   });
 }
@@ -23,10 +28,10 @@ export function pickupLocationSummary(allowedIds: string[] | undefined, location
   return allowedIds.map((id) => names.get(id) || "已停用的地點").join("、");
 }
 
-export function PickupLocationPicker({ value, onChange, legend = "開放的取貨地點", disabled }: {
-  value: string[]; onChange: (ids: string[]) => void; legend?: string; disabled?: boolean;
+export function PickupLocationPicker({ value, onChange, legend = "開放的取貨地點", disabled, retail = false }: {
+  value: string[]; onChange: (ids: string[]) => void; legend?: string; disabled?: boolean; retail?: boolean;
 }) {
-  const locations = usePickupLocations();
+  const locations = usePickupLocations(true, retail);
   const all = locations.data ?? [];
   const selected = value.length ? value.filter((id) => all.some((location) => location.id === id)) : all.map((location) => location.id);
   const toggle = (id: string, checked: boolean) => {

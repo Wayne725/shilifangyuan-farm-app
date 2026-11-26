@@ -312,7 +312,7 @@ async def create_campaign(
     body.confirmation_deadline = None
     if not body.pickup_slots:
         raise HTTPException(status_code=422, detail="請至少設定一個取貨時段")
-    await selectable_pickup_location_ids(session, body.pickup_location_ids)
+    await selectable_pickup_location_ids(session, body.pickup_location_ids, retail=True)
     try:
         validate_campaign_schedule(body, datetime.now(timezone.utc), preorder_only=True)
     except DomainError as exc:
@@ -393,7 +393,7 @@ async def update_campaign(
     if campaign.preorder_only and "min_paid_quantity" in updates:
         raise HTTPException(status_code=422, detail="預訂檔期不使用成團門檻")
     if "pickup_location_ids" in updates:
-        await selectable_pickup_location_ids(session, updates["pickup_location_ids"])
+        await selectable_pickup_location_ids(session, updates["pickup_location_ids"], retail=True)
     editable_details = {"title", "description"}
     if campaign.preorder_only:
         editable_details.update({"image_url", "estimated_pickup_start", "estimated_pickup_end", "pickup_slots", "pickup_location_ids"})
@@ -718,7 +718,7 @@ async def join_campaign(
                 status_code=422,
                 detail="只有合作社取貨可選擇領取地點",
             )
-        pickup_location = await checkout_pickup_location(session, body.pickup_location_id)
+        pickup_location = await checkout_pickup_location(session, body.pickup_location_id, retail=True)
         if pickup_location is None:
             raise HTTPException(status_code=422, detail="找不到可用的領取地點")
     if body.fulfillment_method == FulfillmentMethod.COOPERATIVE_PICKUP and not pickup_location_allowed(

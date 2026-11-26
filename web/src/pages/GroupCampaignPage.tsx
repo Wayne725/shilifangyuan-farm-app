@@ -8,7 +8,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
-import { allowedPickupLocations } from "../components/PickupLocationPicker";
+import { allowedPickupLocations, retailPickupLocations } from "../components/PickupLocationPicker";
 import { DataState, LoadingLines } from "../components/Shared";
 import { storefrontCapabilities, storefrontOrderBlockReason, useStorefrontStatus } from "../components/StorefrontStatus";
 import { InvoiceTaxSummary } from "../components/InvoiceTaxSummary";
@@ -72,6 +72,7 @@ export function GroupCampaignPage() {
   const pickupLocations = useQuery({
     queryKey: ["pickup-locations"],
     queryFn: () => apiFetch<PickupLocation[]>("/v1/pickup-locations"),
+    select: retailPickupLocations,
   });
   const allowedLocationIds = campaign.data?.pickup_location_ids;
   const locationOptions = useMemo(() => allowedPickupLocations(pickupLocations.data, allowedLocationIds), [pickupLocations.data, allowedLocationIds]);
