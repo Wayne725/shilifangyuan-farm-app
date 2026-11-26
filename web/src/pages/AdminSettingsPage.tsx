@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { AdminNav } from "../components/AdminNav";
 import { PublicInformationFields } from "../components/PublicInformationFields";
+import { OptionalMark } from "../components/OptionalMark";
 import { DataState, LoadingLines } from "../components/Shared";
 import { useAuth } from "../context/AuthContext";
 import { useAdminPanelAccess } from "../lib/admin-panel-access";
@@ -40,6 +41,13 @@ export function AdminSettingsPage() {
           <section className="admin-settings-section">
             <p className="eyebrow">CONTACT / 聯絡資訊</p><h2>客服與退單電話</h2>
             <label className="field"><span>客服電話（退單聯絡）</span><input type="tel" autoComplete="tel" maxLength={40} value={draft.support_phone} onChange={event => edit({ support_phone: event.target.value })} /></label>
+          </section>
+          <section className="admin-settings-section">
+            <p className="eyebrow">MEAL NOTICE / 便當訂購須知</p><h2>便當訂購須知</h2>
+            <p>顧客打開便當訂購頁時跳出。系統會自動寫上顧客正在預訂的日期、午餐或晚餐、取餐時間與預訂截止時間，下面的文字接在後面，可以放促銷或提醒。</p>
+            <label className="check-field"><input type="checkbox" checked={draft.meal_order_notice.enabled} onChange={event => edit({ meal_order_notice: { ...draft.meal_order_notice, enabled: event.target.checked } })} />顯示訂購須知</label>
+            <label className="field"><span>標題</span><input required maxLength={40} value={draft.meal_order_notice.title} onChange={event => edit({ meal_order_notice: { ...draft.meal_order_notice, title: event.target.value } })} /></label>
+            <label className="field"><span>補充說明<OptionalMark /></span><textarea rows={4} maxLength={1000} placeholder="例如：本週新品八折" value={draft.meal_order_notice.message} onChange={event => edit({ meal_order_notice: { ...draft.meal_order_notice, message: event.target.value } })} /></label>
           </section>
           <PublicInformationFields value={draft.public_information} onChange={value => edit({ public_information: value })} />
           <section className="admin-settings-section">

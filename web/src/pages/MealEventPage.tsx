@@ -1,5 +1,6 @@
 import { allowedPickupLocations } from "../components/PickupLocationPicker";
 import { StorefrontClosed, useStorefrontStatus } from "../components/StorefrontStatus";
+import { MealOrderNotice } from "../components/MealOrderNotice";
 import {
   ArrowLeft,
   BowlFood,
@@ -465,6 +466,8 @@ function MealEventOrder({ eventId, initialPickupAt }: { eventId: string; initial
   return (
     <section className="offer-page meal-offer-page">
       <Link className="text-link" to="/shop" search={{ tab: "meals" }}><ArrowLeft size={17} />回到便當預購</Link>
+      <MealOrderNotice event={mealEvent} notice={platform.data?.meal_order_notice} relativeDay={dateLabel.slice(1, -1)}
+        deadline={deadline} showDeadline={["可預訂", "尚未開放"].includes(bookingStatus)} />
       <div className="offer-hero meal-offer-hero">
         <div className="offer-copy">
           <p className="eyebrow">MEAL PREORDER / 便當預訂</p>

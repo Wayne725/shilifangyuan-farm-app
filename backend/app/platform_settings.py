@@ -12,6 +12,19 @@ from .public_information import PublicInformation
 PLATFORM_KEY = "storefront_operations"
 
 
+class MealOrderNotice(BaseModel):
+    """Pop-up shown when a buyer opens a meal booking page.
+
+    The page fills in the chosen date, meal period, pickup time and deadline; this
+    text is the cooperative's own addition, such as a promotion.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+    enabled: bool = False
+    title: str = Field(default="訂購須知", min_length=1, max_length=40)
+    message: str = Field(default="", max_length=1000)
+
+
 class PlatformSettings(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     orders_open: bool = True
@@ -22,6 +35,7 @@ class PlatformSettings(BaseModel):
     printer_connection: Literal["unknown", "usb", "network", "bluetooth", "browser"] = "unknown"
     kitchen_sound: bool = False
     public_information: PublicInformation = Field(default_factory=PublicInformation)
+    meal_order_notice: MealOrderNotice = Field(default_factory=MealOrderNotice)
 
     @field_validator("support_phone")
     @classmethod

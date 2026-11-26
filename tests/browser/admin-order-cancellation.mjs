@@ -205,6 +205,21 @@ test('管理員可設定與清空客服電話，消費者訂單跟隨已存電�
   await assertClean(page, state);
 });
 
+test('管理員可開啟並編輯便當訂購須知，與其他平台設定一起儲存', async t => {
+  const { page, state } = await fixture(t, { width: 390 });
+  await page.goto(`${base}/admin/settings`);
+  const enabled = page.getByLabel('顯示訂購須知', { exact: true });
+  assert.equal(await enabled.isChecked(), false);
+  assert.equal(await page.getByLabel('標題', { exact: true }).inputValue(), '訂購須知');
+  await enabled.check();
+  await page.getByLabel('補充說明', { exact: true }).fill('本週新品八折');
+  await page.getByRole('button', { name: '儲存平台設定', exact: true }).click();
+  await page.getByText('設定已儲存', { exact: true }).waitFor();
+  assert.deepEqual(state.writes.at(-1).body.meal_order_notice, { enabled: true, title: '訂購須知', message: '本週新品八折' });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  await assertClean(page, state);
+});
+
 for (const status of ['pending', 'paid']) {
   test(`管理員商品 ${status} 原因可留空，確認後才辦理退單`, async t => {
     const { page, state } = await fixture(t, { status });

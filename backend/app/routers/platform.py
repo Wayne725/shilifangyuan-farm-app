@@ -29,6 +29,8 @@ async def read_platform(response: Response, session: AsyncSession = Depends(get_
     return {"orders_open": current.orders_open, "closed_message": current.closed_message,
             "support_phone": current.support_phone,
             "public_information": current.public_information.model_dump() if current.public_information.published else None,
+            "meal_order_notice": current.meal_order_notice.model_dump(include={"title", "message"})
+            if current.meal_order_notice.enabled else None,
             **sales_capabilities(settings),
             "meal_cutoff_time": "20:00", "timezone": "Asia/Taipei"}
 
@@ -60,7 +62,7 @@ async def update_platform(body: PlatformUpdate, admin: User = Depends(require_ad
     if 'public_information' in body.model_fields_set:
         await preserve_published_policy(session, body.public_information, admin.id)
     row.value = {**body.model_dump(exclude={"reason", "expected_version"}), "_version": version + 1}
-    for field in ('support_phone', 'public_information'):
+    for field in ('support_phone', 'public_information', 'meal_order_notice'):
         if field not in body.model_fields_set:
             row.value = {**row.value, field: previous[field]}
     row.updated_by_id = admin.id
