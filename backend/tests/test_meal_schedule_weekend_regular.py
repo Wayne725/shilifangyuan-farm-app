@@ -57,3 +57,18 @@ async def test_switching_weekend_mode_updates_generated_events(schedule_context)
         assert events[21].business_only is False
         audits = list(await session.scalars(select(AdminAudit).where(AdminAudit.action == "meal_event.weekend_access_update")))
         assert [(audit.aggregate_id, audit.data["after"]["business_only"]) for audit in audits] == [(saturday.id, False)]
+
+
+async def test_unchanged_weekend_choice_keeps_single_event_adjustments(schedule_context):
+    client, session, admin, _buyer, meal = schedule_context
+    with time_machine.travel(FRIDAY, tick=False):
+        _preview, result = await preview_and_save(client, admin, {"schedules": [wizard_entry(meal)]})
+        saturday = next(event for event in await scheduled_events(session) if event.service_date.day == 21)
+        saturday.business_only = False
+        await session.commit()
+        template = result["schedules"][0]
+        renamed = {**wizard_entry(meal, title="改名的排程"), "id": template["id"], "expected_updated_at": template["updated_at"]}
+        await preview_and_save(client, admin, {"schedules": [renamed]})
+        events = {event.service_date.day: event for event in await scheduled_events(session)}
+        assert [events[21].business_only, events[22].business_only] == [False, True]
+        assert await session.scalar(select(AdminAudit.id).where(AdminAudit.action == "meal_event.weekend_access_update")) is None

@@ -207,18 +207,24 @@ async def apply_schedule_pickup_locations(
     return changed
 
 
+def weekend_modes(template: MealScheduleTemplate) -> dict[int, str]:
+    regular = weekend_regular_days(template)
+    business = {5: template.saturday_business_only, 6: template.sunday_business_only}
+    return {day: "all" if day in regular else "business" if business[day] else "off" for day in (5, 6)}
+
+
 async def apply_schedule_weekend_access(
-    session: AsyncSession, template: MealScheduleTemplate, actor_id: str, now: datetime,
+    session: AsyncSession, template: MealScheduleTemplate, actor_id: str, now: datetime, previous: dict[int, str],
 ) -> int:
-    """Match already generated weekend events to the schedule's weekend choice.
+    """Match generated weekend events to a weekend choice that was just changed.
 
     Opening a weekend to regular bookings only widens access, so it applies even when
     business meals were already booked. Narrowing to business meals only touches events
-    without orders.
+    without orders. Days whose choice did not change keep any per-event adjustments.
     """
-    regular_days = weekend_regular_days(template)
-    business_days = {day for day, enabled in ((5, template.saturday_business_only), (6, template.sunday_business_only))
-                     if enabled and day not in regular_days}
+    current = weekend_modes(template)
+    regular_days = {day for day, mode in current.items() if mode == "all" and previous[day] != "all"}
+    business_days = {day for day, mode in current.items() if mode == "business" and previous[day] != "business"}
     if not regular_days and not business_days:
         return 0
     events = list(await session.scalars(select(MealEvent).where(

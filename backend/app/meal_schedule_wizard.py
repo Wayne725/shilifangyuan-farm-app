@@ -18,6 +18,7 @@ from .database import get_session
 from .meal_booking import MEAL_ORDER_CUTOFF, MEAL_PICKUP_TIMES, _aware, meal_period, meal_schedule_has_pickup_slots, meal_service_date
 from .meal_schedules import (
     advance_meal_schedule_version, apply_schedule_pickup_locations, apply_schedule_weekend_access, generate_scheduled_meal_events,
+    weekend_modes,
 )
 from .models import AdminAudit, Meal, MealEvent, MealEventOffering, MealEventStatus, MealScheduleTemplate, Order, User
 from .pickup_locations import selectable_pickup_location_ids
@@ -277,12 +278,13 @@ async def save_wizard(
                                    aggregate_id=template.id, data=values))
         else:
             before = {name: getattr(template, name) for name in values}
+            previous_weekend = weekend_modes(template)
             for name, value in values.items():
                 setattr(template, name, value)
             advance_meal_schedule_version(template, now)
             audit_changes(session, admin.id, "meal_schedule", template.id, "meal_schedule.update", before, values)
             await apply_schedule_pickup_locations(session, template, admin.id, now)
-            await apply_schedule_weekend_access(session, template, admin.id, now)
+            await apply_schedule_weekend_access(session, template, admin.id, now, previous_weekend)
         templates.append(template)
 
     after = [{**item, "is_active": True} for item in plan.menu]

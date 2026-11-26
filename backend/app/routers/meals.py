@@ -79,7 +79,7 @@ from ..meal_booking import (
 )
 from ..meal_schedules import (
     TAIPEI, advance_meal_schedule_version, apply_schedule_pickup_locations, apply_schedule_weekend_access,
-    generate_scheduled_meal_events,
+    generate_scheduled_meal_events, weekend_modes,
 )
 from ..workday_calendar import CalendarUnavailable, calendar_status, is_workday, next_workday, previous_workday
 from ..meal_operations import meal_operations_summary, search_meal_orders
@@ -1563,11 +1563,12 @@ async def admin_update_meal_schedule(
             values.pop(name)
     if template.fixed_booking_window:
         values.update(cutoff_days_before=1, cutoff_time="20:00", advance_days=7)
+    previous_weekend = weekend_modes(template)
     for name, value in values.items():
         setattr(template, name, value)
     advance_meal_schedule_version(template, datetime.now(timezone.utc))
     await apply_schedule_pickup_locations(session, template, admin.id, datetime.now(timezone.utc))
-    await apply_schedule_weekend_access(session, template, admin.id, datetime.now(timezone.utc))
+    await apply_schedule_weekend_access(session, template, admin.id, datetime.now(timezone.utc), previous_weekend)
     await session.flush()
     session.add(AdminAudit(
         actor_id=admin.id, action="meal_schedule.update", aggregate_type="meal_schedule",
