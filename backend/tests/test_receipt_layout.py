@@ -30,12 +30,13 @@ def test_receipt_has_readable_sections_and_phone_first():
     assert "取餐碼" not in plain and "123456" not in plain
     assert "<CB>訂購者：測試顧客</CB>" in content
     assert "電話：0900000000" in plain and "sample@example.com" not in plain
-    assert plain.index("訂購：2026-11-01 18:20") < plain.index("取餐：2026-11-02 11:30")
+    assert plain.index("訂購：2026-11-01 18:20") < plain.index("取餐 11/02 11:30")
     assert plain.index("取餐點：合作社門市") < plain.index("2 × 香烤雞腿便當")
     assert "餐具：不需要" in plain and "主食：紫米飯" in plain
     assert "共 2 份" in plain
     assert "付款方式：線上付款" in plain and "付款狀態：已付款" in plain
     assert "<C><L><BOLD>總金額：NT$240</BOLD></L></C>" in content
+    assert "<CB><BOLD>取餐 11/02 11:30</BOLD></CB>" in content
     assert "送印時間：2026-11-01 18:20:30" in plain
     assert "<" not in plain
 
@@ -66,7 +67,7 @@ def test_pending_and_legacy_receipts_do_not_fabricate_contact_or_times():
         snapshot.pop(key)
     plain = receipt_preview(format_receipt(snapshot))
     assert "電話：" not in plain and "Email：" not in plain and "訂購：" not in plain
-    assert "取餐：2026-11-02 11:30" in plain
+    assert "取餐 11/02 11:30" in plain
     assert "送印時間：送印時產生" in plain
 
 
@@ -80,3 +81,8 @@ def test_adjusted_total_keeps_item_amounts_and_final_order_total_distinct():
     assert "小計 $240" in plain
     assert "餐點小計：NT$240" in plain and "金額調整：-NT$30" in plain
     assert "總金額：NT$210" in plain
+
+
+def test_unparsed_pickup_time_keeps_original_text_in_large_bold():
+    content = format_receipt(sample_receipt(pickup_at="未指定"))
+    assert "<CB><BOLD>取餐：未指定</BOLD></CB>" in content
