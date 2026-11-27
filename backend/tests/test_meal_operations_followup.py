@@ -91,11 +91,10 @@ async def test_buyer_cancellation_is_forbidden_before_and_after_pickup(review_co
     c = review_context
     c.order.fulfillment.pickup_at = c.now + timedelta(minutes=20)
     await c.session.commit()
-    buyer = auth_headers(c.buyer)
     path = f"/v1/meal-orders/{c.order.id}/cancellation-requests"
     for now in (c.now, c.now + timedelta(minutes=20)):
         with time_machine.travel(now, tick=False):
-            denied = await c.client.post(path, headers=buyer, json={"reason": "改期"})
+            denied = await c.client.post(path, headers=auth_headers(c.buyer), json={"reason": "改期"})
             assert denied.status_code == 403, denied.text
             assert denied.json()["detail"] == "退單請致電客服，由管理員協助辦理"
     with time_machine.travel(c.now + timedelta(minutes=20), tick=False):
