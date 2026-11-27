@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 import { apiFetch, formatDateTime, formatMoney } from "../lib/api";
 import { mealPaymentMethodLabel } from "../lib/business-meals";
-import { invoiceStatusLabel, paymentStatusLabel } from "../lib/labels";
+import { invoiceStatusLabel } from "../lib/labels";
 import { formatMealDateTime, shiftMealDate, taipeiDate } from "../lib/meal-time";
 import type { MealAdminOrderItem, MealAdminOrderPage, MealOperationsSummary } from "../lib/types";
 import { InvoiceTaxSummary } from "./InvoiceTaxSummary";
@@ -64,14 +64,13 @@ export function AdminMealOrderSearch({ initialSearch = "", initialQueue = "all" 
     <form className="meal-order-filters" onSubmit={(event) => { event.preventDefault(); if (!dateError) apply({ ...draft, search: draft.search.trim() }); }}>
       <div className="meal-order-primary-filters">
         <label className="field"><span>訂單編號、姓名或 Email</span><input value={draft.search} maxLength={100} onChange={(event) => update("search", event.target.value)} /></label>
-        <label className="field"><span>履約狀態</span><select value={draft.fulfillment_status} onChange={(event) => update("fulfillment_status", event.target.value)}><option value="">全部履約狀態</option><option value="pending_confirmation">待製作</option><option value="preparing">製作中</option><option value="ready_for_pickup">待取餐</option><option value="picked_up">已取餐</option><option value="cancelled">已取消</option></select></label>
+        <label className="field"><span>付款狀態</span><select value={draft.payment_status} onChange={(event) => update("payment_status", event.target.value)}><option value="">全部</option><option value="paid">已支付</option><option value="pending">未支付</option><option value="refunded">已退款</option></select></label>
       </div>
       <details className="meal-order-advanced-filters"><summary>更多篩選</summary><div className="meal-order-filter-fields">
       <label className="field"><span>取餐日期（起）</span><input type="date" value={draft.date_from} onChange={(event) => update("date_from", event.target.value)} /></label>
       <label className="field"><span>取餐日期（迄）</span><input type="date" min={draft.date_from || undefined} value={draft.date_to} aria-invalid={dateError} onChange={(event) => update("date_to", event.target.value)} /></label>
       <label className="field"><span>午餐／晚餐</span><select value={draft.meal_period} onChange={(event) => update("meal_period", event.target.value)}><option value="all">全部餐別</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="unspecified">特殊場次</option></select></label>
       <label className="field"><span>預計取餐時間</span><input type="time" step={60} value={draft.pickup_time} onChange={(event) => update("pickup_time", event.target.value)} /></label>
-      <label className="field"><span>付款狀態</span><select value={draft.payment_status} onChange={(event) => update("payment_status", event.target.value)}><option value="">全部付款狀態</option>{["pending", "paid", "refund_pending", "late_paid_refund_required", "refunded", "expired", "failed"].map((status) => <option value={status} key={status}>{paymentStatusLabel(status)}</option>)}</select></label>
       <label className="check-field"><input type="checkbox" checked={draft.cash_uncollected === "true"} onChange={event => update("cash_uncollected", event.target.checked ? "true" : "")} />現金未收</label>
       <label className="field"><span>發票狀態</span><select value={draft.invoice_status} onChange={(event) => update("invoice_status", event.target.value)}><option value="">全部發票狀態</option>{["not_eligible", "pending", "issued", "failed", "void_pending", "voided"].map((status) => <option value={status} key={status}>{invoiceStatusLabel(status)}</option>)}</select></label>
       <label className="field"><span>退單審核</span><select value={draft.review_status} onChange={(event) => update("review_status", event.target.value)}><option value="all">全部審核狀態</option><option value="none">沒有退單申請</option><option value="pending">待審核</option><option value="approved">已核准</option><option value="rejected">未核准</option></select></label>
