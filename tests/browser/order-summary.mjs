@@ -50,7 +50,9 @@ function summarize(query, source = rows) {
   return {
     ...filters,
     summary: { order_count: count_orders(selected), quantity: quantity(selected), product_count: products.length,
-      ...Object.fromEntries(['paid', 'pending', 'inactive'].map((state) => [`${state}_order_count`, count_orders(selected.filter((row) => row.state === state))])) },
+      ...Object.fromEntries(['paid', 'pending', 'inactive'].map((state) => [`${state}_order_count`, count_orders(selected.filter((row) => row.state === state))])),
+      business_order_count: count_orders(selected.filter((row) => row.booking === 'business' && row.state !== 'inactive')),
+      personal_paid_order_count: count_orders(selected.filter((row) => row.booking !== 'business' && row.state === 'paid')) },
     categories: grouped('category'), channels: grouped('sales_channel'),
     category_options: [...new Set(matching.map((row) => row.category))].sort(),
     products: { items: products.slice(offset, offset + limit), total: products.length, limit, offset },
@@ -325,34 +327,57 @@ test('一般與便當分類重設分頁和互斥條件，查詢保持分類且�
   await verify_read_only(page, state);
 });
 
-test('便當預設依取餐日期，切換下單日期重查；一般訂單不沿用取餐條件', { timeout: 30000 }, async (t) => {
+test('便當用日期卡片選取餐日，查詢可改下單日期；有效訂單分會餐與個人；一般訂單不沿用取餐條件', { timeout: 30000 }, async (t) => {
   const meal = rows.find((row) => row.key === 'meal');
   const { page, state } = await fixture(t, { width: 390, summaryRows: [
     { ...meal, key: 'pickup-today', order_id: 'pickup-today', created_on: '2029-12-31', pickup_on: '2030-01-02', quantity: 4 },
+    { ...meal, key: 'business-today', order_id: 'business-today', created_on: '2029-12-31', pickup_on: '2030-01-02', quantity: 5, state: 'pending', booking: 'business' },
     { ...meal, key: 'ordered-today', order_id: 'ordered-today', created_on: '2030-01-02', pickup_on: '2030-01-03', quantity: 9 },
   ] });
   await page.goto(`${base}/admin?section=summary`);
   await wait_for_summary(page);
   const summary = page.getByRole('region', { name: '訂單品項彙整', exact: true });
-  const dateBasis = summary.getByRole('group', { name: '統計日期依據', exact: true });
-  assert.equal(state.summaries.at(-1).query.date_basis, 'pickup');
-  assert.equal(await dateBasis.getByRole('button', { name: '依取餐日期', exact: true }).getAttribute('aria-pressed'), 'true');
-  await verify_summary(page, { order_count: 1, quantity: 4, product_count: 1 });
-  assert.equal(await summary.getByLabel('取餐日期起（台灣）', { exact: true }).count(), 1);
-  assert.equal(await summary.getByLabel('下單日期起（台灣）', { exact: true }).count(), 0);
-  await dateBasis.getByRole('button', { name: '依下單日期', exact: true }).click();
+  assert.equal(await summary.getByRole('group', { name: '統計日期依據', exact: true }).count(), 0);
+  assert.equal(await summary.getByRole('button', { name: '本月', exact: true }).count(), 0);
+  const dates = summary.getByRole('group', { name: '取餐日期快速選擇', exact: true });
+  const cards = dates.getByRole('button');
+  assert.equal(await cards.count(), 7);
+  assert.deepEqual((await cards.evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')))).slice(0, 3), ['1/2 週三，今天', '1/3 週四，明天', '1/4 週五']);
+  assert.equal(await cards.first().getAttribute('aria-pressed'), 'true');
+  assert.deepEqual([state.summaries.at(-1).query.date_basis, state.summaries.at(-1).query.starts_on, state.summaries.at(-1).query.ends_on], ['pickup', '2030-01-02', '2030-01-02']);
+  await verify_summary(page, { order_count: 2, quantity: 9, product_count: 2 });
+  const types = page.locator('dl[aria-label="有效訂單分類"]');
+  assert.deepEqual(await types.locator('div').allInnerTexts(), ['會餐\n1 筆', '個人訂單（已付款）\n1 筆']);
+  await screenshot(page, 'order-summary-meal-dates-390.png');
+
+  await dates.getByRole('button', { name: '1/3 週四，明天', exact: true }).click();
   await wait_for_summary(page);
-  assert.equal(state.summaries.at(-1).query.date_basis, 'order');
+  assert.deepEqual([state.summaries.at(-1).query.date_basis, state.summaries.at(-1).query.starts_on, state.summaries.at(-1).query.ends_on], ['pickup', '2030-01-03', '2030-01-03']);
   assert.equal(state.summaries.at(-1).query.offset, '0');
   await verify_summary(page, { order_count: 1, quantity: 9, product_count: 1 });
-  assert.equal(await summary.getByLabel('下單日期起（台灣）', { exact: true }).count(), 1);
-  await dateBasis.getByRole('button', { name: '依取餐日期', exact: true }).click();
+  assert.equal(await cards.nth(1).getAttribute('aria-pressed'), 'true');
+
+  await dates.getByRole('button', { name: '1/2 週三，今天', exact: true }).click();
   await wait_for_summary(page);
+  assert.equal(await summary.getByLabel('取餐日期起（台灣）', { exact: true }).count(), 1);
+  const before = state.summaries.length;
+  await summary.getByRole('combobox', { name: '日期類型', exact: true }).selectOption('order');
+  assert.equal(await summary.getByLabel('下單日期起（台灣）', { exact: true }).count(), 1);
+  assert.equal(state.summaries.length, before, '尚未按查詢時不能改條件');
+  await summary.getByRole('button', { name: '查詢', exact: true }).click();
+  await wait_for_summary(page);
+  assert.equal(state.summaries.at(-1).query.date_basis, 'order');
+  await verify_summary(page, { order_count: 1, quantity: 9, product_count: 1 });
+  assert.equal(await dates.locator('button[aria-pressed="true"]').count(), 0);
+
   await summary.getByRole('button', { name: '一般訂單', exact: true }).click();
   await wait_for_summary(page);
   assert.equal(state.summaries.at(-1).query.date_basis, 'order');
-  assert.equal(await dateBasis.count(), 0);
+  assert.equal(await dates.count(), 0);
+  assert.equal(await summary.getByRole('group', { name: '下單日期快速選擇', exact: true }).getByRole('button', { name: '本月', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await summary.getByRole('combobox', { name: '日期類型', exact: true }).count(), 0);
   assert.equal(await summary.getByLabel('取餐日期起（台灣）', { exact: true }).count(), 0);
+  assert.equal(await page.locator('dl[aria-label="有效訂單分類"]').count(), 0);
   await verify_read_only(page, state);
 });
 
