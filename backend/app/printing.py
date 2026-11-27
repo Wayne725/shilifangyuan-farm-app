@@ -98,7 +98,8 @@ def format_receipt(snapshot: dict, *, width: int = 32) -> str:
     add("-" * width)
     if snapshot.get("ordered_at"):
         add(f"訂購：{snapshot['ordered_at']}")
-    add(f"取餐：{snapshot['pickup_at']}", "L")
+    pickup = re.fullmatch(r"\d{4}-(\d{2})-(\d{2}) (\d{2}:\d{2})", str(snapshot["pickup_at"]))
+    add(f"取餐 {pickup[1]}/{pickup[2]} {pickup[3]}" if pickup else f"取餐：{snapshot['pickup_at']}", "CB", "BOLD")
     add("預約自取", "C")
     add(f"取餐點：{snapshot['location']}", "BOLD")
     if snapshot.get("pickup_address"):
