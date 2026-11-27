@@ -7,10 +7,10 @@ from sqlalchemy import event, select
 from sqlalchemy.dialects import postgresql
 
 from app.models import (
-    FulfillmentMethod, FulfillmentState, FulfillmentStatus, GroupBundle, Meal,
+    FulfillmentMethod, FulfillmentState, FulfillmentStatus, GroupBundle, InvoiceBuyerType, Meal,
     MealCancellationRequest, MealEvent, MealEventOffering, MealEventStatus, MembershipType,
     Order, OrderFulfillment, OrderItem, OrderItemOption, OrderKind, PaymentAttempt,
-    PaymentStatus, Product, Refund, RefundStatus, SalesChannel, TaxType, User, UserRole,
+    PaymentMethod, PaymentStatus, Product, Refund, RefundStatus, SalesChannel, TaxType, User, UserRole,
 )
 from app.order_summary import OrderSummaryFilters, _summary_lines
 from app.routers import ALL_ROUTERS
@@ -149,7 +149,7 @@ async def test_item_grain_avoids_attempt_refund_options_multiplication_and_dedup
     ])
     await c.session.commit()
     result = await read(c)
-    assert result["summary"] == {"order_count": 2, "quantity": 15, "product_count": 3, "paid_order_count": 2, "pending_order_count": 0, "inactive_order_count": 0}
+    assert result["summary"] == {"order_count": 2, "quantity": 15, "product_count": 3, "paid_order_count": 2, "pending_order_count": 0, "inactive_order_count": 0, "business_order_count": 0, "personal_paid_order_count": 2}
     same_name = [item for item in result["products"]["items"] if item["name"] == "同名商品"]
     assert [item["quantity"] for item in same_name] == [5, 4]
     assert len({item["key"] for item in same_name}) == 2
@@ -220,9 +220,37 @@ async def test_search_matches_only_historical_product_names_and_treats_wildcards
     assert (await read(c, search=c.buyer.display_name))["summary"]["quantity"] == 0
 
 
+async def test_active_orders_split_into_business_and_paid_personal(summary_context):
+    c = summary_context
+    offering = c.offerings[0]
+
+    def business(label, payment, **kwargs):
+        order = add_order(c, label, [line(1, offering=offering)], channel=SalesChannel.MEAL_PREORDER, payment=payment, **kwargs)
+        order.meal_booking_type = "business"
+        order.payment_method = PaymentMethod.CASH_ON_PICKUP
+        order.invoice_buyer_type = InvoiceBuyerType.COMPANY
+        order.invoice_handling = "pickup_day"
+        order.invoice_issue_after = NOW
+        order.invoice_buyer_tax_id = "12345678"
+        order.invoice_buyer_name = "測試公司"
+
+    business("BIZ-PAID", PaymentStatus.PAID)
+    business("BIZ-CASH", PaymentStatus.PENDING)
+    business("BIZ-CANCELLED", PaymentStatus.PAID, cancelled_at=NOW)
+    add_order(c, "SOLO-PAID", [line(1, offering=offering)], channel=SalesChannel.MEAL_PREORDER)
+    add_order(c, "SOLO-PENDING", [line(1, offering=offering)], channel=SalesChannel.MEAL_PREORDER, payment=PaymentStatus.PENDING)
+    await c.session.commit()
+    active = (await read(c))["summary"]
+    assert (active["order_count"], active["business_order_count"], active["personal_paid_order_count"]) == (4, 2, 1)
+    paid = (await read(c, status="paid"))["summary"]
+    assert (paid["business_order_count"], paid["personal_paid_order_count"]) == (1, 1)
+    inactive = (await read(c, status="inactive"))["summary"]
+    assert (inactive["business_order_count"], inactive["personal_paid_order_count"]) == (0, 0)
+
+
 async def test_empty_summary_has_zero_counts_and_arrays(summary_context):
     result = await read(summary_context)
-    assert result["summary"] == {"order_count": 0, "quantity": 0, "product_count": 0, "paid_order_count": 0, "pending_order_count": 0, "inactive_order_count": 0}
+    assert result["summary"] == {"order_count": 0, "quantity": 0, "product_count": 0, "paid_order_count": 0, "pending_order_count": 0, "inactive_order_count": 0, "business_order_count": 0, "personal_paid_order_count": 0}
     assert result["categories"] == result["channels"] == result["category_options"] == []
     assert result["products"] == {"items": [], "total": 0, "limit": 25, "offset": 0}
 

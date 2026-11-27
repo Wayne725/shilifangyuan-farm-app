@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useAdminPanelAccess } from "../lib/admin-panel-access";
 import { financePeriodPreset } from "../lib/meal-finance";
+import { shiftMealDate, taipeiDate } from "../lib/meal-time";
 import {
   orderSummaryChannelLabels,
   orderSummaryStatusLabels,
@@ -20,6 +21,7 @@ import "./AdminOrderSummary.css";
 const pageSize = 25;
 const privateQueryKeys = [["admin-order-summary"]] as const;
 const periodLabels = { today: "今天", week: "本週", month: "本月" } as const;
+const weekdays = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
 const formatCount = (value: number) => new Intl.NumberFormat("zh-TW").format(value);
 
 export function AdminOrderSummary() {
@@ -27,10 +29,10 @@ export function AdminOrderSummary() {
   const isAdmin = user?.user_role === "admin";
   const access = useAdminPanelAccess(privateQueryKeys);
   const [draft, setDraft] = useState<OrderSummaryFilters>(() => ({
-    ...financePeriodPreset("month"), dateBasis: "pickup", salesChannel: "all", orderCategory: "meal", status: "active", category: "", search: "",
+    ...financePeriodPreset("today"), dateBasis: "pickup", salesChannel: "all", orderCategory: "meal", status: "active", category: "", search: "",
   }));
   const [filters, setFilters] = useState(draft);
-  const [preset, setPreset] = useState<keyof typeof periodLabels | "">("month");
+  const [preset, setPreset] = useState<keyof typeof periodLabels | "">("today");
   const [offset, setOffset] = useState(0);
   const [formError, setFormError] = useState("");
   const parameters = new URLSearchParams({
@@ -63,6 +65,11 @@ export function AdminOrderSummary() {
     const next = { ...draft, ...financePeriodPreset(mode), search: draft.search.trim() };
     setDraft(next); setFilters(next); setPreset(mode); setOffset(0); setFormError("");
   };
+  const pickDate = (date: string) => {
+    const next = { ...draft, dateBasis: "pickup" as const, startsOn: date, endsOn: date, search: draft.search.trim() };
+    setDraft(next); setFilters(next); setPreset(""); setOffset(0); setFormError("");
+  };
+  const pickupDates = Array.from({ length: 7 }, (_, index) => shiftMealDate(taipeiDate(), index));
   const dateError = formError ? "order-summary-date-error" : undefined;
   const draftDateLabel = draft.dateBasis === "pickup" ? "取餐日期" : "下單日期";
 
@@ -73,19 +80,25 @@ export function AdminOrderSummary() {
         data-state={filters.orderCategory === orderCategory ? "active" : "inactive"}
         onClick={() => {
           if (filters.orderCategory === orderCategory) return;
-          const next = { ...filters, orderCategory, dateBasis: orderCategory === "meal" ? "pickup" as const : "order" as const, salesChannel: "all" as const, category: "" };
-          setDraft(next); setFilters(next); setOffset(0); setFormError("");
+          const period = orderCategory === "meal" ? "today" : "month";
+          const next = { ...filters, ...financePeriodPreset(period), orderCategory, dateBasis: orderCategory === "meal" ? "pickup" as const : "order" as const, salesChannel: "all" as const, category: "" };
+          setDraft(next); setFilters(next); setPreset(period); setOffset(0); setFormError("");
         }}>{orderCategoryLabels[orderCategory]}</button>)}
     </div>
-    {filters.orderCategory === "meal" && <div className="admin-order-summary-presets" role="group" aria-label="統計日期依據">
-      {(["pickup", "order"] as const).map((dateBasis) => <button className="button button-quiet" type="button" key={dateBasis} aria-pressed={filters.dateBasis === dateBasis} onClick={() => {
-        const next = { ...filters, dateBasis };
-        setDraft(next); setFilters(next); setOffset(0); setFormError("");
-      }}>{dateBasis === "pickup" ? "依取餐日期" : "依下單日期"}</button>)}
-    </div>}
-    <div className="admin-order-summary-presets" role="group" aria-label={`${draftDateLabel}快速選擇`}>
+    {filters.orderCategory === "meal" ? <div className="meal-date-strip admin-order-summary-dates" role="group" aria-label="取餐日期快速選擇">
+      {pickupDates.map((date, index) => {
+        const monthDay = `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
+        const weekday = weekdays[new Date(`${date}T12:00:00+08:00`).getUTCDay()];
+        const relative = ["今天", "明天"][index] ?? "";
+        return <button key={date} className="meal-date-button" type="button" onClick={() => pickDate(date)}
+          aria-pressed={filters.dateBasis === "pickup" && filters.startsOn === date && filters.endsOn === date}
+          aria-label={`${monthDay} ${weekday}${relative && `，${relative}`}`}>
+          <strong>{monthDay}</strong><span className="meal-date-weekday">{weekday}</span><span className="meal-date-status">{relative}</span>
+        </button>;
+      })}
+    </div> : <div className="admin-order-summary-presets" role="group" aria-label={`${draftDateLabel}快速選擇`}>
       {(Object.keys(periodLabels) as Array<keyof typeof periodLabels>).map((mode) => <button key={mode} className="button button-quiet" type="button" aria-pressed={preset === mode} onClick={() => applyPreset(mode)}>{periodLabels[mode]}</button>)}
-    </div>
+    </div>}
     <form className="admin-order-summary-filters" onSubmit={(event) => {
       event.preventDefault();
       if (!draft.startsOn || !draft.endsOn || draft.startsOn > draft.endsOn) {
@@ -95,6 +108,7 @@ export function AdminOrderSummary() {
       const next = { ...draft, search: draft.search.trim() };
       setDraft(next); setFilters(next); setOffset(0); setFormError("");
     }}>
+      {filters.orderCategory === "meal" && <label className="field"><span id="order-summary-date-basis-label">日期類型</span><select aria-labelledby="order-summary-date-basis-label" value={draft.dateBasis} onChange={(event) => setDraft({ ...draft, dateBasis: event.target.value as OrderSummaryFilters["dateBasis"] })}><option value="pickup">取餐日期</option><option value="order">下單日期</option></select></label>}
       <label className="field"><span>{draftDateLabel}起（台灣）</span><input type="date" required value={draft.startsOn} aria-invalid={Boolean(formError)} aria-describedby={dateError} onChange={(event) => { setDraft({ ...draft, startsOn: event.target.value }); setPreset(""); }} /></label>
       <label className="field"><span>{draftDateLabel}迄（台灣）</span><input type="date" required value={draft.endsOn} aria-invalid={Boolean(formError)} aria-describedby={dateError} onChange={(event) => { setDraft({ ...draft, endsOn: event.target.value }); setPreset(""); }} /></label>
       {showChannelFilter && <label className="field"><span id="order-summary-channel-label">銷售類型</span><select aria-labelledby="order-summary-channel-label" value={draft.salesChannel} onChange={(event) => setDraft({ ...draft, salesChannel: event.target.value as OrderSummaryFilters["salesChannel"] })}>{Object.entries(orderSummaryChannelLabels).filter(([value]) => channelMatchesCategory(value, filters.orderCategory)).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
@@ -116,6 +130,10 @@ export function AdminOrderSummary() {
           <div><dt>品項數量</dt><dd>{formatCount(report.data.summary.quantity)}</dd></div>
           <div><dt>品項種類</dt><dd>{formatCount(report.data.summary.product_count)}<span>種</span></dd></div>
         </dl>
+        {filters.orderCategory === "meal" && report.data.summary.business_order_count !== undefined && <dl className="admin-order-summary-statuses admin-order-summary-booking-types" aria-label="有效訂單分類">
+          <div><dt>會餐</dt><dd>{formatCount(report.data.summary.business_order_count)} 筆</dd></div>
+          <div><dt>個人訂單（已付款）</dt><dd>{formatCount(report.data.summary.personal_paid_order_count ?? 0)} 筆</dd></div>
+        </dl>}
         <dl className="admin-order-summary-statuses" aria-label="查詢結果訂單狀態">
           <div><dt>已付款</dt><dd>{formatCount(report.data.summary.paid_order_count)} 筆</dd></div>
           <div><dt>待付款</dt><dd>{formatCount(report.data.summary.pending_order_count)} 筆</dd></div>

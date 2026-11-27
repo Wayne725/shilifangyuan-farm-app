@@ -58,6 +58,8 @@ export interface OrderSummaryReport {
     pending_order_count: number;
     inactive_order_count: number;
     pending_business_order_count?: number;
+    business_order_count?: number;
+    personal_paid_order_count?: number;
   };
   categories: Array<{ category: string; order_count: number; quantity: number }>;
   channels: Array<{ sales_channel: OrderSummarySalesChannel; order_count: number; quantity: number }>;

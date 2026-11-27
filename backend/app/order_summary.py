@@ -139,6 +139,8 @@ async def read_order_summary(session: AsyncSession, filters: OrderSummaryFilters
         func.coalesce(func.sum(lines.c.quantity), 0).label("quantity"),
         *(func.count(func.distinct(case((lines.c.state == state, lines.c.order_id)))).label(f"{state}_order_count")
           for state in ["paid", "pending", "inactive"]),
+        func.count(func.distinct(case((and_(lines.c.meal_booking_type == "business", lines.c.state != "inactive"), lines.c.order_id)))).label("business_order_count"),
+        func.count(func.distinct(case((and_(lines.c.meal_booking_type != "business", lines.c.state == "paid"), lines.c.order_id)))).label("personal_paid_order_count"),
     ))).one()._mapping)
     group_columns = [lines.c.sales_channel, lines.c.source_kind, lines.c.source_id, lines.c.name, lines.c.unit, lines.c.category,
                      lines.c.meal_booking_type, lines.c.payment_status]
