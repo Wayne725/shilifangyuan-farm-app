@@ -147,7 +147,7 @@ for (const width of [1440, 390]) {
     assert.deepEqual(state.writes.map((r) => r.body.reason), ['客服核對發票狀態', '客服核對退款狀態']);
     await verify(page, state);
   });
-  test(`${width}px 快捷日期與履約下拉查詢、清單製作操作不換頁，歷史／未付款不顯示製作鍵`, async (t) => {
+  test(`${width}px 快捷日期與付款下拉查詢、清單製作操作不換頁，歷史／未付款不顯示製作鍵`, async (t) => {
     const { page, state } = await fixture(t, width);
     await page.goto(`${base}/admin/meals`);
     const row = page.locator('.meal-operation-order').filter({ hasText: 'QUICK-A' });
@@ -155,11 +155,13 @@ for (const width of [1440, 390]) {
     assert.equal(await page.getByLabel('取餐日期（起）', { exact: true }).isVisible(), false);
     await responseAfter(page, (r) => r.url().includes('date_from=2030-01-03'), () => page.getByRole('group', { name: '快速取餐日期', exact: true }).getByRole('button', { name: '明天', exact: true }).click());
     assert.equal(await page.getByRole('group', { name: '快速製作狀態', exact: true }).count(), 0);
-    await page.getByRole('combobox', {name: '履約狀態', exact: true}).selectOption('pending_confirmation');
-    assert.equal(state.reads.filter((r) => r.path === '/v1/admin/meal-orders').at(-1).fulfillment_status, undefined, '選擇後由查詢按鈕套用');
-    await responseAfter(page, (r) => r.url().includes('fulfillment_status=pending_confirmation'), () => page.getByRole('button', {name: '查詢訂單', exact: true}).click());
+    const status = page.getByRole('combobox', {name: '付款狀態', exact: true});
+    assert.deepEqual(await status.locator('option').allTextContents(), ['全部', '已支付', '未支付', '已退款']);
+    await status.selectOption('paid');
+    assert.equal(state.reads.filter((r) => r.path === '/v1/admin/meal-orders').at(-1).payment_status, undefined, '選擇後由查詢按鈕套用');
+    await responseAfter(page, (r) => r.url().includes('payment_status=paid'), () => page.getByRole('button', {name: '查詢訂單', exact: true}).click());
     const read = state.reads.filter((r) => r.path === '/v1/admin/meal-orders').at(-1);
-    assert.equal(read.date_to, date); assert.equal(read.fulfillment_status, 'pending_confirmation');
+    assert.equal(read.date_to, date); assert.equal(read.payment_status, 'paid');
     assert.equal(state.writes.length, 0);
     await row.getByRole('button', { name: '開始製作', exact: true }).click();
     await row.getByRole('button', { name: '標記待取餐', exact: true }).waitFor();
